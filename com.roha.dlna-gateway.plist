@@ -1,0 +1,58 @@
+<!--
+  com.roha.dlna-gateway.plist
+  ───────────────────────────
+  LaunchAgent — starts the DLNA Gateway automatically when the Mac Mini
+  user session begins (i.e. after login or auto-login at boot).
+  INSTALL:
+    cp com.roha.dlna-gateway.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+    launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+  MANAGE:
+    launchctl list | grep dlna          # check it's loaded + PID
+    launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+    launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+  LOGS:
+    tail -f ~/dlna-gateway/gateway.log   # rotating daily log
+    cat /tmp/dlna-gateway.out
+    cat /tmp/dlna-gateway.err
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roha.dlna-gateway</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/ronhamersma/dlna-gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ronhamersma/dlna-gateway/.venv/bin/python</string>
+        <string>/Users/ronhamersma/dlna-gateway/dlna_gateway.py</string>
+        <string>--no-browser</string>
+        <!-- Uncomment to change port:
+        <string>--port</string>
+        <string>8765</string>
+        -->
+        <!-- Uncomment for verbose logging:
+        <string>--debug</string>
+        -->
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+    <key>NumberOfProcesses</key>
+    <integer>512</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/dlna-gateway.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dlna-gateway.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
