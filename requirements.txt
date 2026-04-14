@@ -1,0 +1,13 @@
+# dlna_gateway — Python 3.9+
+# The gateway works with zero third-party packages for core DLNA.
+# These are optional quality-of-life additions.
+
+# Colour-coded terminal logging (degrades gracefully if absent)
+rich>=13.7.0
+
+# Structured JSON logging for log aggregators (optional, --json-log)
+python-json-logger>=2.0.7
+
+# Chromecast support — discovery and casting via Google Cast protocol
+# If not installed, the gateway runs fine without Chromecast support.
+PyChromecast>=14.0.0
