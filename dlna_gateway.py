@@ -149,14 +149,14 @@ Examples:
     setup_logging(debug=args.debug)
 
     lan_ip = get_lan_ip()
-    url    = f"http://localhost:{args.port}/"
+    url    = f"http://localhost:{args.port}/ "
 
     print()
     print("  ┌──────────────────────────────────────────────┐")
-    print("  │   DLNA / UPnP  →  IINA  Gateway  v2         │")
+    print("  │   DLNA / UPnP  →  IINA  Gateway  v2          │")
     print("  ├──────────────────────────────────────────────┤")
-    print(f"  │  Web UI   :  {url:<33}│")
-    print(f"  │  LAN IP   :  {lan_ip:<33}│")
+    print(f" │  Web UI   :  {url:<33}                       │")
+    print(f" │  LAN IP   :  {lan_ip:<33}                    │")
     print("  ├──────────────────────────────────────────────┤")
     print("  │  Remote   :  http://<tailscale-ip>:8765/     │")
     print("  │  HTTPS    :  https://<tailscale-ip>:8443/    │")

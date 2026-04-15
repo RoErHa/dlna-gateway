@@ -199,6 +199,55 @@ else:
 
 
 # ══════════════════════════════════════════════════════════════════
+# T3 — DATABASE POOL CHECKS (file-level)
+# ══════════════════════════════════════════════════════════════════
+
+section("T3.1 — db_pool.py exists and imports")
+pool_path = os.path.join(PROJECT, "db_pool.py")
+check("db_pool.py exists", os.path.isfile(pool_path))
+if os.path.isfile(pool_path):
+    pool_code = open(pool_path).read()
+    check("Pool class defined", "class Pool" in pool_code)
+    check("Pool has read() method", "def read(self)" in pool_code)
+    check("Pool has write() method", "def write(self)" in pool_code)
+    check("Pool has close() method", "def close(self)" in pool_code)
+    check("Pool sets WAL mode", "journal_mode=WAL" in pool_code)
+    check("Pool sets busy_timeout", "busy_timeout" in pool_code)
+
+section("T3.2 — LibraryDB uses pool")
+lib_path = os.path.join(PROJECT, "dlna_library.py")
+if os.path.isfile(lib_path):
+    lib_code = open(lib_path).read()
+    # Extract LibraryDB class only
+    lib_start = lib_code.find("class LibraryDB:")
+    lib_end = lib_code.find("\nclass ", lib_start + 10)
+    lib_class = lib_code[lib_start:lib_end] if lib_end > 0 else lib_code[lib_start:]
+
+    check("LibraryDB imports Pool", "from db_pool import Pool" in lib_code)
+    check("LibraryDB creates Pool", "Pool(" in lib_class)
+    check("No self._lock in LibraryDB", "self._lock" not in lib_class)
+    check("No self._connect in LibraryDB", "self._connect" not in lib_class)
+    check("Uses pool.read()", "self._pool.read()" in lib_class)
+    check("Uses pool.write()", "self._pool.write()" in lib_class)
+
+    reads = lib_class.count("self._pool.read()")
+    writes = lib_class.count("self._pool.write()")
+    check(f"Read/write balance ({reads}r/{writes}w)", reads > 0 and writes > 0)
+
+section("T3.3 — Pool concurrent test (standalone)")
+if os.path.isfile(pool_path):
+    import subprocess
+    # Run db_pool.py standalone test
+    result = subprocess.run(
+        [sys.executable, pool_path],
+        capture_output=True, text=True, timeout=15, cwd=PROJECT
+    )
+    pool_passed = "PASS" in result.stdout
+    check("Pool concurrent test passes", pool_passed,
+          result.stdout.strip().split('\n')[-1] if result.stdout else result.stderr[:100])
+
+
+# ══════════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════════
 

@@ -18,6 +18,7 @@ import uuid
 from typing import Optional
 
 from dlna_config import DB_FILE
+from db_pool import Pool
 
 log = logging.getLogger("dlna.library")
 
@@ -30,64 +31,20 @@ class LibraryDB:
     Thread-safe SQLite wrapper for:
       - Track index (tracks + FTS5)
       - Playlists (playlists + playlist_tracks)
+
+    Uses db_pool.Pool for connection management:
+      - Reads are concurrent (WAL mode)
+      - Writes are serialized (write lock)
     """
 
     def __init__(self, db_file: str = DB_FILE):
-        self._db_file = db_file
-        self._lock    = threading.Lock()
-        self._local   = threading.local()   # thread-local connection cache
+        self._pool = Pool(db_file)
         self._init_schema()
 
-    # ── Connection ────────────────────────────────────────────────
-
-    def _connect(self) -> sqlite3.Connection:
-        """
-        Return a per-thread persistent connection.
-        Opens once per thread, reuses on subsequent calls.
-        WAL mode allows concurrent reads across threads without blocking.
-        """
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            try:
-                conn.execute("SELECT 1")   # cheap liveness check
-                return conn
-            except Exception:
-                pass   # stale connection — fall through and reopen
-
-        db_dir = os.path.dirname(self._db_file)
-        if db_dir:
-            try:
-                os.makedirs(db_dir, exist_ok=True)
-            except OSError as e:
-                log.error(f"Cannot create DB directory {db_dir!r}: {e}")
-                raise
-        if not self._db_file:
-            raise sqlite3.OperationalError(
-                "DB_FILE path is empty — check dlna_config.py")
-        try:
-            conn = sqlite3.connect(self._db_file,
-                                   check_same_thread=False, timeout=15)
-        except sqlite3.OperationalError as e:
-            log.error(f"Cannot open database {self._db_file!r}: {e}")
-            log.error(f"  dir={db_dir!r}  exists={os.path.isdir(db_dir) if db_dir else 'n/a'}"
-                      f"  writable={os.access(db_dir, os.W_OK) if db_dir else 'n/a'}")
-            raise
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=8000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA cache_size=-8000")   # 8 MB per-thread cache
-        self._local.conn = conn
-        log.debug(f"DB connection opened (thread {threading.current_thread().name})")
-        return conn
-
-        # ── Schema ────────────────────────────────────────────────────
+    # ── Schema ────────────────────────────────────────────────────
 
     def _init_schema(self):
-        with self._lock:
-            conn = self._connect()
-            conn.executescript("""
+        self._pool.execute_script("""
                 CREATE TABLE IF NOT EXISTS tracks (
                     id       INTEGER PRIMARY KEY AUTOINCREMENT,
                     udn      TEXT NOT NULL,
@@ -172,31 +129,31 @@ class LibraryDB:
                     last_seen   TEXT DEFAULT (datetime('now'))
                 );
             """)
-            # Migrations: add new columns to existing DBs (safe no-ops if present)
-            for col_sql in [
-                "ALTER TABLE tracks ADD COLUMN genre TEXT DEFAULT ''",
-                "ALTER TABLE tracks ADD COLUMN file_path TEXT DEFAULT ''",
-            ]:
-                try:
+        # Migrations: add new columns to existing DBs (safe no-ops if present)
+        for col_sql in [
+            "ALTER TABLE tracks ADD COLUMN genre TEXT DEFAULT ''",
+            "ALTER TABLE tracks ADD COLUMN file_path TEXT DEFAULT ''",
+        ]:
+            try:
+                with self._pool.write() as conn:
                     conn.execute(col_sql)
-                    conn.commit()
-                    log.info(f"DB migration: {col_sql[:60]}")
-                except Exception:
-                    pass  # column already exists
-            # Ensure Favourites always exists
+                log.info(f"DB migration: {col_sql[:60]}")
+            except Exception:
+                pass  # column already exists
+        # Ensure Favourites always exists
+        with self._pool.write() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO playlists (id, name, sort_order) "
                 "VALUES (?,?,?)",
                 (FAVOURITES_ID, "⭐ Favourites", -1))
-            conn.commit()
             self._migrate_json(conn)
             self._migrate_device_roles(conn)
-        log.debug(f"LibraryDB ready: {self._db_file}")
+        log.debug(f"LibraryDB ready: {self._pool.db_file}")
 
     def _migrate_json(self, conn: sqlite3.Connection):
         """One-time import from old playlists.json if present."""
         import json
-        old = os.path.join(os.path.dirname(self._db_file), "playlists.json")
+        old = os.path.join(os.path.dirname(self._pool.db_file), "playlists.json")
         if not os.path.exists(old):
             return
         try:
@@ -238,8 +195,7 @@ class LibraryDB:
                  host: str = "",
                  is_server: bool = False, is_renderer: bool = False):
         """Persist that this UDN is a server and/or renderer, with its location URL and host."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             conn.execute("""
                 INSERT INTO device_roles (udn, name, location, host, is_server, is_renderer)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -251,7 +207,6 @@ class LibraryDB:
                     is_renderer = MAX(is_renderer, excluded.is_renderer),
                     last_seen   = datetime('now')
             """, (udn, name, location, host, int(is_server), int(is_renderer)))
-            conn.commit()
 
     def roles_load(self) -> dict:
         """
@@ -259,8 +214,7 @@ class LibraryDB:
         Also builds a host→roles index for cross-UDN matching.
         Returns: {udn: {"name", "location", "host", "is_server", "is_renderer"}}
         """
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT udn, name, location, host, is_server, is_renderer "
                 "FROM device_roles"
@@ -278,8 +232,7 @@ class LibraryDB:
 
     def roles_all(self) -> list:
         """Return all device role rows as a list of dicts (for --list-devices)."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT udn, name, location, host, is_server, is_renderer, "
                 "first_seen, last_seen "
@@ -290,16 +243,14 @@ class LibraryDB:
     # ── Track index ───────────────────────────────────────────────
 
     def track_count(self, udn: str) -> int:
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM tracks WHERE udn=?", (udn,)).fetchone()
             return row[0] if row else 0
 
     def album_count(self, udn: str) -> int:
         """Distinct (artist, album) pairs — matches AssetUPnP's display count."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM "
                 "(SELECT DISTINCT artist, album FROM tracks WHERE udn=?)",
@@ -329,8 +280,7 @@ class LibraryDB:
             file_path=t.get("file_path", ""),
         ) for t in tracks if t.get("url")]
 
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             before = conn.execute("SELECT changes()").fetchone()[0]
             # Step 1: insert new tracks (skip duplicates)
             conn.executemany(
@@ -356,7 +306,7 @@ class LibraryDB:
                 WHERE udn=?
                   AND url IN (SELECT url FROM metadata_overrides)
             """, (udn,))
-            conn.commit()
+
             inserted = inserted  # already captured above
         return inserted
 
@@ -365,28 +315,24 @@ class LibraryDB:
         Wipe track index for this UDN. Playlists untouched.
         Forces FTS5 rebuild so shadow tables are clean.
         """
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             conn.execute("DELETE FROM tracks WHERE udn=?", (udn,))
             conn.execute("DELETE FROM index_meta WHERE udn=?", (udn,))
             conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
-            conn.commit()
+
         log.info(f"Track index cleared for {udn}")
 
     def mark_indexed(self, udn: str):
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO index_meta (udn, indexed_at) "
                 "VALUES (?, datetime('now'))", (udn,))
-            conn.commit()
 
     def rebuild_fts(self):
         """Force a full FTS5 shadow-table rebuild."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
-            conn.commit()
+
         log.info("FTS5 rebuild complete")
 
     # ── FTS5 search ───────────────────────────────────────────────
@@ -397,8 +343,7 @@ class LibraryDB:
         """
         safe  = query.replace('"', '""')
         fts_q = f'"{safe}"'
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
 
             tracks = conn.execute(
                 """SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
@@ -437,7 +382,6 @@ class LibraryDB:
                    LIMIT 50""",
                 (fts_q, udn)).fetchall()
 
-
         return {
             "tracks":  [dict(r) for r in tracks],
             "albums":  [dict(r) for r in albums],
@@ -446,8 +390,7 @@ class LibraryDB:
 
     def all_artists(self, udn: str) -> list:
         """Return all artists with album/track counts from SQLite."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT artist,
                           COUNT(DISTINCT album) as album_count,
@@ -462,8 +405,7 @@ class LibraryDB:
 
     def album_tracks(self, udn: str, artist: str, album: str) -> list:
         """Return all tracks for a given (artist, album) pair."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT obj_id as id, url, title, artist, album,
                           duration, art, mime, genre, 'audio' as type
@@ -476,8 +418,7 @@ class LibraryDB:
 
     def all_albums(self, udn: str) -> list:
         """All distinct albums, grouping compilations under 'Various Artists'."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT album,
                           CASE WHEN COUNT(DISTINCT artist) > 1
@@ -494,8 +435,7 @@ class LibraryDB:
 
     def artist_albums(self, udn: str, artist: str) -> list:
         """All albums for a given artist, A-Z."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT album, artist,
                           COUNT(*) as track_count,
@@ -539,8 +479,7 @@ class LibraryDB:
                 params + [limit, offset]).fetchall()
             return tot, rows
 
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             if mode == "artists":
                 total, rows = _q(
                     "artist",
@@ -574,8 +513,7 @@ class LibraryDB:
 
     def all_genres(self, udn: str) -> list:
         """All distinct genres with album/track counts, A-Z."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT genre,
                           COUNT(DISTINCT album) as album_count,
@@ -589,8 +527,7 @@ class LibraryDB:
 
     def genre_albums(self, udn: str, genre: str) -> list:
         """All albums in a genre, grouping compilations under 'Various Artists'."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT album,
                           CASE WHEN COUNT(DISTINCT artist)>1 THEN 'Various Artists'
@@ -623,8 +560,7 @@ class LibraryDB:
             return False
         set_clause = ", ".join(f"{k}=?" for k in fields)
         vals = list(fields.values())
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             conn.execute(
                 f"UPDATE tracks SET {set_clause} WHERE url=?",
                 vals + [url])
@@ -653,22 +589,20 @@ class LibraryDB:
                     "VALUES (?,?,?,?,?)",
                     (url, base["artist"], base["album"],
                      base["title"], base["genre"]))
-            conn.commit()
+
             changed = conn.execute("SELECT changes()").fetchone()[0]
         return changed > 0
 
     def get_track_file_path(self, url: str) -> str:
         """Return stored file_path for a track URL, or empty string."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             row = conn.execute(
                 "SELECT file_path FROM tracks WHERE url=?", (url,)).fetchone()
         return (row["file_path"] or "") if row else ""
 
     def genre_tracks(self, udn: str, genre: str) -> list:
         """All tracks in a genre."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT obj_id as id, url, title, artist, album,
                           duration, art, mime, genre, 'audio' as type
@@ -680,8 +614,7 @@ class LibraryDB:
 
     def random_tracks(self, udn: str, limit: int = 100) -> list:
         """Return `limit` tracks picked randomly from the whole library."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT obj_id as id, url, title, artist, album,
                           duration, art, mime, 'audio' as type
@@ -695,8 +628,7 @@ class LibraryDB:
     # ── Playlists ─────────────────────────────────────────────────
 
     def pl_list(self) -> list:
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             rows = conn.execute(
                 """SELECT p.id, p.name, COUNT(pt.id) as count
                    FROM playlists p
@@ -706,8 +638,7 @@ class LibraryDB:
         return [dict(r) for r in rows]
 
     def pl_get(self, pl_id: str) -> Optional[dict]:
-        with self._lock:
-            conn = self._connect()
+        with self._pool.read() as conn:
             pl = conn.execute(
                 "SELECT id, name FROM playlists WHERE id=?",
                 (pl_id,)).fetchone()
@@ -722,26 +653,23 @@ class LibraryDB:
 
     def pl_create(self, name: str) -> str:
         pl_id = str(uuid.uuid4())[:8]
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             conn.execute("INSERT INTO playlists (id, name) VALUES (?,?)",
                          (pl_id, name))
-            conn.commit()
+
         return pl_id
 
     def pl_delete(self, pl_id: str) -> bool:
         if pl_id == FAVOURITES_ID:
             return False
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             cur = conn.execute("DELETE FROM playlists WHERE id=?", (pl_id,))
-            conn.commit()
+
         return cur.rowcount > 0
 
     def pl_add_track(self, pl_id: str, track: dict) -> str:
         """Returns 'added', 'duplicate', or 'not_found'."""
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             pl = conn.execute(
                 "SELECT id FROM playlists WHERE id=?", (pl_id,)).fetchone()
             if not pl:
@@ -754,18 +682,17 @@ class LibraryDB:
                     (pl_id, track.get("url",""), track.get("title",""),
                      track.get("artist",""), track.get("album",""),
                      track.get("duration",""), track.get("art","")))
-                conn.commit()
+
                 return "added"
             except sqlite3.IntegrityError:
                 return "duplicate"
 
     def pl_remove_track(self, pl_id: str, url: str) -> bool:
-        with self._lock:
-            conn = self._connect()
+        with self._pool.write() as conn:
             cur = conn.execute(
                 "DELETE FROM playlist_tracks WHERE pl_id=? AND url=?",
                 (pl_id, url))
-            conn.commit()
+
         return cur.rowcount > 0
 
     def pl_to_m3u(self, pl_id: str, shuffle: bool = False,
@@ -793,7 +720,6 @@ class LibraryDB:
                 f.write(f"#EXTINF:{secs},{t.get('title','')}\n{t['url']}\n")
         return output_path
 
-
 def _dur_to_secs(dur: str) -> int:
     """'H:MM:SS' → integer seconds, -1 if unparseable."""
     try:
@@ -805,7 +731,6 @@ def _dur_to_secs(dur: str) -> int:
     except Exception:
         pass
     return -1
-
 
 # ── Indexer ───────────────────────────────────────────────────────
 
@@ -833,7 +758,6 @@ class IndexState:
     def status(self) -> str:
         with self._lock:
             return self._d["status"]
-
 
 class Indexer:
     """
@@ -972,12 +896,10 @@ class Indexer:
             log.exception(f"Indexer error: {e}")
             self.state.update(status="error", error=str(e))
 
-
 # ── Singleton ─────────────────────────────────────────────────────
 
 DB      = LibraryDB()
 INDEXER = Indexer(DB)
-
 
 class DeviceRoleCache:
     """
@@ -1098,9 +1020,7 @@ class DeviceRoleCache:
     def all(self) -> list:
         return self._db.roles_all()
 
-
 DEVICE_ROLES = DeviceRoleCache(DB)
-
 
 # ── Standalone test ───────────────────────────────────────────────
 
@@ -1132,7 +1052,6 @@ def _test():
         log.info("Track index: empty (not yet indexed)")
 
     log.info("PASS — dlna_library OK")
-
 
 if __name__ == "__main__":
     _test()
