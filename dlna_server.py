@@ -460,6 +460,29 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._json(200, {"tracks": tracks})
             return
 
+        # ── Artist albums (SQLite) ───────────────────────────────
+        if path == "/api/artist_albums":
+            udn    = params.get("udn", "")
+            artist = params.get("artist", "")
+            if not udn or not artist:
+                self._json(400, {"error": "Missing udn or artist"})
+                return
+            self._json(200, DB.artist_albums(udn, artist))
+            return
+
+        # ── Browse by letter (SQLite — paginated) ────────────────
+        if path == "/api/browse_letter":
+            udn    = params.get("udn", "")
+            mode   = params.get("mode", "artists")   # artists|albums|tracks
+            letter = params.get("letter", "A").upper()
+            offset = int(params.get("offset", 0))
+            limit  = int(params.get("limit", 100))
+            if not udn:
+                self._json(400, {"error": "Missing udn"})
+                return
+            self._json(200, DB.browse_letter(udn, mode, letter, offset, limit))
+            return
+
         # ── Play a single track (GET keeps it simple for the JS side) ──
         if path == "/api/play":
             url   = params.get("url", "")
@@ -854,6 +877,28 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         # ── UPnP ContentDirectory Browse (for Naim Uniti) ─────────
+        # ── Edit track metadata ────────────────────────────────────
+        if path == "/api/edit_track":
+            try:
+                data   = json.loads(body)
+                url    = data.get("url", "")
+                artist = data.get("artist")
+                album  = data.get("album")
+                title  = data.get("title")
+                genre  = data.get("genre")
+                if not url:
+                    self._json(400, {"error": "Missing url"})
+                    return
+                ok = DB.update_track_meta(url, artist=artist, album=album,
+                                          title=title, genre=genre)
+                log.info(f"edit_track: {url[:60]}  "
+                         f"fields={[k for k,v in [('artist',artist),('album',album),('title',title),('genre',genre)] if v is not None]}")
+                self._json(200, {"ok": ok})
+            except Exception as e:
+                log.exception(f"edit_track error: {e}")
+                self._json(500, {"error": str(e)})
+            return
+
         if path == "/gw/cd/control":
             try:
                 root   = ET.fromstring(body.decode("utf-8"))
@@ -1153,4 +1198,3 @@ def _test():
 
 if __name__ == "__main__":
     _test()
-    
