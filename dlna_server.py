@@ -48,90 +48,6 @@ GW_NAME = "DLNA Gateway (IINA)"
 _reprobe_times: dict = {}
 
 
-# ── Service Worker JS ─────────────────────────────────────────────
-# Served at /sw.js — makes the gateway installable as a PWA.
-# Strategy:
-#   App shell (/, manifest, icons, fonts) → stale-while-revalidate
-#   API + stream requests → network-only (never cache dynamic data)
-#   Album art from AssetUPnP → cache-first with long TTL
-
-_SERVICE_WORKER_JS = r"""
-const APP_CACHE = 'dlna-gw-app-v2';
-const ART_CACHE = 'dlna-gw-art-v1';
-
-const SHELL = [
-  '/',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png'
-];
-
-// ── Install: pre-cache app shell ────────────────────────────────
-self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(APP_CACHE)
-      .then(cache => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
-  );
-});
-
-// ── Activate: clean old caches ──────────────────────────────────
-self.addEventListener('activate', event => {
-  const keep = new Set([APP_CACHE, ART_CACHE]);
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(k => !keep.has(k)).map(k => caches.delete(k))
-      ))
-      .then(() => self.clients.claim())
-  );
-});
-
-// ── Fetch: route by request type ────────────────────────────────
-self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-
-  // Never intercept API calls, streams, or POST requests
-  if (url.pathname.startsWith('/api/') ||
-      url.pathname.startsWith('/stream') ||
-      url.pathname.startsWith('/cd/') ||
-      event.request.method !== 'GET') {
-    return;
-  }
-
-  // Album art images — cache-first (images rarely change)
-  if (url.pathname === '/art' ||
-      (event.request.destination === 'image' && url.origin !== self.location.origin)) {
-    event.respondWith(
-      caches.open(ART_CACHE).then(cache =>
-        cache.match(event.request).then(cached => {
-          if (cached) return cached;
-          return fetch(event.request).then(resp => {
-            if (resp.ok) cache.put(event.request, resp.clone());
-            return resp;
-          }).catch(() => cached || new Response('', { status: 404 }));
-        })
-      )
-    );
-    return;
-  }
-
-  // App shell & static assets — stale-while-revalidate
-  event.respondWith(
-    caches.open(APP_CACHE).then(cache =>
-      cache.match(event.request).then(cached => {
-        const network = fetch(event.request).then(resp => {
-          if (resp.ok) cache.put(event.request, resp.clone());
-          return resp;
-        }).catch(() => cached);
-        return cached || network;
-      })
-    )
-  );
-});
-"""
-
-
 # ── PWA icon generator ────────────────────────────────────────────
 # Generates a PNG icon in pure Python (no Pillow/cairosvg needed).
 # Dark background with amber music note — matches the app theme.
@@ -281,6 +197,25 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _serve_static(self, filename: str, content_type: str):
+        """Serve a file from the static/ directory."""
+        static_dir = os.path.join(os.path.dirname(__file__), "static")
+        fpath = os.path.join(static_dir, filename)
+        try:
+            with open(fpath, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type + ("; charset=utf-8" if content_type.startswith("text/") or "javascript" in content_type or "json" in content_type else ""))
+            self.send_header("Content-Length", str(len(body)))
+            if content_type in ("text/css", "application/javascript"):
+                self.send_header("Cache-Control", "public, max-age=60")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._html(404, "<h1>404 Not Found</h1>")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _xml_response(self, code: int, body: bytes):
         self.send_response(code)
         self._send_cors()
@@ -310,8 +245,25 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         # ── Web UI ────────────────────────────────────────────────
         if path in ("/", "/index.html"):
-            from dlna_gateway import WEB_UI
-            self._html(200, WEB_UI)
+            self._serve_static("index.html", "text/html")
+            return
+
+        # ── Static files (CSS, JS) ───────────────────────────────
+        if path.startswith("/static/"):
+            fname = path[len("/static/"):]
+            # Security: no path traversal
+            if ".." in fname or "/" in fname:
+                self.send_error(403)
+                return
+            _MIME = {
+                ".css": "text/css",
+                ".js":  "application/javascript",
+                ".json":"application/json",
+                ".png": "image/png",
+                ".svg": "image/svg+xml",
+            }
+            ext = "." + fname.rsplit(".", 1)[-1] if "." in fname else ""
+            self._serve_static(fname, _MIME.get(ext, "application/octet-stream"))
             return
 
         # ── Servers / renderers ───────────────────────────────────
@@ -647,16 +599,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         # ── Service Worker ───────────────────────────────────────
         if path == "/sw.js":
-            sw_js = _SERVICE_WORKER_JS
-            body = sw_js.encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/javascript")
-            self.send_header("Content-Length", str(len(body)))
-            # Service workers must NOT be cached aggressively
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Service-Worker-Allowed", "/")
-            self.end_headers()
-            self.wfile.write(body)
+            static_dir = os.path.join(os.path.dirname(__file__), "static")
+            fpath = os.path.join(static_dir, "sw.js")
+            try:
+                with open(fpath, "rb") as f:
+                    body = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Service-Worker-Allowed", "/")
+                self.end_headers()
+                self.wfile.write(body)
+            except FileNotFoundError:
+                self._html(404, "<h1>sw.js not found</h1>")
             return
 
         self._html(404, "<h1>404 Not Found</h1>")
@@ -1198,3 +1154,4 @@ def _test():
 
 if __name__ == "__main__":
     _test()
+    

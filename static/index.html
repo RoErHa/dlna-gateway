@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DLNA GW">
+<meta name="theme-color" content="#0e0d0b">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>DLNA Gateway</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<header>
+  <div class="logo">DLNA<sup>GW</sup></div>
+  <div class="sep"></div>
+  <div class="disc-wrap">
+    <div class="disc-dot" id="disc-dot"></div>
+    <div class="disc-label" id="disc-label">Scanning…</div>
+  </div>
+  <div class="sep"></div>
+  <select id="server-sel"><option value="">— scanning… —</option></select>
+  <div class="sep"></div>
+  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+    <span style="font-size:10px;color:var(--ink-dim);letter-spacing:.05em">OUT</span>
+    <select id="output-sel" style="background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:5px 8px;border-radius:var(--r);cursor:pointer;outline:none">
+      <option value="browser">📱 Browser</option>
+    </select>
+  </div>
+  <div class="sep"></div>
+  <div class="search-wrap">
+    <input type="text" id="search-input" placeholder="🔍 Search library…" autocomplete="off">
+  </div>
+  <div class="hdr-right" id="hdr-status">Ready</div>
+  <button class="btn" id="btn-settings" title="Player settings" style="flex-shrink:0;font-size:15px;padding:4px 8px;margin-left:4px">⚙️</button>
+</header>
+<div class="tab-bar">
+  <div class="tab active" id="tab-browse" onclick="showTab('browse')">Browse</div>
+  <div class="tab" id="tab-search" onclick="showTab('search')">Search</div>
+</div>
+<div class="workspace">
+  <!-- LEFT: browser / search / playlist view -->
+  <div id="browser">
+    <!-- Index progress bar -->
+    <div id="index-bar" style="display:none;padding:7px 14px;border-bottom:1px solid var(--border);background:var(--raised);flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:11px;color:var(--ink-dim)" id="index-label">Indexing library…</span>
+        <button class="icon-btn" style="font-size:10px" onclick="reindex()">↺ Rebuild</button>
+      </div>
+      <div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden">
+        <div id="index-progress-bar" style="height:100%;background:var(--amber);border-radius:2px;width:0%;transition:width .3s"></div>
+      </div>
+    </div>
+    <!-- Browse mode bar (only shown in browse tab) -->
+    <div class="browse-modes" id="browse-modes" style="display:none">
+      <div class="browse-mode active" id="bmode-artists" onclick="setBrowseMode('artists')">Artists</div>
+      <div class="browse-mode"       id="bmode-albums"  onclick="setBrowseMode('albums')">Albums</div>
+      <div class="browse-mode"       id="bmode-tracks"  onclick="setBrowseMode('tracks')">Tracks</div>
+      <div class="browse-mode"       id="bmode-genres"  onclick="setBrowseMode('genres')">Genres</div>
+    </div>
+    <!-- Letter picker (only shown in browse tab) -->
+    <div class="letter-bar" id="letter-bar" style="display:none" id="letter-bar"></div>
+    <!-- Back / section header (drill-down) -->
+    <div class="browse-back" id="browse-back" style="display:none">
+      <span onclick="drillBack()">← back</span>
+      <span id="browse-back-title" style="color:var(--ink);font-weight:600"></span>
+    </div>
+    <div class="browse-section-hdr" id="browse-section-hdr" style="display:none">
+      <span id="browse-section-title"></span>
+      <button class="btn primary" style="font-size:11px;padding:4px 10px" id="browse-play-all">▶ Play all</button>
+    </div>
+    <!-- Main list -->
+    <div id="item-list" style="flex:1;overflow-y:auto">
+      <div class="msg">Scanning for DLNA servers…<br>Usually 5–15 s via SSDP,<br>up to 30 s via subnet scan.<br><br><code>AssetUPnP · Plex · Jellyfin · MinimServer</code></div>
+    </div>
+    <!-- Pagination -->
+    <div class="browse-pager hidden" id="browse-pager">
+      <button class="btn" id="pager-prev" style="font-size:11px;padding:4px 10px">‹ Prev</button>
+      <span id="pager-info"></span>
+      <button class="btn" id="pager-next" style="font-size:11px;padding:4px 10px">Next ›</button>
+    </div>
+  </div>
+  <!-- CENTRE: player -->
+  <div id="player">
+    <!-- Back button — mobile only, closes Now Playing fullscreen -->
+    <button id="np-back" onclick="mobileTab('browse')" style="display:none;position:absolute;top:14px;left:16px;background:none;border:none;color:var(--ink-dim);font-size:22px;cursor:pointer;z-index:10;padding:4px 8px">‹</button>
+    <div class="art-wrap"><div class="art" id="art">🎵</div></div>
+    <div class="np-title" id="np-title">Nothing playing</div>
+    <div class="np-artist" id="np-artist" style="font-size:11px;color:var(--amber);text-align:center;margin-bottom:2px;max-width:380px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:16px"></div>
+    <div id="np-album" style="font-size:11px;color:var(--ink-dim);text-align:center;margin-bottom:4px;max-width:380px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:15px;font-style:italic"></div>
+    <div class="np-meta"  id="np-meta">Browse or search your library</div>
+    <div id="np-actions" style="display:none;gap:8px;margin-bottom:6px;justify-content:center;align-items:center;flex-wrap:wrap">
+      <button class="btn" id="np-btn-fav"  title="Add to Favourites" style="font-size:12px;padding:5px 12px">⭐ Favourite</button>
+      <button class="btn" id="np-btn-add"  title="Add to playlist…"  style="font-size:12px;padding:5px 12px">＋ Playlist</button>
+      <button class="btn" id="np-btn-edit" title="Edit metadata"     style="font-size:12px;padding:5px 12px">✏️ Edit</button>
+    </div>
+    <div class="seek-section">
+      <div class="seek-track" id="seek-track">
+        <div class="seek-fill" id="seek-fill"></div>
+        <div class="seek-thumb" id="seek-thumb"></div>
+      </div>
+      <div class="seek-times"><span id="t-pos">0:00</span><span id="t-dur">0:00</span></div>
+    </div>
+    <div class="controls">
+      <button class="btn" id="btn-prev">⏮</button>
+      <button class="btn" id="btn-rew">« 30s</button>
+      <button class="btn" id="btn-stop">⏹ Stop</button>
+      <button class="btn primary" id="btn-pp">▶ Play</button>
+      <button class="btn" id="btn-fwd">30s »</button>
+      <button class="btn" id="btn-next">⏭</button>
+    </div>
+    <div class="vol-row">
+      <span>🔈</span>
+      <input type="range" class="vol" id="vol" min="0" max="100" value="80">
+      <span>🔊</span>
+      <span id="vol-label" style="min-width:26px;font-variant-numeric:tabular-nums">80</span>
+      <div class="sep" style="margin:0 8px"></div>
+      <button class="btn" id="btn-shuffle" title="Toggle shuffle">🔀</button>
+      <button class="btn" id="btn-radio" title="Radio — 100 random tracks from library" style="margin-left:4px">📻</button>
+    </div>
+  </div>
+  <!-- RIGHT: playlists panel -->
+  <div id="pl-panel">
+    <div class="pl-header">
+      <button class="icon-btn" id="pl-back-btn" onclick="showPlaylists()" style="display:none">← back</button>
+      <span class="pl-header-title" id="pl-panel-title">Playlists</span>
+      <div class="pl-actions" id="pl-actions" style="margin-left:auto">
+        <button class="btn" style="font-size:11px;padding:5px 10px" onclick="newPlaylist()">+ New playlist</button>
+      </div>
+    </div>
+    <div class="pl-list" id="pl-list"></div>
+    <div class="pl-tracks" id="pl-tracks"></div>
+  </div>
+</div>
+<div id="statusbar">
+  <div class="sb-dot" id="sb-dot"></div>
+  <div class="sb-item">State: <span id="sb-state">stopped</span></div>
+  <div class="sb-item" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Track: <span id="sb-uri">—</span></div>
+</div>
+<div id="toast"></div>
+
+<!-- Hidden audio element for 📱 Browser output -->
+<audio id="browser-audio" preload="auto" playsinline controls style="display:none"></audio>
+
+<!-- Mini player — mobile only, shown when playing -->
+<div id="mini-player" onclick="mobileTab('nowplaying');$('bnav-nowplaying').classList.add('active')">
+  <div id="mini-art">🎵</div>
+  <div id="mini-info">
+    <div id="mini-title">Nothing playing</div>
+    <div id="mini-artist"></div>
+  </div>
+  <button class="btn" id="mini-pp" onclick="event.stopPropagation();control({action:'pause'})">⏸</button>
+  <button class="btn" id="mini-next" onclick="event.stopPropagation();control({action:'next'})">⏭</button>
+  <div id="mini-progress"></div>
+</div>
+
+<!-- Bottom navigation — mobile only -->
+<nav id="bottom-nav">
+  <button class="bnav-btn active" id="bnav-browse"      onclick="mobileTab('browse')"><span>📁</span><span>Browse</span></button>
+  <button class="bnav-btn"        id="bnav-search"      onclick="mobileTab('search')"><span>🔍</span><span>Search</span></button>
+  <button class="bnav-btn"        id="bnav-playlists"   onclick="mobileTab('playlists')"><span>📋</span><span>Playlists</span></button>
+  <button class="bnav-btn"        id="bnav-favourites"  onclick="mobileTab('favourites')"><span>⭐</span><span>Favs</span></button>
+  <button class="bnav-btn"        id="bnav-nowplaying"  onclick="mobileTab('nowplaying')"><span id="bnav-np-icon">🎵</span><span>Playing</span></button>
+</nav>
+
+<!-- Edit metadata modal — must be in DOM before the script block runs -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal" style="max-width:380px;width:94%">
+    <h2>✏️ Edit Metadata</h2>
+    <p class="modal-sub" id="edit-modal-sub">Changes saved to library immediately.</p>
+    <div class="edit-field"><label>Title</label><input id="edit-title" type="text" placeholder="Track title"></div>
+    <div class="edit-field"><label>Artist</label><input id="edit-artist" type="text" placeholder="Artist name"></div>
+    <div class="edit-field"><label>Album</label><input id="edit-album" type="text" placeholder="Album name"></div>
+    <div class="edit-field"><label>Genre</label><input id="edit-genre" type="text" placeholder="Genre"></div>
+    <div class="modal-footer">
+      <button class="btn" id="edit-cancel">Cancel</button>
+      <button class="btn primary" id="edit-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal — must be in DOM before the script block runs -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal">
+    <h2>⚙️ Player Apps</h2>
+    <p class="modal-sub">Select which local players are installed on this device. The output selector will show only ticked players.</p>
+    <div id="settings-player-list"></div>
+    <div class="modal-footer">
+      <button class="btn primary" id="settings-close">Done</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
