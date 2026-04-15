@@ -962,7 +962,10 @@ async function browseArtist(artist){
 async function playAlbumFromDB(artist,album){
   if(!curServer)return;
   toast("Loading album…",3000);
-  const r=await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}`);
+  // "Various Artists" is a synthetic grouping — pass empty artist so album_tracks
+  // matches all artists for this album name
+  const queryArtist=(artist==="Various Artists")?"":artist;
+  const r=await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(queryArtist)}&album=${enc(album)}`);
   if(!r){toast("Failed to load album");return;}
   const data=await r.json();
   if(!data.tracks||!data.tracks.length){toast("No tracks found for this album");return;}
