@@ -939,3 +939,157 @@ sqlite3.DatabaseError: database disk image is malformed
 2026-04-15 16:42:44 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
 2026-04-15 16:42:44 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
 2026-04-15 16:42:49 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:43:49 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:43:49 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:43:54 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:44:54 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:44:54 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:44:59 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:45:59 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:45:59 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:46:04 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:47:04 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:47:04 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:47:09 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:48:09 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:48:09 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:48:14 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:49:14 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:49:14 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:49:19 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:50:19 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:50:19 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:50:24 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:51:24 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:51:24 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:51:29 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:52:29 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:52:29 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:52:34 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:53:34 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:53:34 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:53:40 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:54:40 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:54:40 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:54:45 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:55:45 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:55:45 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:55:50 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:56:50 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:56:50 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:56:55 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:57:55 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:57:55 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:58:00 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 16:59:00 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 16:59:00 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 16:59:05 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 17:00:05 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 17:00:05 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 17:00:10 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 17:01:10 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 17:01:10 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 17:01:15 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:19:23 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 19:19:23 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 19:19:23 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-15 19:19:23 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-15 19:19:23 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-15 19:19:23 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-15 19:19:23 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-15 19:19:24 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
+2026-04-15 19:19:24 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
+2026-04-15 19:19:24 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-15 19:19:24 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-15 19:19:24 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/  |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-15 19:19:24 [INFO    ] dlna.cast: [CAST +] '4K TV Box'  (4K TV Box)  @ 192.168.1.194
+2026-04-15 19:19:24 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
+2026-04-15 19:19:24 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
+2026-04-15 19:19:25 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-15 19:19:25 [INFO    ] dlna.library: Index OK: 23682 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-15 19:19:30 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:42862/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-15 19:19:30 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-15 19:19:31 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 19:19:31 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 19:19:31 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-15 19:19:31 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-15 19:19:31 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-15 19:19:31 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-15 19:19:31 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-15 19:19:31 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
+2026-04-15 19:19:31 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
+2026-04-15 19:19:32 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
+2026-04-15 19:19:32 [INFO    ] dlna.cast: [CAST +] '4K TV Box'  (4K TV Box)  @ 192.168.1.194
+2026-04-15 19:19:32 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
+2026-04-15 19:19:33 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-15 19:19:33 [INFO    ] dlna.library: Index OK: 23682 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-15 19:19:34 [INFO    ] dlna.cast: Chromecast sweep: browser has 3 device(s)
+2026-04-15 19:19:34 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
+2026-04-15 19:19:34 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
+2026-04-15 19:19:34 [INFO    ] dlna.cast:   Registering 4K TV Box (3940c756-6a45-7af7-37ba-f5d149196428)
+2026-04-15 19:19:34 [INFO    ] dlna.cast: Chromecast sweep done: 3 device(s) in registry
+2026-04-15 19:19:41 [INFO    ] dlna.cast: Chromecast sweep: browser has 3 device(s)
+2026-04-15 19:19:41 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
+2026-04-15 19:19:41 [INFO    ] dlna.cast:   Registering 4K TV Box (3940c756-6a45-7af7-37ba-f5d149196428)
+2026-04-15 19:19:41 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
+2026-04-15 19:19:41 [INFO    ] dlna.cast: Chromecast sweep done: 3 device(s) in registry
+2026-04-15 19:24:39 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:24:39 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:24:43 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:25:43 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:25:43 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:25:48 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:26:48 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:26:48 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:26:52 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:27:53 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:27:53 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:27:57 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:28:57 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:28:57 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:29:01 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:30:02 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:30:02 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:30:06 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:31:06 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:31:06 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:31:11 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:32:11 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:32:11 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:32:15 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:33:15 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:33:15 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:33:20 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:34:20 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:34:20 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:34:24 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:35:24 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:35:24 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:35:29 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:36:29 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:36:29 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:36:33 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:37:33 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:37:33 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:37:38 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:38:38 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:38:38 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:38:42 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:39:42 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:39:42 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:39:47 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:40:47 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:40:47 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:40:51 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:41:51 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:41:51 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:41:56 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:42:56 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:42:56 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:43:00 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:44:00 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:44:00 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:44:05 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 19:45:05 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 19:45:05 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 19:45:10 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>

@@ -39,7 +39,7 @@
 
     <!-- Restart automatically if it crashes -->
     <key>KeepAlive</key>
-    <true/>
+    <false/>
 
     <!-- Wait 10s before restart to avoid tight crash loops -->
     <key>ThrottleInterval</key>
