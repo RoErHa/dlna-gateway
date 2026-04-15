@@ -3,14 +3,16 @@
   ───────────────────────────
   LaunchAgent — starts the DLNA Gateway automatically when the Mac Mini
   user session begins (i.e. after login or auto-login at boot).
+
   INSTALL:
     cp com.roha.dlna-gateway.plist ~/Library/LaunchAgents/
     launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
     launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+
   MANAGE:
     launchctl list | grep dlna          # check it's loaded + PID
-    launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
-    launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+    launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
+
   LOGS:
     tail -f ~/dlna-gateway/gateway.log   # rotating daily log
     cat /tmp/dlna-gateway.out
@@ -20,35 +22,46 @@
 <dict>
     <key>Label</key>
     <string>com.roha.dlna-gateway</string>
+
     <key>WorkingDirectory</key>
     <string>/Users/ronhamersma/dlna-gateway</string>
+
     <key>ProgramArguments</key>
     <array>
         <string>/Users/ronhamersma/dlna-gateway/.venv/bin/python</string>
         <string>/Users/ronhamersma/dlna-gateway/dlna_gateway.py</string>
         <string>--no-browser</string>
-        <!-- Uncomment to change port:
-        <string>--port</string>
-        <string>8765</string>
-        -->
-        <!-- Uncomment for verbose logging:
-        <string>--debug</string>
-        -->
     </array>
+
+    <!-- Start at login -->
     <key>RunAtLoad</key>
     <true/>
+
+    <!-- Restart automatically if it crashes -->
     <key>KeepAlive</key>
     <true/>
+
+    <!-- Wait 10s before restart to avoid tight crash loops -->
     <key>ThrottleInterval</key>
-    <integer>5</integer>
-    <key>NumberOfFiles</key>
-    <integer>8192</integer>
-    <key>NumberOfProcesses</key>
-    <integer>512</integer>
+    <integer>10</integer>
+
+    <!-- File descriptor and process limits — MUST be inside SoftResourceLimits.
+         Without this wrapper, launchd silently ignores them and the gateway
+         hits the default 256 FD limit, causing "Too many open files" and
+         "unable to open database" errors under Chromecast mDNS discovery. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+        <key>NumberOfProcesses</key>
+        <integer>512</integer>
+    </dict>
+
     <key>StandardOutPath</key>
     <string>/tmp/dlna-gateway.out</string>
     <key>StandardErrorPath</key>
     <string>/tmp/dlna-gateway.err</string>
+
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

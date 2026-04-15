@@ -1,0 +1,90 @@
+2026-04-15 11:00:26 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 11:00:26 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 11:00:26 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-15 11:00:26 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-15 11:00:26 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-15 11:00:26 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-15 11:00:26 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-15 11:00:27 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
+2026-04-15 11:00:27 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
+2026-04-15 11:00:27 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-15 11:00:27 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-15 11:00:27 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/  |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-15 11:00:28 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
+2026-04-15 11:00:28 [INFO    ] dlna.cast: [CAST +] '4K TV Box'  (4K TV Box)  @ 192.168.1.194
+2026-04-15 11:00:28 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
+2026-04-15 11:00:28 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-15 11:00:28 [INFO    ] dlna.library: Index OK: 23684 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-15 11:00:28 [INFO    ] dlna.library: Index OK: 23684 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-15 11:00:34 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:42862/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-15 11:00:34 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-15 11:00:37 [INFO    ] dlna.cast: Chromecast sweep: browser has 3 device(s)
+2026-04-15 11:00:37 [INFO    ] dlna.cast:   Registering 4K TV Box (3940c756-6a45-7af7-37ba-f5d149196428)
+2026-04-15 11:00:37 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
+2026-04-15 11:00:37 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
+2026-04-15 11:00:37 [INFO    ] dlna.cast: Chromecast sweep done: 3 device(s) in registry
+2026-04-15 11:06:49 [INFO    ] dlna.library: Indexer started for Asset UPnP: RonsMacMini.home
+2026-04-15 11:06:49 [INFO    ] dlna.library: Using container: 'Album Artist' id=coA07B6A9DDA0027F1
+2026-04-15 11:06:49 [ERROR   ] dlna.library: Indexer error: database disk image is malformed
+Traceback (most recent call last):
+  File "/Users/ronhamersma/dlna-gateway/dlna_library.py", line 915, in _run
+    self.library.clear(udn)
+    ~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Users/ronhamersma/dlna-gateway/dlna_library.py", line 370, in clear
+    conn.execute("DELETE FROM tracks WHERE udn=?", (udn,))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.DatabaseError: database disk image is malformed
+2026-04-15 11:10:40 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 11:10:40 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-15 11:10:40 [INFO    ] dlna.library: DeviceRoleCache: loaded 0 known devices from DB
+2026-04-15 11:10:40 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-15 11:10:40 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
+2026-04-15 11:10:40 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
+2026-04-15 11:10:40 [INFO    ] dlna.gateway: No DB cache yet — probing saved URL: http://localhost:26125/DeviceDescription.xml
+2026-04-15 11:10:40 [INFO    ] dlna.discovery: Probing http://localhost:26125/DeviceDescription.xml …
+2026-04-15 11:10:40 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-15 11:10:40 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-15 11:10:40 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/  |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-15 11:10:41 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
+2026-04-15 11:10:41 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
+2026-04-15 11:10:41 [INFO    ] dlna.cast: [CAST +] '4K TV Box'  (4K TV Box)  @ 192.168.1.194
+2026-04-15 11:10:42 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://localhost:26125/DeviceDescription.xml
+2026-04-15 11:10:42 [INFO    ] dlna.library: Indexer started for Asset UPnP: RonsMacMini.home
+2026-04-15 11:10:42 [INFO    ] dlna.library: Indexer already running — skipping duplicate start
+2026-04-15 11:10:42 [WARNING ] dlna.content: Browse SOAP 500 (retry) @ http://localhost:26125/ContentDirectory/3787CDCF-761D-79C9-0-123456789abc/control.xml
+  <?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultCode>s:Client<
+2026-04-15 11:10:42 [ERROR   ] dlna.library: Indexer: cannot find album container for Asset UPnP: RonsMacMini.home
+2026-04-15 11:10:44 [INFO    ] dlna.discovery: [SERVER +] 'Uniti  livingroom'  @ http://192.168.1.227:16001/DeviceDescription.xml
+2026-04-15 11:10:44 [INFO    ] dlna.library: Indexer started for Uniti  livingroom
+2026-04-15 11:10:44 [ERROR   ] dlna.library: Indexer: cannot find album container for Uniti  livingroom
+2026-04-15 11:10:50 [INFO    ] dlna.cast: Chromecast sweep: browser has 3 device(s)
+2026-04-15 11:10:50 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
+2026-04-15 11:10:50 [INFO    ] dlna.cast:   Registering 4K TV Box (3940c756-6a45-7af7-37ba-f5d149196428)
+2026-04-15 11:10:50 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
+2026-04-15 11:10:50 [INFO    ] dlna.cast: Chromecast sweep done: 3 device(s) in registry
+2026-04-15 11:10:52 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:42862/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-15 11:10:52 [INFO    ] dlna.discovery: Removing server 'Uniti  livingroom' from registry — same host 192.168.1.227 is a renderer
+2026-04-15 11:10:52 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-15 11:10:52 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:5F9EC1B3-ED…
+2026-04-15 11:14:30 [INFO    ] dlna.library: Indexer started for Asset UPnP: RonsMacMini.home
+2026-04-15 11:14:30 [INFO    ] dlna.library: Using container: 'Album Artist' id=coA07B6A9DDA0027F1
+2026-04-15 11:14:30 [INFO    ] dlna.library: Track index cleared for uuid:3787CDCF-761D-79C9-0-123456789abc
+2026-04-15 11:14:30 [INFO    ] dlna.library: Indexer: mapping album tree…
+2026-04-15 11:15:33 [INFO    ] dlna.library: Indexer: found 5067 leaf containers
+2026-04-15 11:16:29 [INFO    ] dlna.library: FTS5 rebuild complete
+2026-04-15 11:16:29 [INFO    ] dlna.library: ============================================================
+2026-04-15 11:16:29 [INFO    ] dlna.library: ✓  INDEX REBUILD COMPLETE
+2026-04-15 11:16:29 [INFO    ] dlna.library:    Server  : Asset UPnP: RonsMacMini.home
+2026-04-15 11:16:29 [INFO    ] dlna.library:    Albums  : 4653  (distinct artist+album pairs)
+2026-04-15 11:16:29 [INFO    ] dlna.library:    Tracks  : 23682  (27165 duplicates suppressed)
+2026-04-15 11:16:29 [INFO    ] dlna.library: ============================================================
+2026-04-15 11:20:57 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 11:20:57 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 11:21:02 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 11:22:02 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 11:22:02 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 11:22:07 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-15 11:23:07 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-15 11:23:07 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-15 11:23:12 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
