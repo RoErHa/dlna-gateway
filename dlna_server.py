@@ -421,6 +421,45 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._json(200, {"tracks": tracks})
             return
 
+        # ── Albums (SQLite — all albums A-Z) ─────────────────────
+        if path == "/api/albums":
+            udn = params.get("udn", "")
+            if not udn:
+                self._json(400, {"error": "Missing udn"})
+                return
+            self._json(200, DB.all_albums(udn))
+            return
+
+        # ── Genres (SQLite — all genres A-Z) ─────────────────────
+        if path == "/api/genres":
+            udn = params.get("udn", "")
+            if not udn:
+                self._json(400, {"error": "Missing udn"})
+                return
+            self._json(200, DB.all_genres(udn))
+            return
+
+        # ── Genre albums (SQLite) ────────────────────────────────
+        if path == "/api/genre_albums":
+            udn   = params.get("udn", "")
+            genre = params.get("genre", "")
+            if not udn or not genre:
+                self._json(400, {"error": "Missing udn or genre"})
+                return
+            self._json(200, DB.genre_albums(udn, genre))
+            return
+
+        # ── Genre tracks (SQLite) ────────────────────────────────
+        if path == "/api/genre_tracks":
+            udn   = params.get("udn", "")
+            genre = params.get("genre", "")
+            if not udn or not genre:
+                self._json(400, {"error": "Missing udn or genre"})
+                return
+            tracks = DB.genre_tracks(udn, genre)
+            self._json(200, {"tracks": tracks})
+            return
+
         # ── Play a single track (GET keeps it simple for the JS side) ──
         if path == "/api/play":
             url   = params.get("url", "")
