@@ -635,6 +635,27 @@ $("server-sel").addEventListener("change",e=>{
 
 // ── Browse ────────────────────────────────────────────────────────
 let browsing=false;
+
+// ── Top-level library navigation ─────────────────────────────────
+function _navButtons(){
+  const wrap=document.createElement("div");
+  wrap.style.cssText="display:flex;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap";
+  const btns=[
+    {label:"👤 Artists",fn:showArtists},
+    {label:"💿 Albums",fn:showAlbums},
+    {label:"🎭 Genres",fn:showGenres},
+    {label:"📁 Folders",fn:()=>{navStack=[{id:"0",title:"Root"}];browse("0");}},
+  ];
+  btns.forEach(b=>{
+    const el=document.createElement("button");
+    el.className="btn";el.style.cssText="font-size:12px;padding:6px 14px";
+    el.textContent=b.label;
+    el.addEventListener("click",b.fn);
+    wrap.appendChild(el);
+  });
+  return wrap;
+}
+
 // ── Artists view (SQLite — default startup view) ──────────────────
 async function showArtists(){
   if(!curServer)return;
@@ -645,18 +666,11 @@ async function showArtists(){
   if(!r){$("item-list").innerHTML='<div class="msg">Could not load artists.</div>';return;}
   const artists=await r.json();
   if(!artists.length){
-    // DB empty — fall back to live Browse
     browse("0");
     return;
   }
   $("item-list").innerHTML="";
-  // Add "📁 Browse folders" row at top for live UPnP navigation
-  const top=document.createElement("div");
-  top.className="row";
-  top.innerHTML=`<div class="row-icon">📁</div><div class="row-body"><div class="row-title">Browse folders…</div><div class="row-sub">Live UPnP navigation</div></div>`;
-  top.addEventListener("click",()=>{navStack=[{id:"0",title:"Root"}];browse("0");});
-  $("item-list").appendChild(top);
-  // Artists list
+  $("item-list").appendChild(_navButtons());
   artists.forEach(a=>{
     const div=document.createElement("div");
     div.className="row";
@@ -665,6 +679,85 @@ async function showArtists(){
       const btn=e.target.closest("[data-action]");
       if(btn){e.stopPropagation();browseArtist(btn.dataset.artist);return;}
       browseArtist(a.artist);
+    });
+    $("item-list").appendChild(div);
+  });
+}
+
+// ── Albums view (SQLite) ─────────────────────────────────────────
+async function showAlbums(){
+  if(!curServer)return;
+  navStack=[{id:"__albums__",title:"Albums"}];
+  renderBreadcrumb();
+  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const r=await api(`/api/albums?udn=${enc(curServer.udn)}`);
+  if(!r){$("item-list").innerHTML='<div class="msg">Could not load albums.</div>';return;}
+  const albums=await r.json();
+  if(!albums.length){$("item-list").innerHTML='<div class="msg">No albums indexed yet</div>';return;}
+  $("item-list").innerHTML="";
+  $("item-list").appendChild(_navButtons());
+  albums.forEach(a=>{
+    const div=document.createElement("div");
+    div.className="row";
+    div.innerHTML=`${a.art?`<img src="${esc(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:`<div class="row-icon">💿</div>`}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" data-artist="${esc(a.artist)}" data-album="${esc(a.album)}" data-action="play">▶</button></div>`;
+    div.addEventListener("click",e=>{
+      const btn=e.target.closest("[data-action]");
+      if(btn){e.stopPropagation();playAlbumFromDB(btn.dataset.artist,btn.dataset.album);return;}
+      playAlbumFromDB(a.artist,a.album);
+    });
+    $("item-list").appendChild(div);
+  });
+}
+
+// ── Genres view (SQLite) ─────────────────────────────────────────
+async function showGenres(){
+  if(!curServer)return;
+  navStack=[{id:"__genres__",title:"Genres"}];
+  renderBreadcrumb();
+  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const r=await api(`/api/genres?udn=${enc(curServer.udn)}`);
+  if(!r){$("item-list").innerHTML='<div class="msg">Could not load genres.</div>';return;}
+  const genres=await r.json();
+  if(!genres.length){$("item-list").innerHTML='<div class="msg">No genres indexed yet</div>';return;}
+  $("item-list").innerHTML="";
+  $("item-list").appendChild(_navButtons());
+  genres.forEach(g=>{
+    const div=document.createElement("div");
+    div.className="row";
+    div.innerHTML=`<div class="row-icon">🎭</div><div class="row-body"><div class="row-title">${esc(g.genre)}</div><div class="row-sub">${g.album_count} albums · ${g.track_count} tracks</div></div>`;
+    div.addEventListener("click",()=>browseGenre(g.genre));
+    $("item-list").appendChild(div);
+  });
+}
+
+async function browseGenre(genre){
+  if(!curServer)return;
+  navStack=[{id:"__genres__",title:"Genres"},{id:"genre:"+genre,title:genre}];
+  renderBreadcrumb();
+  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const r=await api(`/api/genre_albums?udn=${enc(curServer.udn)}&genre=${enc(genre)}`);
+  if(!r){$("item-list").innerHTML='<div class="msg">Could not load genre.</div>';return;}
+  const albums=await r.json();
+  $("item-list").innerHTML="";
+  if(!albums.length){$("item-list").innerHTML='<div class="msg">No albums in this genre</div>';return;}
+  // Play all button
+  const playAll=document.createElement("div");
+  playAll.className="row";
+  playAll.innerHTML=`<div class="row-icon">▶</div><div class="row-body"><div class="row-title">Play all ${genre}</div><div class="row-sub">${albums.reduce((s,a)=>s+a.track_count,0)} tracks</div></div>`;
+  playAll.addEventListener("click",async()=>{
+    const tr=await api(`/api/genre_tracks?udn=${enc(curServer.udn)}&genre=${enc(genre)}`);
+    if(!tr)return;const d=await tr.json();
+    if(d.tracks)await playTracklist(d.tracks,genre,"");
+  });
+  $("item-list").appendChild(playAll);
+  albums.forEach(a=>{
+    const div=document.createElement("div");
+    div.className="row";
+    div.innerHTML=`${a.art?`<img src="${esc(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:`<div class="row-icon">💿</div>`}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" data-artist="${esc(a.artist)}" data-album="${esc(a.album)}" data-action="play">▶</button></div>`;
+    div.addEventListener("click",e=>{
+      const btn=e.target.closest("[data-action]");
+      if(btn){e.stopPropagation();playAlbumFromDB(btn.dataset.artist,btn.dataset.album);return;}
+      playAlbumFromDB(a.artist,a.album);
     });
     $("item-list").appendChild(div);
   });
@@ -710,6 +803,8 @@ function renderBreadcrumb(){
     if(idx>=0){
       navStack=navStack.slice(0,idx+1);
       if(el.dataset.id==="__artists__") showArtists();
+      else if(el.dataset.id==="__albums__") showAlbums();
+      else if(el.dataset.id==="__genres__") showGenres();
       else browse(el.dataset.id);
     }
   }));
