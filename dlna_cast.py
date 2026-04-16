@@ -356,6 +356,10 @@ class CastQueue:
                 metadata=metadata,
             )
             self._mc.block_until_active(timeout=10)
+            # The Cast receiver loads media in PAUSED state — explicit play() is required.
+            # autoplay=True in play_media is not reliable on the Default Media Receiver.
+            self._mc.play()
+            log.info(f"Cast play() sent — waiting for PLAYING state")
         except Exception as e:
             log.warning(f"Cast play failed: {e}")
 
@@ -368,8 +372,15 @@ class CastQueue:
                 if not self._mc or self._stop_flag:
                     break
                 status = self._mc.status
-                if status and status.player_is_idle and status.idle_reason == "FINISHED":
-                    self._next(stream_base)
+                if not status:
+                    continue
+                if status.player_is_idle:
+                    reason = status.idle_reason or ""
+                    if reason == "FINISHED":
+                        self._next(stream_base)
+                    elif reason == "ERROR":
+                        log.warning(f"Cast stream error on track {self._idx + 1} — skipping")
+                        self._next(stream_base)
             except Exception:
                 pass
 
