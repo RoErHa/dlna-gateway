@@ -348,10 +348,32 @@ if os.path.isfile(pool_path):
 
 
 # ══════════════════════════════════════════════════════════════════
-# T4 — CHROMECAST MIME NORMALISATION
+# T4.HB — SERVER HEARTBEAT (file-level)
 # ══════════════════════════════════════════════════════════════════
 
-section("T4.1 — dlna_cast.py MIME normalisation table")
+section("T4.HB — dlna_discovery.py heartbeat_thread")
+disc_path = os.path.join(PROJECT, "dlna_discovery.py")
+if os.path.isfile(disc_path):
+    dc = open(disc_path).read()
+    check("heartbeat_thread defined",       "def heartbeat_thread(" in dc)
+    check("uses SERVERS.touch",             "SERVERS.touch(" in dc)
+    check("tracks _heartbeat_fails",        "_heartbeat_fails" in dc)
+    check("marks offline after 2 failures", "fails >= 2" in dc)
+    check("sets last_seen = 0",             "last_seen = 0" in dc)
+
+section("T4.HB — dlna_gateway.py starts heartbeat thread")
+gw_path = os.path.join(PROJECT, "dlna_gateway.py")
+if os.path.isfile(gw_path):
+    gwc = open(gw_path).read()
+    check("heartbeat thread started", "heartbeat_thread" in gwc)
+    check("heartbeat thread named",   '"heartbeat"' in gwc)
+
+
+# ══════════════════════════════════════════════════════════════════
+# T4.CAST — CHROMECAST MIME NORMALISATION
+# ══════════════════════════════════════════════════════════════════
+
+section("T4.CAST.1 — dlna_cast.py MIME normalisation table")
 cast_path = os.path.join(PROJECT, "dlna_cast.py")
 if os.path.isfile(cast_path):
     import sys as _sys

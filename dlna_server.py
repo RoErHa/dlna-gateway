@@ -161,6 +161,31 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    # ── HTTPS redirect ────────────────────────────────────────────
+
+    # Paths that must stay on HTTP — devices (Chromecast, Uniti) can't do HTTPS
+    _HTTP_ONLY = ("/stream", "/gw/")
+
+    def _redirect_https(self) -> bool:
+        """
+        If HTTPS is running and this request arrived on the plain HTTP server,
+        send a 301 to the HTTPS equivalent — except for device-only endpoints.
+        Returns True if a redirect was sent (caller should return immediately).
+        """
+        tls_port = getattr(self.server, "tls_port", None)
+        if not tls_port:
+            return False   # HTTPS not configured
+        path = urllib.parse.urlparse(self.path).path
+        if any(path.startswith(p) for p in self._HTTP_ONLY):
+            return False   # device endpoint — keep on HTTP
+        host = self.headers.get("Host", "").split(":")[0] or "localhost"
+        self.send_response(301)
+        self.send_header("Location", f"https://{host}:{tls_port}{self.path}")
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        return True
+
     # ── OPTIONS (CORS pre-flight) ─────────────────────────────────
 
     def do_OPTIONS(self):
@@ -208,6 +233,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
     }
 
     def do_GET(self):
+        if self._redirect_https():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         params = dict(urllib.parse.parse_qsl(parsed.query))
@@ -309,6 +336,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
     }
 
     def do_POST(self):
+        if self._redirect_https():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         length = int(self.headers.get("Content-Length", 0))

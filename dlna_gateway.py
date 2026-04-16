@@ -208,6 +208,12 @@ Examples:
         args=(lan_ip, GW_UDN),
         daemon=True, name="subnet-scan").start()
 
+    # Server heartbeat — keeps last_seen fresh, eliminates offline flicker
+    threading.Thread(
+        target=_disc.heartbeat_thread,
+        args=(GW_UDN,),
+        daemon=True, name="heartbeat").start()
+
     # Chromecast discovery (mDNS/zeroconf) — finds Cast-capable devices
     _cast_start()
 
@@ -231,6 +237,7 @@ Examples:
 
     # HTTP server
     server = ThreadedHTTPServer((args.host, args.port), GatewayHandler)
+    server.tls_port = None   # filled in below if HTTPS starts successfully
 
     # ── HTTPS server (Tailscale certs) ───────────────────────────
     # Auto-detect cert files in working directory if not specified
@@ -256,6 +263,7 @@ Examples:
                 threading.Thread(
                     target=tls_server.serve_forever,
                     daemon=True, name="https").start()
+                server.tls_port = args.tls_port   # tells HTTP handler where to redirect
                 log.info(f"HTTPS ready → https://localhost:{args.tls_port}/")
             except Exception as e:
                 log.warning(f"HTTPS failed to start: {e}")
