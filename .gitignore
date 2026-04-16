@@ -1,0 +1,33 @@
+# macOS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# env / secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / JS
+node_modules/
+dist/
+build/
+
+# Docker / misc
+docker-compose.override.yml
+*.log
+logs/
+.snapshots/
+*.zip
+*.tar
+project docs/
+
+# DB / runtime
+*.sqlite3
+data/
+db/
