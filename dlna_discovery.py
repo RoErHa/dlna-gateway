@@ -109,7 +109,9 @@ class ServerRegistry:
             return s is not None and now - s.last_seen < _STALE_SEC
 
     def empty(self) -> bool:
-        return len(self.online()) == 0
+        """True only if no server has ever been discovered (registry is bare)."""
+        with self._lock:
+            return len(self._d) == 0
 
 
 class RendererRegistry:
@@ -462,6 +464,48 @@ def subnet_scan_if_empty(lan_ip: str, gw_udn: str = "",
                 else:
                     log.info("Servers offline — subnet scan…")
                     subnet_scan(lan_ip, gw_udn)
+
+
+# ── Server heartbeat ─────────────────────────────────────────────
+
+_heartbeat_fails: dict = {}   # udn → consecutive failure count
+
+
+def heartbeat_thread(gw_udn: str = ""):
+    """
+    Background thread: ping each known server's location URL every 30 s.
+
+    On success  → SERVERS.touch(udn) keeps last_seen fresh → no offline flicker.
+    On failure  → increment per-server counter; after 2 consecutive failures
+                  (≥ 60 s) set last_seen = 0 so the UI shows offline promptly.
+    """
+    time.sleep(15)   # let SSDP / pre-probe settle first
+    while True:
+        for srv in SERVERS.all():
+            udn = srv.udn
+            try:
+                req = urllib.request.Request(
+                    srv.location, headers={"User-Agent": "DLNAGateway/1.0"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    resp.read(512)   # just enough to confirm the server is alive
+                SERVERS.touch(udn)
+                if udn in _heartbeat_fails:
+                    log.info(f"Heartbeat: {srv.name!r} back online")
+                    _heartbeat_fails.pop(udn)
+                else:
+                    log.debug(f"Heartbeat OK: {srv.name!r}")
+            except Exception as e:
+                fails = _heartbeat_fails.get(udn, 0) + 1
+                _heartbeat_fails[udn] = fails
+                log.debug(f"Heartbeat fail ({fails}×): {srv.name!r}: {e}")
+                if fails >= 2:
+                    # Force offline so the UI reflects reality within 60 s
+                    with SERVERS._lock:
+                        if udn in SERVERS._d:
+                            SERVERS._d[udn].last_seen = 0
+                    log.info(f"Heartbeat: {srv.name!r} marked offline "
+                             f"(2 consecutive failures)")
+        time.sleep(30)
 
 
 # ── Direct probe ──────────────────────────────────────────────────
