@@ -19,6 +19,45 @@ from typing import Dict, List, Optional
 
 log = logging.getLogger("dlna.cast")
 
+# ── MIME type normalisation for Chromecast ────────────────────────
+# Chromecast is strict about content-type. Map every alias/variant from
+# UPnP/DLNA servers to the canonical type that the Cast receiver accepts.
+CAST_MIME_NORM: dict = {
+    # ── MP3 ──────────────────────────────────────────────────────
+    "audio/mp3":              "audio/mpeg",
+    "audio/x-mpeg":           "audio/mpeg",
+    "audio/x-mp3":            "audio/mpeg",
+    "audio/mpeg3":            "audio/mpeg",
+    "audio/mpg":              "audio/mpeg",
+    # ── FLAC ─────────────────────────────────────────────────────
+    "audio/x-flac":           "audio/flac",
+    # ── AAC / M4A / ALAC (all in MP4 container) ──────────────────
+    "audio/aac":              "audio/mp4",
+    "audio/x-aac":            "audio/mp4",
+    "audio/x-m4a":            "audio/mp4",
+    "audio/x-alac":           "audio/mp4",
+    "audio/m4a":              "audio/mp4",
+    "audio/vnd.dlna.adts":    "audio/mp4",   # DLNA AAC transport stream
+    # ── OGG / Vorbis / Opus ──────────────────────────────────────
+    "audio/vorbis":           "audio/ogg",
+    "audio/x-ogg":            "audio/ogg",
+    "audio/x-vorbis":         "audio/ogg",
+    "audio/opus":             "audio/ogg",   # Opus in OGG container
+    "audio/x-opus":           "audio/ogg",
+    # ── WAV ──────────────────────────────────────────────────────
+    "audio/x-wav":            "audio/wav",
+    "audio/wave":             "audio/wav",
+    "audio/vnd.wave":         "audio/wav",
+    # ── AIFF ─────────────────────────────────────────────────────
+    "audio/x-aiff":           "audio/aiff",
+    "audio/aif":              "audio/aiff",
+    # ── WMA ──────────────────────────────────────────────────────
+    "audio/x-ms-wma":         "audio/x-ms-wma",   # keep — no better option
+    "audio/wma":              "audio/x-ms-wma",
+    # ── WebM ─────────────────────────────────────────────────────
+    "audio/x-webm":           "audio/webm",
+}
+
 # ── Lazy import — pychromecast is optional ────────────────────────
 _pychromecast = None
 _zeroconf_inst = None
@@ -295,8 +334,10 @@ class CastQueue:
         artist = t.get("artist", "")
         album = t.get("album", "")
         art = t.get("art", "")
+        mime = t.get("mime", "") or "audio/flac"
+        mime = CAST_MIME_NORM.get(mime, mime)
 
-        log.info(f"Cast ▶ [{self._idx+1}/{len(self._tracks)}] {title}")
+        log.info(f"Cast ▶ [{self._idx+1}/{len(self._tracks)}] {title}  ({mime})")
 
         try:
             metadata = {
@@ -310,7 +351,7 @@ class CastQueue:
 
             self._mc.play_media(
                 stream_url,
-                "audio/flac",  # gateway stream proxy handles format
+                mime,
                 title=title,
                 metadata=metadata,
             )

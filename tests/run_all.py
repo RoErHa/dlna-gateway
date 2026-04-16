@@ -22,6 +22,10 @@ OFFLINE = "--offline" in sys.argv
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.join(PROJECT, "static")
 
+# Project must be on sys.path so local modules (dlna_*, api_*) can be imported
+if PROJECT not in sys.path:
+    sys.path.insert(0, PROJECT)
+
 passed = 0
 failed = 0
 errors = []
@@ -199,6 +203,98 @@ else:
 
 
 # ══════════════════════════════════════════════════════════════════
+# T2 — SERVER SPLIT CHECKS (file-level)
+# ══════════════════════════════════════════════════════════════════
+
+section("T2.1 — API module files exist")
+api_modules = ["api_browse.py", "api_playback.py", "api_playlists.py", "api_upnp.py"]
+for mod in api_modules:
+    check(f"{mod} exists", os.path.isfile(os.path.join(PROJECT, mod)))
+
+section("T2.2 — API module imports (no circular deps)")
+if all(os.path.isfile(os.path.join(PROJECT, m)) for m in api_modules):
+    import importlib.util as _ilu2
+    for mod in api_modules:
+        try:
+            _spec = _ilu2.spec_from_file_location(mod[:-3], os.path.join(PROJECT, mod))
+            _m    = _ilu2.module_from_spec(_spec)
+            _spec.loader.exec_module(_m)
+            check(f"{mod} imports cleanly", True)
+        except Exception as _e:
+            check(f"{mod} imports cleanly", False, str(_e)[:80])
+
+section("T2.3 — api_browse.py: all browse functions present")
+browse_path = os.path.join(PROJECT, "api_browse.py")
+if os.path.isfile(browse_path):
+    bc = open(browse_path).read()
+    for fn in ["servers", "renderers", "browse", "artists", "search",
+               "album_tracks", "albums", "genres", "genre_albums",
+               "genre_tracks", "artist_albums", "browse_letter"]:
+        check(f"  api_browse.{fn}", f"def {fn}(" in bc)
+
+section("T2.4 — api_playback.py: all playback functions present")
+pb_path = os.path.join(PROJECT, "api_playback.py")
+if os.path.isfile(pb_path):
+    pc = open(pb_path).read()
+    for fn in ["play", "state", "renderer_state", "capabilities",
+               "index_status", "index_rebuild", "stream",
+               "cast_devices", "cast_state", "cast_queue",
+               "render_queue", "render", "control", "edit_track",
+               "play_tracks"]:
+        check(f"  api_playback.{fn}", f"def {fn}(" in pc)
+
+section("T2.5 — api_playlists.py: all playlist functions present")
+pl_path = os.path.join(PROJECT, "api_playlists.py")
+if os.path.isfile(pl_path):
+    plc = open(pl_path).read()
+    for fn in ["playlists", "playlist", "playlist_create",
+               "playlist_delete", "playlist_add", "playlist_remove"]:
+        check(f"  api_playlists.{fn}", f"def {fn}(" in plc)
+
+section("T2.6 — api_upnp.py: UPnP gateway present")
+upnp_path = os.path.join(PROJECT, "api_upnp.py")
+if os.path.isfile(upnp_path):
+    uc = open(upnp_path).read()
+    check("  GW_UDN defined", "GW_UDN" in uc)
+    check("  GW_NAME defined", "GW_NAME" in uc)
+    for fn in ["device_xml", "cd_desc_xml", "cd_events", "cd_control",
+               "gw_ssdp_announcer", "gw_ssdp_byebye"]:
+        check(f"  api_upnp.{fn}", f"def {fn}(" in uc)
+
+section("T2.7 — dlna_server.py is slim router")
+srv_path = os.path.join(PROJECT, "dlna_server.py")
+if os.path.isfile(srv_path):
+    srv = open(srv_path).read()
+    srv_lines = srv.count("\n")
+    check(f"dlna_server.py is slim ({srv_lines} lines)", srv_lines < 400,
+          f"got {srv_lines} lines")
+    check("imports api_browse",    "import api_browse"    in srv)
+    check("imports api_playback",  "import api_playback"  in srv)
+    check("imports api_playlists", "import api_playlists" in srv)
+    check("imports api_upnp",      "import api_upnp"      in srv)
+    check("re-exports GW_UDN",     "GW_UDN" in srv)
+    check("no domain logic in router", "_gw_browse" not in srv)
+
+section("T2.8 — dlna_server.py endpoint routing")
+if os.path.isfile(srv_path):
+    srv = open(srv_path).read()
+    endpoints = [
+        "/api/servers", "/api/renderers", "/api/browse", "/api/artists",
+        "/api/albums", "/api/genres", "/api/genre_albums", "/api/genre_tracks",
+        "/api/artist_albums", "/api/browse_letter", "/api/search",
+        "/api/album_tracks", "/api/play", "/api/play_tracks",
+        "/api/playlist", "/api/playlists", "/api/playlist/add",
+        "/api/playlist/create", "/api/playlist/delete", "/api/playlist/remove",
+        "/api/render", "/api/render_queue", "/api/renderer_state",
+        "/api/state", "/api/capabilities", "/api/index/rebuild",
+        "/api/index/status", "/api/cast_devices", "/api/cast_state",
+        "/api/cast_queue", "/api/control", "/api/edit_track",
+    ]
+    for ep in endpoints:
+        check(f"  {ep} routed", f'"{ep}"' in srv)
+
+
+# ══════════════════════════════════════════════════════════════════
 # T3 — DATABASE POOL CHECKS (file-level)
 # ══════════════════════════════════════════════════════════════════
 
@@ -227,6 +323,10 @@ if os.path.isfile(lib_path):
     check("LibraryDB creates Pool", "Pool(" in lib_class)
     check("No self._lock in LibraryDB", "self._lock" not in lib_class)
     check("No self._connect in LibraryDB", "self._connect" not in lib_class)
+    check("No self._db_file in LibraryDB", "self._db_file" not in lib_class,
+          "stale attribute — use self._pool.db_file instead")
+    check("No self._local in LibraryDB", "self._local" not in lib_class,
+          "stale attribute — pool handles thread-local connections")
     check("Uses pool.read()", "self._pool.read()" in lib_class)
     check("Uses pool.write()", "self._pool.write()" in lib_class)
 
@@ -245,6 +345,79 @@ if os.path.isfile(pool_path):
     pool_passed = "PASS" in result.stdout
     check("Pool concurrent test passes", pool_passed,
           result.stdout.strip().split('\n')[-1] if result.stdout else result.stderr[:100])
+
+
+# ══════════════════════════════════════════════════════════════════
+# T4 — CHROMECAST MIME NORMALISATION
+# ══════════════════════════════════════════════════════════════════
+
+section("T4.1 — dlna_cast.py MIME normalisation table")
+cast_path = os.path.join(PROJECT, "dlna_cast.py")
+if os.path.isfile(cast_path):
+    import sys as _sys
+    _sys.path.insert(0, PROJECT)
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("dlna_cast", cast_path)
+        _mod  = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        norm = _mod.CAST_MIME_NORM
+
+        check("CAST_MIME_NORM exported", isinstance(norm, dict))
+
+        # Every alias must map to a canonical type (no self-mapping needed, but
+        # the canonical itself must not be in the table as a key pointing elsewhere)
+        _expected = {
+            # MP3
+            "audio/mp3":           "audio/mpeg",
+            "audio/x-mpeg":        "audio/mpeg",
+            "audio/x-mp3":         "audio/mpeg",
+            "audio/mpeg3":         "audio/mpeg",
+            "audio/mpg":           "audio/mpeg",
+            # FLAC
+            "audio/x-flac":        "audio/flac",
+            # AAC / M4A / ALAC
+            "audio/aac":           "audio/mp4",
+            "audio/x-aac":         "audio/mp4",
+            "audio/x-m4a":         "audio/mp4",
+            "audio/x-alac":        "audio/mp4",
+            "audio/m4a":           "audio/mp4",
+            "audio/vnd.dlna.adts": "audio/mp4",
+            # OGG / Opus / Vorbis
+            "audio/vorbis":        "audio/ogg",
+            "audio/x-ogg":         "audio/ogg",
+            "audio/x-vorbis":      "audio/ogg",
+            "audio/opus":          "audio/ogg",
+            "audio/x-opus":        "audio/ogg",
+            # WAV
+            "audio/x-wav":         "audio/wav",
+            "audio/wave":          "audio/wav",
+            "audio/vnd.wave":      "audio/wav",
+            # AIFF
+            "audio/x-aiff":        "audio/aiff",
+            "audio/aif":           "audio/aiff",
+            # WMA
+            "audio/x-ms-wma":      "audio/x-ms-wma",
+            "audio/wma":           "audio/x-ms-wma",
+            # WebM
+            "audio/x-webm":        "audio/webm",
+        }
+        for alias, canonical in _expected.items():
+            check(f"  {alias} → {canonical}", norm.get(alias) == canonical,
+                  f"got {norm.get(alias)!r}")
+
+        # Canonical pass-through: types already correct should not be remapped
+        _passthrough = ["audio/mpeg", "audio/flac", "audio/mp4",
+                        "audio/ogg", "audio/wav", "audio/aiff", "audio/webm"]
+        for t in _passthrough:
+            check(f"  {t} passes through unchanged",
+                  norm.get(t, t) == t,
+                  f"remapped to {norm.get(t)!r}")
+
+    except Exception as _e:
+        check("dlna_cast imports cleanly", False, str(_e))
+else:
+    check("dlna_cast.py exists", False)
 
 
 # ══════════════════════════════════════════════════════════════════
