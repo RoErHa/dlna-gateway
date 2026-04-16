@@ -2856,3 +2856,380 @@
 2026-04-16 17:16:50 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
 2026-04-16 17:16:50 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
 2026-04-16 17:16:54 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:17:54 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:17:54 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:17:59 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:18:59 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:18:59 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:19:03 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:20:03 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:20:03 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:20:08 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:21:08 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:21:08 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:21:12 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:22:12 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:22:12 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:22:16 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:23:16 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:23:16 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:23:21 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:24:21 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:24:21 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:24:25 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:25:25 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:25:25 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:25:30 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:26:30 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:26:30 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:26:34 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:27:34 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:27:34 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:27:39 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:28:39 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:28:39 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:28:43 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:29:43 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:29:43 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:29:48 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:30:48 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:30:48 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:30:52 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:31:52 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:31:52 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:31:57 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:32:57 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:32:57 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:33:01 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:34:01 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:34:01 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:34:05 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:35:06 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:35:06 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:35:10 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:36:10 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:36:10 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:36:15 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:37:15 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:37:15 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:37:18 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-16 17:37:18 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-16 17:37:18 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-16 17:37:18 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-16 17:37:18 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-16 17:37:18 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-16 17:37:18 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-16 17:37:18 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
+2026-04-16 17:37:18 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
+2026-04-16 17:37:18 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-16 17:37:18 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-16 17:37:18 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/   |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-16 17:37:19 [INFO    ] dlna.cast: [CAST +] '4K TV Box'  (4K TV Box)  @ 192.168.1.194
+2026-04-16 17:37:19 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
+2026-04-16 17:37:19 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
+2026-04-16 17:37:19 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-16 17:37:19 [INFO    ] dlna.library: Index OK: 23682 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-16 17:37:28 [INFO    ] dlna.cast: Chromecast sweep: browser has 3 device(s)
+2026-04-16 17:37:28 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
+2026-04-16 17:37:28 [INFO    ] dlna.cast:   Registering 4K TV Box (3940c756-6a45-7af7-37ba-f5d149196428)
+2026-04-16 17:37:28 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
+2026-04-16 17:37:28 [INFO    ] dlna.cast: Chromecast sweep done: 3 device(s) in registry
+2026-04-16 17:37:32 [INFO    ] dlna.discovery: [RENDERER+] 'TV136'  @ http://192.168.1.35:1919/
+2026-04-16 17:37:32 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-16 17:37:32 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:42862/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-16 17:37:32 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-16 17:40:03 [INFO    ] dlna.api.playback: POST /api/cast_queue  1 tracks → Uniti  livingroom  (base: http://192.168.1.125:8443)
+2026-04-16 17:40:03 [INFO    ] dlna.cast: Connecting to Uniti  livingroom @ 192.168.1.227:8009…
+2026-04-16 17:40:03 [INFO    ] dlna.cast: Cast queue: 1 tracks → Uniti  livingroom
+2026-04-16 17:40:03 [INFO    ] dlna.cast: Cast ▶ [1/1] Fantasy  (audio/flac)
+2026-04-16 17:40:03 [INFO    ] pychromecast.controllers: Receiver:Launching app CC1AD845
+2026-04-16 17:40:31 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 17:40:31 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 17:40:32 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 17:40:32 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 17:40:37 [INFO    ] pychromecast: Quitting current app
+2026-04-16 17:40:37 [INFO    ] pychromecast.controllers: Receiver:Stopping current app 'CC1AD845'
+2026-04-16 17:40:38 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 17:40:38 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 17:40:59 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 17:40:59 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 17:41:02 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 17:41:02 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 17:41:05 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 17:41:05 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 17:41:06 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 17:41:06 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 17:43:12 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 17:43:12 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 17:43:43 [INFO    ] dlna.api.playback: POST /api/render_queue  449 tracks → Uniti  livingroom
+2026-04-16 17:43:43 [INFO    ] dlna.player: RendererQueue [1/449] 'If You Need To, Keep Time On Me (Live On Boston Harbor)' → Uniti  livingroom
+2026-04-16 17:43:43 [INFO    ] dlna.content: AVTransport ▶ 'If You Need To, Keep Time On Me (Live On Boston Harbor)' → http://192.168.1.227:42862/Control/LibRygelRenderer/RygelAVTransport
+2026-04-16 17:44:07 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-16 17:45:33 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:45:33 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:45:38 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:46:38 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:46:38 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:46:42 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:47:42 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:47:42 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:47:47 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:48:47 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:48:47 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:48:52 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:49:52 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:49:52 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:49:56 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:50:56 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:50:56 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:51:01 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:52:01 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:52:01 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:52:05 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:53:05 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:53:05 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:53:09 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:54:10 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:54:10 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:54:14 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:55:14 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:55:14 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:55:18 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:56:18 [INFO    ] dlna.discovery: No servers seen yet — subnet scan…
+2026-04-16 17:56:18 [INFO    ] dlna.discovery: Subnet scan: 192.168.1.1–254
+2026-04-16 17:56:23 [WARNING ] dlna.discovery: Subnet scan found nothing. Use --probe <url>
+2026-04-16 17:56:45 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-16 17:56:45 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-16 17:56:45 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-16 17:56:45 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-16 17:56:45 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-16 17:56:45 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-16 17:56:45 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-16 17:56:45 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
+2026-04-16 17:56:45 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
+2026-04-16 17:56:45 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-16 17:56:45 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-16 17:56:45 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/   |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-16 17:56:45 [INFO    ] dlna.cast: [CAST +] '4K TV Box'  (4K TV Box)  @ 192.168.1.194
+2026-04-16 17:56:45 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
+2026-04-16 17:56:45 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
+2026-04-16 17:56:46 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-16 17:56:46 [INFO    ] dlna.library: Index OK: 23682 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-16 17:56:46 [INFO    ] dlna.library: Index OK: 23682 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-16 17:56:50 [INFO    ] dlna.discovery: [RENDERER+] 'TV136'  @ http://192.168.1.35:1919/
+2026-04-16 17:56:50 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-16 17:56:55 [INFO    ] dlna.cast: Chromecast sweep: browser has 3 device(s)
+2026-04-16 17:56:55 [INFO    ] dlna.cast:   Registering 4K TV Box (3940c756-6a45-7af7-37ba-f5d149196428)
+2026-04-16 17:56:55 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
+2026-04-16 17:56:55 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
+2026-04-16 17:56:55 [INFO    ] dlna.cast: Chromecast sweep done: 3 device(s) in registry
+2026-04-16 17:57:14 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:60524/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-16 17:57:14 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-16 17:57:36 [INFO    ] dlna.api.playback: POST /api/cast_queue  1 tracks → 4K TV Box  (base: http://192.168.1.125:8443)
+2026-04-16 17:57:36 [INFO    ] dlna.cast: Connecting to 4K TV Box @ 192.168.1.194:8009…
+2026-04-16 17:57:36 [INFO    ] dlna.cast: Cast queue: 1 tracks → 4K TV Box
+2026-04-16 17:57:36 [INFO    ] dlna.cast: Cast ▶ [1/1] Yosemite (feat. Dave Matthews)  (audio/flac)
+2026-04-16 17:57:36 [INFO    ] pychromecast.controllers: Receiver:Launching app CC1AD845
+2026-04-16 17:57:37 [INFO    ] dlna.api.playback: POST /api/cast_queue  37 tracks → 4K TV Box  (base: http://192.168.1.125:8443)
+2026-04-16 17:57:37 [INFO    ] dlna.cast: Cast queue: 37 tracks → 4K TV Box
+2026-04-16 17:57:37 [INFO    ] dlna.cast: Cast ▶ [1/37] More Like a River  (audio/flac)
+2026-04-16 17:57:37 [INFO    ] pychromecast.controllers: Receiver:Launching app CC1AD845
+2026-04-16 17:57:43 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:45 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:57:45 [INFO    ] dlna.cast: Cast ▶ [2/37] Down Home Dispensary  (audio/flac)
+2026-04-16 17:57:45 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:48 [WARNING ] dlna.cast: Cast stream error on track 2 — skipping
+2026-04-16 17:57:48 [INFO    ] dlna.cast: Cast ▶ [3/37] Caldera  (audio/flac)
+2026-04-16 17:57:48 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:50 [WARNING ] dlna.cast: Cast stream error on track 3 — skipping
+2026-04-16 17:57:50 [INFO    ] dlna.cast: Cast ▶ [4/37] Down, Down, Stream  (audio/flac)
+2026-04-16 17:57:50 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:52 [WARNING ] dlna.cast: Cast stream error on track 4 — skipping
+2026-04-16 17:57:52 [INFO    ] dlna.cast: Cast ▶ [5/37] Goodbye Mary  (audio/flac)
+2026-04-16 17:57:52 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:53 [WARNING ] dlna.cast: Cast play failed: Execution of play timed out after 10.0 s.
+2026-04-16 17:57:54 [WARNING ] dlna.cast: Cast stream error on track 5 — skipping
+2026-04-16 17:57:54 [INFO    ] dlna.cast: Cast ▶ [6/37] When My Race Is Run  (audio/flac)
+2026-04-16 17:57:54 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:55 [WARNING ] dlna.cast: Cast stream error on track 6 — skipping
+2026-04-16 17:57:55 [INFO    ] dlna.cast: Cast ▶ [7/37] The Rules  (audio/flac)
+2026-04-16 17:57:55 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:56 [WARNING ] dlna.cast: Cast stream error on track 7 — skipping
+2026-04-16 17:57:56 [INFO    ] dlna.cast: Cast ▶ [8/37] Bad News  (audio/flac)
+2026-04-16 17:57:56 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:57 [WARNING ] dlna.cast: Cast stream error on track 8 — skipping
+2026-04-16 17:57:57 [INFO    ] dlna.cast: Cast ▶ [9/37] When You're Ready  (audio/flac)
+2026-04-16 17:57:57 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:58 [WARNING ] dlna.cast: Cast stream error on track 9 — skipping
+2026-04-16 17:57:58 [INFO    ] dlna.cast: Cast ▶ [10/37] Truckin'  (2015 Remaster)  (audio/flac)
+2026-04-16 17:57:59 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:57:59 [WARNING ] dlna.cast: Cast stream error on track 10 — skipping
+2026-04-16 17:57:59 [INFO    ] dlna.cast: Cast ▶ [11/37] The El Burro Song  (audio/flac)
+2026-04-16 17:58:00 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:01 [WARNING ] dlna.cast: Cast stream error on track 11 — skipping
+2026-04-16 17:58:01 [INFO    ] dlna.cast: Cast ▶ [12/37] The First Time I Fell in Love  (audio/flac)
+2026-04-16 17:58:01 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:02 [WARNING ] dlna.cast: Cast stream error on track 12 — skipping
+2026-04-16 17:58:02 [INFO    ] dlna.cast: Cast ▶ [13/37] It's OK (I Knew What You Meant)  (audio/flac)
+2026-04-16 17:58:02 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:03 [WARNING ] dlna.cast: Cast stream error on track 13 — skipping
+2026-04-16 17:58:03 [INFO    ] dlna.cast: Cast ▶ [14/37] Don't Let Go  (audio/flac)
+2026-04-16 17:58:03 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:04 [WARNING ] dlna.cast: Cast stream error on track 14 — skipping
+2026-04-16 17:58:04 [INFO    ] dlna.cast: Cast ▶ [15/37] Sundown  (audio/flac)
+2026-04-16 17:58:04 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:05 [WARNING ] dlna.cast: Cast stream error on track 15 — skipping
+2026-04-16 17:58:05 [INFO    ] dlna.cast: Cast ▶ [16/37] Carefree Highway  (audio/flac)
+2026-04-16 17:58:05 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:06 [WARNING ] dlna.cast: Cast stream error on track 16 — skipping
+2026-04-16 17:58:06 [INFO    ] dlna.cast: Cast ▶ [17/37] Liberada  (audio/flac)
+2026-04-16 17:58:06 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:07 [WARNING ] dlna.cast: Cast stream error on track 17 — skipping
+2026-04-16 17:58:07 [INFO    ] dlna.cast: Cast ▶ [18/37] Yosemite (feat. Dave Matthews)  (audio/flac)
+2026-04-16 17:58:07 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:08 [WARNING ] dlna.cast: Cast stream error on track 18 — skipping
+2026-04-16 17:58:08 [INFO    ] dlna.cast: Cast ▶ [19/37] Sleepwalking  (audio/flac)
+2026-04-16 17:58:08 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:09 [WARNING ] dlna.cast: Cast stream error on track 19 — skipping
+2026-04-16 17:58:09 [INFO    ] dlna.cast: Cast ▶ [20/37] Never Been To Spain  (audio/flac)
+2026-04-16 17:58:09 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:10 [WARNING ] dlna.cast: Cast stream error on track 20 — skipping
+2026-04-16 17:58:10 [INFO    ] dlna.cast: Cast ▶ [21/37] Make My Mind Up  (audio/flac)
+2026-04-16 17:58:10 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:12 [WARNING ] dlna.cast: Cast stream error on track 21 — skipping
+2026-04-16 17:58:12 [INFO    ] dlna.cast: Cast ▶ [22/37] The High Road  (audio/flac)
+2026-04-16 17:58:12 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:12 [WARNING ] dlna.cast: Cast stream error on track 22 — skipping
+2026-04-16 17:58:12 [INFO    ] dlna.cast: Cast ▶ [23/37] Constellation  (audio/flac)
+2026-04-16 17:58:12 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:14 [WARNING ] dlna.cast: Cast stream error on track 23 — skipping
+2026-04-16 17:58:14 [INFO    ] dlna.cast: Cast ▶ [24/37] Step Away  (audio/flac)
+2026-04-16 17:58:14 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:15 [WARNING ] dlna.cast: Cast stream error on track 24 — skipping
+2026-04-16 17:58:15 [INFO    ] dlna.cast: Cast ▶ [25/37] Stranger Things  (audio/flac)
+2026-04-16 17:58:15 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:16 [WARNING ] dlna.cast: Cast stream error on track 25 — skipping
+2026-04-16 17:58:16 [INFO    ] dlna.cast: Cast ▶ [26/37] Next Rodeo  (audio/flac)
+2026-04-16 17:58:16 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:17 [WARNING ] dlna.cast: Cast stream error on track 26 — skipping
+2026-04-16 17:58:17 [INFO    ] dlna.cast: Cast ▶ [27/37] Summer Side Of Life  (audio/flac)
+2026-04-16 17:58:17 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:18 [WARNING ] dlna.cast: Cast stream error on track 27 — skipping
+2026-04-16 17:58:18 [INFO    ] dlna.cast: Cast ▶ [28/37] Million Miles  (audio/flac)
+2026-04-16 17:58:18 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:19 [WARNING ] dlna.cast: Cast stream error on track 28 — skipping
+2026-04-16 17:58:19 [INFO    ] dlna.cast: Cast ▶ [29/37] San Joaquin  (audio/flac)
+2026-04-16 17:58:19 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:20 [WARNING ] dlna.cast: Cast stream error on track 29 — skipping
+2026-04-16 17:58:20 [INFO    ] dlna.cast: Cast ▶ [30/37] Great Song Of Indefference  (audio/flac)
+2026-04-16 17:58:20 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:21 [WARNING ] dlna.cast: Cast stream error on track 30 — skipping
+2026-04-16 17:58:21 [INFO    ] dlna.cast: Cast ▶ [31/37] El Dorado  (audio/flac)
+2026-04-16 17:58:21 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:22 [WARNING ] dlna.cast: Cast stream error on track 31 — skipping
+2026-04-16 17:58:22 [INFO    ] dlna.cast: Cast ▶ [32/37] Evergreen, OK  (audio/flac)
+2026-04-16 17:58:22 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:23 [WARNING ] dlna.cast: Cast stream error on track 32 — skipping
+2026-04-16 17:58:23 [INFO    ] dlna.cast: Cast ▶ [33/37] Let's Go Again  (audio/flac)
+2026-04-16 17:58:23 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:23 [INFO    ] pychromecast: Quitting current app
+2026-04-16 17:58:23 [INFO    ] pychromecast.controllers: Receiver:Stopping current app 'CC1AD845'
+2026-04-16 17:58:25 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 17:58:25 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 17:58:37 [INFO    ] dlna.api.playback: POST /api/cast_queue  1 tracks → 4K TV Box  (base: http://192.168.1.125:8443)
+2026-04-16 17:58:37 [INFO    ] dlna.cast: Connecting to 4K TV Box @ 192.168.1.194:8009…
+2026-04-16 17:58:37 [INFO    ] dlna.cast: Cast queue: 1 tracks → 4K TV Box
+2026-04-16 17:58:37 [INFO    ] dlna.cast: Cast ▶ [1/1] Yosemite (feat. Dave Matthews)  (audio/flac)
+2026-04-16 17:58:37 [INFO    ] pychromecast.controllers: Receiver:Launching app CC1AD845
+2026-04-16 17:58:42 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 17:58:44 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:44 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:46 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:46 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:48 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:48 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:50 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:50 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:52 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:52 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:54 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:54 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:56 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:56 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:58:58 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:58:58 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:01 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:01 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:03 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:03 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:05 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:05 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:07 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:07 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:09 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:09 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:11 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:11 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:13 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:13 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:15 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:15 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:17 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:17 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:19 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:19 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:21 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:21 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:23 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:23 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:25 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:25 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:27 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:27 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:29 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:29 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:31 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:31 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:33 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:33 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:35 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:35 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:37 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:37 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:40 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:40 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:42 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:42 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:44 [WARNING ] dlna.cast: Cast stream error on track 1 — skipping
+2026-04-16 17:59:44 [INFO    ] dlna.cast: Cast queue: finished
+2026-04-16 17:59:44 [INFO    ] dlna.api.playback: POST /api/cast_queue  1 tracks → Uniti  livingroom  (base: http://192.168.1.125:8443)
+2026-04-16 17:59:44 [INFO    ] dlna.cast: Connecting to Uniti  livingroom @ 192.168.1.227:8009…
+2026-04-16 17:59:44 [INFO    ] dlna.cast: Cast queue: 1 tracks → Uniti  livingroom
+2026-04-16 17:59:44 [INFO    ] dlna.cast: Cast ▶ [1/1] Sukiyaki  (audio/mpeg)
+2026-04-16 17:59:44 [INFO    ] pychromecast.controllers: Receiver:Launching app CC1AD845
+2026-04-16 17:59:54 [WARNING ] pychromecast.controllers: PLAY command requested but no session is active.
+2026-04-16 17:59:54 [WARNING ] dlna.cast: Cast play failed: Failed to execute play.
+2026-04-16 18:01:38 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 18:01:38 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 18:01:42 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 18:01:42 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 18:01:43 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 18:01:43 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 18:01:43 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 18:01:43 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 18:01:44 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 18:01:44 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 18:01:45 [WARNING ] pychromecast.controllers: STOP command requested but no session is active.
+2026-04-16 18:01:45 [WARNING ] dlna.cast: Cast stop: Failed to execute stop.
+2026-04-16 18:01:45 [WARNING ] pychromecast.controllers: PAUSE command requested but no session is active.
+2026-04-16 18:01:45 [WARNING ] dlna.cast: Cast pause: Failed to execute pause.
+2026-04-16 18:02:51 [INFO    ] dlna.api.playback: POST /api/cast_queue  1 tracks → 4K TV Box  (base: http://192.168.1.125:8765)
+2026-04-16 18:02:51 [INFO    ] dlna.cast: Connecting to 4K TV Box @ 192.168.1.194:8009…
+2026-04-16 18:02:51 [INFO    ] dlna.cast: Cast queue: 1 tracks → 4K TV Box
+2026-04-16 18:02:51 [INFO    ] dlna.cast: Cast ▶ [1/1] Boogie Oogie Oogie  (audio/flac)
+2026-04-16 18:02:52 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
+2026-04-16 18:03:14 [INFO    ] dlna.api.playback: POST /api/cast_queue  1 tracks → 4K TV Box  (base: http://192.168.1.125:8765)
+2026-04-16 18:03:14 [INFO    ] dlna.cast: Connecting to 4K TV Box @ 192.168.1.194:8009…
+2026-04-16 18:03:14 [INFO    ] dlna.cast: Cast queue: 1 tracks → 4K TV Box
+2026-04-16 18:03:14 [INFO    ] dlna.cast: Cast ▶ [1/1] Dancing Shoes  (audio/flac)
+2026-04-16 18:03:14 [INFO    ] dlna.cast: Cast play() sent — waiting for PLAYING state
