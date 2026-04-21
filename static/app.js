@@ -47,7 +47,12 @@ browserAudio.addEventListener("ended",()=>{
   if(browserIdx<browserQueue.length-1){browserIdx++;_browserPlayIdx(browserIdx);}
   else{activeDevice="browser";} // playlist done
 });
-browserAudio.addEventListener("error",e=>{toast("⚠ Stream error — format may not be supported in browser");});
+browserAudio.addEventListener("error",e=>{
+  if(activeDevice!=="browser")return;
+  const t=browserQueue[browserIdx];
+  toast(`⚠ Can't play "${t?.title||'track'}" in browser — try IINA or Chromecast`);
+  $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+});
 
 // ── MediaSession — lock screen / CarPlay controls + metadata ──
 function _updateMediaSession(t, idx){
@@ -780,16 +785,14 @@ async function playTracklist(tracks, title, artist){
       if(!d||d.error){toast("Agent error: "+(d?.error||"no response"));return;}
       toast(`▶ Playing ${tracks.length} tracks in ${playerCfg.label}`);
     } else {
-      // No agent — fall back to URL scheme (launch only, no transport control)
-      const r=await api("/api/iina_queue",{method:"POST",
+      // No agent — use server-side play_tracks (IPC reuses running instance)
+      const r=await api("/api/play_tracks",{method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({tracks})});
-      if(!r){toast("Failed to queue tracks");return;}
+        body:JSON.stringify({tracks,title})});
+      if(!r){toast("Failed to start playback");return;}
       const d=await r.json();
       if(d.error){toast("Error: "+d.error);return;}
-      const m3uUrl=`${window.location.protocol}//${window.location.host}/api/iina.m3u`;
-      window.location.href=`${playerCfg.scheme}${encodeURIComponent(m3uUrl)}`;
-      toast(`▶ Opening ${tracks.length} tracks in ${playerCfg.label} (no agent)`);
+      toast(`▶ Playing ${tracks.length} tracks in ${playerCfg.label}`);
     }
   } else if(out.startsWith("cast:")){
     // Chromecast
@@ -1056,8 +1059,10 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
       if(d&&!d.error) toast(`▶ Playing in ${playerCfg.label}`);
       else toast("Agent error: "+(d?.error||"no response"));
     } else {
-      window.location.href=`${playerCfg.scheme}${encodeURIComponent(url)}`;
-      toast(`▶ Opening in ${playerCfg.label}…`);
+      // No agent — use server-side play (IPC reuses running instance)
+      const r=await api(`/api/play?url=${enc(url)}&title=${enc(title)}`);
+      if(!r){toast("Failed to start playback");return;}
+      toast(`▶ Playing in ${playerCfg.label}`);
     }
   } else if(out.startsWith("cast:")){
     const castUuid=out.replace("cast:","");
@@ -1116,11 +1121,18 @@ async function control(cmd){
     // Handle browser audio locally — no server round-trip needed
     switch(cmd.action){
       case "pause":
-        if(browserAudio.paused){browserAudio.play().catch(()=>{});$("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";}
-        else{browserAudio.pause();$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
+        if(browserAudio.paused){
+          $("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";
+          browserAudio.play().catch(err=>{
+            $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+            if(err?.name==="NotAllowedError")
+              toast("⚠ Browser blocked autoplay — tap ▶ Play to start");
+          });
+        }else{browserAudio.pause();$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
         break;
       case "stop":
-        browserAudio.pause();browserAudio.currentTime=0;
+        browserAudio.pause();browserAudio.src="";browserAudio.load();
+        browserQueue=[];browserIdx=0;
         $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
         break;
       case "next":

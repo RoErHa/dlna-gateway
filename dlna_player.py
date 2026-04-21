@@ -115,8 +115,27 @@ class PlayerState:
     def play(self, uri: str, title: str = ""):
         """
         Start playing a URI (direct URL or /tmp/*.m3u path).
-        Terminates any running player first.
+        Reuses a running IINA/mpv via IPC loadfile; only launches fresh if none is running.
         """
+        with self._lock:
+            self.uri   = uri
+            self.title = title
+            self.state = "playing"
+
+        log.info(f"play → {title!r}  ({uri[:80]}{'…' if len(uri)>80 else ''})")
+
+        # Prefer IPC — avoids opening a second IINA window when one is already running.
+        # iina-cli exits after queuing but IINA.app stays alive (--keep-running),
+        # so self.proc.poll() can be non-None even though the IPC socket is still live.
+        is_playlist = uri.endswith(".m3u") or uri.endswith(".m3u8")
+        ipc_cmd = ({"command": ["loadlist", uri, "replace"]} if is_playlist
+                   else {"command": ["loadfile", uri, "replace"]})
+        r = self.ipc(ipc_cmd, retries=1)
+        if r is not None:
+            log.info("play: reused existing IINA/mpv via IPC")
+            return
+
+        # No running player — kill any stale CLI process and launch fresh.
         with self._lock:
             if self.proc and self.proc.poll() is None:
                 try:
@@ -124,11 +143,7 @@ class PlayerState:
                     self.proc.wait(timeout=2)
                 except Exception:
                     pass
-            self.uri   = uri
-            self.title = title
-            self.state = "playing"
 
-        log.info(f"play → {title!r}  ({uri[:80]}{'…' if len(uri)>80 else ''})")
         p = launch_player(uri)
         with self._lock:
             self.proc = p
