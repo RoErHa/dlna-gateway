@@ -163,7 +163,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     # ── HTTPS redirect ────────────────────────────────────────────
 
-    # Paths that must stay on HTTP — devices (Chromecast, Uniti) can't do HTTPS
+    # Paths that must stay on HTTP — UPnP renderers can't do HTTPS
     _HTTP_ONLY = ("/stream", "/gw/")
 
     def _redirect_https(self) -> bool:
@@ -202,8 +202,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     _GET_ROUTES = {
         "/api/servers":        api_browse.servers,
         "/api/renderers":      api_browse.renderers,
-        "/api/cast_devices":   api_playback.cast_devices,
-        "/api/cast_state":     api_playback.cast_state,
         "/api/browse":         api_browse.browse,
         "/api/artists":        api_browse.artists,
         "/api/search":         api_browse.search,
@@ -214,10 +212,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         "/api/genre_tracks":   api_browse.genre_tracks,
         "/api/artist_albums":  api_browse.artist_albums,
         "/api/browse_letter":  api_browse.browse_letter,
-        "/api/play":           api_playback.play,
         "/api/renderer_state": api_playback.renderer_state,
-        "/api/capabilities":   api_playback.capabilities,
-        "/api/state":          api_playback.state,
         "/api/index/status":   api_playback.index_status,
         "/api/index/rebuild":  api_playback.index_rebuild,
         "/stream":             api_playback.stream,
@@ -326,8 +321,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     # ── POST ──────────────────────────────────────────────────────
 
     _POST_ROUTES = {
-        "/api/play_tracks":  api_playback.play_tracks,
-        "/api/cast_queue":   api_playback.cast_queue,
         "/api/render_queue": api_playback.render_queue,
         "/api/render":       api_playback.render,
         "/api/control":      api_playback.control,

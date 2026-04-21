@@ -50,8 +50,16 @@ browserAudio.addEventListener("ended",()=>{
 browserAudio.addEventListener("error",e=>{
   if(activeDevice!=="browser")return;
   const t=browserQueue[browserIdx];
-  toast(`⚠ Can't play "${t?.title||'track'}" in browser — try IINA or Chromecast`);
-  $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+  if(browserQueue.length>1){
+    toast(`⚠ Skipping "${t?.title||'track'}" — unsupported format`);
+    setTimeout(()=>{
+      if(browserIdx<browserQueue.length-1){browserIdx++;_browserPlayIdx(browserIdx);}
+      else{$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
+    },1500);
+  }else{
+    toast(`⚠ Can't play "${t?.title||'track'}" — unsupported format`);
+    $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+  }
 });
 
 // ── MediaSession — lock screen / CarPlay controls + metadata ──
@@ -158,48 +166,6 @@ function mobileTab(tab){
   else{document.body.classList.add("m-browse");showTab("browse");}
 }
 
-// ── Local agent detection (dlna_agent.py on this machine) ────────
-const AGENT_URL = "http://localhost:8766";
-let agentAvailable = false;
-
-async function checkAgent(){
-  try{
-    const r = await fetch(`${AGENT_URL}/ping`);
-    if(r.ok){
-      const d = await r.json();
-      agentAvailable = true;
-    }
-  } catch(e){
-    agentAvailable = false;
-  }
-}
-
-async function agentPlay(playerId, tracks){
-  const r = await fetch(`${AGENT_URL}/play`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({player: playerId, tracks})
-  });
-  return r.ok ? r.json() : null;
-}
-
-async function agentControl(playerId, action, value){
-  const body = {player: playerId, action};
-  if(value !== undefined) body.value = value;
-  const r = await fetch(`${AGENT_URL}/control`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body)
-  });
-  return r.ok ? r.json() : null;
-}
-
-async function agentState(){
-  try{
-    const r = await fetch(`${AGENT_URL}/state`);
-    return r.ok ? r.json() : null;
-  } catch(e){ return null; }
-}
 
 // ── Tabs ──────────────────────────────────────────────────────────
 function showTab(tab){
@@ -221,7 +187,6 @@ function showTab(tab){
 
 // ── Servers (source) ─────────────────────────────────────────────
 let renderers = {};   // udn → MediaRenderer
-let castDevices = {}; // uuid → CastDevice
 async function refreshServers(){
   const r=await api("/api/servers");if(!r)return;
   const data=await r.json();
@@ -250,11 +215,7 @@ async function refreshRenderers(){
   const r=await api("/api/renderers");if(!r)return;
   const data=await r.json();
   renderers={};data.forEach(rd=>renderers[rd.udn]=rd);
-  // Fetch Chromecast devices too
-  let castList=[];
-  const cr=await api("/api/cast_devices");
-  if(cr){castList=await cr.json();castDevices={};castList.forEach(d=>castDevices[d.uuid]=d);}
-  rebuildOutputSel(data, castList);
+  rebuildOutputSel(data);
 }
 $("server-sel").addEventListener("change",e=>{
   const s=servers[e.target.value];if(!s)return;
@@ -775,36 +736,6 @@ async function playTracklist(tracks, title, artist){
     browserQueue=tracks;browserIdx=0;
     _browserPlayIdx(0);
     toast(`▶ Playing ${tracks.length} tracks in browser`);
-  } else if(out.startsWith("player:")){
-    const playerId=out.replace("player:","");
-    const playerCfg=PLAYERS.find(p=>p.id===playerId);
-    if(!playerCfg){toast("Unknown player: "+playerId);return;}
-    if(agentAvailable){
-      // Agent running locally — reuses existing instance, no double-launch
-      const d=await agentPlay(playerId,tracks);
-      if(!d||d.error){toast("Agent error: "+(d?.error||"no response"));return;}
-      toast(`▶ Playing ${tracks.length} tracks in ${playerCfg.label}`);
-    } else {
-      // No agent — use server-side play_tracks (IPC reuses running instance)
-      const r=await api("/api/play_tracks",{method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({tracks,title})});
-      if(!r){toast("Failed to start playback");return;}
-      const d=await r.json();
-      if(d.error){toast("Error: "+d.error);return;}
-      toast(`▶ Playing ${tracks.length} tracks in ${playerCfg.label}`);
-    }
-  } else if(out.startsWith("cast:")){
-    // Chromecast
-    const castUuid=out.replace("cast:","");
-    const r=await api("/api/cast_queue",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({uuid:castUuid, tracks})});
-    if(!r){toast("Failed to reach Chromecast");return;}
-    const d=await r.json();
-    if(d.error){toast("Error: "+d.error);return;}
-    const cname=castDevices[castUuid]?.name||castUuid;
-    toast(`▶ Casting ${tracks.length} tracks to ${cname}`);
   } else {
     // UPnP renderer
     const rendUdn=out.replace("upnp:","");
@@ -1050,26 +981,6 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
     browserAudio.src=`/stream?url=${enc(url)}`;
     browserAudio.play().catch(()=>{});
     toast("▶ Streaming in browser…");
-  } else if(out.startsWith("player:")){
-    const playerId=out.replace("player:","");
-    const playerCfg=PLAYERS.find(p=>p.id===playerId);
-    if(!playerCfg) return;
-    if(agentAvailable){
-      const d=await agentPlay(playerId,[{url,title,artist,album,art,mime:""}]);
-      if(d&&!d.error) toast(`▶ Playing in ${playerCfg.label}`);
-      else toast("Agent error: "+(d?.error||"no response"));
-    } else {
-      // No agent — use server-side play (IPC reuses running instance)
-      const r=await api(`/api/play?url=${enc(url)}&title=${enc(title)}`);
-      if(!r){toast("Failed to start playback");return;}
-      toast(`▶ Playing in ${playerCfg.label}`);
-    }
-  } else if(out.startsWith("cast:")){
-    const castUuid=out.replace("cast:","");
-    await api("/api/cast_queue",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({uuid:castUuid,tracks:[{url,title,artist,album,art,mime:""}]})});
-    toast(`▶ Casting to ${castDevices[castUuid]?.name||castUuid}…`);
   } else {
     const rendUdn=out.replace("upnp:","");
     await api("/api/render_queue",{method:"POST",
@@ -1079,7 +990,7 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
   }
 }
 
-// activeDevice tracks the current output: "browser", "player:<id>", "upnp:<udn>", or "cast:<uuid>"
+// activeDevice tracks the current output: "browser" or "upnp:<udn>"
 let activeDevice="browser";  // default — always available
 
 // Sync activeDevice when user changes output selector
@@ -1151,11 +1062,6 @@ async function control(cmd){
     }
     return;
   }
-  if(agentAvailable && activeDevice.startsWith("player:")){
-    const playerId=activeDevice.replace("player:","");
-    await agentControl(playerId, cmd.action, cmd.value);
-    return;
-  }
   await api("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({...cmd,device:activeDevice})});
 }
@@ -1195,104 +1101,32 @@ async function pollState(){
     if(dur>0) $("mini-progress").style.width=((pos/dur)*100)+"%";
     return;
   }
-  if(agentAvailable && activeDevice.startsWith("player:")){
-    // agent state
-    const ps=await agentState();
-    if(!ps) return;
-    $("sb-dot").className="sb-dot "+(ps.state||"stopped");
-    $("sb-state").textContent=ps.state||"stopped";
-    $("btn-pp").textContent=ps.paused?"▶ Play":"⏸ Pause";
-    if(ps.media_title) $("sb-uri").textContent=ps.media_title;
-    const pos=ps.position||0,dur=ps.duration||0;
-    if(!seeking&&dur>0){
-      const p=(pos/dur)*100;
-      $("seek-fill").style.width=p+"%";$("seek-thumb").style.left=p+"%";
-      $("t-pos").textContent=fmtSec(pos);$("t-dur").textContent=fmtSec(dur);
-    }
-    if(dur>0) $("mini-progress").style.width=((pos/dur)*100)+"%";
-    updateShuffleBtn();
-    return;
-  }
-  if(activeDevice.startsWith("cast:")){
-    // ── Chromecast state ──────────────────────────────────────
-    const r=await api("/api/cast_state");if(!r)return;
-    const cs=await r.json();
-    $("sb-dot").className="sb-dot "+(cs.state||"stopped");
-    $("sb-state").textContent=cs.state||"stopped";
-    $("sb-uri").textContent=cs.media_title||"—";
-    if(cs.alive){
-      $("btn-pp").textContent=cs.paused?"▶ Play":"⏸ Pause";
-      if(cs.media_title){
-        $("np-title").textContent=cs.media_title;
-        $("hdr-status").textContent=cs.media_title;
-      }
-      if(cs.artist) $("np-artist").textContent=cs.artist;
-      if(cs.album)  $("np-album").textContent=cs.album;
-      if(cs.queue_len>1)
-        $("np-meta").textContent=`Track ${cs.queue_pos} of ${cs.queue_len}`;
-      if(!seeking&&cs.duration&&cs.position!=null){
-        const p=(cs.position/cs.duration)*100;
-        $("seek-fill").style.width=p+"%";$("seek-thumb").style.left=p+"%";
-        $("t-pos").textContent=fmtSec(cs.position);$("t-dur").textContent=fmtSec(cs.duration);
-        if(cs.duration>0) $("mini-progress").style.width=p+"%";
-      }
-      _updateMiniPlayer({title:cs.media_title,artist:cs.artist,art:""});
-    } else {
-      if($("player").classList.contains("playing")){
-        $("player").classList.remove("playing");$("btn-pp").textContent="▶ Play";
-      }
-    }
-    return;
-  }
-  if(!activeDevice.startsWith("player:")){
-    // ── Renderer (Uniti) state ────────────────────────────────
-    const r=await api("/api/renderer_state");if(!r)return;
-    const ps=await r.json();
-    $("sb-dot").className="sb-dot "+(ps.state||"stopped");
-    $("sb-state").textContent=ps.state||"stopped";
-    $("sb-uri").textContent=ps.media_title||ps.title||"—";
-    if(ps.alive){
-      $("btn-pp").textContent=ps.paused?"▶ Play":"⏸ Pause";
-      if(ps.media_title||ps.title){
-        $("np-title").textContent=ps.media_title||ps.title||"";
-        $("hdr-status").textContent=ps.media_title||ps.title||"";
-      }
-      if(ps.artist) $("np-artist").textContent=ps.artist;
-      if(ps.album)  $("np-album").textContent=ps.album;
-      if(ps.queue_len>1)
-        $("np-meta").textContent=`Track ${ps.queue_pos} of ${ps.queue_len}`;
-      if(!seeking&&ps.duration&&ps.position!=null){
-        const p=(ps.position/ps.duration)*100;
-        $("seek-fill").style.width=p+"%";$("seek-thumb").style.left=p+"%";
-        $("t-pos").textContent=fmtSec(ps.position);$("t-dur").textContent=fmtSec(ps.duration);
-      }
-    } else {
-      if($("player").classList.contains("playing")){
-        $("player").classList.remove("playing");$("btn-pp").textContent="▶ Play";
-      }
-    }
-    return;
-  }
-  // ── IINA / mpv state ─────────────────────────────────────────
-  const r=await api("/api/state");if(!r)return;
-  ps=await r.json();
-  if(!seeking&&ps.duration&&ps.position!=null){const p=(ps.position/ps.duration)*100;$("seek-fill").style.width=p+"%";$("seek-thumb").style.left=p+"%";$("t-pos").textContent=fmtSec(ps.position);$("t-dur").textContent=fmtSec(ps.duration);}
-  if(ps.alive){
-    $("btn-pp").textContent=ps.paused?"▶ Play":"⏸ Pause";
-    if(ps.volume!=null){$("vol").value=Math.round(ps.volume);$("vol-label").textContent=Math.round(ps.volume);}
-    if(ps.media_title){
-      $("np-title").textContent=ps.media_title;
-      $("hdr-status").textContent=ps.media_title;
-    }
-    if(ps.artist) $("np-artist").textContent=ps.artist;
-    if(ps.album)  $("np-album").textContent=ps.album;
-    // shuffle button reflects JS-side state, not mpv's internal shuffle
-    updateShuffleBtn();
-  }
+  // ── UPnP renderer state ───────────────────────────────────────
+  const r=await api("/api/renderer_state");if(!r)return;
+  const ps=await r.json();
   $("sb-dot").className="sb-dot "+(ps.state||"stopped");
   $("sb-state").textContent=ps.state||"stopped";
   $("sb-uri").textContent=ps.media_title||ps.title||"—";
-  if(!ps.alive&&$("player").classList.contains("playing")){$("player").classList.remove("playing");$("btn-pp").textContent="▶ Play";}
+  if(ps.alive){
+    $("btn-pp").textContent=ps.paused?"▶ Play":"⏸ Pause";
+    if(ps.media_title||ps.title){
+      $("np-title").textContent=ps.media_title||ps.title||"";
+      $("hdr-status").textContent=ps.media_title||ps.title||"";
+    }
+    if(ps.artist) $("np-artist").textContent=ps.artist;
+    if(ps.album)  $("np-album").textContent=ps.album;
+    if(ps.queue_len>1)
+      $("np-meta").textContent=`Track ${ps.queue_pos} of ${ps.queue_len}`;
+    if(!seeking&&ps.duration&&ps.position!=null){
+      const p=(ps.position/ps.duration)*100;
+      $("seek-fill").style.width=p+"%";$("seek-thumb").style.left=p+"%";
+      $("t-pos").textContent=fmtSec(ps.position);$("t-dur").textContent=fmtSec(ps.duration);
+    }
+  } else {
+    if($("player").classList.contains("playing")){
+      $("player").classList.remove("playing");$("btn-pp").textContent="▶ Play";
+    }
+  }
 }
 
 async function pollIndex(){
@@ -1374,86 +1208,34 @@ browserAudio.addEventListener("play", ()=>{
 });
 
 // ── Init ──────────────────────────────────────────────────────────
-checkAgent();
 refreshServers();
 refreshRenderers();
 loadPlaylists().then(showPlaylists);
 startPolling();
 
-// ── Player settings ────────────────────────────────────────────
-// Known local-app players with their URL scheme and platform
-const PLAYERS=[
-  {id:"iina",    label:"IINA",           icon:"🖥",  scheme:"iina://open?url=",          platform:"macOS",       desc:"Best macOS media player"},
-  {id:"vlc",     label:"VLC",            icon:"🎥",  scheme:"vlc://",                    platform:"macOS / iOS", desc:"Free, plays everything"},
-  {id:"infuse",  label:"Infuse",         icon:"🎬",  scheme:"infuse://x-callback-url/play?url=", platform:"iOS / macOS", desc:"Premium media player"},
-  {id:"elmedia", label:"Elmedia Player", icon:"🎵",  scheme:"elmedia://",                platform:"macOS",       desc:"Mac App Store player"},
-  {id:"doppler", label:"Doppler",        icon:"🎧",  scheme:"doppler://",                platform:"iOS",         desc:"Audiophile iOS player"},
-];
-
-// Load saved prefs — default: only IINA enabled
-function loadPlayerPrefs(){
-  try{
-    const raw=localStorage.getItem("dlna_players");
-    if(raw) return JSON.parse(raw);
-  }catch(e){}
-  return {iina:true};  // sensible default
-}
-
-function savePlayerPrefs(prefs){
-  localStorage.setItem("dlna_players",JSON.stringify(prefs));
-}
-
-let playerPrefs=loadPlayerPrefs();
-
-// Rebuild the output selector with enabled players + UPnP renderers
-function rebuildOutputSel(upnpData, castList){
+// Rebuild the output selector with browser + UPnP renderers
+function rebuildOutputSel(upnpData){
   const out=$("output-sel");
   const prev=out.value;
   let html=`<option value="browser">📱 Browser</option>`;
-  // Enabled local app players
-  for(const p of PLAYERS){
-    if(playerPrefs[p.id]){
-      html+=`<option value="player:${p.id}">${p.icon} ${p.label}</option>`;
-    }
-  }
-  // UPnP renderers
   if(upnpData){
     upnpData.forEach(rd=>{
       html+=`<option value="upnp:${esc(rd.udn)}">📡 ${esc(rd.name)}</option>`;
     });
   }
-  // Chromecast devices
-  if(castList){
-    castList.forEach(d=>{
-      html+=`<option value="cast:${esc(d.uuid)}">📺 ${esc(d.name)}</option>`;
-    });
-  }
   out.innerHTML=html;
-  // Restore previous selection if still valid
   if(prev&&out.querySelector(`option[value="${prev}"]`)) out.value=prev;
   else out.value="browser";
   activeDevice=out.value;
 }
 
-// Render settings modal player list
 function renderPlayerSettings(){
   const list=$("settings-player-list");
-  list.innerHTML=PLAYERS.map(p=>`
-    <div class="player-row">
-      <input type="checkbox" id="chk-${p.id}" ${playerPrefs[p.id]?"checked":""}
-             onchange="togglePlayer('${p.id}',this.checked)">
-      <label for="chk-${p.id}">
-        <div class="pl-name">${p.icon} ${p.label}</div>
-        <div class="pl-desc">${p.desc}</div>
-      </label>
-      <span class="pl-platform">${p.platform}</span>
-    </div>`).join("");
+  if(list) list.innerHTML="";
 }
 
 function togglePlayer(id,enabled){
-  playerPrefs[id]=enabled;
-  savePlayerPrefs(playerPrefs);
-  rebuildOutputSel(Object.values(renderers), Object.values(castDevices));
+  rebuildOutputSel(Object.values(renderers));
 }
 
 // ── Edit metadata modal ───────────────────────────────────────────
@@ -1540,7 +1322,7 @@ $("settings-close").addEventListener("click",()=>$("settings-modal").classList.r
 $("settings-modal").addEventListener("click",e=>{if(e.target===$("settings-modal"))$("settings-modal").classList.remove("open");});
 
 // Initialise output selector on first load
-rebuildOutputSel(null, null);
+rebuildOutputSel(null);
 
 // ── Service Worker registration ──────────────────────────────────
 if ('serviceWorker' in navigator) {
