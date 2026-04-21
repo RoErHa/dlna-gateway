@@ -25,7 +25,6 @@ import threading
 import time
 
 import dlna_discovery as _disc
-from dlna_cast import start_discovery as _cast_start, stop_discovery as _cast_stop
 from dlna_config import load_config, save_config, setup_logging
 from dlna_library import DB, INDEXER, DEVICE_ROLES
 from dlna_server import (GW_UDN, ThreadedHTTPServer, GatewayHandler,
@@ -84,7 +83,7 @@ def _on_server_found(server):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DLNA/UPnP Gateway → IINA",
+        description="DLNA/UPnP Music Gateway",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -153,7 +152,7 @@ Examples:
 
     print()
     print("  ┌──────────────────────────────────────────────┐")
-    print("  │   DLNA / UPnP  →  IINA  Gateway  v2          │")
+    print("  │         DLNA / UPnP  Music  Gateway  v2      │")
     print("  ├──────────────────────────────────────────────┤")
     print(f" │  Web UI   :  {url:<33}                       │")
     print(f" │  LAN IP   :  {lan_ip:<33}                    │")
@@ -163,7 +162,6 @@ Examples:
     print("  │  Module tests:  python dlna_config.py        │")
     print("  │                 python dlna_discovery.py     │")
     print("  │                 python dlna_library.py       │")
-    print("  │                 python dlna_player.py        │")
     print("  └──────────────────────────────────────────────┘")
     print()
 
@@ -213,9 +211,6 @@ Examples:
         target=_disc.heartbeat_thread,
         args=(GW_UDN,),
         daemon=True, name="heartbeat").start()
-
-    # Chromecast discovery (mDNS/zeroconf) — finds Cast-capable devices
-    _cast_start()
 
     # CLI --probe or config.json probe (fresh install / manual override).
     # On subsequent runs the DB cache handles this — but honour explicit CLI.
@@ -281,7 +276,6 @@ Examples:
     except KeyboardInterrupt:
         print()
         log.info("Shutting down…")
-        _cast_stop()
         if tls_server:
             tls_server.shutdown()
         gw_ssdp_byebye(lan_ip, args.port)

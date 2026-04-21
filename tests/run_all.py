@@ -108,9 +108,6 @@ features = {
     "Genre albums":      "showGenreAlbums",
     "Artist albums":     "showArtistAlbums",
     "Edit modal":        "openEditModal",
-    "Chromecast":        "castDevices",
-    "Cast queue":        "cast_queue",
-    "Cast state poll":   "cast_state",
     "SW registration":   "serviceWorker",
     "Shuffle":           "shuffle",
     "MediaSession":      "mediaSession",
@@ -137,13 +134,12 @@ if os.path.isfile(srv_path):
         "/api/servers", "/api/renderers", "/api/browse", "/api/artists",
         "/api/albums", "/api/genres", "/api/genre_albums", "/api/genre_tracks",
         "/api/artist_albums", "/api/browse_letter", "/api/search",
-        "/api/album_tracks", "/api/play", "/api/play_tracks",
+        "/api/album_tracks",
         "/api/playlist", "/api/playlists", "/api/playlist/add",
         "/api/playlist/create", "/api/playlist/delete", "/api/playlist/remove",
         "/api/render", "/api/render_queue", "/api/renderer_state",
-        "/api/state", "/api/capabilities", "/api/index/rebuild",
-        "/api/index/status", "/api/cast_devices", "/api/cast_state",
-        "/api/cast_queue", "/api/control", "/api/edit_track",
+        "/api/index/rebuild", "/api/index/status",
+        "/api/control", "/api/edit_track",
     ]
     for ep in endpoints:
         check(f"Endpoint {ep} in server code", f'"{ep}"' in srv)
@@ -163,11 +159,6 @@ check("play().catch handles NotAllowedError",
 check("control stop clears browserAudio.src",
       'browserAudio.src=""' in js)
 
-section("T1.FIX — IINA routing (no agent path)")
-check("IINA playlist uses /api/play_tracks (not iina_queue)",
-      "/api/iina_queue" not in js and "/api/play_tracks" in js)
-check("IINA single track uses /api/play (not URL scheme only)",
-      '"/api/play?' in js or "`/api/play?" in js)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -362,9 +353,7 @@ else:
     live_endpoints = [
         ("/api/servers", True),
         ("/api/renderers", True),
-        ("/api/cast_devices", True),
         ("/api/playlists", True),
-        ("/api/capabilities", True),
     ]
     for ep, is_json in live_endpoints:
         status, data = fetch(ep, expect_json=is_json)
@@ -411,11 +400,8 @@ section("T2.4 — api_playback.py: all playback functions present")
 pb_path = os.path.join(PROJECT, "api_playback.py")
 if os.path.isfile(pb_path):
     pc = open(pb_path).read()
-    for fn in ["play", "state", "renderer_state", "capabilities",
-               "index_status", "index_rebuild", "stream",
-               "cast_devices", "cast_state", "cast_queue",
-               "render_queue", "render", "control", "edit_track",
-               "play_tracks"]:
+    for fn in ["renderer_state", "index_status", "index_rebuild", "stream",
+               "render_queue", "render", "control", "edit_track"]:
         check(f"  api_playback.{fn}", f"def {fn}(" in pc)
 
 section("T2.5 — api_playlists.py: all playlist functions present")
@@ -457,13 +443,12 @@ if os.path.isfile(srv_path):
         "/api/servers", "/api/renderers", "/api/browse", "/api/artists",
         "/api/albums", "/api/genres", "/api/genre_albums", "/api/genre_tracks",
         "/api/artist_albums", "/api/browse_letter", "/api/search",
-        "/api/album_tracks", "/api/play", "/api/play_tracks",
+        "/api/album_tracks",
         "/api/playlist", "/api/playlists", "/api/playlist/add",
         "/api/playlist/create", "/api/playlist/delete", "/api/playlist/remove",
         "/api/render", "/api/render_queue", "/api/renderer_state",
-        "/api/state", "/api/capabilities", "/api/index/rebuild",
-        "/api/index/status", "/api/cast_devices", "/api/cast_state",
-        "/api/cast_queue", "/api/control", "/api/edit_track",
+        "/api/index/rebuild", "/api/index/status",
+        "/api/control", "/api/edit_track",
     ]
     for ep in endpoints:
         check(f"  {ep} routed", f'"{ep}"' in srv)
@@ -541,67 +526,6 @@ if os.path.isfile(gw_path):
     check("heartbeat thread started", "heartbeat_thread" in gwc)
     check("heartbeat thread named",   '"heartbeat"' in gwc)
 
-
-# ══════════════════════════════════════════════════════════════════
-# T4.CAST — CHROMECAST MIME NORMALISATION
-# ══════════════════════════════════════════════════════════════════
-
-section("T4.CAST.1 — dlna_cast.py MIME normalisation table")
-cast_path = os.path.join(PROJECT, "dlna_cast.py")
-if os.path.isfile(cast_path):
-    import sys as _sys
-    _sys.path.insert(0, PROJECT)
-    try:
-        import importlib.util as _ilu
-        _spec = _ilu.spec_from_file_location("dlna_cast", cast_path)
-        _mod  = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        norm = _mod.CAST_MIME_NORM
-
-        check("CAST_MIME_NORM exported", isinstance(norm, dict))
-
-        _expected = {
-            "audio/mp3":           "audio/mpeg",
-            "audio/x-mpeg":        "audio/mpeg",
-            "audio/x-mp3":         "audio/mpeg",
-            "audio/mpeg3":         "audio/mpeg",
-            "audio/mpg":           "audio/mpeg",
-            "audio/x-flac":        "audio/flac",
-            "audio/aac":           "audio/mp4",
-            "audio/x-aac":         "audio/mp4",
-            "audio/x-m4a":         "audio/mp4",
-            "audio/x-alac":        "audio/mp4",
-            "audio/m4a":           "audio/mp4",
-            "audio/vnd.dlna.adts": "audio/mp4",
-            "audio/vorbis":        "audio/ogg",
-            "audio/x-ogg":         "audio/ogg",
-            "audio/x-vorbis":      "audio/ogg",
-            "audio/opus":          "audio/ogg",
-            "audio/x-opus":        "audio/ogg",
-            "audio/x-wav":         "audio/wav",
-            "audio/wave":          "audio/wav",
-            "audio/vnd.wave":      "audio/wav",
-            "audio/x-aiff":        "audio/aiff",
-            "audio/aif":           "audio/aiff",
-            "audio/x-ms-wma":      "audio/x-ms-wma",
-            "audio/wma":           "audio/x-ms-wma",
-            "audio/x-webm":        "audio/webm",
-        }
-        for alias, canonical in _expected.items():
-            check(f"  {alias} → {canonical}", norm.get(alias) == canonical,
-                  f"got {norm.get(alias)!r}")
-
-        _passthrough = ["audio/mpeg", "audio/flac", "audio/mp4",
-                        "audio/ogg", "audio/wav", "audio/aiff", "audio/webm"]
-        for t in _passthrough:
-            check(f"  {t} passes through unchanged",
-                  norm.get(t, t) == t,
-                  f"remapped to {norm.get(t)!r}")
-
-    except Exception as _e:
-        check("dlna_cast imports cleanly", False, str(_e))
-else:
-    check("dlna_cast.py exists", False)
 
 
 # ══════════════════════════════════════════════════════════════════
