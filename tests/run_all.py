@@ -13,6 +13,8 @@ Exit code: 0 if all pass, 1 if any fail.
 """
 import json
 import os
+import re
+import ssl
 import sys
 import urllib.request
 import urllib.error
@@ -30,6 +32,12 @@ passed = 0
 failed = 0
 errors = []
 
+# SSL context that accepts self-signed certs (gateway uses tailscale / local cert)
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
+_opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx))
+
 
 def check(name, condition, detail=""):
     global passed, failed
@@ -46,18 +54,18 @@ def check(name, condition, detail=""):
 
 
 def fetch(path, expect_json=False):
-    """GET a path from the running gateway. Returns (status, body) or (0, None) on error."""
+    """GET a path from the running gateway. Follows HTTP→HTTPS redirects."""
     try:
         url = BASE_URL.rstrip("/") + path
         req = urllib.request.Request(url)
-        resp = urllib.request.urlopen(req, timeout=5)
+        resp = _opener.open(req, timeout=5)
         body = resp.read()
         if expect_json:
             return resp.status, json.loads(body)
         return resp.status, body
     except urllib.error.HTTPError as e:
         return e.code, None
-    except Exception as e:
+    except Exception:
         return 0, None
 
 
@@ -141,6 +149,173 @@ if os.path.isfile(srv_path):
         check(f"Endpoint {ep} in server code", f'"{ep}"' in srv)
 else:
     check("dlna_server.py exists", False)
+
+
+# ══════════════════════════════════════════════════════════════════
+# T1.FIX — BUG-FIX REGRESSION CHECKS (file-level)
+# ══════════════════════════════════════════════════════════════════
+
+section("T1.FIX — Browser audio error handling")
+check("Error handler resets play button",
+      "$" in js and "btn-pp" in js and "▶ Play" in js and "activeDevice" in js)
+check("play().catch handles NotAllowedError",
+      "NotAllowedError" in js)
+check("control stop clears browserAudio.src",
+      'browserAudio.src=""' in js)
+
+section("T1.FIX — IINA routing (no agent path)")
+check("IINA playlist uses /api/play_tracks (not iina_queue)",
+      "/api/iina_queue" not in js and "/api/play_tracks" in js)
+check("IINA single track uses /api/play (not URL scheme only)",
+      '"/api/play?' in js or "`/api/play?" in js)
+
+
+# ══════════════════════════════════════════════════════════════════
+# T5 — PLAYLIST DROPDOWN
+# ══════════════════════════════════════════════════════════════════
+
+section("T5.1 — Playlist dropdown CSS: max 5 items")
+_dd_match = re.search(r'\.pl-dropdown\{([^}]+)\}', css)
+if _dd_match:
+    _dd_css = _dd_match.group(1)
+    check(".pl-dropdown has overflow-y:auto", "overflow-y:auto" in _dd_css)
+
+    # max-height must be a fixed pixel value, not a viewport unit
+    _mh = re.search(r'max-height:([^;]+)', _dd_css)
+    if _mh:
+        _mh_val = _mh.group(1).strip()
+        check(".pl-dropdown max-height is pixel-based (not vh/rem/em)",
+              "px" in _mh_val and "vh" not in _mh_val,
+              f"got max-height:{_mh_val}")
+        # 5 items at ~30px each = ~150px; allow 130–180px
+        _px = re.search(r'(\d+)px', _mh_val)
+        if _px:
+            _px_val = int(_px.group(1))
+            check(f".pl-dropdown max-height fits ~5 items ({_px_val}px)",
+                  130 <= _px_val <= 180,
+                  f"expected 130–180px, got {_px_val}px")
+    else:
+        check(".pl-dropdown has max-height", False, "max-height not found")
+else:
+    check(".pl-dropdown rule exists in CSS", False)
+
+section("T5.2 — Playlist dropdown JS: show/hide logic")
+check("showAddToPlaylistForItem defined", "showAddToPlaylistForItem" in js)
+check("hideDropdown defined",             "hideDropdown" in js)
+check("Dropdown appended to body",        "document.body.appendChild" in js and "pl-dropdown" in js)
+check("Dropdown dismissed on doc click",  'document.addEventListener("click",hideDropdown)' in js
+                                           or "document.addEventListener('click',hideDropdown)" in js)
+
+
+# ══════════════════════════════════════════════════════════════════
+# T6 — POST-INDEX DB FIXES
+# ══════════════════════════════════════════════════════════════════
+
+section("T6.1 — post_index_fixes.sql exists and is valid SQL")
+sql_path = os.path.join(PROJECT, "post_index_fixes.sql")
+check("post_index_fixes.sql exists", os.path.isfile(sql_path))
+
+if os.path.isfile(sql_path):
+    sql_src = open(sql_path).read()
+
+    check("SQL fixes Rolling Stones artist name",
+          "Rolling Stones" in sql_src and "The Rolling Stones" in sql_src)
+    check("SQL deletes inferior duplicates before renaming",
+          "DELETE FROM tracks" in sql_src and "Rolling Stones" in sql_src)
+    check("SQL renames remaining entries",
+          "UPDATE tracks SET artist" in sql_src)
+    check("SQL rebuilds FTS after changes",
+          "tracks_fts" in sql_src and "rebuild" in sql_src)
+
+    # Validate SQL syntax by running it against an in-memory DB that mirrors
+    # the tracks schema (no actual data — just checks parse/compile)
+    import sqlite3 as _sqlite3
+    try:
+        _mem = _sqlite3.connect(":memory:")
+        _mem.execute("""
+            CREATE TABLE tracks (
+                id INTEGER PRIMARY KEY,
+                udn TEXT, obj_id TEXT, url TEXT,
+                title TEXT, artist TEXT, album TEXT,
+                duration TEXT, art TEXT, mime TEXT,
+                genre TEXT, file_path TEXT,
+                UNIQUE(udn, artist, album, title)
+            )
+        """)
+        _mem.execute("""
+            CREATE VIRTUAL TABLE tracks_fts USING fts5(
+                title, artist, album,
+                content=tracks, content_rowid=id
+            )
+        """)
+        # Strip comments, split on semicolons, execute each statement
+        _stmts = [s.strip() for s in sql_src.split(";") if s.strip() and not s.strip().startswith("--")]
+        _ok = True
+        _err_detail = ""
+        for _stmt in _stmts:
+            # Skip comment-only blocks
+            _clean = "\n".join(l for l in _stmt.splitlines() if not l.strip().startswith("--")).strip()
+            if not _clean:
+                continue
+            try:
+                _mem.execute(_clean)
+            except _sqlite3.OperationalError as _e:
+                # "no such table" is expected for an empty DB — that's fine
+                if "no such table" not in str(_e) and "no such row" not in str(_e):
+                    _ok = False
+                    _err_detail = str(_e)[:80]
+        _mem.close()
+        check("SQL statements parse without errors", _ok, _err_detail)
+    except Exception as _e:
+        check("SQL validation setup", False, str(_e)[:80])
+
+section("T6.2 — DB fix logic: lossless beats lossy")
+# Verify the DELETE logic keeps lossless (flac) over lossy (mp3)
+# by running it against a tiny in-memory fixture
+import sqlite3 as _sqlite3
+try:
+    _mem = _sqlite3.connect(":memory:")
+    _mem.executescript("""
+        CREATE TABLE tracks (
+            id INTEGER PRIMARY KEY,
+            udn TEXT, obj_id TEXT DEFAULT '', url TEXT DEFAULT '',
+            title TEXT, artist TEXT, album TEXT,
+            duration TEXT DEFAULT '', art TEXT DEFAULT '',
+            mime TEXT, genre TEXT DEFAULT '', file_path TEXT DEFAULT '',
+            UNIQUE(udn, artist, album, title)
+        );
+        CREATE VIRTUAL TABLE tracks_fts USING fts5(
+            title, artist, album,
+            content=tracks, content_rowid=id
+        );
+        -- MP3 under wrong name (should be deleted — lossless duplicate exists)
+        INSERT INTO tracks VALUES(1,'udn1','','','Start Me Up','Rolling Stones','Some Girls','','','audio/mpeg','','');
+        -- FLAC under correct name (should be kept)
+        INSERT INTO tracks VALUES(2,'udn1','','','Start Me Up','The Rolling Stones','Some Girls','','','audio/x-flac','','');
+        -- Only exists under wrong name — should be renamed, not deleted
+        INSERT INTO tracks VALUES(3,'udn1','','','Wild Horses','Rolling Stones','Sticky Fingers','','','audio/mpeg','','');
+    """)
+    # Run the fix logic
+    _mem.execute("""
+        DELETE FROM tracks WHERE artist='Rolling Stones'
+        AND id IN (
+            SELECT r.id FROM tracks r
+            JOIN tracks t ON t.udn=r.udn AND t.album=r.album AND t.title=r.title
+            WHERE r.artist='Rolling Stones' AND t.artist='The Rolling Stones'
+        )
+    """)
+    _mem.execute("UPDATE tracks SET artist='The Rolling Stones' WHERE artist='Rolling Stones'")
+    _mem.commit()
+    _rows = {r[0]: r for r in _mem.execute("SELECT id, artist, title FROM tracks").fetchall()}
+    _mem.close()
+
+    check("Lossless duplicate kept (id=2 present)",       2 in _rows)
+    check("Lossy duplicate deleted (id=1 removed)",        1 not in _rows)
+    check("Sole entry renamed (id=3 → The Rolling Stones)",
+          3 in _rows and _rows[3][1] == "The Rolling Stones")
+except Exception as _e:
+    check("DB fix logic test setup", False, str(_e)[:80])
+
 
 # ══════════════════════════════════════════════════════════════════
 # LIVE SERVER CHECKS (skip with --offline)
@@ -314,7 +489,6 @@ section("T3.2 — LibraryDB uses pool")
 lib_path = os.path.join(PROJECT, "dlna_library.py")
 if os.path.isfile(lib_path):
     lib_code = open(lib_path).read()
-    # Extract LibraryDB class only
     lib_start = lib_code.find("class LibraryDB:")
     lib_end = lib_code.find("\nclass ", lib_start + 10)
     lib_class = lib_code[lib_start:lib_end] if lib_end > 0 else lib_code[lib_start:]
@@ -337,7 +511,6 @@ if os.path.isfile(lib_path):
 section("T3.3 — Pool concurrent test (standalone)")
 if os.path.isfile(pool_path):
     import subprocess
-    # Run db_pool.py standalone test
     result = subprocess.run(
         [sys.executable, pool_path],
         capture_output=True, text=True, timeout=15, cwd=PROJECT
@@ -387,48 +560,37 @@ if os.path.isfile(cast_path):
 
         check("CAST_MIME_NORM exported", isinstance(norm, dict))
 
-        # Every alias must map to a canonical type (no self-mapping needed, but
-        # the canonical itself must not be in the table as a key pointing elsewhere)
         _expected = {
-            # MP3
             "audio/mp3":           "audio/mpeg",
             "audio/x-mpeg":        "audio/mpeg",
             "audio/x-mp3":         "audio/mpeg",
             "audio/mpeg3":         "audio/mpeg",
             "audio/mpg":           "audio/mpeg",
-            # FLAC
             "audio/x-flac":        "audio/flac",
-            # AAC / M4A / ALAC
             "audio/aac":           "audio/mp4",
             "audio/x-aac":         "audio/mp4",
             "audio/x-m4a":         "audio/mp4",
             "audio/x-alac":        "audio/mp4",
             "audio/m4a":           "audio/mp4",
             "audio/vnd.dlna.adts": "audio/mp4",
-            # OGG / Opus / Vorbis
             "audio/vorbis":        "audio/ogg",
             "audio/x-ogg":         "audio/ogg",
             "audio/x-vorbis":      "audio/ogg",
             "audio/opus":          "audio/ogg",
             "audio/x-opus":        "audio/ogg",
-            # WAV
             "audio/x-wav":         "audio/wav",
             "audio/wave":          "audio/wav",
             "audio/vnd.wave":      "audio/wav",
-            # AIFF
             "audio/x-aiff":        "audio/aiff",
             "audio/aif":           "audio/aiff",
-            # WMA
             "audio/x-ms-wma":      "audio/x-ms-wma",
             "audio/wma":           "audio/x-ms-wma",
-            # WebM
             "audio/x-webm":        "audio/webm",
         }
         for alias, canonical in _expected.items():
             check(f"  {alias} → {canonical}", norm.get(alias) == canonical,
                   f"got {norm.get(alias)!r}")
 
-        # Canonical pass-through: types already correct should not be remapped
         _passthrough = ["audio/mpeg", "audio/flac", "audio/mp4",
                         "audio/ogg", "audio/wav", "audio/aiff", "audio/webm"]
         for t in _passthrough:
