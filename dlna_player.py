@@ -45,9 +45,23 @@ class RendererQueue:
     def start(self, av_url: str, tracks: list, renderer_name: str = ""):
         """
         Start playing a list of tracks on the renderer.
-        Cancels any currently active queue.
+        Cancels any currently active queue, and explicitly stops the renderer
+        before sending the new URI+Play so the renderer isn't mid-transition
+        when the new Play lands (which returns HTTP 500 on Naim/Rygel).
         """
+        from dlna_content import avtransport_stop
         self._cancel()
+
+        with self._lock:
+            prev_url = self._av_url
+
+        if prev_url:
+            try:
+                avtransport_stop(prev_url)
+                time.sleep(0.5)
+            except Exception as e:
+                log.warning(f"RendererQueue: prior Stop failed: {e}")
+
         with self._lock:
             self._av_url   = av_url
             self._tracks   = list(tracks)
@@ -149,8 +163,10 @@ class RendererQueue:
             av_url = self._av_url
         if 0 <= idx < len(tracks):
             t = tracks[idx]
+            dur = t.get("duration") or 0
+            dur_s = f" ({int(dur)}s)" if dur else ""
             log.info(f"RendererQueue [{idx+1}/{len(tracks)}] "
-                     f"{t.get('title','?')!r} → {self._rnd_name}")
+                     f"{t.get('title','?')!r}{dur_s} → {self._rnd_name}")
             avtransport_send(av_url, t.get("url",""),
                              t.get("title",""), t.get("mime",""))
 
@@ -174,8 +190,12 @@ class RendererQueue:
                 break
 
             cur_state = avtransport_get_state(av_url)
-            log.debug(f"RendererQueue monitor: state={cur_state} "
-                      f"prev={prev_state} [{idx+1}/{total}]")
+            if cur_state != prev_state:
+                log.info(f"RendererQueue: state {prev_state} → {cur_state} "
+                         f"[{idx+1}/{total}]")
+            else:
+                log.debug(f"RendererQueue monitor: state={cur_state} "
+                          f"[{idx+1}/{total}]")
 
             if (prev_state in ("PLAYING", "TRANSITIONING") and
                     cur_state in ("STOPPED", "NO_MEDIA_PRESENT")):

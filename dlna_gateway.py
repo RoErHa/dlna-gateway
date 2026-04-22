@@ -27,8 +27,8 @@ import time
 import dlna_discovery as _disc
 from dlna_config import load_config, save_config, setup_logging
 from dlna_library import DB, INDEXER, DEVICE_ROLES
-from dlna_server import (GW_UDN, ThreadedHTTPServer, GatewayHandler,
-                         gw_ssdp_announcer, gw_ssdp_byebye)
+from dlna_server import (GW_UDN, ThreadedHTTPServer, TLSThreadedHTTPServer,
+                         GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
 
 log = logging.getLogger("dlna.gateway")
 
@@ -253,8 +253,19 @@ Examples:
             try:
                 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 ctx.load_cert_chain(tls_cert, tls_key)
-                tls_server = ThreadedHTTPServer((args.host, args.tls_port), GatewayHandler)
-                tls_server.socket = ctx.wrap_socket(tls_server.socket, server_side=True)
+                tls_server = TLSThreadedHTTPServer(
+                    (args.host, args.tls_port), GatewayHandler)
+                # do_handshake_on_connect=False is critical: it makes
+                # SSLSocket.accept() return immediately with an unhandshaked
+                # socket so a stalled client cannot block the accept loop.
+                # The handshake happens lazily on first read in the worker
+                # thread, bounded by TLSThreadedHTTPServer.REQUEST_TIMEOUT.
+                tls_server.socket = ctx.wrap_socket(
+                    tls_server.socket,
+                    server_side=True,
+                    do_handshake_on_connect=False,
+                    suppress_ragged_eofs=True,
+                )
                 threading.Thread(
                     target=tls_server.serve_forever,
                     daemon=True, name="https").start()
