@@ -26,7 +26,7 @@ import time
 
 import dlna_discovery as _disc
 from dlna_config import load_config, save_config, setup_logging
-from dlna_library import DB, INDEXER, DEVICE_ROLES
+from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER
 from dlna_server import (GW_UDN, ThreadedHTTPServer, TLSThreadedHTTPServer,
                          GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
 
@@ -211,6 +211,12 @@ Examples:
         target=_disc.heartbeat_thread,
         args=(GW_UDN,),
         daemon=True, name="heartbeat").start()
+
+    # Album-art fetcher — one-shot startup scan 120s after boot to mop
+    # up anything left bare by a previous interrupted run. Steady-state
+    # refills come from Indexer._run() triggering on each successful
+    # crawl; there is no periodic poll. Rate-limited to ≤1 MB req/sec.
+    ART_FETCHER.start_initial_scan()
 
     # CLI --probe or config.json probe (fresh install / manual override).
     # On subsequent runs the DB cache handles this — but honour explicit CLI.

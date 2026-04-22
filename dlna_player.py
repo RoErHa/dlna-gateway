@@ -31,6 +31,8 @@ class RendererQueue:
     Thread-safe. Singleton: import RENDERER_QUEUE from this module.
     """
 
+    _MAX_CONSECUTIVE_FAILS = 5
+
     def __init__(self):
         self._lock    = threading.Lock()
         self._tracks: list  = []
@@ -39,6 +41,8 @@ class RendererQueue:
         self._rnd_name: str = ""
         self._stop_event    = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._started_at: float = 0.0
+        self._consecutive_fails: int = 0
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -50,6 +54,7 @@ class RendererQueue:
         when the new Play lands (which returns HTTP 500 on Naim/Rygel).
         """
         from dlna_content import avtransport_stop
+        self._log_track_end("queue_replaced")
         self._cancel()
 
         with self._lock:
@@ -63,15 +68,19 @@ class RendererQueue:
                 log.warning(f"RendererQueue: prior Stop failed: {e}")
 
         with self._lock:
-            self._av_url   = av_url
-            self._tracks   = list(tracks)
-            self._index    = 0
-            self._rnd_name = renderer_name
+            self._av_url             = av_url
+            self._tracks             = list(tracks)
+            self._index              = 0
+            self._rnd_name           = renderer_name
+            self._consecutive_fails  = 0
+            self._started_at         = 0.0
             self._stop_event.clear()
 
         if not tracks:
             return
 
+        log.info(f"RendererQueue: new queue with {len(tracks)} track(s) "
+                 f"→ {renderer_name}")
         self._send_current()
 
         self._thread = threading.Thread(
@@ -81,6 +90,8 @@ class RendererQueue:
     def stop(self):
         """Stop playback and cancel the queue."""
         from dlna_content import avtransport_stop
+        log.info("RendererQueue: user STOP")
+        self._log_track_end("user_stop")
         self._cancel()
         with self._lock:
             url = self._av_url
@@ -92,23 +103,32 @@ class RendererQueue:
         from dlna_content import avtransport_pause
         with self._lock:
             url = self._av_url
+        log.info("RendererQueue: user PAUSE toggle")
         if url:
             avtransport_pause(url)
 
     def next_track(self):
         """Skip to the next track immediately."""
         with self._lock:
-            if self._index < len(self._tracks) - 1:
-                self._index += 1
-            else:
+            if self._index >= len(self._tracks) - 1:
+                log.info("RendererQueue: user NEXT (at end — no-op)")
                 return
+        log.info("RendererQueue: user NEXT")
+        self._log_track_end("user_next")
+        with self._lock:
+            self._index += 1
         self._send_current()
 
     def prev_track(self):
         """Go back to the previous track."""
         with self._lock:
-            if self._index > 0:
-                self._index -= 1
+            if self._index <= 0:
+                log.info("RendererQueue: user PREV (at start — no-op)")
+                return
+        log.info("RendererQueue: user PREV")
+        self._log_track_end("user_prev")
+        with self._lock:
+            self._index -= 1
         self._send_current()
 
     def snapshot(self) -> dict:
@@ -153,22 +173,86 @@ class RendererQueue:
         if t and t.is_alive():
             t.join(timeout=3)
 
-    def _send_current(self):
+    def _log_track_end(self, reason: str):
+        """Emit a single INFO line when the current track stops playing,
+        regardless of the reason (natural end, user-pressed button,
+        SOAP fault, queue replacement). Elapsed seconds come from the
+        monotonic clock stamped when the track's Play was sent."""
+        with self._lock:
+            start  = self._started_at
+            idx    = self._index
+            tracks = list(self._tracks)
+        if not tracks or start <= 0 or not (0 <= idx < len(tracks)):
+            return
+        elapsed = time.monotonic() - start
+        t       = tracks[idx]
+        dur     = t.get("duration") or 0
+        dur_s   = f"/{int(dur)}s" if dur else ""
+        log.info(f"RendererQueue ■ END   [{idx+1}/{len(tracks)}] "
+                 f"{t.get('title','?')!r} played {elapsed:.1f}s{dur_s} "
+                 f"reason={reason}")
+        with self._lock:
+            self._started_at = 0.0
+
+    def _send_current(self) -> bool:
+        """Send SetURI + Play for tracks[_index]. Returns True on success.
+        On failure, logs the skip, auto-advances, and aborts the queue
+        after _MAX_CONSECUTIVE_FAILS failures so we don't silently chew
+        through every track when a renderer is wedged."""
         from dlna_content import avtransport_send
         with self._lock:
             if not self._tracks or not self._av_url:
-                return
+                return False
             idx    = self._index
-            tracks = self._tracks
+            tracks = list(self._tracks)
             av_url = self._av_url
-        if 0 <= idx < len(tracks):
-            t = tracks[idx]
-            dur = t.get("duration") or 0
-            dur_s = f" ({int(dur)}s)" if dur else ""
-            log.info(f"RendererQueue [{idx+1}/{len(tracks)}] "
-                     f"{t.get('title','?')!r}{dur_s} → {self._rnd_name}")
-            avtransport_send(av_url, t.get("url",""),
-                             t.get("title",""), t.get("mime",""))
+            rname  = self._rnd_name
+        if not (0 <= idx < len(tracks)):
+            return False
+
+        t = tracks[idx]
+        dur = t.get("duration") or 0
+        dur_s = f" ({int(dur)}s)" if dur else ""
+        log.info(f"RendererQueue ▶ START [{idx+1}/{len(tracks)}] "
+                 f"{t.get('title','?')!r} — "
+                 f"{t.get('artist','?')} / {t.get('album','?')}"
+                 f"{dur_s} → {rname}")
+
+        with self._lock:
+            self._started_at = time.monotonic()
+
+        ok = avtransport_send(av_url, t.get("url",""),
+                              t.get("title",""), t.get("mime",""))
+        if ok:
+            with self._lock:
+                self._consecutive_fails = 0
+            return True
+
+        log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "
+                    f"{t.get('title','?')!r} — SetURI/Play returned False "
+                    f"(url={t.get('url','')[:80]})")
+        self._log_track_end("send_failed")
+
+        with self._lock:
+            self._consecutive_fails += 1
+            fails = self._consecutive_fails
+            more  = self._index < len(self._tracks) - 1
+
+        if fails >= self._MAX_CONSECUTIVE_FAILS:
+            log.warning(f"RendererQueue ⚠ ABORT {fails} consecutive send "
+                        f"failures — stopping queue (renderer likely wedged; "
+                        f"kickstart the gateway if this persists)")
+            self._stop_event.set()
+            return False
+
+        if more:
+            with self._lock:
+                self._index += 1
+            return self._send_current()
+
+        log.info("RendererQueue ■ QUEUE END — all remaining tracks failed")
+        self._stop_event.set()
+        return False
 
     def _monitor(self):
         """
@@ -199,17 +283,20 @@ class RendererQueue:
 
             if (prev_state in ("PLAYING", "TRANSITIONING") and
                     cur_state in ("STOPPED", "NO_MEDIA_PRESENT")):
+                self._log_track_end("finished")
                 with self._lock:
                     more = self._index < len(self._tracks) - 1
                     if more:
                         self._index += 1
 
                 if more:
-                    log.info("RendererQueue: track ended, advancing…")
+                    log.info(f"RendererQueue: advancing to next track "
+                             f"[{idx+2}/{total}]")
                     self._send_current()
                     self._stop_event.wait(4.0)
                 else:
-                    log.info("RendererQueue: playlist finished")
+                    log.info(f"RendererQueue ■ QUEUE END — "
+                             f"playlist finished ({total} track(s))")
                     self._stop_event.set()
                     break
 
