@@ -344,7 +344,7 @@ def avtransport_send(av_url: str, media_url: str, title: str,
             resp = conn.getresponse()
             body = resp.read()
             if resp.status not in (200, 204):
-                log.error(f"AVTransport {action} → HTTP {resp.status}: {body[:200]}")
+                log.error(f"AVTransport {action} → HTTP {resp.status}: {body[:800]}")
                 return False
             return True
         finally:

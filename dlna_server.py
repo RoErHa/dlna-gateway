@@ -11,7 +11,10 @@ Standalone test (starts server on port 8766 for 30 s):
 import json
 import logging
 import os
+import socket
+import ssl
 import struct
+import sys
 import threading
 import time
 import urllib.parse
@@ -34,6 +37,48 @@ log = logging.getLogger("dlna.server")
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
+
+
+class TLSThreadedHTTPServer(ThreadedHTTPServer):
+    """
+    HTTPS variant hardened against accept-loop stalls.
+
+    The default `SSLSocket.accept()` performs the TLS handshake inline on
+    the accepting thread. A single client that opens a TCP connection and
+    never sends a ClientHello (port scanner, sleeping phone, dropped peer)
+    blocks the entire HTTPS server until that handshake completes — which
+    is never. Has been observed to wedge the gateway for days.
+
+    This subclass:
+      • requires the listening socket to be wrapped with
+        `do_handshake_on_connect=False`, so accept() returns immediately
+        with an unhandshaked SSLSocket; the handshake then happens lazily
+        on the per-request worker thread's first read;
+      • sets a per-connection socket timeout, so a stalled handshake or
+        slow client tears down its own thread instead of leaking forever;
+      • downgrades the noisy stderr traceback for routine handshake/timeout
+        errors to a single log.warning line.
+    """
+
+    REQUEST_TIMEOUT = 30.0  # per read/write op, not total connection
+
+    def get_request(self):
+        sock, addr = self.socket.accept()
+        try:
+            sock.settimeout(self.REQUEST_TIMEOUT)
+        except OSError:
+            pass
+        return sock, addr
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ssl.SSLError, socket.timeout,
+                            ConnectionResetError, BrokenPipeError, OSError)):
+            log.warning(
+                f"HTTPS: dropped {client_address}: "
+                f"{type(exc).__name__}: {exc}")
+            return
+        super().handle_error(request, client_address)
 
 
 # ── PWA icon generator ────────────────────────────────────────────

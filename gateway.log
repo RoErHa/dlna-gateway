@@ -1,22 +1,97 @@
-2026-04-21 06:19:07 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
-2026-04-21 06:19:25 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Connection reestablished!
-2026-04-21 22:08:28 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Heartbeat timeout, resetting connection
-2026-04-21 22:08:28 [INFO    ] pychromecast.controllers: Receiver:channel_disconnected
-2026-04-21 22:08:58 [ERROR   ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Failed to connect to service MDNSServiceInfo(name='4K-TV-Box-3940c7566a457af737baf5d149196428._googlecast._tcp.local.'), retrying in 5.0s
-2026-04-21 22:19:01 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
-2026-04-21 22:19:01 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
-2026-04-21 22:19:01 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
-2026-04-21 22:19:01 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
-2026-04-21 22:19:01 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
-2026-04-21 22:19:01 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
-2026-04-21 22:19:01 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
-2026-04-21 22:19:02 [INFO    ] dlna.cast: pychromecast loaded — Chromecast support enabled
-2026-04-21 22:19:02 [INFO    ] dlna.cast: Chromecast discovery started (CastBrowser + mDNS)
-2026-04-21 22:19:02 [INFO    ] dlna.cast: [CAST +] 'Tv in slaapkamer'  (4K TV Box)  @ 192.168.1.177
-2026-04-21 22:19:02 [INFO    ] dlna.cast: [CAST +] 'Uniti  livingroom'  (Uniti Nova)  @ 192.168.1.227
-2026-04-21 22:19:03 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
-2026-04-21 22:19:03 [INFO    ] dlna.library: Index OK: 23682 tracks already in DB for Asset UPnP: RonsMacMini.home
-2026-04-21 22:19:12 [INFO    ] dlna.cast: Chromecast sweep: browser has 2 device(s)
-2026-04-21 22:19:12 [INFO    ] dlna.cast:   Registering Tv in slaapkamer (607130fe-b9bf-4dac-5676-a9066489dc75)
-2026-04-21 22:19:12 [INFO    ] dlna.cast:   Registering Uniti  livingroom (8137fd47-4565-52e3-590d-df796a474614)
-2026-04-21 22:19:12 [INFO    ] dlna.cast: Chromecast sweep done: 2 device(s) in registry
+2026-04-22 00:51:36 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Heartbeat timeout, resetting connection
+2026-04-22 00:51:36 [INFO    ] pychromecast.controllers: Receiver:channel_disconnected
+2026-04-22 00:52:06 [ERROR   ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Failed to connect to service MDNSServiceInfo(name='4K-TV-Box-3940c7566a457af737baf5d149196428._googlecast._tcp.local.'), retrying in 5.0s
+2026-04-22 06:22:05 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-22 06:22:58 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Connection reestablished!
+2026-04-22 06:23:07 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-22 07:12:27 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Heartbeat timeout, resetting connection
+2026-04-22 07:12:27 [INFO    ] pychromecast.controllers: Receiver:channel_disconnected
+2026-04-22 07:12:57 [ERROR   ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Failed to connect to service HostServiceInfo(host='192.168.1.194', port=8009), retrying in 5.0s
+2026-04-22 09:21:59 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-22 09:22:39 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Connection reestablished!
+2026-04-22 11:58:18 [ERROR   ] dlna.content: AVTransport Stop error: [Errno 61] Connection refused
+2026-04-22 11:58:20 [ERROR   ] dlna.content: avtransport_pause: [Errno 61] Connection refused
+2026-04-22 11:58:22 [ERROR   ] dlna.content: AVTransport Stop error: [Errno 61] Connection refused
+2026-04-22 11:58:28 [ERROR   ] dlna.content: avtransport_pause: [Errno 61] Connection refused
+2026-04-22 11:58:39 [INFO    ] dlna.api.playback: POST /api/render_queue  472 tracks → Uniti  livingroom
+2026-04-22 11:58:39 [INFO    ] dlna.player: RendererQueue [1/472] 'Longview' → Uniti  livingroom
+2026-04-22 11:58:39 [INFO    ] dlna.content: AVTransport ▶ 'Longview' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 11:58:57 [INFO    ] dlna.content: AVTransport Pause → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 11:58:58 [INFO    ] dlna.content: AVTransport ■ Stop → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:01:33 [INFO    ] dlna.api.playback: POST /api/render_queue  472 tracks → Uniti  livingroom
+2026-04-22 12:01:33 [INFO    ] dlna.player: RendererQueue [1/472] 'Mykonos (Live On Boston Harbor)' → Uniti  livingroom
+2026-04-22 12:01:34 [INFO    ] dlna.content: AVTransport ▶ 'Mykonos (Live On Boston Harbor)' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:06:54 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:06:54 [INFO    ] dlna.player: RendererQueue [2/472] 'A Sunday Kind Of Love' → Uniti  livingroom
+2026-04-22 12:06:54 [INFO    ] dlna.content: AVTransport ▶ 'A Sunday Kind Of Love' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:10:13 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:10:13 [INFO    ] dlna.player: RendererQueue [3/472] 'This House Is A Circus' → Uniti  livingroom
+2026-04-22 12:10:14 [INFO    ] dlna.content: AVTransport ▶ 'This House Is A Circus' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:13:27 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:13:27 [INFO    ] dlna.player: RendererQueue [4/472] 'More Than I Can Say' → Uniti  livingroom
+2026-04-22 12:13:27 [INFO    ] dlna.content: AVTransport ▶ 'More Than I Can Say' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:17:12 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:17:12 [INFO    ] dlna.player: RendererQueue [5/472] 'Fly Like An Eagle' → Uniti  livingroom
+2026-04-22 12:17:13 [INFO    ] dlna.content: AVTransport ▶ 'Fly Like An Eagle' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:21:22 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:21:22 [INFO    ] dlna.player: RendererQueue [6/472] "We'll Sweep Out The Ashes In The Morning.Flac" → Uniti  livingroom
+2026-04-22 12:21:22 [INFO    ] dlna.content: AVTransport ▶ "We'll Sweep Out The Ashes In The Morning.Flac" → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:24:39 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:24:39 [INFO    ] dlna.player: RendererQueue [7/472] 'Get Off of My Cloud' → Uniti  livingroom
+2026-04-22 12:24:39 [INFO    ] dlna.content: AVTransport ▶ 'Get Off of My Cloud' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:27:38 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:27:38 [INFO    ] dlna.player: RendererQueue [8/472] 'New Kid In Town' → Uniti  livingroom
+2026-04-22 12:27:38 [INFO    ] dlna.content: AVTransport ▶ 'New Kid In Town' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:32:46 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:32:46 [INFO    ] dlna.player: RendererQueue [9/472] 'Samba Triste' → Uniti  livingroom
+2026-04-22 12:32:46 [INFO    ] dlna.content: AVTransport ▶ 'Samba Triste' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:37:39 [INFO    ] dlna.player: RendererQueue: track ended, advancing…
+2026-04-22 12:37:39 [INFO    ] dlna.player: RendererQueue [10/472] 'Blue Spotted Tail (Live On Boston Harbor)' → Uniti  livingroom
+2026-04-22 12:37:39 [INFO    ] dlna.content: AVTransport ▶ 'Blue Spotted Tail (Live On Boston Harbor)' → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 12:38:06 [INFO    ] dlna.content: AVTransport Pause → http://192.168.1.227:60371/Control/LibRygelRenderer/RygelAVTransport
+2026-04-22 13:03:29 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-22 17:30:11 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:30:11 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:30:11 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-22 17:30:11 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-22 17:30:11 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-22 17:30:11 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-22 17:30:11 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-22 17:31:30 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:31:30 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:31:30 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-22 17:31:30 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-22 17:31:30 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-22 17:31:30 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-22 17:31:30 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-22 17:31:30 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-22 17:31:30 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-22 17:31:30 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/   |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-22 17:31:32 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-22 17:31:32 [INFO    ] dlna.library: Index OK: 23657 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-22 17:31:32 [INFO    ] dlna.library: Index OK: 23657 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-22 17:31:34 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:31:34 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:31:34 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-22 17:31:34 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-22 17:31:34 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-22 17:31:34 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-22 17:31:34 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-22 17:31:46 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:49701/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-22 17:31:46 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-22 17:36:19 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:36:19 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-22 17:36:19 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-22 17:36:19 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-22 17:36:19 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-22 17:36:19 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-22 17:36:19 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-22 17:36:19 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-22 17:36:19 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-22 17:36:19 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/   |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-22 17:36:20 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-22 17:36:20 [INFO    ] dlna.library: Index OK: 23657 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-22 17:36:20 [INFO    ] dlna.library: Index OK: 23657 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-22 17:36:24 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:49701/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-22 17:36:24 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-22 17:38:15 [WARNING ] dlna.server: HTTPS: dropped ('100.72.54.16', 50967): SSLError: [SSL: SSLV3_ALERT_CERTIFICATE_UNKNOWN] ssl/tls alert certificate unknown (_ssl.c:2710)
