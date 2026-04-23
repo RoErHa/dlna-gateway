@@ -4,11 +4,14 @@ api_playback.py — Playback, state, and stream proxy API handlers.
 
 Handles: /api/renderer_state, /api/index/status, /api/index/rebuild,
          /api/render_queue, /api/render, /api/control,
-         /api/edit_track, /stream
+         /api/edit_track, /stream, /art, /api/client_log
 """
+import http.client
 import json
 import logging
+import ssl
 import threading
+import urllib.parse
 
 from dlna_content import avtransport_send
 from dlna_discovery import RENDERERS, SERVERS
@@ -80,6 +83,88 @@ def stream(h, params):
         h.send_error(400, "Missing url")
         return
     proxy_stream(url, h)
+
+
+# Cap art payload at 5MB — real album art is <1MB; this just prevents a
+# malicious/broken upstream from making the gateway allocate arbitrary memory.
+_ART_MAX_BYTES = 5 * 1024 * 1024
+_ART_TIMEOUT   = 10
+
+
+def art(h, params):
+    """Proxy an arbitrary image URL through the gateway.
+
+    Purpose: iOS MediaSession will NOT load cross-origin artwork on the
+    lock screen. The PWA rewrites track art URLs to `/art?url=<external>`
+    so the lock-screen fetch is same-origin as the app. Same story for
+    the Service Worker's art cache — same-origin URLs are cacheable
+    without CORS headaches.
+
+    No Range support (art is small, one-shot). Short timeout (10s) —
+    slow upstream just fails fast.
+    """
+    upstream = params.get("url", "")
+    if not upstream:
+        h.send_error(400, "Missing url")
+        return
+
+    try:
+        parsed = urllib.parse.urlparse(upstream)
+    except Exception:
+        h.send_error(400, "Bad url")
+        return
+    if parsed.scheme not in ("http", "https"):
+        h.send_error(400, "Bad scheme")
+        return
+    host = parsed.netloc
+    path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
+    conn = None
+    try:
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(
+                host, timeout=_ART_TIMEOUT,
+                context=ssl._create_unverified_context())
+        else:
+            conn = http.client.HTTPConnection(host, timeout=_ART_TIMEOUT)
+
+        conn.request("GET", path, headers={"User-Agent": "DLNAGateway/1.0"})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            h.send_error(resp.status, f"Upstream {resp.status}")
+            return
+
+        body = resp.read(_ART_MAX_BYTES + 1)
+        if len(body) > _ART_MAX_BYTES:
+            h.send_error(502, "Image too large")
+            return
+
+        ctype = resp.getheader("Content-Type") or "image/jpeg"
+        # Refuse non-image responses — a 200 with HTML body (upstream's
+        # prettier 404 page) would otherwise be served as-is and confuse
+        # the browser/SW cache.
+        if not ctype.lower().startswith("image/"):
+            h.send_error(502, f"Not an image: {ctype}")
+            return
+
+        h.send_response(200)
+        h.send_header("Content-Type",  ctype)
+        h.send_header("Content-Length", str(len(body)))
+        # Art rarely changes — let the SW + browser cache it aggressively.
+        h.send_header("Cache-Control",  "public, max-age=86400")
+        h.send_header("Access-Control-Allow-Origin", "*")
+        h.end_headers()
+        h.wfile.write(body)
+    except Exception as e:
+        log.debug(f"art proxy: {upstream[:80]}  {type(e).__name__}: {e}")
+        try:
+            h.send_error(502, str(e))
+        except Exception:
+            pass
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
 
 
 # ── POST handlers ─────────────────────────────────────────────────
@@ -213,4 +298,43 @@ def edit_track(h, body):
         h._json(200, {"ok": ok})
     except Exception as e:
         log.exception(f"edit_track error: {e}")
+        h._json(500, {"error": str(e)})
+
+
+# Dedicated logger for browser-side events so they're easy to grep
+# ("grep dlna.client gateway.log") and don't drown in the API chatter.
+_client_log = logging.getLogger("dlna.client")
+
+
+def client_log(h, body):
+    """Accept a structured error report from the PWA and write it to
+    gateway.log. This is what gives us OBSERVABILITY of browser-side
+    events that happen on a phone three rooms away — autoplay blocked,
+    MediaError codes, retry outcomes.
+
+    Body shape is free-form {kind: str, ...}. The handler clamps sizes
+    defensively so a broken or malicious client can't flood the log."""
+    try:
+        data = _parse_json_or_400(h, body)
+        if data is None:
+            return
+        kind = str(data.get("kind", "unknown"))[:40]
+        # Pull out and clamp common fields that we care about; stringify
+        # the rest into a single compact tail.
+        fields = []
+        for key in ("code", "codeName", "err", "reason", "retries",
+                    "title", "artist", "ready_state", "network_state"):
+            if key in data:
+                v = str(data[key])[:120]
+                fields.append(f"{key}={v}")
+        ua = str(data.get("ua") or data.get("user_agent", ""))[:80]
+        msg = str(data.get("message", ""))[:200]
+        tail = "  ".join(fields)
+        _client_log.info(
+            f"client_log[{kind}]  {tail}"
+            f"{'  msg=' + msg if msg else ''}"
+            f"{'  ua=' + ua if ua else ''}")
+        h._json(200, {"ok": True})
+    except Exception as e:
+        log.exception(f"client_log error: {e}")
         h._json(500, {"error": str(e)})

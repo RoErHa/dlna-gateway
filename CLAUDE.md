@@ -135,6 +135,78 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 - `PROXY_IDLE_SEC = 300` (module-level so tests can monkey-patch) — if the browser stops consuming bytes for 5 minutes (laptop suspended, tab closed without clean FIN), the proxy tears down the upstream connection. On laptop wake, the user starts playback again from the beginning; there's no resume.
 - Every session logs `proxy_stream ▶ START host/path` and `proxy_stream ■ END host/path sent=N bytes in Xs reason=<r>` with reason ∈ `{upstream_eof, client_idle_timeout, client_closed, error:<Type>}`.
 - The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from AssetUPnP); the proxy only matters for browser-audio playback.
+- No HTTP keep-alive — `Connection: close` on both ends. Each browser Range request opens a new upstream TCP connection. On LAN this is ~1ms; on Tailscale it's ~50-100ms per seek. Acceptable for current load; would need a connection pool if users start complaining about seek latency over the tailnet.
+
+### `/art` — lock-screen artwork proxy
+
+iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PWA rewrites every track art URL to `/art?url=<external>` so the lock-screen fetch is same-origin. Service Worker cache-firsts these (art rarely changes).
+
+- Hard-caps at 5 MB per image to prevent memory abuse.
+- Validates Content-Type starts with `image/` — an upstream HTML 404 page won't poison the SW cache.
+- 10-second timeout; slow upstream fails fast.
+- The handler is in `api_playback.art()` routed at `/art` in `dlna_server.py`.
+
+### Browser audio error handling (MediaError discrimination)
+
+`static/app.js` listens for `error` events on the `<audio>` element and branches on `MediaError.code`:
+
+| code | name              | behavior                                                      |
+|------|-------------------|--------------------------------------------------------------- |
+| 1    | ABORTED           | ignored (we or the UA told it to stop)                        |
+| 2    | NETWORK           | retry the same track ONCE (transient network), then skip      |
+| 3    | DECODE            | retry the same track ONCE (could be a bad Range chunk), skip  |
+| 4    | SRC_NOT_SUPPORTED | skip immediately — the format genuinely isn't playable        |
+
+Prior to 2026-04-23 every `error` event was treated as code 4 and auto-skipped, producing false-positive "unsupported format" skips whenever the network hiccupped. Every event (including ignored-code-1) is now POSTed to `/api/client_log` so real-world incidents land in `gateway.log` for diagnosis.
+
+### `_playBrowserAudio()` — autoplay-rejection-aware play()
+
+Every call to `browserAudio.play()` now routes through this helper instead of `audio.play().catch(()=>{})`. When the browser rejects with `NotAllowedError` (autoplay blocked, first-play without gesture, iOS standalone resume) or `AbortError`, the helper:
+1. Resets the play button UI so the user can manually re-trigger.
+2. Toasts "⚠ Browser blocked playback — tap ▶ Play to start".
+3. POSTs a `play_rejected` event to `/api/client_log` with the error name + UA.
+
+Before this, blocked autoplay was invisible: the UI showed "⏸ Pause", no audio, no error surfaced.
+
+### `/api/client_log` — browser-side observability
+
+POST-only endpoint that logs free-form JSON reports from the PWA into `gateway.log` under the `dlna.client` logger:
+
+```
+grep "dlna.client" gateway.log         # all browser-reported events
+grep "client_log\[audio_error" gw.log  # just MediaError events
+grep "client_log\[play_rejected" gw.log # just autoplay blocks
+```
+
+Payload fields are clamped defensively (40 chars for `kind`, 120 for fields, 200 for `message`, 80 for `ua`) so a broken or malicious client can't flood the log. Handler in `api_playback.client_log()`.
+
+### HTTPS / Tailscale cert
+
+The gateway auto-detects `*.crt` + `*.key` in the working directory on startup. Currently uses a Tailscale-issued Let's Encrypt cert: `ronsmacmini.tail5be6ad.ts.net.{crt,key}`. Mobile devices on the tailnet get a trusted cert with no install or exception needed.
+
+**Cert renewal is NOT automated.** Tailscale-issued certs are valid 90 days. To renew:
+
+```bash
+cd ~/dlna-gateway
+tailscale cert ronsmacmini.tail5be6ad.ts.net   # writes new .crt + .key
+launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
+```
+
+Set a calendar reminder; an expired cert will make mobile PWA access fail silently (browser blocks with "not private" warning). When it breaks, `gateway.log` shows `HTTPS failed to start: ...` or continues to serve with the expired cert — the gateway doesn't check expiry.
+
+### Mobile / PWA testing checklist
+
+Because there's no automated test coverage for on-device behavior (iOS Safari, Android Chrome, PWA standalone mode), before believing a browser-mode change is shipped, manually verify on an actual mobile device over Tailscale:
+
+1. **Fresh PWA install**: Safari → Share → Add to Home Screen. Icon + title use manifest values.
+2. **First-play autoplay**: Tap a track. Audio starts. (If it doesn't, and a toast says "Browser blocked playback", that's the correct new behavior — the `catch` surfaces it.)
+3. **Lock screen artwork**: Lock the phone during playback. Album art shown on lock screen. Previous/Next/Play/Pause work.
+4. **Tab backgrounded**: Switch to another app. Audio continues. (If it pauses, that's iOS's audio-session policy, not a bug.)
+5. **Laptop/phone suspend during stream**: Close lid (or long-press sleep). Wait 5+ min. Check `gateway.log` shows `proxy_stream ■ END ... reason=client_idle_timeout` within 6 minutes.
+6. **Error reporting**: After playback fails (e.g., play an unsupported-format track), `grep dlna.client gateway.log` should show the event with `codeName=unsupported` etc.
+7. **Rebuild / force-refresh**: Pull-to-refresh in PWA. Service Worker updates (check DevTools Application tab → SW version).
+
+When something goes wrong, the diagnostic order is (1) `gateway.log` `dlna.client` entries for browser-side events, (2) `/tmp/dlna-gateway.err` for server-thread crashes, (3) Safari DevTools Web Inspector for pre-report JS errors.
 
 ## Dependencies
 

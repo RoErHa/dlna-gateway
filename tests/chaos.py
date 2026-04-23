@@ -261,6 +261,140 @@ def act_control_bad_action(rng, target, base):
     return f"control bad action → {s}", (s, t)
 
 
+# --- Browser-mode / PWA actions ---
+#
+# These exercise the proxy endpoints that serve the in-browser audio
+# player and its lock-screen / Service Worker dependencies. The goal
+# is NOT to test the browser's audio stack (we can't do that from
+# Python) but to confirm the gateway-side proxies stay stable under
+# the kind of load a flaky mobile browser produces: rapid Range
+# fetches, abrupt disconnects (laptop close / tab backgrounded on
+# iOS), many concurrent sessions (tab duplication, PWA reload loops).
+
+def _sample_track_url(rng, target):
+    """Grab a real content URL from a playlist so /stream proxies
+    something that actually exists. Falls back to a bogus local URL
+    so adversarial scenarios still exercise the error paths."""
+    if not target.playlists:
+        return None
+    pl = rng.choice(target.playlists)
+    data = _get_json(target.base, f"/api/playlist?id={pl['id']}")
+    tracks = (data or {}).get("tracks", [])
+    return rng.choice(tracks).get("url") if tracks else None
+
+def act_stream_abrupt_disconnect(rng, target, base):
+    """Open /stream, read a few chunks, then close without reading the
+    rest. This is the exact pattern of 'laptop lid closed while music
+    is playing'. The proxy must clean up the upstream without leaking
+    a file descriptor or raising a handled exception into stderr."""
+    url = _sample_track_url(rng, target)
+    if not url: return "stream disconnect (no playlist)", (-1, 0)
+    t0 = time.monotonic()
+    try:
+        req = urllib.request.Request(
+            f"{base.rstrip('/')}/stream?url={urllib.parse.quote(url)}")
+        with _opener.open(req, timeout=10) as r:
+            # Read just enough to get the proxy streaming, then bail
+            r.read(rng.randint(1024, 65536))
+        # urllib closes on context exit — abrupt from server's POV
+        return "stream abrupt disconnect", (200, time.monotonic() - t0)
+    except Exception as e:
+        return f"stream disconnect: {type(e).__name__}", (0, time.monotonic() - t0)
+
+def act_stream_range_request(rng, target, base):
+    """Simulate a browser seeking: HEAD or GET with a Range header for
+    a middle segment. The proxy forwards Range upstream; upstream may
+    or may not honour it. Either way, no 5xx."""
+    url = _sample_track_url(rng, target)
+    if not url: return "stream range (no playlist)", (-1, 0)
+    t0 = time.monotonic()
+    start = rng.randint(0, 1_000_000)
+    end = start + rng.randint(1024, 262_144)
+    try:
+        req = urllib.request.Request(
+            f"{base.rstrip('/')}/stream?url={urllib.parse.quote(url)}")
+        req.add_header("Range", f"bytes={start}-{end}")
+        with _opener.open(req, timeout=10) as r:
+            r.read(rng.randint(256, 8192))
+            s = r.status
+        return f"stream range {start}- → {s}", (s, time.monotonic() - t0)
+    except urllib.error.HTTPError as e:
+        return f"stream range → {e.code}", (e.code, time.monotonic() - t0)
+    except Exception as e:
+        return f"stream range: {type(e).__name__}", (0, time.monotonic() - t0)
+
+def act_stream_bogus_url(rng, target, base):
+    """URL param points at a port nothing listens on. The proxy should
+    emit a clean 502 (or similar), NOT a 5xx from unhandled exception."""
+    bogus = rng.choice([
+        "http://127.0.0.1:1/nope.flac",
+        "http://240.0.0.1/unreachable.flac",
+        "http://does-not-exist.local:9999/x.flac",
+    ])
+    t0 = time.monotonic()
+    try:
+        req = urllib.request.Request(
+            f"{base.rstrip('/')}/stream?url={urllib.parse.quote(bogus)}")
+        with _opener.open(req, timeout=8) as r:
+            s = r.status
+            r.read(1024)
+        return f"stream bogus → {s}", (s, time.monotonic() - t0)
+    except urllib.error.HTTPError as e:
+        return f"stream bogus → {e.code}", (e.code, time.monotonic() - t0)
+    except Exception as e:
+        return f"stream bogus: {type(e).__name__}", (0, time.monotonic() - t0)
+
+def act_art_fetch(rng, target, base):
+    """The lock-screen artwork proxy. Must return 200 for a valid image
+    URL, 4xx/502 otherwise — never a 5xx."""
+    url = rng.choice([
+        "http://127.0.0.1:1/nope.jpg",            # unreachable → 502
+        "http://240.0.0.1/unroutable.jpg",        # unroutable → 502
+        "https://example.com/robots.txt",         # non-image → 502
+        "",                                        # missing → 400
+    ])
+    t0 = time.monotonic()
+    try:
+        if url:
+            req = f"{base.rstrip('/')}/art?url={urllib.parse.quote(url)}"
+        else:
+            req = f"{base.rstrip('/')}/art"
+        resp = _opener.open(urllib.request.Request(req), timeout=8)
+        s = resp.status
+        resp.read(1024)
+        return f"art → {s}", (s, time.monotonic() - t0)
+    except urllib.error.HTTPError as e:
+        return f"art → {e.code}", (e.code, time.monotonic() - t0)
+    except Exception as e:
+        return f"art: {type(e).__name__}", (0, time.monotonic() - t0)
+
+def act_client_log_flood(rng, target, base):
+    """A broken PWA could spam this endpoint. Should always 200 or 400,
+    never crash."""
+    kinds = ["audio_error", "play_rejected", "unknown_chaos"]
+    body = json.dumps({
+        "kind":    rng.choice(kinds),
+        "code":    rng.randint(0, 5),
+        "message": "chaos fuzz " + "x" * rng.randint(0, 500),
+        "ua":      "ChaosUA/" + str(rng.randint(0, 99)),
+    })
+    s, _, t = _http(base, "POST", "/api/client_log", body)
+    return f"client_log → {s}", (s, t)
+
+def act_client_log_malformed(rng, target, base):
+    """Must 400, not 500, on garbage input — verified path still holds
+    after the 2026-04-23 JSON-shape fix."""
+    body = rng.choice([
+        "[]",
+        "42",
+        '"just-a-string"',
+        "{not json",
+        "",
+    ])
+    s, _, t = _http(base, "POST", "/api/client_log", body)
+    return f"client_log malformed → {s}", (s, t)
+
+
 ACTIONS = [
     # weight, fn
     (10, act_list_renderers),
@@ -280,6 +414,13 @@ ACTIONS = [
     ( 5, act_queue_hms_duration),
     ( 3, act_control_unknown_udn),
     ( 3, act_control_bad_action),
+    # Browser / PWA / mobile proxy endpoints
+    ( 8, act_stream_abrupt_disconnect),
+    ( 5, act_stream_range_request),
+    ( 3, act_stream_bogus_url),
+    ( 5, act_art_fetch),
+    ( 3, act_client_log_flood),
+    ( 2, act_client_log_malformed),
 ]
 
 
@@ -336,8 +477,13 @@ def run(base, iterations, workers, seed, quiet):
 
         with lock:
             status_hist[status] += 1
-            if 500 <= status < 600:
-                failures.append((i, desc, status, "5xx response"))
+            # 500 = internal server error (gateway bug) → always a failure.
+            # 503 = service unavailable → gateway refusing work → failure.
+            # 502/504 = bad gateway / upstream timeout → LEGITIMATE when
+            # a chaos action deliberately points at an unreachable URL.
+            # Counting those as failures gives false positives.
+            if status in (500, 503):
+                failures.append((i, desc, status, "gateway 5xx"))
             # 5s is the "something is actually broken" threshold. An
             # overloaded UPnP renderer can take 2-4s to answer
             # GetTransportInfo when hammered — that's upstream slowness,
@@ -376,9 +522,10 @@ def run(base, iterations, workers, seed, quiet):
             f"stderr grew by {stderr_growth} bytes — "
             f"a worker thread crashed silently. "
             f"tail {STDERR_PATH} to see the traceback.")
-    if any(500 <= s < 600 for s in status_hist):
-        n = sum(v for s, v in status_hist.items() if 500 <= s < 600)
-        hard_fails.append(f"{n} 5xx response(s) — handler returned 500")
+    bad_5xx = {500, 503}
+    if any(s in bad_5xx for s in status_hist):
+        n = sum(v for s, v in status_hist.items() if s in bad_5xx)
+        hard_fails.append(f"{n} 500/503 response(s) — handler itself broke")
     if slow_calls:
         hard_fails.append(
             f"{len(slow_calls)} snapshot(s) took > 5s — "
