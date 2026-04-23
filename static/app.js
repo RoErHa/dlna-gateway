@@ -712,6 +712,31 @@ async function playAlbumFromDB(artist,album){
   await playTracklist(data.tracks, album, artist);
 }
 
+// POST a queue to a UPnP renderer. Handles the server's 409 "renderer busy"
+// response by prompting the user to take over an existing session.
+// Returns true on success, false if user declined or request failed.
+async function sendRenderQueue(udn, tracks){
+  const post=(force)=>api("/api/render_queue",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({udn, tracks, force})});
+  let r=await post(false);
+  if(!r){toast("Failed to reach renderer");return false;}
+  if(r.status===409){
+    const d=await r.json().catch(()=>({}));
+    const bw=d.busy_with||{};
+    const what=bw.title?`"${bw.title}"${bw.artist?" — "+bw.artist:""}`:"another session";
+    const rname=renderers[udn]?.name||udn;
+    if(!confirm(`${rname} is already playing ${what}.\n\nTake over and replace the current queue?`)){
+      return false;
+    }
+    r=await post(true);
+    if(!r){toast("Failed to reach renderer");return false;}
+  }
+  const d=await r.json().catch(()=>({}));
+  if(d.error){toast("Error: "+d.error);return false;}
+  return true;
+}
+
 // Central function: play a list of track objects via whatever output is selected
 async function playTracklist(tracks, title, artist){
   // Apply shuffle before anything else so art/title reflect actual first track
@@ -739,12 +764,7 @@ async function playTracklist(tracks, title, artist){
   } else {
     // UPnP renderer
     const rendUdn=out.replace("upnp:","");
-    const r=await api("/api/render_queue",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({udn:rendUdn, tracks})});
-    if(!r){toast("Failed to reach renderer");return;}
-    const d=await r.json();
-    if(d.error){toast("Error: "+d.error);return;}
+    if(!await sendRenderQueue(rendUdn, tracks)) return;
     const rname=renderers[rendUdn]?.name||rendUdn;
     toast(`▶ Playing ${tracks.length} tracks on ${rname}`);
   }
@@ -983,10 +1003,8 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
     toast("▶ Streaming in browser…");
   } else {
     const rendUdn=out.replace("upnp:","");
-    await api("/api/render_queue",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({udn:rendUdn,tracks:[{url,title,artist,art,mime:""}]})});
-    toast(`▶ Sending to ${renderers[rendUdn]?.name||rendUdn}…`);
+    const ok=await sendRenderQueue(rendUdn,[{url,title,artist,art,mime:""}]);
+    if(ok) toast(`▶ Sending to ${renderers[rendUdn]?.name||rendUdn}…`);
   }
 }
 
@@ -1101,8 +1119,11 @@ async function pollState(){
     if(dur>0) $("mini-progress").style.width=((pos/dur)*100)+"%";
     return;
   }
-  // ── UPnP renderer state ───────────────────────────────────────
-  const r=await api("/api/renderer_state");if(!r)return;
+  // ── UPnP renderer state (per-renderer; pass UDN so we poll the
+  // right queue when multiple renderers have active sessions) ──
+  const udn=activeDevice.startsWith("upnp:")?activeDevice.slice(5):"";
+  const url="/api/renderer_state"+(udn?"?udn="+encodeURIComponent(udn):"");
+  const r=await api(url);if(!r)return;
   const ps=await r.json();
   $("sb-dot").className="sb-dot "+(ps.state||"stopped");
   $("sb-state").textContent=ps.state||"stopped";

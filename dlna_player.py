@@ -18,6 +18,32 @@ from typing import Optional
 log = logging.getLogger("dlna.player")
 
 
+def _dur_to_sec(dur) -> int:
+    """Coerce a track duration to an int second count. Accepts int, float,
+    empty/None, or UPnP-style 'H:MM:SS(.fff)' / 'MM:SS' strings (how the
+    library DB actually stores them). Returns 0 when unparseable so callers
+    never raise on a malformed duration."""
+    if not dur:
+        return 0
+    if isinstance(dur, (int, float)):
+        return int(dur)
+    s = str(dur).strip()
+    if not s:
+        return 0
+    if ":" in s:
+        try:
+            total = 0.0
+            for part in s.split(":"):
+                total = total * 60 + float(part)
+            return int(total)
+        except (ValueError, TypeError):
+            return 0
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return 0
+
+
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
 class RendererQueue:
@@ -27,8 +53,9 @@ class RendererQueue:
     When a track finishes (state goes STOPPED after PLAYING) the next
     track in the queue is automatically sent via SetAVTransportURI+Play.
 
-    Only one queue is active at a time; starting a new queue cancels the old one.
-    Thread-safe. Singleton: import RENDERER_QUEUE from this module.
+    Only one queue is active per renderer; starting a new queue on the same
+    renderer cancels the old one. Multiple RendererQueue instances coexist
+    (one per renderer UDN) — see QueueRegistry below.
     """
 
     _MAX_CONSECUTIVE_FAILS = 5
@@ -43,6 +70,18 @@ class RendererQueue:
         self._thread: Optional[threading.Thread] = None
         self._started_at: float = 0.0
         self._consecutive_fails: int = 0
+        # Pre-populate with a "stopped" default so concurrent callers
+        # during the first fetch have something to return rather than
+        # block waiting for the SOAP.
+        self._snap_cache: dict = {"state": "stopped", "alive": False,
+                                   "renderer": "", "queue_len": 0,
+                                   "queue_pos": 0}
+        self._snap_cache_at: float = 0.0
+        # Try-acquire lock: the first caller who finds cache stale
+        # becomes the fetcher; everyone else gets the stale cache
+        # immediately (no blocking). Without this, N concurrent callers
+        # all wait behind the fetch and each sees multi-second latency.
+        self._snap_fetch_lock = threading.Lock()
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -76,6 +115,7 @@ class RendererQueue:
             self._started_at         = 0.0
             self._stop_event.clear()
 
+        self._invalidate_snap()
         if not tracks:
             return
 
@@ -97,6 +137,7 @@ class RendererQueue:
             url = self._av_url
         if url:
             avtransport_stop(url)
+        self._invalidate_snap()
 
     def pause(self):
         """Toggle pause on the renderer."""
@@ -106,6 +147,7 @@ class RendererQueue:
         log.info("RendererQueue: user PAUSE toggle")
         if url:
             avtransport_pause(url)
+        self._invalidate_snap()
 
     def next_track(self):
         """Skip to the next track immediately."""
@@ -117,6 +159,7 @@ class RendererQueue:
         self._log_track_end("user_next")
         with self._lock:
             self._index += 1
+        self._invalidate_snap()
         self._send_current()
 
     def prev_track(self):
@@ -129,43 +172,98 @@ class RendererQueue:
         self._log_track_end("user_prev")
         with self._lock:
             self._index -= 1
+        self._invalidate_snap()
         self._send_current()
 
+    # Short TTL on snapshot(): every poll fires two SOAP calls to the
+    # renderer, and the dlna_content semaphore caps concurrent SOAP at 3.
+    # Under heavy polling (multiple browser tabs, chaos-style hammering)
+    # that queue builds up seconds of latency. 500ms coalescing loses
+    # nothing UI-relevant and caps real-world load.
+    _SNAP_TTL_SEC = 0.5
+
     def snapshot(self) -> dict:
-        """Return current queue state for the UI state poll."""
+        """Return current queue state for the UI state poll. Cached for
+        _SNAP_TTL_SEC; concurrent callers that miss the TTL return the
+        stale cache rather than block — only the first caller to find
+        stale cache fires the SOAP round-trip."""
         from dlna_content import avtransport_get_state, avtransport_get_position
+
+        now = time.monotonic()
         with self._lock:
-            av_url  = self._av_url
-            tracks  = list(self._tracks)
-            idx     = self._index
-            rname   = self._rnd_name
+            cache     = dict(self._snap_cache)
+            cached_at = self._snap_cache_at
 
-        if not av_url or not tracks:
-            return {"state": "stopped", "alive": False,
-                    "renderer": rname, "queue_len": 0, "queue_pos": 0}
+        if now - cached_at < self._SNAP_TTL_SEC:
+            return cache
 
-        state = avtransport_get_state(av_url)
-        pos   = avtransport_get_position(av_url)
+        # Stale. Try to become the fetcher. If we can't, we're in the
+        # middle of another caller's fetch — just return the stale data
+        # rather than queue up a duplicate SOAP or block the caller.
+        if not self._snap_fetch_lock.acquire(blocking=False):
+            return cache
 
-        cur = tracks[idx] if 0 <= idx < len(tracks) else {}
-        return {
-            "state":       _av_state_to_ui(state),
-            "alive":       state in ("PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"),
-            "paused":      state == "PAUSED_PLAYBACK",
-            "renderer":    rname,
-            "title":       pos.get("title") or cur.get("title", ""),
-            "artist":      cur.get("artist", ""),
-            "album":       cur.get("album", ""),
-            "art":         cur.get("art", ""),
-            "position":    pos.get("position"),
-            "duration":    pos.get("duration"),
-            "queue_len":   len(tracks),
-            "queue_pos":   idx + 1,
-            "uri":         cur.get("url", ""),
-            "media_title": pos.get("title") or cur.get("title", ""),
-        }
+        try:
+            with self._lock:
+                av_url = self._av_url
+                tracks = list(self._tracks)
+                idx    = self._index
+                rname  = self._rnd_name
+
+            if not av_url or not tracks:
+                snap = {"state": "stopped", "alive": False,
+                        "renderer": rname, "queue_len": 0, "queue_pos": 0}
+            else:
+                # Fire the two SOAP calls in parallel — halves snapshot
+                # latency. Each bounded by _av_soap's 6s timeout, so an
+                # unresponsive renderer caps us at ~6s not 12s.
+                result = {"state": None, "pos": None}
+                def _fetch_state():
+                    result["state"] = avtransport_get_state(av_url)
+                def _fetch_pos():
+                    result["pos"] = avtransport_get_position(av_url)
+                ts = threading.Thread(target=_fetch_state, daemon=True)
+                tp = threading.Thread(target=_fetch_pos,   daemon=True)
+                ts.start(); tp.start()
+                ts.join(timeout=7); tp.join(timeout=7)
+                state = result["state"] or "UNKNOWN"
+                pos   = result["pos"]   or {"position": None, "duration": None,
+                                             "title": None}
+                cur = tracks[idx] if 0 <= idx < len(tracks) else {}
+                snap = {
+                    "state":       _av_state_to_ui(state),
+                    "alive":       state in ("PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"),
+                    "paused":      state == "PAUSED_PLAYBACK",
+                    "renderer":    rname,
+                    "title":       pos.get("title") or cur.get("title", ""),
+                    "artist":      cur.get("artist", ""),
+                    "album":       cur.get("album", ""),
+                    "art":         cur.get("art", ""),
+                    "position":    pos.get("position"),
+                    "duration":    pos.get("duration"),
+                    "queue_len":   len(tracks),
+                    "queue_pos":   idx + 1,
+                    "uri":         cur.get("url", ""),
+                    "media_title": pos.get("title") or cur.get("title", ""),
+                }
+
+            with self._lock:
+                self._snap_cache    = snap
+                self._snap_cache_at = time.monotonic()
+            return dict(snap)
+        finally:
+            self._snap_fetch_lock.release()
 
     # ── Internal ──────────────────────────────────────────────────
+
+    def _invalidate_snap(self):
+        """Force the next poll to re-fetch from the renderer. Called after
+        any mutation (start/stop/pause/next/prev) so UI doesn't see up to
+        500ms of stale state. We zero the timestamp but LEAVE the cache
+        dict in place — concurrent callers that lose the fetch-lock race
+        need a non-None fallback value to return."""
+        with self._lock:
+            self._snap_cache_at = 0.0
 
     def _cancel(self):
         self._stop_event.set()
@@ -186,8 +284,8 @@ class RendererQueue:
             return
         elapsed = time.monotonic() - start
         t       = tracks[idx]
-        dur     = t.get("duration") or 0
-        dur_s   = f"/{int(dur)}s" if dur else ""
+        dur     = _dur_to_sec(t.get("duration"))
+        dur_s   = f"/{dur}s" if dur else ""
         log.info(f"RendererQueue ■ END   [{idx+1}/{len(tracks)}] "
                  f"{t.get('title','?')!r} played {elapsed:.1f}s{dur_s} "
                  f"reason={reason}")
@@ -211,8 +309,8 @@ class RendererQueue:
             return False
 
         t = tracks[idx]
-        dur = t.get("duration") or 0
-        dur_s = f" ({int(dur)}s)" if dur else ""
+        dur = _dur_to_sec(t.get("duration"))
+        dur_s = f" ({dur}s)" if dur else ""
         log.info(f"RendererQueue ▶ START [{idx+1}/{len(tracks)}] "
                  f"{t.get('title','?')!r} — "
                  f"{t.get('artist','?')} / {t.get('album','?')}"
@@ -314,22 +412,83 @@ def _av_state_to_ui(state: str) -> str:
     }.get(state, "stopped")
 
 
-# ── Singleton ─────────────────────────────────────────────────────
+# ── QueueRegistry — per-renderer queue owner ──────────────────────
 
-RENDERER_QUEUE = RendererQueue()
+class QueueRegistry:
+    """Owns one RendererQueue per renderer UDN.
+
+    Concurrent multi-renderer playback: each physical output gets its own
+    queue. Queues are lazily created on first access and persist for the
+    lifetime of the process — there's no churn (at most a handful of
+    renderers ever exist on a LAN).
+    """
+
+    def __init__(self):
+        self._queues: dict = {}
+        self._lock = threading.Lock()
+
+    def get(self, udn: str) -> RendererQueue:
+        """Return the queue for this UDN, creating it on first use."""
+        with self._lock:
+            q = self._queues.get(udn)
+            if q is None:
+                q = RendererQueue()
+                self._queues[udn] = q
+            return q
+
+    def peek(self, udn: str) -> Optional[RendererQueue]:
+        """Return the queue for this UDN if one exists, else None (does
+        NOT create). Use this when probing state to avoid allocating a
+        queue for an unknown UDN."""
+        with self._lock:
+            return self._queues.get(udn)
+
+    def is_busy(self, udn: str) -> bool:
+        """True iff this UDN has an active queue (renderer not stopped).
+        Step C will use this to return 409 Conflict on second-session
+        queue posts."""
+        q = self.peek(udn)
+        if q is None:
+            return False
+        return bool(q.snapshot().get("alive"))
+
+    def snapshot_all(self) -> dict:
+        """Return {udn: snapshot} for every queue that has ever been
+        created. Useful for a global 'what's playing anywhere' view."""
+        with self._lock:
+            items = list(self._queues.items())
+        return {udn: q.snapshot() for udn, q in items}
+
+
+QUEUES = QueueRegistry()
 
 
 # ── Stream proxy ──────────────────────────────────────────────────
+
+# Module-level so tests can monkey-patch a shorter window for chaos runs
+# without waiting the full 5 minutes per iteration.
+PROXY_IDLE_SEC = 300  # 5 min — covers a closed-laptop/sleeping-browser gap
+
 
 def proxy_stream(upstream_url: str, handler):
     """
     HTTP Range-aware proxy: relay AssetUPnP bytes to the browser.
     Forwards Range header so browser seek works without hitting AssetUPnP directly.
+
+    A 5-minute client-idle timeout frees up the upstream connection when a
+    browser stops consuming bytes (laptop suspended, tab closed without a
+    clean FIN, network drop). Without this, the upstream socket would be
+    held open indefinitely.
     """
     parsed  = urllib.parse.urlparse(upstream_url)
     host    = parsed.netloc
     path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
     use_ssl = parsed.scheme == "https"
+
+    sent_bytes = 0
+    reason     = "unknown"
+    t_start    = time.monotonic()
+    log.info(f"proxy_stream ▶ START {host}{path[:80]}")
 
     conn = None
     try:
@@ -371,31 +530,38 @@ def proxy_stream(upstream_url: str, handler):
         handler.send_header("Connection", "close")
         handler.end_headers()
 
-        CHUNK    = 65_536
-        IDLE_SEC = 30
+        CHUNK = 65_536
         while True:
             chunk = resp.read(CHUNK)
             if not chunk:
+                reason = "upstream_eof"
                 break
             try:
-                rdy = select.select([], [handler.wfile], [], IDLE_SEC)[1]
+                rdy = select.select([], [handler.wfile], [], PROXY_IDLE_SEC)[1]
                 if not rdy:
-                    log.debug("proxy_stream: client idle timeout — closing")
+                    reason = "client_idle_timeout"
                     break
                 handler.wfile.write(chunk)
                 handler.wfile.flush()
+                sent_bytes += len(chunk)
             except (BrokenPipeError, OSError):
+                reason = "client_closed"
                 break
 
     except BrokenPipeError:
-        pass
+        reason = "client_closed"
     except Exception as e:
-        log.debug(f"proxy_stream: {e}")
+        reason = f"error:{type(e).__name__}"
+        log.warning(f"proxy_stream error: {e}")
         try:
             handler.send_error(502, str(e))
         except Exception:
             pass
     finally:
+        elapsed = time.monotonic() - t_start
+        log.info(f"proxy_stream ■ END   {host}{path[:60]} "
+                 f"sent={sent_bytes} bytes in {elapsed:.1f}s "
+                 f"reason={reason}")
         if conn:
             try:
                 conn.close()
@@ -409,8 +575,30 @@ def _test():
     from dlna_config import setup_logging
     setup_logging(debug=True)
     log.info("=== dlna_player self-test ===")
-    snap = RENDERER_QUEUE.snapshot()
-    log.info(f"RendererQueue state: {snap['state']}")
+
+    # Duration parser covers every format the library DB actually stores
+    assert _dur_to_sec("0:04:51.000") == 291
+    assert _dur_to_sec("3:45")        == 225
+    assert _dur_to_sec("")            == 0
+    assert _dur_to_sec(None)          == 0
+    assert _dur_to_sec(42)            == 42
+    assert _dur_to_sec("abc")         == 0
+    log.info("PASS — _dur_to_sec handles all formats")
+
+    # QueueRegistry lazily creates per-UDN queues
+    reg = QueueRegistry()
+    assert reg.peek("uuid:test") is None
+    assert reg.is_busy("uuid:test") is False
+    q1 = reg.get("uuid:a")
+    q2 = reg.get("uuid:b")
+    assert q1 is not q2, "each UDN must get its own queue"
+    assert reg.get("uuid:a") is q1, "get() must be idempotent"
+    assert reg.snapshot_all().keys() == {"uuid:a", "uuid:b"}
+    log.info("PASS — QueueRegistry lazy per-UDN allocation")
+
+    # Module-level registry exists
+    snap = QUEUES.snapshot_all()
+    log.info(f"QUEUES.snapshot_all(): {snap}")
     log.info("PASS — dlna_player OK")
 
 
