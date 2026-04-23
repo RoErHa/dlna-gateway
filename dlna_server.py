@@ -261,6 +261,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         "/api/index/status":   api_playback.index_status,
         "/api/index/rebuild":  api_playback.index_rebuild,
         "/stream":             api_playback.stream,
+        "/art":                api_playback.art,
         "/api/playlists":      api_playlists.playlists,
         "/api/playlist":       api_playlists.playlist,
         "/api/playlist/create":api_playlists.playlist_create,
@@ -370,6 +371,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         "/api/render":       api_playback.render,
         "/api/control":      api_playback.control,
         "/api/edit_track":   api_playback.edit_track,
+        "/api/client_log":   api_playback.client_log,
         "/gw/cd/control":    api_upnp.cd_control,
     }
 

@@ -284,5 +284,129 @@ class TestControlHandler(unittest.TestCase):
         self.assertEqual(qb.stop_calls, 0)
 
 
+# ── /art image-proxy handler ──────────────────────────────────────
+
+class TestArtHandler(unittest.TestCase):
+    """The /art endpoint is the iOS lock-screen artwork proxy. Without it,
+    MediaSession artwork silently 404s on iPhones — exactly the kind of
+    mobile/PWA-only bug that never surfaces in dev."""
+
+    class _ArtHandler:
+        """Captures send_response/send_header/send_error/wfile output."""
+        def __init__(self):
+            self.status = None
+            self.headers = {}
+            self.body = b""
+            self.error_status = None
+            self.error_message = None
+            self.wfile = self
+        def send_response(self, status): self.status = status
+        def send_header(self, k, v):     self.headers[k] = v
+        def send_error(self, status, message=None):
+            self.error_status = status
+            self.error_message = message
+        def end_headers(self): pass
+        def write(self, data): self.body += data
+
+    def test_missing_url_returns_400(self):
+        h = self._ArtHandler()
+        api_playback.art(h, {})
+        self.assertEqual(h.error_status, 400)
+
+    def test_bad_scheme_returns_400(self):
+        h = self._ArtHandler()
+        api_playback.art(h, {"url": "ftp://example/x.jpg"})
+        self.assertEqual(h.error_status, 400)
+
+    def test_successful_image_proxies_through(self):
+        h = self._ArtHandler()
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.read.return_value = b"\xff\xd8\xff\xe0FAKEJPEG"
+        fake_resp.getheader.side_effect = lambda k: {
+            "Content-Type": "image/jpeg",
+        }.get(k)
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = fake_resp
+        with patch("http.client.HTTPConnection", return_value=fake_conn):
+            api_playback.art(h, {"url": "http://fake.local/cover.jpg"})
+        self.assertEqual(h.status, 200)
+        self.assertEqual(h.headers.get("Content-Type"), "image/jpeg")
+        self.assertEqual(h.body, b"\xff\xd8\xff\xe0FAKEJPEG")
+        self.assertIn("max-age=", h.headers.get("Cache-Control", ""))
+
+    def test_non_image_upstream_rejected(self):
+        """Guards against serving HTML (upstream 404 page) as an image —
+        that would poison the Service Worker's art cache."""
+        h = self._ArtHandler()
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.read.return_value = b"<html>404 not found</html>"
+        fake_resp.getheader.side_effect = lambda k: {
+            "Content-Type": "text/html",
+        }.get(k)
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = fake_resp
+        with patch("http.client.HTTPConnection", return_value=fake_conn):
+            api_playback.art(h, {"url": "http://fake.local/missing"})
+        self.assertEqual(h.error_status, 502)
+
+    def test_oversized_image_rejected(self):
+        """Prevents a malicious/broken upstream from forcing arbitrary
+        memory allocation in the gateway."""
+        h = self._ArtHandler()
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        # _ART_MAX_BYTES+1 — just over the cap so len > max
+        fake_resp.read.return_value = b"x" * (api_playback._ART_MAX_BYTES + 1)
+        fake_resp.getheader.return_value = "image/jpeg"
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = fake_resp
+        with patch("http.client.HTTPConnection", return_value=fake_conn):
+            api_playback.art(h, {"url": "http://fake.local/huge.jpg"})
+        self.assertEqual(h.error_status, 502)
+
+    def test_upstream_404_forwards_status(self):
+        h = self._ArtHandler()
+        fake_resp = MagicMock()
+        fake_resp.status = 404
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = fake_resp
+        with patch("http.client.HTTPConnection", return_value=fake_conn):
+            api_playback.art(h, {"url": "http://fake.local/missing.jpg"})
+        self.assertEqual(h.error_status, 404)
+
+
+# ── /api/client_log observability endpoint ────────────────────────
+
+class TestClientLogHandler(unittest.TestCase):
+    """The PWA posts browser-side MediaError events and play() rejections
+    here so we can see them in gateway.log instead of silently losing
+    them to DevTools that nobody's watching on a phone."""
+
+    def test_well_formed_report_accepted(self):
+        h = MockHandler()
+        body = json.dumps({
+            "kind": "audio_error",
+            "code": 4, "codeName": "unsupported",
+            "message": "bad mime",
+            "title": "Song", "retries": 0,
+            "ua": "Mozilla/5.0 iPhone",
+        })
+        api_playback.client_log(h, body)
+        self.assertEqual(h.status, 200)
+        self.assertTrue(h.body.get("ok"))
+
+    def test_malformed_json_returns_400(self):
+        h = MockHandler()
+        api_playback.client_log(h, "{not json")
+        self.assertEqual(h.status, 400)
+
+    def test_empty_body_returns_400(self):
+        h = MockHandler()
+        api_playback.client_log(h, "[]")   # list, not dict
+        self.assertEqual(h.status, 400)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

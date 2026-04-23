@@ -1,6 +1,14 @@
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const enc=s=>encodeURIComponent(s||"");
+// Every track/album art URL is routed through the gateway's /art proxy so
+// it's always same-origin as the PWA. Without this, an HTTPS-served PWA
+// loading raw http://media-server/...cover.jpg may be blocked as mixed
+// content on some mobile browsers (iOS Safari PWA standalone is the
+// strictest) — the thumbnail and the now-playing art then load
+// inconsistently depending on whether the browser's cache has a prior
+// successful fetch. Same-origin via /art removes that whole class.
+const artUrl=raw=>raw?`/art?url=${encodeURIComponent(raw)}`:"";
 const fmtSec=s=>{if(s==null||isNaN(s))return"0:00";s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60,p=n=>String(n).padStart(2,"0");return h?`${h}:${p(m)}:${p(sc)}`:`${m}:${p(sc)}`;};
 const fmtDur=d=>{if(!d)return"";const p=d.split(":").map(Number);return p.length===3?fmtSec(p[0]*3600+p[1]*60+p[2]):d;};
 async function api(url,opts){try{return await fetch(url,opts);}catch{return null;}}
@@ -47,20 +55,116 @@ browserAudio.addEventListener("ended",()=>{
   if(browserIdx<browserQueue.length-1){browserIdx++;_browserPlayIdx(browserIdx);}
   else{activeDevice="browser";} // playlist done
 });
-browserAudio.addEventListener("error",e=>{
-  if(activeDevice!=="browser")return;
-  const t=browserQueue[browserIdx];
-  if(browserQueue.length>1){
-    toast(`⚠ Skipping "${t?.title||'track'}" — unsupported format`);
+// ── <audio> error handling ───────────────────────────────────────
+// MediaError.code mapping:
+//   1 MEDIA_ERR_ABORTED        — user/script aborted (not our concern, ignore)
+//   2 MEDIA_ERR_NETWORK        — transient network failure — retry ONCE before skipping
+//   3 MEDIA_ERR_DECODE         — decode failure mid-stream — retry ONCE (bad chunk can heal)
+//   4 MEDIA_ERR_SRC_NOT_SUPPORTED — genuinely unsupported format — skip immediately
+//
+// Prior to this refactor every "error" event treated the track as unsupported
+// and skipped, causing false-positive skips whenever the network hiccupped or
+// an upstream Range returned garbage. Discriminating by code fixes that.
+//
+// Tracks a per-URL retry counter so a persistently-broken track can't loop.
+const _audioRetryCount = new Map();   // src URL → retry count
+const _MEDIA_ERR = {1:"aborted", 2:"network", 3:"decode", 4:"unsupported"};
+
+async function _reportClientError(payload){
+  try{
+    await fetch("/api/client_log",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)});
+  }catch(e){ /* best effort — don't recurse */ }
+}
+
+browserAudio.addEventListener("error", e=>{
+  if(activeDevice!=="browser") return;
+  const err = browserAudio.error;
+  const code = err ? err.code : 0;
+  const codeName = _MEDIA_ERR[code] || `unknown(${code})`;
+  const t = browserQueue[browserIdx];
+  const src = browserAudio.currentSrc || "";
+  const retries = _audioRetryCount.get(src) || 0;
+
+  // Always surface the event to the gateway so we can see what's really happening.
+  _reportClientError({
+    kind:   "audio_error",
+    code,           codeName,
+    message:       err?.message || "",
+    title:         t?.title  || "",
+    artist:        t?.artist || "",
+    src:           src.slice(0, 200),
+    retries,
+    queue_len:     browserQueue.length,
+    ready_state:   browserAudio.readyState,
+    network_state: browserAudio.networkState,
+    user_agent:    navigator.userAgent.slice(0, 120),
+  });
+
+  // Code 1 (aborted): we told it to stop, or a new src was set. Ignore.
+  if(code === 1) return;
+
+  // Codes 2 (network) / 3 (decode): transient. Retry the same track once
+  // before giving up.
+  if((code === 2 || code === 3) && retries < 1 && src){
+    _audioRetryCount.set(src, retries + 1);
+    toast(`⟳ Retrying "${t?.title||'track'}" (${codeName})`);
     setTimeout(()=>{
-      if(browserIdx<browserQueue.length-1){browserIdx++;_browserPlayIdx(browserIdx);}
-      else{$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
-    },1500);
-  }else{
-    toast(`⚠ Can't play "${t?.title||'track'}" — unsupported format`);
-    $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+      // Re-arm the same src (forces a fresh request)
+      browserAudio.src = src;
+      _playBrowserAudio("retry_"+codeName);
+    }, 800);
+    return;
+  }
+
+  // Reached here: code 4, or we've already retried once. Treat as unplayable.
+  const why = code === 4 ? "unsupported format" : `${codeName} error`;
+  if(browserQueue.length > 1){
+    toast(`⚠ Skipping "${t?.title||'track'}" — ${why}`);
+    setTimeout(()=>{
+      if(browserIdx < browserQueue.length - 1){
+        browserIdx++; _browserPlayIdx(browserIdx);
+      } else {
+        $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
+      }
+    }, 1500);
+  } else {
+    toast(`⚠ Can't play "${t?.title||'track'}" — ${why}`);
+    $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
   }
 });
+
+// Clear the retry counter on a successful play-start
+browserAudio.addEventListener("playing", ()=>{
+  _audioRetryCount.clear();
+});
+
+// Single helper for every call to browserAudio.play() — surfaces the
+// NotAllowedError that browsers throw when autoplay is blocked
+// (first-play without a user gesture; backgrounded tab resume on iOS)
+// instead of swallowing it silently. The old `.catch(()=>{})` form is
+// what made "tapped play but nothing happened" invisible.
+function _playBrowserAudio(reason){
+  return browserAudio.play().catch(err=>{
+    const name = err?.name || "Error";
+    if(name === "NotAllowedError" || name === "AbortError"){
+      // Update UI so the user can re-trigger manually.
+      $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
+      toast("⚠ Browser blocked playback — tap ▶ Play to start");
+    } else {
+      // Something unexpected. Don't swallow — log it.
+      toast(`⚠ Playback error: ${name}`);
+    }
+    _reportClientError({
+      kind:    "play_rejected",
+      reason:  reason || "",
+      err:     name,
+      message: err?.message || "",
+      ua:      navigator.userAgent.slice(0, 120),
+    });
+  });
+}
 
 // ── MediaSession — lock screen / CarPlay controls + metadata ──
 function _updateMediaSession(t, idx){
@@ -76,7 +180,7 @@ function _updateMediaSession(t, idx){
   });
   // Transport handlers — registered every track so iOS keeps them active
   navigator.mediaSession.setActionHandler("play", ()=>{
-    browserAudio.play().catch(()=>{});
+    _playBrowserAudio("mediasession_play");
     $("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";
   });
   navigator.mediaSession.setActionHandler("pause", ()=>{
@@ -120,12 +224,12 @@ browserAudio.addEventListener("timeupdate",()=>{
 function _browserPlayIdx(idx){
   const t=browserQueue[idx];if(!t)return;
   browserAudio.src=`/stream?url=${enc(t.url)}`;
-  browserAudio.play().catch(()=>{});
+  _playBrowserAudio("queue_advance");
   $("np-title").textContent=t.title||"";
   $("np-artist").textContent=t.artist||"";
   $("np-album").textContent=t.album||"";
   $("np-meta").textContent=`Track ${idx+1} of ${browserQueue.length}`;
-  if(t.art){$("art").innerHTML=`<img src="${esc(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+  if(t.art){$("art").innerHTML=`<img src="${artUrl(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
   else{$("art").textContent="💿";}
   $("player").className="playing is-audio";
   $("btn-pp").textContent="⏸ Pause";
@@ -142,7 +246,7 @@ function _browserPlayIdx(idx){
 function _updateMiniPlayer(t){
   $("mini-title").textContent=t?.title||"Nothing playing";
   $("mini-artist").textContent=t?.artist||"";
-  if(t?.art){$("mini-art").innerHTML=`<img src="${esc(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px" onerror="this.parentElement.textContent='🎵'">`;}
+  if(t?.art){$("mini-art").innerHTML=`<img src="${artUrl(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px" onerror="this.parentElement.textContent='🎵'">`;}
   else{$("mini-art").textContent=t?"💿":"🎵";}
   // Pulse the now-playing nav icon when something is playing
   const icon=$("bnav-np-icon");
@@ -598,7 +702,7 @@ function renderList(data,context="browse"){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img src="${esc(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ?`<img src="${artUrl(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
 
     const isItem = item.type !== "container";
@@ -659,7 +763,7 @@ async function doSearch(q){
       const k=regItem({id:"artist:"+a.artist,title:a.artist,type:"container",art:a.art||""});
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img src="${esc(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img src="${artUrl(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
         `<div class="row-icon">👤</div>`}<div class="row-body"><div class="row-title">${esc(a.artist)}</div><div class="row-sub">${a.album_count} albums · ${a.track_count} tracks</div></div>`;
       div.addEventListener("click",()=>{ showTab('browse'); showArtistAlbums({artist:a.artist, album_count:a.album_count||0}); });
       $("item-list").appendChild(div);
@@ -674,7 +778,7 @@ async function doSearch(q){
       const k=regItem(pseudo);
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img src="${esc(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img src="${artUrl(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
         `<div class="row-icon">💿</div>`}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" data-k="${k}" data-action="fav">⭐</button><button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
       div.addEventListener("click",e=>{
         const btn=e.target.closest("[data-action]");
@@ -750,7 +854,7 @@ async function playTracklist(tracks, title, artist){
   $("np-album").textContent=first?.album||"";
   $("np-meta").textContent=`${tracks.length} tracks`;
   setNpTrack(first||null);
-  if(first?.art){$("art").innerHTML=`<img src="${esc(first.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+  if(first?.art){$("art").innerHTML=`<img src="${artUrl(first.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
   else{$("art").textContent="💿";}
   $("player").className="playing is-audio";
   $("btn-pp").textContent="⏸ Pause";
@@ -798,7 +902,7 @@ function renderListAppend(data){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img src="${esc(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ?`<img src="${artUrl(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
     const isItem=item.type!=="container";
     div.innerHTML=`${artEl}<div class="row-body"><div class="row-title">${esc(item.title)}</div>${sub?`<div class="row-sub">${esc(sub)}</div>`:""}</div>${item.duration?`<div class="row-dur">${fmtDur(item.duration)}</div>`:""}<div class="row-actions">${isItem?`<button class="icon-btn" data-k="${k}" data-action="fav" title="Add to Favourites">⭐</button><button class="icon-btn" data-k="${k}" data-action="add" title="Add to playlist">＋</button><button class="icon-btn" data-k="${k}" data-action="edit" title="Edit metadata">✏️</button>`:""}<button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
@@ -985,7 +1089,7 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
   $("np-artist").textContent=artist||"";
   $("np-album").textContent=album||"";
   $("np-meta").textContent="";
-  if(art){$("art").innerHTML=`<img src="${esc(art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='🎵'">`;}
+  if(art){$("art").innerHTML=`<img src="${artUrl(art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='🎵'">`;}
   else{$("art").textContent=mtype==="video"?"🎬":"🎵";}
   $("btn-pp").textContent="⏸ Pause";
   $("hdr-status").textContent=title||"";
@@ -999,7 +1103,7 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
   if(out==="browser"){
     browserQueue=[{url,title,artist,album,art,mime:""}];browserIdx=0;
     browserAudio.src=`/stream?url=${enc(url)}`;
-    browserAudio.play().catch(()=>{});
+    _playBrowserAudio("single_track_send");
     toast("▶ Streaming in browser…");
   } else {
     const rendUdn=out.replace("upnp:","");
@@ -1052,11 +1156,7 @@ async function control(cmd){
       case "pause":
         if(browserAudio.paused){
           $("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";
-          browserAudio.play().catch(err=>{
-            $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
-            if(err?.name==="NotAllowedError")
-              toast("⚠ Browser blocked autoplay — tap ▶ Play to start");
-          });
+          _playBrowserAudio("user_pause_toggle");
         }else{browserAudio.pause();$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
         break;
       case "stop":

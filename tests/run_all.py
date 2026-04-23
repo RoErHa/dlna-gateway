@@ -534,6 +534,67 @@ if os.path.isfile(gw_path):
 # so they catch bugs that static checks can't — like today's
 # ValueError-in-daemon-thread duration bug.
 
+# ══════════════════════════════════════════════════════════════════
+# T_PWA — PWA / Service Worker integrity
+# ══════════════════════════════════════════════════════════════════
+# Catches the 2026-04-23 bug where sw.js pre-cached /art and the PWA's
+# MediaSession referenced /art?url=… but the server had no /art route.
+# Any URL the SW claims to pre-cache, or any same-origin URL app.js
+# fetches, must resolve against the live gateway — otherwise SW install
+# fails and iOS lock-screen artwork breaks silently.
+
+section("T_PWA — Art URLs routed through /art proxy (no mixed content)")
+# Regression guard for 2026-04-23 "now-playing art missing" bug: when the
+# PWA is served over HTTPS but art URLs point at plain-HTTP UPnP servers,
+# iOS Safari (esp. in standalone PWA mode) blocks the image as mixed
+# content. Routing every art through the same-origin /art proxy avoids it.
+_ap_path = os.path.join(STATIC, "app.js")
+if os.path.isfile(_ap_path):
+    _app = open(_ap_path).read()
+    # Every <img src=…> should either be a literal /static asset or route
+    # through artUrl()/`/art?url=`. Anything else means a raw track-art
+    # URL is being dropped into an img tag — the regression.
+    _img_srcs = re.findall(r'img\s+src="([^"]+)"', _app)
+    bad = [s for s in _img_srcs
+           if ".art" in s and "/art?url=" not in s and "artUrl(" not in s]
+    check(f"Every art <img src=> uses /art proxy ({len(_img_srcs)} img tags, {len(bad)} raw)",
+          len(bad) == 0,
+          f"raw art src found: {bad[:3]}")
+
+
+section("T_PWA — Service Worker referenced URLs exist")
+sw_path = os.path.join(STATIC, "sw.js")
+if os.path.isfile(sw_path):
+    sw = open(sw_path).read()
+    # Pre-cache shell — these MUST all be 200 or SW install will fail
+    shell_urls = re.findall(r"'(/[^']*)'", sw)
+    # Filter to the SHELL array
+    shell_block = re.search(r"const\s+SHELL\s*=\s*\[(.*?)\]", sw, re.DOTALL)
+    if shell_block:
+        shell_urls = re.findall(r"'(/[^']*)'", shell_block.group(1))
+    else:
+        shell_urls = []
+    check(f"SHELL has ≥4 entries ({len(shell_urls)})", len(shell_urls) >= 4)
+    if not OFFLINE:
+        for u in shell_urls:
+            status, _ = fetch(u)
+            check(f"SW shell URL {u} → 200", status == 200, f"got {status}")
+
+    # Intercepted paths (where SW has special handling) — all referenced
+    # same-origin paths must actually resolve, or iOS silently breaks
+    intercepted = re.findall(r"url\.pathname\s*===?\s*'(/[^']+)'", sw)
+    if not OFFLINE:
+        for u in intercepted:
+            # These paths take query args (?url=...); hit them with a
+            # sentinel value that must NOT 404 (400/502 are fine — the
+            # route exists; only 404 means "handler missing")
+            status, _ = fetch(f"{u}?url=http://127.0.0.1:1/z")
+            check(f"SW-intercepted path {u} is routed (not 404)",
+                  status != 404, f"got {status}")
+else:
+    check("static/sw.js exists", False)
+
+
 section("T_UNIT — Behavioural unit tests (tests/test_*.py)")
 import unittest as _ut
 _loader = _ut.TestLoader()
