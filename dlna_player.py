@@ -5,14 +5,9 @@ dlna_player.py — UPnP renderer queue and browser stream proxy.
 Standalone test:
     python dlna_player.py
 """
-import http.client
-import json
 import logging
-import select
-import ssl
 import threading
 import time
-import urllib.parse
 from typing import Optional
 
 log = logging.getLogger("dlna.player")
@@ -463,110 +458,9 @@ class QueueRegistry:
 QUEUES = QueueRegistry()
 
 
-# ── Stream proxy ──────────────────────────────────────────────────
-
-# Module-level so tests can monkey-patch a shorter window for chaos runs
-# without waiting the full 5 minutes per iteration.
-PROXY_IDLE_SEC = 300  # 5 min — covers a closed-laptop/sleeping-browser gap
-
-
-def proxy_stream(upstream_url: str, handler):
-    """
-    HTTP Range-aware proxy: relay AssetUPnP bytes to the browser.
-    Forwards Range header so browser seek works without hitting AssetUPnP directly.
-
-    A 5-minute client-idle timeout frees up the upstream connection when a
-    browser stops consuming bytes (laptop suspended, tab closed without a
-    clean FIN, network drop). Without this, the upstream socket would be
-    held open indefinitely.
-    """
-    parsed  = urllib.parse.urlparse(upstream_url)
-    host    = parsed.netloc
-    path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
-    use_ssl = parsed.scheme == "https"
-
-    sent_bytes = 0
-    reason     = "unknown"
-    t_start    = time.monotonic()
-    log.info(f"proxy_stream ▶ START {host}{path[:80]}")
-
-    conn = None
-    try:
-        if use_ssl:
-            conn = http.client.HTTPSConnection(
-                host, timeout=20,
-                context=ssl._create_unverified_context())
-        else:
-            conn = http.client.HTTPConnection(host, timeout=20)
-
-        req_headers = {"User-Agent": "DLNAGateway/1.0", "Connection": "close"}
-        range_hdr   = handler.headers.get("Range", "")
-        if range_hdr:
-            req_headers["Range"] = range_hdr
-
-        conn.request("GET", path, headers=req_headers)
-        resp = conn.getresponse()
-
-        # Normalise MIME types for browser compatibility.
-        # Safari requires exact types — audio/x-flac won't play, audio/flac will.
-        _MIME_MAP = {
-            "audio/x-flac":   "audio/flac",
-            "audio/x-m4a":    "audio/mp4",
-            "audio/x-alac":   "audio/mp4",
-            "audio/x-aiff":   "audio/aiff",
-            "audio/x-wav":    "audio/wav",
-            "audio/x-ms-wma": "audio/x-ms-wma",
-        }
-        handler.send_response(resp.status)
-        for h in ("Content-Type", "Content-Length", "Content-Range",
-                  "Accept-Ranges", "Last-Modified", "ETag"):
-            v = resp.getheader(h)
-            if v:
-                if h == "Content-Type":
-                    base = v.split(";")[0].strip().lower()
-                    v = _MIME_MAP.get(base, base)
-                handler.send_header(h, v)
-        handler.send_header("Access-Control-Allow-Origin", "*")
-        handler.send_header("Connection", "close")
-        handler.end_headers()
-
-        CHUNK = 65_536
-        while True:
-            chunk = resp.read(CHUNK)
-            if not chunk:
-                reason = "upstream_eof"
-                break
-            try:
-                rdy = select.select([], [handler.wfile], [], PROXY_IDLE_SEC)[1]
-                if not rdy:
-                    reason = "client_idle_timeout"
-                    break
-                handler.wfile.write(chunk)
-                handler.wfile.flush()
-                sent_bytes += len(chunk)
-            except (BrokenPipeError, OSError):
-                reason = "client_closed"
-                break
-
-    except BrokenPipeError:
-        reason = "client_closed"
-    except Exception as e:
-        reason = f"error:{type(e).__name__}"
-        log.warning(f"proxy_stream error: {e}")
-        try:
-            handler.send_error(502, str(e))
-        except Exception:
-            pass
-    finally:
-        elapsed = time.monotonic() - t_start
-        log.info(f"proxy_stream ■ END   {host}{path[:60]} "
-                 f"sent={sent_bytes} bytes in {elapsed:.1f}s "
-                 f"reason={reason}")
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+# The browser-audio stream proxy lives in dlna_stream_proxy — imported
+# here so existing callers can keep `from dlna_player import proxy_stream`.
+from dlna_stream_proxy import proxy_stream, PROXY_IDLE_SEC  # noqa: F401
 
 
 # ── Standalone test ───────────────────────────────────────────────

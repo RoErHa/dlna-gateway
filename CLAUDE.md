@@ -66,15 +66,22 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | File | Responsibility |
 |---|---|
 | `dlna_gateway.py` | Main entry point, wires modules, starts all threads |
-| `dlna_server.py` | Threaded HTTP server, routes `/api/*` to api_* modules, serves static PWA files |
-| `dlna_discovery.py` | SSDP discovery; `ServerRegistry`/`RendererRegistry` thread-safe device stores |
-| `dlna_library.py` | SQLite library index + FTS5 search; `LibraryDB` (db_pool-backed) + `Indexer` crawler |
+| `dlna_server.py` | Threaded HTTP server; delegates routing to `dlna_routes` |
+| `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
+| `dlna_discovery.py` | SSDP listener, probe, subnet scanner, server heartbeat |
+| `dlna_registry.py` | Data classes + `ServerRegistry` / `RendererRegistry` thread-safe stores |
+| `dlna_library.py` | `LibraryDB` — SQLite index + FTS5 search + playlists; composition root for DB-owning singletons |
+| `dlna_indexer.py` | `Indexer` — background crawler that walks a MediaServer and populates LibraryDB |
+| `dlna_art_fetcher.py` | `AlbumArtFetcher` — Phase B MusicBrainz + Cover Art Archive lookup |
+| `dlna_devices.py` | `DeviceRoleCache` — in-memory mirror of device_roles for zero-latency classification |
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
-| `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`) + AVTransport sender |
-| `dlna_player.py` | `RendererQueue` (sequential track playback per renderer) + `QueueRegistry` (one queue per UDN) + browser-audio HTTP stream proxy with 5-min idle timeout |
+| `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`) |
+| `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position) |
+| `dlna_player.py` | `RendererQueue` (sequential playback per renderer) + `QueueRegistry` (one queue per UDN) |
+| `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout |
 | `api_browse.py` | Browse/search API endpoints |
-| `api_playback.py` | Playback, streaming, player state, indexer management endpoints |
+| `api_playback.py` | Playback, stream proxy route, `/art`, `/api/client_log`, state, indexer management |
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `api_upnp.py` | UPnP service descriptors + SOAP ContentDirectory (for Naim Uniti browsing gateway playlists) |
 

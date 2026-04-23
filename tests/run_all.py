@@ -127,9 +127,11 @@ else:
     check("dlna_gateway.py exists", False)
 
 section("T1.5a — Server endpoints (file check)")
-srv_path = os.path.join(PROJECT, "dlna_server.py")
-if os.path.isfile(srv_path):
-    srv = open(srv_path).read()
+# Routes moved to dlna_routes.py. Endpoint strings now live there; the
+# file check reads the routes module instead of the server module.
+routes_path = os.path.join(PROJECT, "dlna_routes.py")
+if os.path.isfile(routes_path):
+    routes = open(routes_path).read()
     endpoints = [
         "/api/servers", "/api/renderers", "/api/browse", "/api/artists",
         "/api/albums", "/api/genres", "/api/genre_albums", "/api/genre_tracks",
@@ -142,9 +144,9 @@ if os.path.isfile(srv_path):
         "/api/control", "/api/edit_track",
     ]
     for ep in endpoints:
-        check(f"Endpoint {ep} in server code", f'"{ep}"' in srv)
+        check(f"Endpoint {ep} in dlna_routes", f'"{ep}"' in routes)
 else:
-    check("dlna_server.py exists", False)
+    check("dlna_routes.py exists", False)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -436,9 +438,9 @@ if os.path.isfile(srv_path):
     check("re-exports GW_UDN",     "GW_UDN" in srv)
     check("no domain logic in router", "_gw_browse" not in srv)
 
-section("T2.8 — dlna_server.py endpoint routing")
-if os.path.isfile(srv_path):
-    srv = open(srv_path).read()
+section("T2.8 — dlna_routes.py endpoint routing")
+if os.path.isfile(routes_path):
+    routes = open(routes_path).read()
     endpoints = [
         "/api/servers", "/api/renderers", "/api/browse", "/api/artists",
         "/api/albums", "/api/genres", "/api/genre_albums", "/api/genre_tracks",
@@ -451,7 +453,7 @@ if os.path.isfile(srv_path):
         "/api/control", "/api/edit_track",
     ]
     for ep in endpoints:
-        check(f"  {ep} routed", f'"{ep}"' in srv)
+        check(f"  {ep} routed", f'"{ep}"' in routes)
 
 
 # ══════════════════════════════════════════════════════════════════

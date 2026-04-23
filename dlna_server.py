@@ -26,6 +26,7 @@ import api_browse
 import api_playback
 import api_playlists
 import api_upnp
+from dlna_routes import GET_ROUTES, POST_ROUTES
 
 # Re-export for dlna_gateway.py
 from api_upnp import GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye  # noqa: F401
@@ -242,36 +243,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     # ── GET ───────────────────────────────────────────────────────
 
-    # Routes that map a path directly to an api_* handler function.
-    # Each function receives (handler_instance, params_dict).
-    _GET_ROUTES = {
-        "/api/servers":        api_browse.servers,
-        "/api/renderers":      api_browse.renderers,
-        "/api/browse":         api_browse.browse,
-        "/api/artists":        api_browse.artists,
-        "/api/search":         api_browse.search,
-        "/api/album_tracks":   api_browse.album_tracks,
-        "/api/albums":         api_browse.albums,
-        "/api/genres":         api_browse.genres,
-        "/api/genre_albums":   api_browse.genre_albums,
-        "/api/genre_tracks":   api_browse.genre_tracks,
-        "/api/artist_albums":  api_browse.artist_albums,
-        "/api/browse_letter":  api_browse.browse_letter,
-        "/api/renderer_state": api_playback.renderer_state,
-        "/api/index/status":   api_playback.index_status,
-        "/api/index/rebuild":  api_playback.index_rebuild,
-        "/stream":             api_playback.stream,
-        "/art":                api_playback.art,
-        "/api/playlists":      api_playlists.playlists,
-        "/api/playlist":       api_playlists.playlist,
-        "/api/playlist/create":api_playlists.playlist_create,
-        "/api/playlist/delete":api_playlists.playlist_delete,
-        "/api/playlist/add":   api_playlists.playlist_add,
-        "/api/playlist/remove":api_playlists.playlist_remove,
-        "/gw/device.xml":      api_upnp.device_xml,
-        "/gw/cd/desc.xml":     api_upnp.cd_desc_xml,
-        "/gw/cd/events":       api_upnp.cd_events,
-    }
+    # Route tables live in dlna_routes — see that module to add endpoints.
 
     def do_GET(self):
         if self._redirect_https():
@@ -357,7 +329,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         # ── API / UPnP routes ─────────────────────────────────────
-        fn = self._GET_ROUTES.get(path)
+        fn = GET_ROUTES.get(path)
         if fn:
             fn(self, params)
             return
@@ -365,15 +337,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._html(404, "<h1>404 Not Found</h1>")
 
     # ── POST ──────────────────────────────────────────────────────
-
-    _POST_ROUTES = {
-        "/api/render_queue": api_playback.render_queue,
-        "/api/render":       api_playback.render,
-        "/api/control":      api_playback.control,
-        "/api/edit_track":   api_playback.edit_track,
-        "/api/client_log":   api_playback.client_log,
-        "/gw/cd/control":    api_upnp.cd_control,
-    }
 
     def do_POST(self):
         if self._redirect_https():
@@ -387,7 +350,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             log.warning(f"do_POST: cannot read body: {e}")
             body = b""
 
-        fn = self._POST_ROUTES.get(path)
+        fn = POST_ROUTES.get(path)
         if fn:
             fn(self, body)
             return
