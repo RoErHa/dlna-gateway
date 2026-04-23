@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Does
 
-DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPnP MediaServers (AssetUPnP, MinimServer, Jellyfin, Plex) on the local network, indexes their music into a local SQLite DB, and exposes a PWA web UI for browsing and playback. Playback targets: IINA (Mac), Chromecast, UPnP MediaRenderers (Naim Uniti, etc.), and browser audio. The gateway also announces itself as a UPnP MediaServer so UPnP renderers can browse its playlists directly.
+DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPnP MediaServers (AssetUPnP, MinimServer, Jellyfin, Plex) on the local network, indexes their music into a local SQLite DB, and exposes a PWA web UI for browsing and playback. Playback targets: UPnP MediaRenderers (Naim Uniti, etc.) and browser audio. The gateway also announces itself as a UPnP MediaServer so UPnP renderers can browse its playlists directly.
 
 ## Running the Gateway
 
@@ -19,11 +19,22 @@ DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPn
 
 ## Running Tests
 
+Three complementary layers:
+
 ```bash
-python tests/run_all.py            # full suite (requires gateway running on localhost:8765)
+python tests/run_all.py            # full suite: grep-level + unit tests (requires gateway running)
 python tests/run_all.py --offline  # file-level checks only (no server needed)
 python tests/run_all.py http://192.168.1.x:8765  # custom gateway URL
+
+# Layer 1 — behavioural unit tests (no network, <1s):
+python3 -m unittest tests.test_player tests.test_api_playback -v
+
+# Layer 3 — chaos simulator (live gateway, randomized + adversarial):
+python3 tests/chaos.py --iterations 500 --workers 4
+python3 tests/chaos.py --seed 42 --quiet    # reproduce a past failure
 ```
+
+`chaos.py` hard-fails if it sees any 5xx, `/tmp/dlna-gateway.err` grows (= silent thread death), or a snapshot takes >5s. Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string `ValueError` that was killing the renderer-queue daemon thread invisibly.
 
 Each core module also has a standalone self-test:
 
@@ -33,8 +44,7 @@ python dlna_discovery.py           # SSDP discovery (20s live scan)
 python dlna_content.py <control-url>  # UPnP SOAP
 python dlna_library.py             # DB operations
 python db_pool.py                  # concurrent DB stress test
-python dlna_player.py              # IINA/mpv control
-python dlna_cast.py                # Chromecast discovery
+python dlna_player.py              # QueueRegistry + duration-parser self-test
 python dlna_server.py              # HTTP server (30s on :8766)
 ```
 
@@ -48,9 +58,8 @@ python dlna_server.py              # HTTP server (30s on :8766)
 3. Subnet scanner (fallback if SSDP finds nothing)
 4. Heartbeat thread (marks devices offline after 2 consecutive failures)
 5. Gateway SSDP announcer (broadcasts gateway itself as a MediaServer)
-6. Chromecast discovery (mDNS/zeroconf via pychromecast)
-7. HTTP server (ThreadingMixIn, handles all API and static file requests)
-8. Optional HTTPS server (separate thread, redirects HTTP→HTTPS)
+6. HTTP server (ThreadingMixIn, handles all API and static file requests)
+7. Optional HTTPS server (separate thread, redirects HTTP→HTTPS)
 
 ### Module Responsibilities
 
@@ -63,8 +72,7 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`) + AVTransport sender |
-| `dlna_player.py` | IINA/mpv launcher, JSON IPC control, HTTP stream proxy |
-| `dlna_cast.py` | Chromecast registry + queue playback; lazy-loads pychromecast |
+| `dlna_player.py` | `RendererQueue` (sequential track playback per renderer) + `QueueRegistry` (one queue per UDN) + browser-audio HTTP stream proxy with 5-min idle timeout |
 | `api_browse.py` | Browse/search API endpoints |
 | `api_playback.py` | Playback, streaming, player state, indexer management endpoints |
 | `api_playlists.py` | Playlist CRUD endpoints |
@@ -76,8 +84,7 @@ These are shared state across all request handler threads:
 
 - `dlna_discovery.SERVERS` / `RENDERERS` — device registries
 - `dlna_library.DB` / `INDEXER` / `DEVICE_ROLES` — library DB, crawler, device role cache
-- `dlna_cast.CAST_DEVICES` / `CAST_QUEUE` — Chromecast registry + queue player
-- `dlna_player.PLAYER` / `RENDERER_QUEUE` — IINA state + UPnP renderer queue
+- `dlna_player.QUEUES` — `QueueRegistry` holding one `RendererQueue` per renderer UDN (lazily created). Replaces the prior single-queue singleton so multiple users/renderers can play concurrently.
 
 ### Database Schema
 
@@ -107,6 +114,27 @@ album_art(artist, album, art_url, source, updated_at)
 - All DB writes are serialized through `db_pool`'s write lock; reads use thread-local connections in WAL mode.
 - SOAP calls to UPnP servers are throttled by a semaphore (max 3 concurrent) in `dlna_content.py` to avoid overwhelming servers like AssetUPnP.
 - Device registries use `threading.Lock` for thread-safe access.
+- `RendererQueue.snapshot()` is cached for 500ms and coalesced across concurrent callers: only the first cache-miss fires SOAP; subsequent callers during the fetch return the stale cache immediately rather than block. Prevents N polling browser tabs from stacking N SOAP round-trips.
+- The two SOAP calls inside `snapshot()` (GetTransportInfo + GetPositionInfo) run in parallel threads — halves snapshot latency under load, caps at ~6s on an unresponsive renderer instead of 12s.
+- Worker threads kicked off by `/api/render_queue` are wrapped in `_start_safe()` with `log.exception` so any crash inside `RendererQueue.start()` lands in `gateway.log`, not silently in `/tmp/dlna-gateway.err`.
+
+### Concurrent playback model
+
+Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule: one active stream per physical output, enforced server-side.
+
+- `POST /api/render_queue` with `{udn, tracks}` → 200 if that renderer is idle.
+- `POST /api/render_queue` while that UDN is already playing → **409 Conflict** with body `{error: "renderer_busy", busy_with: {title, artist, renderer}}`.
+- Client resends with `{udn, tracks, force: true}` to take over — this stops the prior session and starts the new queue.
+- The UI (`sendRenderQueue()` in `app.js`) catches the 409 and shows a native `confirm()`: "X is already playing Y — Take over?".
+- Different UDNs are fully independent: queuing on renderer A doesn't touch renderer B's state. Per-UDN concurrency is proven by `tests/test_api_playback.py::test_concurrent_renderers_have_independent_state`.
+
+### Browser-audio stream proxy
+
+`proxy_stream()` in `dlna_player.py` relays bytes from the media server to the browser over a single HTTP connection with Range support.
+
+- `PROXY_IDLE_SEC = 300` (module-level so tests can monkey-patch) — if the browser stops consuming bytes for 5 minutes (laptop suspended, tab closed without clean FIN), the proxy tears down the upstream connection. On laptop wake, the user starts playback again from the beginning; there's no resume.
+- Every session logs `proxy_stream ▶ START host/path` and `proxy_stream ■ END host/path sent=N bytes in Xs reason=<r>` with reason ∈ `{upstream_eof, client_idle_timeout, client_closed, error:<Type>}`.
+- The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from AssetUPnP); the proxy only matters for browser-audio playback.
 
 ## Dependencies
 
@@ -115,10 +143,9 @@ All optional — the gateway degrades gracefully if missing:
 ```
 rich>=13.7.0              # colored terminal logging
 python-json-logger>=2.0.7 # structured JSON logging
-PyChromecast>=14.0.0      # Chromecast support
 ```
 
-Standard library only for core UPnP functionality.
+Standard library only for core UPnP functionality. `requirements.txt` still lists `PyChromecast` but Chromecast support was removed (commit `2a8d81e`); the package is not imported anywhere and can be dropped on next cleanup pass.
 
 ## Album art persistence (Phase A + Phase B)
 
@@ -169,7 +196,7 @@ launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
 
 ## Renderer playback diagnostics
 
-`dlna_player.RendererQueue` emits a fixed-format per-track line for every start and end, regardless of the reason. Greppable prefixes:
+Each `RendererQueue` (one per renderer UDN in `QUEUES`) emits a fixed-format per-track line for every start and end, regardless of the reason. Greppable prefixes:
 
 ```
 RendererQueue ▶ START [idx/total] 'title' — artist / album (durS) → renderer
@@ -183,10 +210,10 @@ Reason tags on END lines:
 | reason | Where it comes from |
 |---|---|
 | `finished` | Renderer state went PLAYING → STOPPED naturally (end of track) |
-| `user_next` | `RENDERER_QUEUE.next_track()` — UI pressed Next |
-| `user_prev` | `RENDERER_QUEUE.prev_track()` — UI pressed Prev |
-| `user_stop` | `RENDERER_QUEUE.stop()` — UI pressed Stop |
-| `queue_replaced` | `RENDERER_QUEUE.start()` — a new queue was posted while the old one was still playing |
+| `user_next` | `QUEUES.get(udn).next_track()` — UI pressed Next |
+| `user_prev` | `QUEUES.get(udn).prev_track()` — UI pressed Prev |
+| `user_stop` | `QUEUES.get(udn).stop()` — UI pressed Stop |
+| `queue_replaced` | `QUEUES.get(udn).start()` — a new queue was posted while the old one was still playing (includes the "force take over" path) |
 | `send_failed` | `avtransport_send()` returned False (SOAP fault on SetURI or Play) |
 
 ### Why SEND FAILED matters
@@ -196,6 +223,10 @@ Previously `_send_current()` ignored the return value of `avtransport_send()`. W
 The fix has two parts:
 1. `_send_current()` now checks the SOAP return and emits `✗ SEND FAILED` with the track URL for every failure.
 2. `RendererQueue._MAX_CONSECUTIVE_FAILS = 5` caps the damage: after 5 consecutive SetURI/Play failures the queue aborts itself with `⚠ ABORT`. A transient blip (1–4 failures) auto-advances past the bad track and resets the counter on the next success.
+
+### Duration parsing (`_dur_to_sec`)
+
+Track durations in `playlist_tracks` are stored as TEXT in UPnP `H:MM:SS(.fff)` format, NOT as seconds. `_dur_to_sec()` in `dlna_player.py` tolerates every format the DB stores (int, float, empty/None, `H:MM:SS.fff`, `MM:SS`, malformed strings → 0). Prior to 2026-04-23 this was `int(dur)` and blew up silently inside the daemon thread, killing playback before SetURI was ever sent. Regression-guarded by `tests/test_player.py::TestDurToSec` and `TestRendererQueueDurationSafety`.
 
 ## External services (outbound HTTP)
 

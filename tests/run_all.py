@@ -527,6 +527,30 @@ if os.path.isfile(gw_path):
     check("heartbeat thread named",   '"heartbeat"' in gwc)
 
 
+# ══════════════════════════════════════════════════════════════════
+# T_UNIT — Behavioural unit tests (test_*.py via unittest)
+# ══════════════════════════════════════════════════════════════════
+# These actually import & call module code (no grep-based faking),
+# so they catch bugs that static checks can't — like today's
+# ValueError-in-daemon-thread duration bug.
+
+section("T_UNIT — Behavioural unit tests (tests/test_*.py)")
+import unittest as _ut
+_loader = _ut.TestLoader()
+_suite  = _loader.discover(
+    start_dir=os.path.dirname(os.path.abspath(__file__)),
+    pattern="test_*.py",
+    top_level_dir=PROJECT,
+)
+_runner = _ut.TextTestRunner(verbosity=0, stream=open(os.devnull, "w"))
+_result = _runner.run(_suite)
+_total  = _result.testsRun
+_fails  = len(_result.failures) + len(_result.errors)
+check(f"All unit tests pass ({_total - _fails}/{_total})",
+      _fails == 0,
+      f"{_fails} failure(s)/error(s) — run `python3 -m unittest discover "
+      f"tests -v` for details")
+
 
 # ══════════════════════════════════════════════════════════════════
 # SUMMARY
