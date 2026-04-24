@@ -5,7 +5,7 @@ api_browse.py — Library browse/search API handlers.
 Handles: /api/servers, /api/renderers, /api/browse, /api/artists,
          /api/albums, /api/genres, /api/genre_albums, /api/genre_tracks,
          /api/artist_albums, /api/album_tracks, /api/search,
-         /api/browse_letter
+         /api/browse_letter, /api/radio
 """
 import logging
 import threading
@@ -72,6 +72,26 @@ def artists(h, params):
         h._json(400, {"error": "Missing udn"})
         return
     h._json(200, DB.all_artists(udn))
+
+
+def radio(h, params):
+    """Return a batch of tracks for the Radio feature, biased toward
+    lowest play count so the same 100 don't keep surfacing. Each
+    returned URL's play_count is incremented server-side so the next
+    call picks fresher material."""
+    udn = params.get("udn", "")
+    if not udn:
+        h._json(400, {"error": "Missing udn"})
+        return
+    try:
+        limit = int(params.get("limit", "100"))
+    except ValueError:
+        limit = 100
+    limit = max(1, min(limit, 500))   # sanity-cap so a broken client
+                                       # can't grab the whole library
+    tracks = DB.radio_tracks(udn, limit)
+    log.info(f"/api/radio  {len(tracks)} tracks  udn={udn[:16]}…  limit={limit}")
+    h._json(200, {"tracks": tracks})
 
 
 def search(h, params):

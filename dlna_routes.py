@@ -30,6 +30,7 @@ GET_ROUTES = {
     "/api/genre_tracks":   api_browse.genre_tracks,
     "/api/artist_albums":  api_browse.artist_albums,
     "/api/browse_letter":  api_browse.browse_letter,
+    "/api/radio":          api_browse.radio,
     "/api/renderer_state": api_playback.renderer_state,
     "/api/index/status":   api_playback.index_status,
     "/api/index/rebuild":  api_playback.index_rebuild,

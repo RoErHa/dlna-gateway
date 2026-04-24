@@ -786,7 +786,15 @@ async function doSearch(q){
           if(btn.dataset.action==="play") playAlbumFromDB(a.artist,a.album);
           else if(btn.dataset.action==="fav") addAlbumToPlaylist("__favourites__",a.artist,a.album);
           return;}
-        playAlbumFromDB(a.artist,a.album);
+        // Row click → drill into tracks (same pattern as the artist's
+        // album view). Jump to the browse tab first so the back button
+        // and section header chrome are visible for the drill-down.
+        // Pass an explicit artistItem so `back` from the track list
+        // returns to THIS album's artist, not a stale drillArtist from
+        // an earlier browse session.
+        showTab('browse');
+        showAlbumTracks(a.artist, a.album,
+                        {artist: a.artist, album_count: null});
       });
       $("item-list").appendChild(div);
     });
@@ -1136,7 +1144,10 @@ function updateShuffleBtn(){
 }
 updateShuffleBtn();  // initialise visual state (ON by default)
 
-$("btn-radio").addEventListener("click", async ()=>{
+// Play a shuffled grab-bag of tracks from the current server. Exposed on
+// the global scope so both the desktop toolbar (#btn-radio) and the
+// mobile bottom-nav (#bnav-radio) can call it directly.
+async function startRadio(){
   if(!curServer){toast("No server selected");return;}
   toast("📻 Loading radio…", 3000);
   const r=await api(`/api/radio?udn=${enc(curServer.udn)}&limit=100`);
@@ -1147,7 +1158,8 @@ $("btn-radio").addEventListener("click", async ()=>{
   const tracks=shuffle(d.tracks);
   await playTracklist(tracks,"📻 Radio","");
   toast(`📻 Radio — ${tracks.length} random tracks`);
-});
+}
+$("btn-radio").addEventListener("click", startRadio);
 $("vol").addEventListener("input",()=>{const v=parseInt($("vol").value);$("vol-label").textContent=v;control({action:"volume",value:v});});
 async function control(cmd){
   if(activeDevice==="browser"){
