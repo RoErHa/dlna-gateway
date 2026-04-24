@@ -87,6 +87,16 @@ class LibraryDB:
                     updated_at TEXT DEFAULT (datetime('now')),
                     PRIMARY KEY (artist, album)
                 );
+                -- Radio play counts. Independent of `tracks` (keyed by
+                -- URL, no FK) so rebuild-index doesn't affect it — play
+                -- history persists forever, like album_art. Radio
+                -- ordering biases toward lowest count so the full
+                -- library cycles through over time.
+                CREATE TABLE IF NOT EXISTS play_counts (
+                    url         TEXT PRIMARY KEY,
+                    count       INTEGER NOT NULL DEFAULT 0,
+                    last_played INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS index_meta (
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
@@ -699,17 +709,37 @@ class LibraryDB:
                 (udn, genre)).fetchall()
         return [dict(r) for r in rows]
 
-    def random_tracks(self, udn: str, limit: int = 100) -> list:
-        """Return `limit` tracks picked randomly from the whole library."""
-        with self._pool.read() as conn:
+    def radio_tracks(self, udn: str, limit: int = 100) -> list:
+        """Pick `limit` tracks for the Radio feature, biased toward those
+        the user hasn't heard often — lowest play count wins, random
+        tiebreak within a tier. Bumps each selected track's count in
+        play_counts so the NEXT radio call picks different tracks.
+
+        Rebuild-index doesn't touch play_counts, so play history persists
+        forever (same invariant as album_art). The table is keyed by URL;
+        if the upstream server ever renames URLs, those entries become
+        orphaned and that track resets to count=0 — acceptable because
+        this is a soft preference, not a correctness requirement."""
+        with self._pool.write() as conn:
             rows = conn.execute(
-                """SELECT obj_id as id, url, title, artist, album,
-                          duration, art, mime, 'audio' as type
-                   FROM tracks
-                   WHERE udn=?
-                   ORDER BY RANDOM()
-                   LIMIT ?""",
+                """SELECT t.obj_id AS id, t.url, t.title, t.artist, t.album,
+                          t.duration, t.art, t.mime, 'audio' AS type
+                     FROM tracks t
+                     LEFT JOIN play_counts p ON p.url = t.url
+                    WHERE t.udn = ?
+                    ORDER BY COALESCE(p.count, 0) ASC, RANDOM()
+                    LIMIT ?""",
                 (udn, limit)).fetchall()
+            # Bulk-increment the selected URLs so next radio call picks
+            # fresher material. Using an UPSERT so brand-new URLs insert
+            # at count=1 and existing URLs increment in place.
+            conn.executemany(
+                """INSERT INTO play_counts (url, count, last_played)
+                   VALUES (?, 1, strftime('%s','now'))
+                   ON CONFLICT(url) DO UPDATE
+                      SET count = count + 1,
+                          last_played = strftime('%s','now')""",
+                [(r["url"],) for r in rows if r["url"]])
         return [dict(r) for r in rows]
 
     # ── Playlists ─────────────────────────────────────────────────

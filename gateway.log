@@ -805,3 +805,85 @@ ConnectionRefusedError: [Errno 61] Connection refused
 2026-04-24 00:15:24 [WARNING ] dlna.player: proxy_stream error: timed out
 2026-04-24 00:15:24 [INFO    ] dlna.player: proxy_stream ■ END   240.0.0.1/unreachable.flac sent=0 bytes in 20.0s reason=error:TimeoutError
 2026-04-24 00:16:27 [INFO    ] dlna.library: AlbumArtFetcher: no bare albums to look up
+2026-04-24 06:53:30 [INFO    ] dlna.discovery: [RENDERER+] 'TV136'  @ http://192.168.1.35:1066/
+2026-04-24 06:53:30 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-24 06:54:22 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-24 10:05:33 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
+2026-04-24 11:12:44 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d3168335792565925065-co28BC00C721C6707C.flac
+2026-04-24 11:12:44 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d3168335792565925065-co28BC00C721C670 sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:12:44 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d3168335792565925065-co28BC00C721C6707C.flac
+2026-04-24 11:12:44 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d3168335792565925065-co28BC00C721C670 sent=131072 bytes in 0.1s reason=client_closed
+2026-04-24 11:12:44 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d3168335792565925065-co28BC00C721C6707C.flac
+2026-04-24 11:12:44 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d3168335792565925065-co28BC00C721C670 sent=393216 bytes in 0.1s reason=client_closed
+2026-04-24 11:12:45 [INFO    ] dlna.client: client_log[play_rejected]  err=AbortError  reason=queue_advance  msg=The operation was aborted.  ua=Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHT
+2026-04-24 11:12:45 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC617.flac
+2026-04-24 11:12:45 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:12:45 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC617.flac
+2026-04-24 11:12:45 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC sent=131072 bytes in 0.1s reason=client_closed
+2026-04-24 11:13:03 [INFO    ] dlna.client: client_log[audio_error]  code=3  codeName=decode  retries=0  title=Paranoid  artist=Black Sabbath  ready_state=1  network_state=1  msg=Media failed to decode  ua=Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHT
+2026-04-24 11:13:04 [INFO    ] dlna.client: client_log[play_rejected]  err=AbortError  reason=queue_advance  msg=The operation was aborted.  ua=Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHT
+2026-04-24 11:13:04 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC617.flac
+2026-04-24 11:13:04 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:13:04 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC617.flac
+2026-04-24 11:13:04 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC sent=131072 bytes in 0.1s reason=client_closed
+2026-04-24 11:13:04 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC617.flac
+2026-04-24 11:13:08 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5057738467925278601-co674BF930F4AFC sent=19484103 bytes in 3.7s reason=upstream_eof
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B9C.mp3
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B9C.mp3
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B sent=131072 bytes in 0.1s reason=client_closed
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B9C.mp3
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B sent=262144 bytes in 0.1s reason=client_closed
+2026-04-24 11:14:31 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B9C.mp3
+2026-04-24 11:14:32 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-965759259658530286-co8F23D8C0728A8B sent=11812539 bytes in 0.4s reason=upstream_eof
+2026-04-24 11:19:59 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d7850754562198496218-co56CD4EA578EBC0DE.mp3
+2026-04-24 11:19:59 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d7850754562198496218-co56CD4EA578EBC0 sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:19:59 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d7850754562198496218-co56CD4EA578EBC0DE.mp3
+2026-04-24 11:19:59 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d7850754562198496218-co56CD4EA578EBC0 sent=262144 bytes in 0.1s reason=client_closed
+2026-04-24 11:19:59 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d7850754562198496218-co56CD4EA578EBC0DE.mp3
+2026-04-24 11:20:00 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d7850754562198496218-co56CD4EA578EBC0 sent=6323406 bytes in 0.8s reason=upstream_eof
+2026-04-24 11:24:24 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C6707C.flac
+2026-04-24 11:24:24 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C67 sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:24:24 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C6707C.flac
+2026-04-24 11:24:25 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C67 sent=262144 bytes in 0.4s reason=client_closed
+2026-04-24 11:24:25 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C6707C.flac
+2026-04-24 11:24:27 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C67 sent=43057152 bytes in 1.7s reason=client_closed
+2026-04-24 11:24:53 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C6707C.flac
+2026-04-24 11:24:53 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C67 sent=4325244 bytes in 0.2s reason=upstream_eof
+2026-04-24 11:25:21 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C6707C.flac
+2026-04-24 11:25:23 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-1597122159755945874-co28BC00C721C67 sent=2162556 bytes in 1.8s reason=upstream_eof
+2026-04-24 11:32:27 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5116796357570296909-co5386091A6419101E.mp3
+2026-04-24 11:32:27 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5116796357570296909-co5386091A64191 sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:32:27 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5116796357570296909-co5386091A6419101E.mp3
+2026-04-24 11:32:28 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5116796357570296909-co5386091A64191 sent=458752 bytes in 0.5s reason=client_closed
+2026-04-24 11:32:28 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d-5116796357570296909-co5386091A6419101E.mp3
+2026-04-24 11:32:35 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d-5116796357570296909-co5386091A64191 sent=11536382 bytes in 6.7s reason=upstream_eof
+2026-04-24 11:34:25 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-24 11:34:25 [INFO    ] dlna: Logging → /Users/ronhamersma/dlna-gateway/gateway.log  (debug=False)
+2026-04-24 11:34:25 [INFO    ] dlna.library: DeviceRoleCache: loaded 4 known devices from DB
+2026-04-24 11:34:25 [INFO    ] dlna.gateway: Pre-probing 1 known server(s) from DB…
+2026-04-24 11:34:25 [INFO    ] dlna.gateway:   → 'Asset UPnP: RonsMacMini.home'  http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-24 11:34:25 [INFO    ] dlna.discovery: Probing http://192.168.1.125:26125/DeviceDescription.xml …
+2026-04-24 11:34:25 [INFO    ] dlna.discovery: SSDP discovery starting on 192.168.1.125
+2026-04-24 11:34:25 [INFO    ] dlna.library: AlbumArtFetcher: initial scan scheduled in 120s
+2026-04-24 11:34:25 [INFO    ] dlna.gateway: Auto-detected TLS cert: ronsmacmini.tail5be6ad.ts.net.crt
+2026-04-24 11:34:25 [INFO    ] dlna.gateway: HTTPS ready → https://localhost:8443/
+2026-04-24 11:34:25 [INFO    ] dlna.gateway: Gateway ready → http://localhost:8765/   |    HTTPS  → https://localhost:8443/   (Ctrl-C to stop)
+2026-04-24 11:34:26 [INFO    ] dlna.discovery: [SERVER +] 'Asset UPnP: RonsMacMini.home'  @ http://192.168.1.125:26125/DeviceDescription.xml
+2026-04-24 11:34:26 [INFO    ] dlna.library: Index OK: 23808 tracks already in DB for Asset UPnP: RonsMacMini.home
+2026-04-24 11:34:28 [INFO    ] dlna.discovery: [RENDERER+] 'Uniti  livingroom'  @ http://192.168.1.227:58382/d21efcdf-128c-4e89-8358-78e51afd579c.xml
+2026-04-24 11:34:28 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:d21efcdf-12…
+2026-04-24 11:34:28 [INFO    ] dlna.api.browse: /api/radio  5 tracks  udn=uuid:3787CDCF-76…  limit=5
+2026-04-24 11:34:29 [INFO    ] dlna.api.browse: /api/radio  5 tracks  udn=uuid:3787CDCF-76…  limit=5
+2026-04-24 11:36:25 [INFO    ] dlna.library: AlbumArtFetcher: no bare albums to look up
+2026-04-24 11:37:57 [INFO    ] dlna.api.browse: /api/radio  100 tracks  udn=uuid:3787CDCF-76…  limit=100
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A702C.flac
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A70 sent=2 bytes in 0.0s reason=upstream_eof
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A702C.flac
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A70 sent=131072 bytes in 0.1s reason=client_closed
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A702C.flac
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A70 sent=131072 bytes in 0.1s reason=client_closed
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A702C.flac
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A70 sent=196608 bytes in 0.1s reason=client_closed
+2026-04-24 11:37:57 [INFO    ] dlna.player: proxy_stream ▶ START 192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A702C.flac
+2026-04-24 11:37:59 [INFO    ] dlna.player: proxy_stream ■ END   192.168.1.125:26125/content/c2/b16/f44100/d1763576315908702161-co5B332B4B438A70 sent=38086045 bytes in 1.4s reason=upstream_eof

@@ -110,6 +110,9 @@ device_roles(udn, name, location, host, is_server, is_renderer, first_seen, last
 album_art(artist, album, art_url, source, updated_at)
   PRIMARY KEY (artist, album)
   source ∈ {'sibling', 'musicbrainz', 'notfound', 'manual'}
+play_counts(url, count, last_played)
+  PRIMARY KEY (url)
+  Incremented by LibraryDB.radio_tracks(); persists across rebuild-index.
 ```
 
 ### Frontend
@@ -306,6 +309,32 @@ The fix has two parts:
 ### Duration parsing (`_dur_to_sec`)
 
 Track durations in `playlist_tracks` are stored as TEXT in UPnP `H:MM:SS(.fff)` format, NOT as seconds. `_dur_to_sec()` in `dlna_player.py` tolerates every format the DB stores (int, float, empty/None, `H:MM:SS.fff`, `MM:SS`, malformed strings → 0). Prior to 2026-04-23 this was `int(dur)` and blew up silently inside the daemon thread, killing playback before SetURI was ever sent. Regression-guarded by `tests/test_player.py::TestDurToSec` and `TestRendererQueueDurationSafety`.
+
+## Radio play-count biasing
+
+`GET /api/radio?udn=X&limit=N` (handler: `api_browse.radio` → `LibraryDB.radio_tracks`) picks N tracks biased toward **lowest play count** with random tiebreak, then atomically bumps the count on all selected URLs. The same 100 never keep surfacing: over time the whole library cycles through.
+
+```
+SELECT ... FROM tracks t
+  LEFT JOIN play_counts p ON p.url = t.url
+ WHERE t.udn = ?
+ ORDER BY COALESCE(p.count, 0) ASC, RANDOM()
+ LIMIT ?
+```
+
+The `play_counts` table is intentionally decoupled from `tracks`:
+
+- **Not touched by `clear(udn)`** — rebuild-index doesn't reset play history, same invariant as `album_art`.
+- **Keyed by URL** — if the upstream media server ever re-hashes URLs, orphaned rows are harmless and those tracks restart at count=0. Soft preference, not a correctness invariant.
+- **Radio-only tracking** — listening via browse / playlists / favourites does NOT increment; only `/api/radio` does. Keeps the feature self-contained and matches the "radio freshness" use case.
+
+To force a full reset (hear early picks again):
+
+```sql
+DELETE FROM play_counts;
+```
+
+Tests: `tests/test_library.py::TestRadioPlayCountBias` covers the invariants — disjoint-from-prior-call, full-library cycling, persistence across `clear()`.
 
 ## External services (outbound HTTP)
 
