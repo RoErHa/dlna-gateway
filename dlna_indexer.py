@@ -103,22 +103,40 @@ class Indexer:
         log.info(f"Indexer started for {server.name}")
 
         try:
-            # Find Album Artist/Album container
-            root_result = cd_browse(server.control_url, "0", count=50)
-            album_cid   = None
-            for c in root_result.get("containers", []):
-                if c["title"].strip() in ("Album Artist / Album",
-                                          "Album Artist",
-                                          "Albums"):
-                    album_cid = c["id"]
-                    log.info(f"Using container: {c['title']!r} id={c['id']}")
-                    break
+            # Find Album Artist/Album container.
+            # Servers like AssetUPnP/MinimServer/Jellyfin expose it at root.
+            # Plex nests it one level under a "Music" container.
+            ALBUM_TITLES = ("Album Artist / Album", "Album Artist",
+                            "Albums", "By Album")
+            MUSIC_TITLES = ("Music", "Audio", "Music Library")
+
+            def _find_album_cid(parent_cid: str):
+                result = cd_browse(server.control_url, parent_cid, count=50)
+                for c in result.get("containers", []):
+                    if c["title"].strip() in ALBUM_TITLES:
+                        return c["id"], c["title"]
+                return None, None
+
+            album_cid, album_title = _find_album_cid("0")
+
+            if not album_cid:
+                # Plex-style: descend into a "Music" container first.
+                root_result = cd_browse(server.control_url, "0", count=50)
+                for c in root_result.get("containers", []):
+                    if c["title"].strip() in MUSIC_TITLES:
+                        log.info(f"Descending into {c['title']!r} id={c['id']} "
+                                 f"to locate album container")
+                        album_cid, album_title = _find_album_cid(c["id"])
+                        if album_cid:
+                            break
 
             if not album_cid:
                 self.state.update(status="error",
                                   error="No Album Artist/Album container found")
                 log.error(f"Indexer: cannot find album container for {server.name}")
                 return
+
+            log.info(f"Using container: {album_title!r} id={album_cid}")
 
             if force:
                 self.library.clear(udn)

@@ -91,13 +91,6 @@ class DeviceRoleCache:
         with self._lock:
             return self._cache.get(udn, {}).get("is_renderer", False)
 
-    def is_renderer_host(self, host: str) -> bool:
-        """True if ANY UDN from this host is a known renderer.
-        Handles combined devices (Naim Uniti) that use different UDNs
-        for their ContentDirectory and AVTransport services."""
-        with self._lock:
-            return "renderer" in self._host_index.get(host, set())
-
     def is_server(self, udn: str) -> bool:
         with self._lock:
             return self._cache.get(udn, {}).get("is_server", False)

@@ -56,7 +56,9 @@ def proxy_stream(upstream_url: str, handler):
     sent_bytes = 0
     reason     = "unknown"
     t_start    = time.monotonic()
-    log.info(f"proxy_stream ▶ START {host}{path[:80]}")
+    range_hdr  = handler.headers.get("Range", "")
+    log.info(f"proxy_stream ▶ START {host}{path[:80]}"
+             f"{' range=' + range_hdr if range_hdr else ''}")
 
     conn = None
     try:
@@ -68,7 +70,6 @@ def proxy_stream(upstream_url: str, handler):
             conn = http.client.HTTPConnection(host, timeout=20)
 
         req_headers = {"User-Agent": "DLNAGateway/1.0", "Connection": "close"}
-        range_hdr   = handler.headers.get("Range", "")
         if range_hdr:
             req_headers["Range"] = range_hdr
 
