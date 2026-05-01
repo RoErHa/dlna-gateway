@@ -518,7 +518,7 @@ if os.path.isfile(disc_path):
     check("heartbeat_thread defined",       "def heartbeat_thread(" in dc)
     check("uses SERVERS.touch",             "SERVERS.touch(" in dc)
     check("tracks _heartbeat_fails",        "_heartbeat_fails" in dc)
-    check("marks offline after 2 failures", "fails >= 2" in dc)
+    check("marks offline on 2nd consecutive fail", "fails == 2" in dc)
     check("sets last_seen = 0",             "last_seen = 0" in dc)
 
 section("T4.HB — dlna_gateway.py starts heartbeat thread")

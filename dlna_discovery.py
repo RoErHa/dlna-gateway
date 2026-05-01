@@ -32,6 +32,13 @@ log = logging.getLogger("dlna.discovery")
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
 
+# Hardcoded policy: the gateway tracks exactly one external MediaServer —
+# AssetUPnP. Other discovered MediaServers (Naim Uniti playqueue, LG TV
+# media share, Plex DLNA, etc.) are dropped at discovery time, even if
+# they're valid UPnP, so the UI never shows competing libraries.
+# The gateway's own self-announce is excluded separately via gw_udn.
+ALLOWED_SERVER_NAME_PREFIX = "Asset UPnP"
+
 
 # ── Device description fetcher ────────────────────────────────────
 
@@ -88,11 +95,8 @@ def _fetch_device(location: str,
                 av_url = ctrl
 
         if cd_url and "MediaServer" in dev_type and not av_url:
-            # Check by UDN and by host — the Naim Uniti's server UDN differs
-            # from its renderer UDN, so we must check both
-            if DEVICE_ROLES.is_renderer(udn) or DEVICE_ROLES.is_renderer_host(host):
-                log.debug(f"Skipping server registration for {name!r} @ {host} "
-                          f"— host is a known renderer")
+            if not name.startswith(ALLOWED_SERVER_NAME_PREFIX):
+                log.debug(f"Ignoring non-allowlisted MediaServer {name!r} @ {host}")
             else:
                 DEVICE_ROLES.mark(udn, name, location=location, host=host, is_server=True)
                 servers.add(MediaServer(
@@ -107,28 +111,6 @@ def _fetch_device(location: str,
             if "MediaServer" in dev_type:
                 log.debug(f"Combined device {name!r}: has AVTransport → "
                           f"renderer only, skipping ContentDirectory")
-            # Evict from server registry in case it registered before renderer was known
-            with servers._lock:
-                if udn in servers._d:
-                    log.info(f"Removing {name!r} from server registry "
-                             f"— superseded by renderer registration")
-                    del servers._d[udn]
-            # Also evict any server from the same host (different UDN, same device)
-            with servers._lock:
-                to_evict = [k for k, v in servers._d.items()
-                            if urllib.parse.urlparse(v.location).hostname == host]
-                for k in to_evict:
-                    log.info(f"Removing server {servers._d[k].name!r} from registry "
-                             f"— same host {host} is a renderer")
-                    del servers._d[k]
-            try:
-                from dlna_library import INDEXER
-                INDEXER.cancel_udn(udn)
-                # Cancel any server UDN from same host too
-                for k in to_evict:
-                    INDEXER.cancel_udn(k)
-            except ImportError:
-                pass
 
     except ET.ParseError as e:
         log.debug(f"XML parse error ({location}): {e}")
@@ -388,8 +370,10 @@ def heartbeat_thread(gw_udn: str = ""):
                 fails = _heartbeat_fails.get(udn, 0) + 1
                 _heartbeat_fails[udn] = fails
                 log.debug(f"Heartbeat fail ({fails}×): {srv.name!r}: {e}")
-                if fails >= 2:
-                    # Force offline so the UI reflects reality within 60 s
+                if fails == 2:
+                    # First crossover: force offline so the UI reflects reality
+                    # within 60 s. Subsequent ticks skip both the log and the
+                    # write — already offline, idempotent.
                     with SERVERS._lock:
                         if udn in SERVERS._d:
                             SERVERS._d[udn].last_seen = 0
