@@ -18,7 +18,7 @@ monkey-patch a shorter window for chaos runs without waiting 5 min.
 """
 import http.client
 import logging
-import select
+import selectors
 import ssl
 import time
 import urllib.parse
@@ -89,23 +89,32 @@ def proxy_stream(upstream_url: str, handler):
         handler.send_header("Connection", "close")
         handler.end_headers()
 
-        CHUNK = 65_536
-        while True:
-            chunk = resp.read(CHUNK)
-            if not chunk:
-                reason = "upstream_eof"
-                break
-            try:
-                rdy = select.select([], [handler.wfile], [], PROXY_IDLE_SEC)[1]
-                if not rdy:
-                    reason = "client_idle_timeout"
+        # Use selectors (kqueue on macOS) instead of select.select() — the
+        # latter has an FD_SETSIZE=1024 ceiling and raises ValueError once any
+        # fd in the process exceeds 1023. Under load that turns every /stream
+        # request into a 0-byte response and the browser <audio> element
+        # surfaces it as MediaError.code=4 "unsupported format".
+        sel = selectors.DefaultSelector()
+        sel.register(handler.wfile, selectors.EVENT_WRITE)
+        try:
+            CHUNK = 65_536
+            while True:
+                chunk = resp.read(CHUNK)
+                if not chunk:
+                    reason = "upstream_eof"
                     break
-                handler.wfile.write(chunk)
-                handler.wfile.flush()
-                sent_bytes += len(chunk)
-            except (BrokenPipeError, OSError):
-                reason = "client_closed"
-                break
+                try:
+                    if not sel.select(PROXY_IDLE_SEC):
+                        reason = "client_idle_timeout"
+                        break
+                    handler.wfile.write(chunk)
+                    handler.wfile.flush()
+                    sent_bytes += len(chunk)
+                except (BrokenPipeError, OSError):
+                    reason = "client_closed"
+                    break
+        finally:
+            sel.close()
 
     except BrokenPipeError:
         reason = "client_closed"

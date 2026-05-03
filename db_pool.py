@@ -2,28 +2,33 @@
 """
 db_pool.py — SQLite connection pool for the DLNA Gateway.
 
-Provides thread-safe database access with:
-  - WAL mode for concurrent reads
-  - Connection reuse via thread-local storage
-  - Write lock (SQLite allows only one writer)
-  - busy_timeout to handle contention gracefully
-  - Proper cleanup on shutdown
+Each `with pool.read() / pool.write()` block opens a fresh SQLite
+connection and closes it on exit. Open is cheap (~0.5 ms on local
+disk) and the OS page cache absorbs the per-connection cold start,
+so the cost is invisible compared with the alternative — caching
+per thread under HTTPServer.ThreadingMixIn (one new thread per
+request) leaks a connection every request because there is no
+reliable hook to close on thread death. After 38 h of normal use
+that surfaced as 1985 open FDs against library.db, FD numbers >1024,
+and `select()` in the stream proxy raising
+`ValueError: filedescriptor out of range` — every browser-audio
+track skipped as "unsupported format". The fix is to not cache.
+
+WAL mode + per-connection writer lock + busy_timeout are still in
+play.
 
 Usage:
     from db_pool import Pool
 
     pool = Pool("library.db")
 
-    # Read (concurrent, no global lock):
     with pool.read() as conn:
         rows = conn.execute("SELECT ...").fetchall()
 
-    # Write (serialized via write lock):
     with pool.write() as conn:
         conn.execute("INSERT ...")
-        conn.commit()
+        # commit happens automatically on exit
 
-    # Shutdown:
     pool.close()
 """
 import logging
@@ -46,26 +51,20 @@ _PRAGMAS = [
 
 class Pool:
     """
-    SQLite connection pool.
-
-    Connections are cached per-thread (thread-local storage).
-    Reads are fully concurrent under WAL mode.
-    Writes are serialized via a threading.Lock.
+    SQLite connection helper. Reads are concurrent under WAL mode;
+    writes are serialized via a threading.Lock.
     """
 
     def __init__(self, db_file: str, max_retries: int = 3):
         self._db_file = db_file
-        self._local = threading.local()
         self._write_lock = threading.Lock()
         self._max_retries = max_retries
         self._closed = False
 
-        # Validate the path early
         db_dir = os.path.dirname(db_file) or "."
         if not os.path.isdir(db_dir):
             os.makedirs(db_dir, exist_ok=True)
 
-        # Open one connection to set WAL mode (affects the whole database file)
         conn = self._new_connection()
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         log.info(f"DB pool: {db_file} (journal_mode={mode})")
@@ -83,58 +82,31 @@ class Pool:
             conn.execute(pragma)
         return conn
 
-    def _get_conn(self) -> sqlite3.Connection:
-        """Get or create a thread-local connection."""
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            try:
-                conn.execute("SELECT 1")
-                return conn
-            except Exception:
-                # Stale or broken — close and reopen
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                self._local.conn = None
-
-        conn = self._new_connection()
-        self._local.conn = conn
-        log.debug(f"DB pool: new connection (thread {threading.current_thread().name})")
-        return conn
-
     @contextmanager
     def read(self):
-        """
-        Context manager for read-only access.
-        No global lock — WAL mode allows concurrent readers.
-
-        Usage:
-            with pool.read() as conn:
-                rows = conn.execute("SELECT ...").fetchall()
-        """
-        conn = self._get_conn()
+        """Context manager for read-only access. No global lock."""
+        if self._closed:
+            raise RuntimeError("DB pool is closed")
+        conn = self._new_connection()
         try:
             yield conn
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower():
                 log.warning(f"DB read contention: {e}")
             raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     @contextmanager
     def write(self):
-        """
-        Context manager for write access.
-        Acquires a write lock so only one thread writes at a time.
-        Auto-commits on success, rolls back on exception.
-
-        Usage:
-            with pool.write() as conn:
-                conn.execute("INSERT ...")
-                # commit happens automatically on exit
-        """
+        """Context manager for write access. Auto-commits on success."""
+        if self._closed:
+            raise RuntimeError("DB pool is closed")
         with self._write_lock:
-            conn = self._get_conn()
+            conn = self._new_connection()
             try:
                 yield conn
                 conn.commit()
@@ -144,24 +116,29 @@ class Pool:
                 except Exception:
                     pass
                 raise
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def close(self):
-        """Close all connections. Call on shutdown."""
+        """Mark the pool closed; future read()/write() calls will raise."""
         self._closed = True
-        conn = getattr(self._local, "conn", None)
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._local.conn = None
         log.info("DB pool: closed")
 
     def execute_script(self, sql: str):
         """Execute a multi-statement SQL script (schema init, etc.)."""
         with self._write_lock:
-            conn = self._get_conn()
-            conn.executescript(sql)
+            conn = self._new_connection()
+            try:
+                conn.executescript(sql)
+                conn.commit()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     @property
     def db_file(self) -> str:
