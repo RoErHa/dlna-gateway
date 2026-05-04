@@ -4,3 +4,12 @@ python tests/run_all.py --offline
 
 # Full test against running gateway:
 python tests/run_all.py http://192.168.1.125:8765
+
+# Frontend Playwright suite — covers every button (existence, enabled/disabled
+# state, click behaviour). Boots an in-process stub gateway, no live server
+# or AssetUPnP needed. ~75 seconds.
+.venv/bin/pip install playwright pytest-playwright   # one-time
+.venv/bin/playwright install chromium                # one-time
+python tests/run_all.py --frontend-only              # just the UI suite
+python tests/run_all.py --frontend                   # backend + UI suite combined
+.venv/bin/pytest tests/frontend -k transport --headed  # debug single panel visibly

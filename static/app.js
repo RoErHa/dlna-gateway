@@ -274,8 +274,11 @@ function mobileTab(tab){
 // ── Tabs ──────────────────────────────────────────────────────────
 function showTab(tab){
   curTab=tab;
+  // Only browse/search exist as desktop tab-bar buttons; playlists/favourites
+  // are mobile-only (#bnav-*). Optional-chain so calling showTab("playlists")
+  // from mobileTab() doesn't crash on the desktop layout.
   ["browse","search","playlists","favourites"].forEach(t=>{
-    $("tab-"+t).classList.toggle("active",t===tab);
+    $("tab-"+t)?.classList.toggle("active",t===tab);
   });
   const isBrowse = tab==="browse";
   $("browse-modes").style.display = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
@@ -290,28 +293,35 @@ function showTab(tab){
 }
 
 // ── Servers (source) ─────────────────────────────────────────────
+// Only AssetUPnP is a valid music server (memory: project_server_allowlist),
+// so the UI surfaces a single status label rather than a picker. The label is
+// the disc-dot on the left of the header.
 let renderers = {};   // udn → MediaRenderer
 async function refreshServers(){
   const r=await api("/api/servers");if(!r)return;
   const data=await r.json();
-  const sel=$("server-sel"),prev=sel.value||curServer?.udn;
   servers={};data.forEach(s=>servers[s.udn]=s);
   const dot=$("disc-dot"),lbl=$("disc-label");
   const online=data.filter(s=>s.online);
-  if(online.length){dot.className="disc-dot on";lbl.textContent=`${online.length} server${online.length>1?"s":""} online`;}
-  else if(data.length){dot.className="disc-dot";lbl.textContent="Server offline — reconnecting…";}
-  else{dot.className="disc-dot";lbl.textContent="Scanning…";}
-  // Populate selector — offline servers shown dimmed but selectable
-  if(data.length){
-    sel.innerHTML=data.map(s=>`<option value="${esc(s.udn)}" ${s.online?"":"style='color:var(--ink-dim)'"}>
-      ${esc(s.name)}${s.online?"":" ⚠"}${s.tracks?" · "+s.tracks.toLocaleString()+" tracks":""}
-    </option>`).join("");
+  if(online.length){
+    dot.className="disc-dot on";
+    const s=online[0];
+    lbl.textContent=`${s.name} · online${s.tracks?" · "+s.tracks.toLocaleString()+" tracks":""}`;
+  } else if(data.length){
+    dot.className="disc-dot";
+    lbl.textContent=`${data[0].name} · offline`;
   } else {
-    sel.innerHTML='<option value="">— scanning… —</option>';
+    dot.className="disc-dot";
+    lbl.textContent="Scanning…";
   }
-  // Restore previous server selection (keep curServer even when offline)
-  if(prev&&servers[prev]){sel.value=prev;curServer=servers[prev];}
-  else if(data.length&&!curServer){curServer=data[0];sel.value=data[0].udn;if(curTab==="browse")showArtists();}
+  // Adopt the first known server. With a single-server allowlist this is
+  // either AssetUPnP or nothing — no picker to manage.
+  if(!curServer && data.length){
+    curServer=data[0];
+    if(curTab==="browse") showArtists();
+  } else if(curServer && servers[curServer.udn]){
+    curServer=servers[curServer.udn];   // refresh online flag etc.
+  }
 }
 
 // ── Renderers (output) ────────────────────────────────────────────
@@ -321,11 +331,6 @@ async function refreshRenderers(){
   renderers={};data.forEach(rd=>renderers[rd.udn]=rd);
   rebuildOutputSel(data);
 }
-$("server-sel").addEventListener("change",e=>{
-  const s=servers[e.target.value];if(!s)return;
-  curServer=s;navStack=[{id:"0",title:"Root"}];
-  if(curTab==="browse")showArtists();
-});
 
 // ── Browse ────────────────────────────────────────────────────────
 let browsing=false;
@@ -979,8 +984,16 @@ async function openPlaylist(plId){
     const div=document.createElement("div");
     div.className="pl-track";
     const k2=regItem(t);
-    div.innerHTML=`${t.art?`<img src="/art?url=${encodeURIComponent(t.art)}" style="width:28px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`:""}<div class="pl-track-body"><div class="pl-track-title">${esc(t.title)}</div><div class="pl-track-sub">${esc([t.artist,t.album].filter(Boolean).join(" · "))}</div></div><button class="pl-remove" title="Remove from playlist" onclick="event.stopPropagation();removeFromPlaylist('${plId}',${JSON.stringify(t.url)})">✕</button>`;
+    div.innerHTML=`${t.art?`<img src="/art?url=${encodeURIComponent(t.art)}" style="width:28px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`:""}<div class="pl-track-body"><div class="pl-track-title">${esc(t.title)}</div><div class="pl-track-sub">${esc([t.artist,t.album].filter(Boolean).join(" · "))}</div></div><button class="pl-remove" title="Remove from playlist">✕</button>`;
     div.querySelector(".pl-track-body").addEventListener("click",()=>startPlayTrack(t));
+    // Wire the remove button from JS — using inline onclick with JSON.stringify(url)
+    // produced HTML like onclick="…removeFromPlaylist('pl-1',"http://…")" which
+    // breaks the attribute parser on the embedded double-quote, so the click
+    // silently did nothing.
+    div.querySelector(".pl-remove").addEventListener("click",e=>{
+      e.stopPropagation();
+      removeFromPlaylist(plId, t.url);
+    });
     tracks.appendChild(div);
   });
 }
@@ -1362,15 +1375,6 @@ function rebuildOutputSel(upnpData){
   activeDevice=out.value;
 }
 
-function renderPlayerSettings(){
-  const list=$("settings-player-list");
-  if(list) list.innerHTML="";
-}
-
-function togglePlayer(id,enabled){
-  rebuildOutputSel(Object.values(renderers));
-}
-
 // ── Edit metadata modal ───────────────────────────────────────────
 let _editTrack = null;   // track object currently being edited
 
@@ -1446,13 +1450,6 @@ $("np-btn-add").addEventListener("click",(e)=>{
   if(!npTrack){toast("Nothing playing");return;}
   showAddToPlaylistForItem(e, npTrack);
 });
-
-$("btn-settings").addEventListener("click",()=>{
-  renderPlayerSettings();
-  $("settings-modal").classList.add("open");
-});
-$("settings-close").addEventListener("click",()=>$("settings-modal").classList.remove("open"));
-$("settings-modal").addEventListener("click",e=>{if(e.target===$("settings-modal"))$("settings-modal").classList.remove("open");});
 
 // Initialise output selector on first load
 rebuildOutputSel(null);
