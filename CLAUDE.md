@@ -19,20 +19,42 @@ DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPn
 
 ## Running Tests
 
-Three complementary layers:
+Four complementary layers:
 
 ```bash
-python tests/run_all.py            # full suite: grep-level + unit tests (requires gateway running)
-python tests/run_all.py --offline  # file-level checks only (no server needed)
+python tests/run_all.py              # full backend suite: grep + live + unit tests
+python tests/run_all.py --offline    # file-level checks only (no server needed)
+python tests/run_all.py --frontend   # backend suite + Playwright UI suite
+python tests/run_all.py --frontend-only  # just the Playwright UI suite (fastest iteration)
 python tests/run_all.py http://192.168.1.x:8765  # custom gateway URL
 
 # Layer 1 — behavioural unit tests (no network, <1s):
 python3 -m unittest tests.test_player tests.test_api_playback -v
 
+# Layer 2 — Playwright UI suite (~75s, no live gateway needed):
+.venv/bin/pytest tests/frontend -v
+.venv/bin/pytest tests/frontend -k transport --headed   # visible browser, single panel
+
 # Layer 3 — chaos simulator (live gateway, randomized + adversarial):
 python3 tests/chaos.py --iterations 500 --workers 4
 python3 tests/chaos.py --seed 42 --quiet    # reproduce a past failure
 ```
+
+### Frontend test architecture (`tests/frontend/`)
+
+The Playwright suite never touches the live gateway — it boots a Python
+stub (`stub_gateway.py`) on an ephemeral port that serves the real
+`static/` files and mocks every `/api/*` endpoint app.js calls. Each test
+gets a fresh stub instance via the `gateway` fixture (state) plus a
+Playwright `app` (desktop, 1280×800) or `mobile_app` (iPhone-sized,
+375×667) page.
+
+Add a button-or-feature test by appending to the right `test_<panel>.py`.
+The stub captures every request into `gateway.requests`, so assertions
+of the form *"clicking X must POST {body} to /api/Y"* are one-liners:
+`gateway.wait_for_request("/api/Y", method="POST", match=lambda r: ...)`.
+Call `gateway.clear_requests()` before the user action so stale init
+calls don't false-match.
 
 `chaos.py` hard-fails if it sees any 5xx, `/tmp/dlna-gateway.err` grows (= silent thread death), or a snapshot takes >5s. Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string `ValueError` that was killing the renderer-queue daemon thread invisibly.
 

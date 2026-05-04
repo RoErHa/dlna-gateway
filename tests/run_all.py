@@ -8,6 +8,8 @@ Usage:
     python tests/run_all.py                          # defaults to http://localhost:8765
     python tests/run_all.py http://192.168.1.125:8765
     python tests/run_all.py --offline                # file-only checks, no running server needed
+    python tests/run_all.py --frontend               # also run the Playwright frontend suite
+    python tests/run_all.py --frontend-only          # ONLY run the Playwright frontend suite
 
 Exit code: 0 if all pass, 1 if any fail.
 """
@@ -15,12 +17,15 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import sys
 import urllib.request
 import urllib.error
 
 BASE_URL = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "http://localhost:8765"
 OFFLINE = "--offline" in sys.argv
+FRONTEND = "--frontend" in sys.argv or "--frontend-only" in sys.argv
+FRONTEND_ONLY = "--frontend-only" in sys.argv
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.join(PROJECT, "static")
 
@@ -71,6 +76,19 @@ def fetch(path, expect_json=False):
 
 def section(title):
     print(f"\n\033[1m{title}\033[0m")
+
+
+# --frontend-only short-circuits everything except the Playwright suite.
+# Useful while iterating on frontend code without re-running the slow
+# library / SOAP / discovery checks.
+if FRONTEND_ONLY:
+    section("T_FRONTEND — Playwright frontend suite (tests/frontend/)")
+    cmd = [sys.executable, "-m", "pytest", os.path.join(PROJECT, "tests", "frontend"),
+           "--tb=line", "-q"]
+    proc = subprocess.run(cmd, cwd=PROJECT, capture_output=True, text=True)
+    out  = proc.stdout + proc.stderr
+    print(out)
+    sys.exit(proc.returncode)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -600,11 +618,23 @@ else:
 section("T_UNIT — Behavioural unit tests (tests/test_*.py)")
 import unittest as _ut
 _loader = _ut.TestLoader()
+# Limit discovery to the top-level tests/ directory only — tests/frontend/
+# uses Playwright fixtures that aren't unittest-compatible.
 _suite  = _loader.discover(
     start_dir=os.path.dirname(os.path.abspath(__file__)),
     pattern="test_*.py",
     top_level_dir=PROJECT,
 )
+# Filter out anything from tests/frontend/ — those run via pytest below
+def _strip_frontend(suite):
+    out = _ut.TestSuite()
+    for s in suite:
+        if isinstance(s, _ut.TestSuite):
+            out.addTest(_strip_frontend(s))
+        elif "tests.frontend" not in s.id():
+            out.addTest(s)
+    return out
+_suite = _strip_frontend(_suite)
 _runner = _ut.TextTestRunner(verbosity=0, stream=open(os.devnull, "w"))
 _result = _runner.run(_suite)
 _total  = _result.testsRun
@@ -613,6 +643,30 @@ check(f"All unit tests pass ({_total - _fails}/{_total})",
       _fails == 0,
       f"{_fails} failure(s)/error(s) — run `python3 -m unittest discover "
       f"tests -v` for details")
+
+
+# ══════════════════════════════════════════════════════════════════
+# T_FRONTEND — Playwright UI suite (--frontend / --frontend-only)
+# ══════════════════════════════════════════════════════════════════
+if FRONTEND:
+    section("T_FRONTEND — Playwright frontend suite (tests/frontend/)")
+    # Use the same interpreter that's running this script (the project venv)
+    cmd = [sys.executable, "-m", "pytest", os.path.join(PROJECT, "tests", "frontend"),
+           "--tb=line", "-q"]
+    proc = subprocess.run(cmd, cwd=PROJECT, capture_output=True, text=True)
+    out  = proc.stdout + proc.stderr
+    # Parse the pytest summary line: "97 passed in 72.73s" or "3 failed, 94 passed ..."
+    m_pass = re.search(r"(\d+) passed", out)
+    m_fail = re.search(r"(\d+) failed", out)
+    n_pass = int(m_pass.group(1)) if m_pass else 0
+    n_fail = int(m_fail.group(1)) if m_fail else 0
+    check(f"Playwright suite ({n_pass} passed, {n_fail} failed)",
+          proc.returncode == 0 and n_fail == 0,
+          f"pytest exit {proc.returncode} — run `pytest tests/frontend -v` "
+          f"for details")
+    if proc.returncode != 0:
+        # Print the tail so failures are visible without needing a re-run
+        print("\n".join(out.splitlines()[-30:]))
 
 
 # ══════════════════════════════════════════════════════════════════

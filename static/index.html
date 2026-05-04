@@ -23,8 +23,6 @@
     <div class="disc-label" id="disc-label">Scanning…</div>
   </div>
   <div class="sep"></div>
-  <select id="server-sel"><option value="">— scanning… —</option></select>
-  <div class="sep"></div>
   <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
     <span style="font-size:10px;color:var(--ink-dim);letter-spacing:.05em">OUT</span>
     <select id="output-sel" style="background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:5px 8px;border-radius:var(--r);cursor:pointer;outline:none">
@@ -36,7 +34,6 @@
     <input type="text" id="search-input" placeholder="🔍 Search library…" autocomplete="off">
   </div>
   <div class="hdr-right" id="hdr-status">Ready</div>
-  <button class="btn" id="btn-settings" title="Player settings" style="flex-shrink:0;font-size:15px;padding:4px 8px;margin-left:4px">⚙️</button>
 </header>
 <div class="tab-bar">
   <div class="tab active" id="tab-browse" onclick="showTab('browse')">Browse</div>
@@ -184,17 +181,6 @@
   </div>
 </div>
 
-<!-- Settings modal — must be in DOM before the script block runs -->
-<div class="modal-overlay" id="settings-modal">
-  <div class="modal">
-    <h2>⚙️ Player Apps</h2>
-    <p class="modal-sub">Select which local players are installed on this device. The output selector will show only ticked players.</p>
-    <div id="settings-player-list"></div>
-    <div class="modal-footer">
-      <button class="btn primary" id="settings-close">Done</button>
-    </div>
-  </div>
-</div>
 <script src="/static/app.js"></script>
 </body>
 </html>
