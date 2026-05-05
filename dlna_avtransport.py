@@ -230,6 +230,88 @@ def avtransport_get_position(av_url: str) -> dict:
     return result
 
 
+# ─────────────────────────────────────────────────────────────────
+# RenderingControl — volume helpers (used by loudness normalization).
+# This is a *separate* UPnP service from AVTransport; the SOAP endpoint
+# URL on the renderer is different (sourced from the device description
+# during discovery and stashed as `_RendererInfo.rc_url`).
+# ─────────────────────────────────────────────────────────────────
+
+def _rc_soap(rc_url: str, action: str, body_inner: str,
+             timeout: float = 6.0) -> Optional[str]:
+    """Generic RenderingControl SOAP helper. Returns response body
+    text on 2xx, None otherwise. Catches connection errors so callers
+    don't have to."""
+    envelope = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+        ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        f'<s:Body>{body_inner}</s:Body></s:Envelope>'
+    ).encode("utf-8")
+    parsed = urllib.parse.urlparse(rc_url)
+    try:
+        conn = http.client.HTTPConnection(parsed.netloc, timeout=timeout)
+    except Exception as e:
+        log.debug(f"_rc_soap {action}: connect failed: {e}")
+        return None
+    try:
+        conn.request("POST", parsed.path, envelope, {
+            "Content-Type":   "text/xml; charset=utf-8",
+            "SOAPAction":     f'"urn:schemas-upnp-org:service:RenderingControl:1#{action}"',
+            "Content-Length": str(len(envelope)),
+            "User-Agent":     "DLNAGateway/1.0",
+        })
+        resp = conn.getresponse()
+        text = resp.read().decode("utf-8", errors="replace")
+        if resp.status not in (200, 204):
+            log.debug(f"_rc_soap {action} → HTTP {resp.status}: {text[:200]}")
+            return None
+        return text
+    except Exception as e:
+        log.debug(f"_rc_soap {action}: {e}")
+        return None
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+def set_volume(rc_url: str, level: int) -> bool:
+    """Set the renderer's volume on Master channel. Clamped 0-100."""
+    level = max(0, min(100, int(level)))
+    raw = _rc_soap(rc_url, "SetVolume",
+        '<u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+        '<InstanceID>0</InstanceID>'
+        '<Channel>Master</Channel>'
+        f'<DesiredVolume>{level}</DesiredVolume>'
+        '</u:SetVolume>')
+    return raw is not None
+
+
+def get_volume(rc_url: str) -> Optional[int]:
+    """Read the renderer's current volume on Master channel. Returns None
+    on fault or garbled response — callers should treat None as
+    "unknown, fall back to a sensible default" rather than fail-fast."""
+    raw = _rc_soap(rc_url, "GetVolume",
+        '<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
+        '<InstanceID>0</InstanceID>'
+        '<Channel>Master</Channel>'
+        '</u:GetVolume>')
+    if not raw:
+        return None
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    for el in root.iter():
+        tag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+        if tag == "CurrentVolume" and el.text:
+            try:
+                return int(el.text.strip())
+            except ValueError:
+                return None
+    return None
+
+
 def avtransport_stop(av_url: str) -> bool:
     """Send Stop to a renderer."""
     envelope = (

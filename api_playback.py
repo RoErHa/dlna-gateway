@@ -67,6 +67,31 @@ def index_status(h, params):
     h._json(200, {**INDEXER.state.get(), "db_tracks": count})
 
 
+def loudness_status(h, params):
+    """Per-track loudness scanner progress. Frontend reads this for the
+    progress UI (out of scope for Phase 1) and the suite asserts the
+    contract shape. `total` includes both analysed AND sticky-negative
+    rows, since both count as "the scanner has done its job."""
+    from dlna_library import LOUDNESS_SCANNER
+    from dlna_loudness import TARGET_LUFS
+    with DB._pool.read() as conn:
+        scanned = conn.execute(
+            "SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
+        bare = conn.execute(
+            "SELECT COUNT(*) AS n FROM tracks t "
+            "WHERE t.file_path != '' "
+            "  AND NOT EXISTS (SELECT 1 FROM track_loudness l "
+            "                   WHERE l.url = t.url)").fetchone()["n"]
+    in_progress = bool(LOUDNESS_SCANNER._thread
+                       and LOUDNESS_SCANNER._thread.is_alive())
+    h._json(200, {
+        "scanned":     int(scanned),
+        "total":       int(scanned + bare),
+        "in_progress": in_progress,
+        "target_lufs": float(TARGET_LUFS),
+    })
+
+
 def index_rebuild(h, params):
     udn = params.get("udn", "")
     srv = SERVERS.get(udn)
@@ -208,9 +233,10 @@ def render_queue(h, body):
                  f"{'  (force=True, taking over)' if force else ''}")
         queue = QUEUES.get(udn)
 
-        def _start_safe(q=queue, av_url=rnd.av_url, tracks=tracks, name=rnd.name):
+        def _start_safe(q=queue, av_url=rnd.av_url, rc_url=rnd.rc_url,
+                        tracks=tracks, name=rnd.name):
             try:
-                q.start(av_url, tracks, name)
+                q.start(av_url, tracks, name, rc_url=rc_url)
             except Exception:
                 log.exception(
                     f"RendererQueue.start crashed for {name} — "
@@ -267,6 +293,17 @@ def control(h, body):
                 queue.next_track()
             elif action == "prev":
                 queue.prev_track()
+            elif action == "volume":
+                # User moved the gateway volume slider while OUT was UPnP.
+                # Per-track loudness math is offset from this new reference;
+                # the renderer also gets SetVolume immediately so the
+                # change is audible without waiting for the next track.
+                try:
+                    level = int(cmd.get("value", 0))
+                except (TypeError, ValueError):
+                    h._json(400, {"error": "value must be int 0-100"})
+                    return
+                queue.set_user_volume(level)
             else:
                 log.debug(f"Renderer control: {action!r} not implemented")
             h._json(200, {"ok": True})

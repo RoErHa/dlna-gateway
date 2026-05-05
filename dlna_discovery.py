@@ -85,6 +85,7 @@ def _fetch_device(location: str,
         # Check for ContentDirectory → MediaServer
         cd_url = None
         av_url = None
+        rc_url = None    # RenderingControl — used by loudness normalization SetVolume
         for svc in device.findall(".//u:service", ns):
             stype = svc.findtext("u:serviceType", "", ns)
             ctrl  = svc.findtext("u:controlURL", "", ns) or ""
@@ -93,6 +94,8 @@ def _fetch_device(location: str,
                 cd_url = ctrl
             if "AVTransport" in stype:
                 av_url = ctrl
+            if "RenderingControl" in stype:
+                rc_url = ctrl
 
         if cd_url and "MediaServer" in dev_type and not av_url:
             if not name.startswith(ALLOWED_SERVER_NAME_PREFIX):
@@ -107,7 +110,7 @@ def _fetch_device(location: str,
             DEVICE_ROLES.mark(udn, name, location=location, host=host, is_renderer=True)
             renderers.add(MediaRenderer(
                 udn=udn, name=name, location=location,
-                av_url=av_url, base_url=base))
+                av_url=av_url, base_url=base, rc_url=rc_url or ""))
             if "MediaServer" in dev_type:
                 log.debug(f"Combined device {name!r}: has AVTransport → "
                           f"renderer only, skipping ContentDirectory")

@@ -45,11 +45,12 @@ class MediaRenderer:
     location:  str
     av_url:    str   # AVTransport control URL
     base_url:  str
+    rc_url:    str = ""   # RenderingControl control URL (volume); may be empty
     last_seen: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
         return {"udn": self.udn, "name": self.name, "location": self.location,
-                "av_url": self.av_url}
+                "av_url": self.av_url, "rc_url": self.rc_url}
 
 
 # ── Thread-safe registries ────────────────────────────────────────

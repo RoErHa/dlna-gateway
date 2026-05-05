@@ -37,10 +37,12 @@ class MockHandler:
 
 class MockRenderer:
     def __init__(self, udn="uuid:test", name="TestRenderer",
-                 av_url="http://fake-renderer/av"):
+                 av_url="http://fake-renderer/av",
+                 rc_url="http://fake-renderer/rc"):
         self.udn    = udn
         self.name   = name
         self.av_url = av_url
+        self.rc_url = rc_url
 
 
 class FakeQueue:
@@ -58,8 +60,8 @@ class FakeQueue:
         self.prev_calls  = 0
 
     def snapshot(self):       return dict(self._snap)
-    def start(self, av_url, tracks, name):
-        self.start_calls.append((av_url, list(tracks), name))
+    def start(self, av_url, tracks, name, rc_url=""):
+        self.start_calls.append((av_url, list(tracks), name, rc_url))
     def pause(self):          self.pause_calls += 1
     def stop(self):           self.stop_calls  += 1
     def next_track(self):     self.next_calls  += 1

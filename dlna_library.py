@@ -97,6 +97,17 @@ class LibraryDB:
                     count       INTEGER NOT NULL DEFAULT 0,
                     last_played INTEGER
                 );
+                -- Per-track loudness analysis (Phase 1 normalization).
+                -- Independent of `tracks` (keyed by URL, no FK) so it
+                -- survives clear(udn) — same invariant as album_art and
+                -- play_counts. lufs IS NULL marks a sticky negative
+                -- cache (scan failed, don't retry forever).
+                CREATE TABLE IF NOT EXISTS track_loudness (
+                    url        TEXT PRIMARY KEY,
+                    lufs       REAL,
+                    gain_db    REAL DEFAULT 0.0,
+                    scanned_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS index_meta (
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
@@ -697,6 +708,16 @@ class LibraryDB:
                 "SELECT file_path FROM tracks WHERE url=?", (url,)).fetchone()
         return (row["file_path"] or "") if row else ""
 
+    def gain_db_for_url(self, url: str) -> float:
+        """Per-track loudness gain in dB. Returns 0.0 for unknown tracks
+        (don't fail-fast — missing analysis just means no normalization
+        applied yet)."""
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT gain_db FROM track_loudness WHERE url=?",
+                (url,)).fetchone()
+        return float(row["gain_db"]) if row and row["gain_db"] is not None else 0.0
+
     def genre_tracks(self, udn: str, genre: str) -> list:
         """All tracks in a genre."""
         with self._pool.read() as conn:
@@ -860,10 +881,12 @@ DB = LibraryDB()
 from dlna_devices      import DeviceRoleCache
 from dlna_indexer      import Indexer, IndexState  # noqa: F401 re-exported
 from dlna_art_fetcher  import AlbumArtFetcher
+from dlna_loudness     import LoudnessScanner
 
-DEVICE_ROLES = DeviceRoleCache(DB)
-INDEXER      = Indexer(DB)
-ART_FETCHER  = AlbumArtFetcher(DB)
+DEVICE_ROLES     = DeviceRoleCache(DB)
+INDEXER          = Indexer(DB)
+ART_FETCHER      = AlbumArtFetcher(DB)
+LOUDNESS_SCANNER = LoudnessScanner(DB)
 
 
 # ── Standalone test ───────────────────────────────────────────────

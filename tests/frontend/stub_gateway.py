@@ -61,6 +61,10 @@ class StubGateway:
         # index status
         self.index_status: dict = {"status": "idle", "progress": 0, "total": 0,
                                    "tracks": 0, "db_tracks": 0}
+        # loudness scanner status — set by Phase-1 LoudnessScanner work
+        self.loudness_status: dict = {"scanned": 0, "total": 0,
+                                      "in_progress": False,
+                                      "target_lufs": -18.0}
         # /api/render_queue can be told to reject with 409 once
         self.render_queue_busy: dict | None = None
         # captured requests: list of {method, path, query, body, headers}
@@ -372,6 +376,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/index/status":
             self._send_json(gw.index_status)
+            return
+        if path == "/api/loudness/status":
+            self._send_json(gw.loudness_status)
             return
         if path == "/api/index/rebuild":
             gw.index_status = {"status": "running", "progress": 0, "total": 100,
