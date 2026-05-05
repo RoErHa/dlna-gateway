@@ -35,12 +35,16 @@ from dlna_player import RendererQueue, GAIN_TO_VOLUME_RATIO
 
 # Convenience: build a queue + start it with a stack of mocked SOAP helpers.
 def _start_queue(tracks, gain_map=None, get_volume_returns=70):
-    """Returns (queue, set_volume_calls, get_volume_calls).
+    """Returns (queue, set_volume_calls, get_volume_calls, patches).
+
+    Note: SetVolume now runs in a daemon thread (non-blocking for the
+    queue / HTTP handler). Tests wait briefly for set_calls to populate.
 
     `gain_map` keys = track URL, value = gain_db. Missing URLs → 0.0.
     `get_volume_returns` = what the renderer reports as its current volume
     when GetVolume is called once on first play.
     """
+    import time as _t
     set_volume_calls = []
     get_volume_calls = []
 
@@ -76,8 +80,20 @@ def _start_queue(tracks, gain_map=None, get_volume_returns=70):
         # Stop the monitor thread so the test exits clean
         q._cancel = MagicMock()  # prevent further side effects on teardown
         q._stop_event.set()
-    # Caller is responsible for stopping patches via .stop() — return them.
+    # SetVolume is dispatched off-thread; wait briefly for it to land.
+    for _ in range(40):
+        if set_volume_calls: break
+        _t.sleep(0.005)
     return q, set_volume_calls, get_volume_calls, patches
+
+
+def _wait_for_set_calls(set_calls, count: int, timeout: float = 0.2):
+    """Poll-wait helper for tests that fire additional SetVolume calls
+    after the queue is started (e.g. set_user_trim_db, next_track)."""
+    import time as _t
+    deadline = _t.time() + timeout
+    while _t.time() < deadline and len(set_calls) < count:
+        _t.sleep(0.005)
 
 
 def _stop_patches(patches):
@@ -117,6 +133,7 @@ class TestPerTrackGain(unittest.TestCase):
             get_volume_returns=70)
         try:
             q.next_track()
+            _wait_for_set_calls(set_calls, 2)
             self.assertEqual(len(get_calls), 1,
                              "GetVolume must NOT be called for tracks 2+")
             self.assertEqual(len(set_calls), 2,
@@ -202,9 +219,12 @@ class TestUserTrim(unittest.TestCase):
             _stop_patches(patches)
 
     def test_set_user_trim_db_immediate_call(self):
-        """Moving the slider mid-queue must SetVolume immediately on the
-        renderer so the user hears the change — not wait for the next
-        track. Computed from baseline + (current_track_gain + trim)."""
+        """Moving the slider mid-queue must SetVolume on the renderer
+        so the user hears the change — not wait for the next track.
+        SetVolume runs in a daemon thread (so the HTTP handler returns
+        instantly even if Naim is slow), but the test waits briefly
+        so the assertion sees the call."""
+        import time as _t
         set_calls = []
 
         def fake_set_volume(rc_url, level):
@@ -214,8 +234,12 @@ class TestUserTrim(unittest.TestCase):
             q = RendererQueue()
             q._rc_url             = "http://r/Render"
             q._renderer_baseline  = 50
-            # No active track: trim still applied as a pure offset
             q.set_user_trim_db(2.0)
+            # set_user_trim_db dispatches to a worker thread; give it
+            # a beat to land. 100 ms is generous for an in-process call.
+            for _ in range(20):
+                if set_calls: break
+                _t.sleep(0.005)
             # baseline 50 + (0 gain + 2 dB trim) * RATIO=2 → 54
             self.assertEqual(set_calls, [54])
             self.assertEqual(q._user_trim_db, 2.0)
@@ -259,15 +283,18 @@ class TestUserTrim(unittest.TestCase):
                     renderer_name="Naim", rc_url="http://r/Render")
 
             # First track played at baseline=50 + gain=0 + trim=0 → 50
+            _wait_for_set_calls(set_calls, 1)
             self.assertEqual(set_calls[-1], 50)
 
             # User trims to +3 dB
             q.set_user_trim_db(+3.0)
+            _wait_for_set_calls(set_calls, 2)
             # Immediate SetVolume: 50 + (0 + 3) * 2 = 56
             self.assertEqual(set_calls[-1], 56)
 
             # Next track also at baseline=50 + (gain=0 + trim=3) * 2 = 56
             q.next_track()
+            _wait_for_set_calls(set_calls, 3)
             self.assertEqual(set_calls[-1], 56)
 
     def test_trim_resets_on_new_queue(self):
@@ -305,9 +332,55 @@ class TestEffectiveLevel(unittest.TestCase):
             self.assertEqual(set_calls[0], 62)
             # Now add trim: 70 + round((-4 + 2) * 2) = 70 - 4 = 66
             q.set_user_trim_db(+2.0)
+            _wait_for_set_calls(set_calls, 2)
             self.assertEqual(set_calls[-1], 66)
         finally:
             _stop_patches(patches)
+
+
+class TestSetVolumeIsAsync(unittest.TestCase):
+    """Regression guard for the playout-freeze bug (2026-05-05): if
+    SetVolume blocks (Naim's SOAP slow because GetTransportInfo poll is
+    in flight), the queue must NOT block — `_send_current` must call
+    `avtransport_send` regardless of how long SetVolume takes."""
+
+    def test_slow_set_volume_does_not_block_avtransport_send(self):
+        import time as _t
+        # SetVolume sleeps for half a second; avtransport_send must
+        # still fire well before that.
+        send_calls = []
+        set_volume_started = []
+
+        def slow_set_volume(rc_url, level):
+            set_volume_started.append(_t.time())
+            _t.sleep(0.5)
+            return True
+
+        def fast_send(av_url, url, title, mime):
+            send_calls.append(_t.time())
+            return True
+
+        with patch("dlna_content.set_volume", side_effect=slow_set_volume), \
+             patch("dlna_content.get_volume", return_value=50), \
+             patch("dlna_content.avtransport_send", side_effect=fast_send), \
+             patch("dlna_library.DB.gain_db_for_url", return_value=0.0):
+
+            q = RendererQueue()
+            t0 = _t.time()
+            q.start("http://r/AV", [{"url": "http://t/0", "title": "T0"}],
+                    renderer_name="Naim", rc_url="http://r/Render")
+            # Wait for avtransport_send to fire — must NOT take 500 ms
+            for _ in range(40):
+                if send_calls: break
+                _t.sleep(0.005)
+            elapsed = (send_calls[0] if send_calls else _t.time()) - t0
+            q._stop_event.set()
+
+        self.assertTrue(send_calls, "avtransport_send must have fired")
+        self.assertLess(elapsed, 0.3, (
+            f"avtransport_send was blocked by slow SetVolume for "
+            f"{elapsed*1000:.0f} ms — the queue's _send_current must "
+            f"NOT wait on SetVolume."))
 
 
 if __name__ == "__main__":

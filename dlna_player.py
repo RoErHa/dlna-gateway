@@ -169,13 +169,24 @@ class RendererQueue:
             avtransport_stop(url)
         self._invalidate_snap()
 
+    def _set_volume_async(self, rc_url: str, level: int):
+        """Fire SetVolume in a daemon thread so the caller never blocks
+        on the renderer's SOAP. Naim's HTTP server is single-threaded
+        and can take >1s to respond when GetTransportInfo polls are in
+        flight; if we waited synchronously, the per-track call would
+        delay SetURI/Play and the user would perceive it as a freeze."""
+        from dlna_content import set_volume
+        threading.Thread(
+            target=lambda: set_volume(rc_url, level),
+            daemon=True, name="set-volume").start()
+
     def set_user_trim_db(self, trim_db: float):
         """User moved the gateway volume slider (relative trim, -5..+5 dB).
         Update the cached trim AND fire SetVolume immediately so the
         change is audible mid-track, not deferred until the next song.
 
-        Idempotent for trim==current value; safe to call repeatedly."""
-        from dlna_content import set_volume
+        SetVolume runs in a daemon thread so the HTTP handler returns
+        instantly even when Naim's SOAP is slow."""
         trim_db = max(-MAX_USER_TRIM_DB, min(MAX_USER_TRIM_DB, float(trim_db)))
         with self._lock:
             self._user_trim_db = trim_db
@@ -200,7 +211,7 @@ class RendererQueue:
                 cur_gain_db = 0.0
         offset = round((cur_gain_db + trim_db) * GAIN_TO_VOLUME_RATIO)
         level  = max(0, min(100, baseline + offset))
-        set_volume(rc_url, level)
+        self._set_volume_async(rc_url, level)
 
     def pause(self):
         """Toggle pause on the renderer."""
@@ -394,7 +405,11 @@ class RendererQueue:
             gain_db = 0.0
         offset = round((gain_db + trim_db) * GAIN_TO_VOLUME_RATIO)
         level  = max(0, min(100, baseline + offset))
-        set_volume(rc_url, level)
+        # Fire-and-forget so a slow Naim SOAP (busy serving the snapshot
+        # poller) doesn't delay SetURI/Play. Worst case: a few hundred
+        # ms of audio at the wrong level — inaudible compared to the
+        # alternative of the track stalling.
+        self._set_volume_async(rc_url, level)
         if abs(offset) >= 1:
             log.debug(f"RendererQueue: loudness {gain_db:+.1f} dB + "
                       f"trim {trim_db:+.1f} dB → SetVolume({level}) "
