@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 """
-tests/test_player_volume.py — RendererQueue per-track loudness-gain integration.
+tests/test_player_volume.py — RendererQueue per-track loudness-gain
++ user-trim integration.
 
-Tests how RendererQueue applies the new per-track SetVolume just before
-each SetURI/Play. The track's gain_db is looked up from the DB at play
-time; this test patches that lookup and the SOAP helpers so we can
-assert the exact SetVolume sequence without a renderer.
+The user's volume slider is a *relative trim* (-5..+5 dB around the
+renderer's current absolute volume), NOT an absolute level. The track's
+effective renderer-volume on each play is:
+
+    baseline + round((loudness_gain_db + user_trim_db) * RATIO)
+    └ clamped 0..100 ──────────────────────────────────────────┘
+
+Where:
+  * baseline = the renderer's volume when the queue first started
+    (read via GetVolume on first play — adopts whatever the user has
+    set on the Naim's own remote).
+  * loudness_gain_db = per-track replay-gain from track_loudness.
+  * user_trim_db    = the slider's offset, default 0.
 
 Run standalone:
     python3 -m unittest tests.test_player_volume -v
@@ -171,29 +181,59 @@ class TestPerTrackGain(unittest.TestCase):
             _stop_patches(patches)
 
 
-class TestSetUserVolume(unittest.TestCase):
+class TestUserTrim(unittest.TestCase):
+    """User-trim semantics: the slider is a relative offset, not an
+    absolute level. Default 0 dB → renderer plays at its natural
+    baseline. ±5 dB clamp prevents accidental ear damage from the user
+    flicking the slider to the rail."""
 
-    def test_set_user_volume_updates_reference_and_calls_renderer(self):
-        """When the user moves the gateway volume slider on a UPnP output,
-        we (1) push that as the new reference for future tracks, and
-        (2) SetVolume the renderer immediately so the user hears the change."""
+    def test_default_trim_is_zero(self):
+        """A fresh queue starts with trim=0, so the first track plays
+        at baseline + loudness_gain — never at the slider's rail."""
+        tracks = [{"url": "http://t/0.flac", "title": "T0"}]
+        q, set_calls, _, patches = _start_queue(
+            tracks, gain_map={"http://t/0.flac": 0.0},
+            get_volume_returns=70)
+        try:
+            self.assertEqual(q._user_trim_db, 0.0)
+            self.assertEqual(set_calls[0], 70,
+                             "trim=0 + gain=0 → baseline only")
+        finally:
+            _stop_patches(patches)
+
+    def test_set_user_trim_db_immediate_call(self):
+        """Moving the slider mid-queue must SetVolume immediately on the
+        renderer so the user hears the change — not wait for the next
+        track. Computed from baseline + (current_track_gain + trim)."""
         set_calls = []
 
         def fake_set_volume(rc_url, level):
-            set_calls.append(level)
-            return True
+            set_calls.append(level); return True
 
         with patch("dlna_content.set_volume", side_effect=fake_set_volume):
             q = RendererQueue()
-            q._rc_url = "http://r/Render"   # simulate post-discovery
-            q.set_user_volume(55)
+            q._rc_url             = "http://r/Render"
+            q._renderer_baseline  = 50
+            # No active track: trim still applied as a pure offset
+            q.set_user_trim_db(2.0)
+            # baseline 50 + (0 gain + 2 dB trim) * RATIO=2 → 54
+            self.assertEqual(set_calls, [54])
+            self.assertEqual(q._user_trim_db, 2.0)
 
-        self.assertEqual(set_calls, [55])
-        self.assertEqual(q._user_volume, 55)
+    def test_trim_clamped_to_plus_minus_five_db(self):
+        """User can flick the slider, but ±5 dB max — protects ears."""
+        with patch("dlna_content.set_volume", return_value=True):
+            q = RendererQueue()
+            q._rc_url            = "http://r/Render"
+            q._renderer_baseline = 50
+            q.set_user_trim_db(+99.0)
+            self.assertEqual(q._user_trim_db, 5.0)
+            q.set_user_trim_db(-99.0)
+            self.assertEqual(q._user_trim_db, -5.0)
 
-    def test_set_user_volume_changes_reference_for_next_track(self):
-        """After set_user_volume(80), the next track's per-track gain is
-        computed from 80, not from whatever was first read via GetVolume."""
+    def test_trim_persists_across_tracks(self):
+        """Moving the trim once should affect every subsequent track —
+        it's session state, not a one-shot."""
         set_calls = []
         get_calls = []
 
@@ -218,18 +258,56 @@ class TestSetUserVolume(unittest.TestCase):
                      {"url": "http://t/1.flac", "title": "T1"}],
                     renderer_name="Naim", rc_url="http://r/Render")
 
-            # Track 1 used reference=50 from GetVolume → SetVolume(50)
+            # First track played at baseline=50 + gain=0 + trim=0 → 50
             self.assertEqual(set_calls[-1], 50)
 
-            # User bumps to 80
-            q.set_user_volume(80)
-            self.assertEqual(set_calls[-1], 80)
+            # User trims to +3 dB
+            q.set_user_trim_db(+3.0)
+            # Immediate SetVolume: 50 + (0 + 3) * 2 = 56
+            self.assertEqual(set_calls[-1], 56)
 
-            # Next track now uses 80 as the reference
+            # Next track also at baseline=50 + (gain=0 + trim=3) * 2 = 56
             q.next_track()
-            self.assertEqual(set_calls[-1], 80)
+            self.assertEqual(set_calls[-1], 56)
 
-            q._stop_event.set()
+    def test_trim_resets_on_new_queue(self):
+        """Each new queue should start with trim = 0 — yesterday's
+        trim isn't carried into today's session."""
+        with patch("dlna_content.set_volume", return_value=True), \
+             patch("dlna_content.get_volume", return_value=50), \
+             patch("dlna_content.avtransport_send", return_value=True), \
+             patch("dlna_library.DB.gain_db_for_url", return_value=0.0):
+
+            q = RendererQueue()
+            q.start("http://r/AV", [{"url": "http://t/0", "title": "T0"}],
+                    renderer_name="Naim", rc_url="http://r/Render")
+            q.set_user_trim_db(+4.0)
+            self.assertEqual(q._user_trim_db, 4.0)
+
+            # New queue → trim resets
+            q.start("http://r/AV", [{"url": "http://t/1", "title": "T1"}],
+                    renderer_name="Naim", rc_url="http://r/Render")
+            self.assertEqual(q._user_trim_db, 0.0)
+
+
+class TestEffectiveLevel(unittest.TestCase):
+    """The interaction between baseline / loudness gain / user trim."""
+
+    def test_loudness_gain_and_trim_compose_additively(self):
+        """A track with gain=-4 dB + user trim of +2 dB →
+        net -2 dB → SetVolume(baseline - 4 in renderer units)."""
+        tracks = [{"url": "http://t/0.flac", "title": "T0"}]
+        q, set_calls, _, patches = _start_queue(
+            tracks, gain_map={"http://t/0.flac": -4.0},
+            get_volume_returns=70)
+        try:
+            # Without trim: 70 + round(-4 * 2) = 70 - 8 = 62
+            self.assertEqual(set_calls[0], 62)
+            # Now add trim: 70 + round((-4 + 2) * 2) = 70 - 4 = 66
+            q.set_user_trim_db(+2.0)
+            self.assertEqual(set_calls[-1], 66)
+        finally:
+            _stop_patches(patches)
 
 
 if __name__ == "__main__":

@@ -1,37 +1,90 @@
-"""Volume slider, shuffle, radio."""
+"""Volume trim slider, ± buttons, shuffle, radio.
+
+The volume slider is a *relative* trim around the renderer's natural
+volume — NOT an absolute level. Default 0 dB → tapping or sliding the
+control can never blast a UPnP renderer (regression bug 2026-05-05).
+Range ±5 dB; each slider step = 0.5 dB.
+"""
+import json
 
 
-def test_volume_initial_value(app):
-    assert app.locator("#vol").input_value() == "80"
-    assert app.locator("#vol-label").text_content().strip() == "80"
+def test_volume_slider_default_is_zero_db(app):
+    """Safety-critical: slider must default to 0 (no change) so a tap
+    on the freshly-loaded PWA can't send Naim to volume 80."""
+    assert app.locator("#vol").input_value() == "0"
+    assert "0.0" in app.locator("#vol-label").text_content()
 
 
-def test_volume_input_updates_label_and_posts_for_upnp(page, stub, gateway):
-    """Tighter assertion: the POST body must address the *specific* renderer
-    (device='upnp:<udn>') and carry both action+value. Loose substring
-    matches let regressions through where the body lacks the device field
-    and the gateway can't route the volume action to the right queue."""
-    import json
+def test_volume_slider_range_is_minus10_to_plus10(app):
+    """Slider units are 0.5-dB steps; 10 units of slider = 5 dB of trim."""
+    assert app.locator("#vol").get_attribute("min") == "-10"
+    assert app.locator("#vol").get_attribute("max") == "10"
+
+
+def test_vol_up_down_buttons_present(app):
+    assert app.locator("#btn-vol-up").count() == 1
+    assert app.locator("#btn-vol-down").count() == 1
+
+
+def test_vol_up_button_steps_half_db(app, gateway):
+    """Each + click = +1 slider unit = +0.5 dB trim."""
+    gateway.clear_requests()
+    app.locator("#btn-vol-up").click()
+    app.wait_for_timeout(150)
+    assert app.locator("#vol").input_value() == "1"
+    assert "+0.5" in app.locator("#vol-label").text_content()
+
+
+def test_vol_down_button_steps_half_db(app, gateway):
+    gateway.clear_requests()
+    app.locator("#btn-vol-down").click()
+    app.wait_for_timeout(150)
+    assert app.locator("#vol").input_value() == "-1"
+    assert "-0.5" in app.locator("#vol-label").text_content()
+
+
+def test_vol_up_clamps_at_plus_5_db(app):
+    """Mash + 20 times → still capped at +5 dB."""
+    for _ in range(20):
+        app.locator("#btn-vol-up").click()
+    app.wait_for_timeout(150)
+    assert app.locator("#vol").input_value() == "10"
+    assert "+5.0" in app.locator("#vol-label").text_content()
+
+
+def test_vol_down_clamps_at_minus_5_db(app):
+    for _ in range(20):
+        app.locator("#btn-vol-down").click()
+    app.wait_for_timeout(150)
+    assert app.locator("#vol").input_value() == "-10"
+    assert "-5.0" in app.locator("#vol-label").text_content()
+
+
+def test_volume_input_posts_trim_db_for_upnp(page, stub, gateway):
+    """The POST body must use action='trim_db' (NOT 'volume' — that
+    semantic was the absolute-volume regression that blasted Naim) and
+    address the specific renderer."""
     gateway.renderers = [{"udn": "uuid:naim", "name": "Naim"}]
     page.goto(stub.base_url + "/")
     page.wait_for_function(
         "document.querySelectorAll('#output-sel option').length >= 2", timeout=4000)
     page.select_option("#output-sel", "upnp:uuid:naim")
     gateway.clear_requests()
+    # Move slider to +4 (= +2.0 dB trim)
     page.evaluate("""
-      const v=document.getElementById('vol');
-      v.value=42;
+      const v = document.getElementById('vol');
+      v.value = 4;
       v.dispatchEvent(new Event('input'));
     """)
-    assert page.locator("#vol-label").text_content().strip() == "42"
+    assert "+2.0" in page.locator("#vol-label").text_content()
     req = gateway.wait_for_request("/api/control", method="POST", timeout=2.0)
     assert req is not None
     body = json.loads(req["body"])
-    assert body.get("action") == "volume", f"unexpected body: {body}"
-    assert body.get("value") == 42
-    assert body.get("device") == "upnp:uuid:naim", (
-        "frontend must send device='upnp:<udn>' so the gateway routes "
-        "the volume action to the right RendererQueue")
+    assert body.get("action") == "trim_db", (
+        "must be 'trim_db' (relative offset), not 'volume' (absolute level "
+        "— that was the slider-blast regression)")
+    assert body.get("value") == 2.0
+    assert body.get("device") == "upnp:uuid:naim"
 
 
 def test_loudness_status_endpoint(app, gateway):
