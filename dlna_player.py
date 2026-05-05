@@ -45,6 +45,12 @@ def _dur_to_sec(dur) -> int:
 # Tune by ear after the first listen on the actual hardware.
 GAIN_TO_VOLUME_RATIO: int = 2
 
+# User-trim slider clamp. The slider is a relative offset around the
+# renderer's natural volume; ±5 dB caps "ear damage from accidental
+# slider flick" while still giving meaningful range. Edit the constant
+# to widen/narrow the slider.
+MAX_USER_TRIM_DB: float = 5.0
+
 
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
@@ -73,11 +79,16 @@ class RendererQueue:
         self._thread: Optional[threading.Thread] = None
         self._started_at: float = 0.0
         self._consecutive_fails: int = 0
-        # Reference volume — the user's "level zero" against which the
-        # per-track gain is offset. None on first play means "haven't
-        # read the renderer's current volume yet"; we adopt whatever
-        # the user has set on the Naim's own remote as the reference.
-        self._user_volume: Optional[int] = None
+        # Renderer baseline — the renderer's natural volume when the
+        # queue first started. Read once via GetVolume on first play,
+        # so we adopt whatever the user has on the Naim's own remote
+        # rather than overriding it. None means "not yet read".
+        self._renderer_baseline: Optional[int] = None
+        # User trim — relative offset from baseline applied to every
+        # track in this queue. The PWA volume slider sets this; default
+        # 0 means "play at renderer's natural volume" (no surprise jolt
+        # on slider tap). Clamped ±MAX_USER_TRIM_DB.
+        self._user_trim_db: float = 0.0
         # Pre-populate with a "stopped" default so concurrent callers
         # during the first fetch have something to return rather than
         # block waiting for the SOAP.
@@ -127,7 +138,11 @@ class RendererQueue:
             self._rnd_name           = renderer_name
             self._consecutive_fails  = 0
             self._started_at         = 0.0
-            self._user_volume        = None  # re-read on first play
+            # Each new queue re-reads the renderer's natural volume and
+            # resets the user trim — yesterday's slider position doesn't
+            # carry into today's session.
+            self._renderer_baseline  = None
+            self._user_trim_db       = 0.0
             self._stop_event.clear()
 
         self._invalidate_snap()
@@ -154,18 +169,38 @@ class RendererQueue:
             avtransport_stop(url)
         self._invalidate_snap()
 
-    def set_user_volume(self, level: int):
-        """User moved the gateway volume slider while OUT is this UPnP
-        renderer. (1) push the new level to the renderer immediately so
-        the change is audible; (2) update _user_volume so the next
-        track's per-track gain math is offset from the new reference."""
+    def set_user_trim_db(self, trim_db: float):
+        """User moved the gateway volume slider (relative trim, -5..+5 dB).
+        Update the cached trim AND fire SetVolume immediately so the
+        change is audible mid-track, not deferred until the next song.
+
+        Idempotent for trim==current value; safe to call repeatedly."""
         from dlna_content import set_volume
-        level = max(0, min(100, int(level)))
+        trim_db = max(-MAX_USER_TRIM_DB, min(MAX_USER_TRIM_DB, float(trim_db)))
         with self._lock:
-            self._user_volume = level
-            rc_url = self._rc_url
-        if rc_url:
-            set_volume(rc_url, level)
+            self._user_trim_db = trim_db
+            rc_url   = self._rc_url
+            baseline = self._renderer_baseline
+            tracks   = list(self._tracks)
+            idx      = self._index
+        if not rc_url:
+            return
+        # If we know the baseline, apply NOW so the user hears the change.
+        # Otherwise the trim is stored and applied on first play.
+        if baseline is None:
+            return
+        # Add the currently-playing track's loudness gain so the trim
+        # composes correctly mid-song.
+        cur_gain_db = 0.0
+        if 0 <= idx < len(tracks):
+            try:
+                from dlna_library import DB
+                cur_gain_db = DB.gain_db_for_url(tracks[idx].get("url", ""))
+            except Exception:
+                cur_gain_db = 0.0
+        offset = round((cur_gain_db + trim_db) * GAIN_TO_VOLUME_RATIO)
+        level  = max(0, min(100, baseline + offset))
+        set_volume(rc_url, level)
 
     def pause(self):
         """Toggle pause on the renderer."""
@@ -326,35 +361,44 @@ class RendererQueue:
 
         On the very first track, GetVolume is called once to adopt the
         renderer's current volume (whatever the user has on the Naim
-        remote) as the reference. Subsequent tracks reuse the cached
-        reference."""
+        remote) as the BASELINE. Subsequent tracks reuse the cached
+        baseline; the per-track effective volume is:
+
+            level = clamp(0, 100, baseline +
+                          round((loudness_gain_db + user_trim_db) * RATIO))
+
+        The user trim defaults to 0 dB so a fresh queue plays at the
+        renderer's natural volume — never at the slider's rail."""
         from dlna_content import set_volume, get_volume
         with self._lock:
-            rc_url = self._rc_url
+            rc_url   = self._rc_url
+            baseline = self._renderer_baseline
+            trim_db  = self._user_trim_db
         if not rc_url:
             return
-        # First-play reference adoption
-        if self._user_volume is None:
+        # First-play baseline adoption
+        if baseline is None:
             cur = get_volume(rc_url)
             if cur is None:
                 log.debug(f"RendererQueue: GetVolume failed on {rc_url} — "
                           f"skipping loudness gain")
                 return
+            baseline = cur
             with self._lock:
-                self._user_volume = cur
+                self._renderer_baseline = cur
         # Per-track gain
         from dlna_library import DB
         try:
             gain_db = DB.gain_db_for_url(t.get("url", ""))
         except Exception:
             gain_db = 0.0
-        offset = round(gain_db * GAIN_TO_VOLUME_RATIO)
-        level  = max(0, min(100, self._user_volume + offset))
+        offset = round((gain_db + trim_db) * GAIN_TO_VOLUME_RATIO)
+        level  = max(0, min(100, baseline + offset))
         set_volume(rc_url, level)
         if abs(offset) >= 1:
-            log.debug(f"RendererQueue: loudness gain {gain_db:+.1f} dB → "
-                      f"SetVolume({level}) (ref={self._user_volume}, "
-                      f"offset={offset:+d})")
+            log.debug(f"RendererQueue: loudness {gain_db:+.1f} dB + "
+                      f"trim {trim_db:+.1f} dB → SetVolume({level}) "
+                      f"(baseline={baseline}, offset={offset:+d})")
 
     def _send_current(self) -> bool:
         """Send SetURI + Play for tracks[_index]. Returns True on success.

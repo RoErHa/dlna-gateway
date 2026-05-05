@@ -111,10 +111,10 @@
       <button class="btn" id="btn-next">⏭</button>
     </div>
     <div class="vol-row">
-      <span>🔈</span>
-      <input type="range" class="vol" id="vol" min="0" max="100" value="80">
-      <span>🔊</span>
-      <span id="vol-label" style="min-width:26px;font-variant-numeric:tabular-nums">80</span>
+      <button class="btn" id="btn-vol-down" title="Quieter (−0.5 dB)" style="font-size:14px;padding:4px 10px">−</button>
+      <input type="range" class="vol" id="vol" min="-10" max="10" step="1" value="0" title="Volume trim (−5 to +5 dB around renderer's current level)">
+      <button class="btn" id="btn-vol-up" title="Louder (+0.5 dB)" style="font-size:14px;padding:4px 10px">+</button>
+      <span id="vol-label" style="min-width:48px;font-variant-numeric:tabular-nums;text-align:center">0.0 dB</span>
       <div class="sep" style="margin:0 8px"></div>
       <button class="btn" id="btn-shuffle" title="Toggle shuffle">🔀</button>
       <button class="btn" id="btn-radio" title="Radio — 100 random tracks from library" style="margin-left:4px">📻</button>

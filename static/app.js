@@ -1173,7 +1173,28 @@ async function startRadio(){
   toast(`📻 Radio — ${tracks.length} random tracks`);
 }
 $("btn-radio").addEventListener("click", startRadio);
-$("vol").addEventListener("input",()=>{const v=parseInt($("vol").value);$("vol-label").textContent=v;control({action:"volume",value:v});});
+
+// ── Volume slider — RELATIVE TRIM (-5..+5 dB), default 0 ─────────
+// Each slider step = 0.5 dB (range -10..+10 in slider units → -5..+5 dB).
+// Default 0 means "no change" — tapping the slider can't blast the room.
+function _trimDbFromSlider(){ return parseInt($("vol").value, 10) / 2; }
+function _formatTrim(db){ return (db >= 0 ? "+" : "") + db.toFixed(1) + " dB"; }
+function _sendTrim(){
+  const db = _trimDbFromSlider();
+  $("vol-label").textContent = _formatTrim(db);
+  control({action: "trim_db", value: db});
+}
+$("vol").addEventListener("input", _sendTrim);
+$("btn-vol-up").addEventListener("click", () => {
+  const v = $("vol");
+  v.value = Math.min(parseInt(v.max, 10), parseInt(v.value, 10) + 1);
+  _sendTrim();
+});
+$("btn-vol-down").addEventListener("click", () => {
+  const v = $("vol");
+  v.value = Math.max(parseInt(v.min, 10), parseInt(v.value, 10) - 1);
+  _sendTrim();
+});
 async function control(cmd){
   if(activeDevice==="browser"){
     // Handle browser audio locally — no server round-trip needed
@@ -1200,8 +1221,15 @@ async function control(cmd){
         browserAudio.currentTime=Math.max(0,browserAudio.currentTime+(cmd.value||0));break;
       case "seek_abs":
         browserAudio.currentTime=Math.max(0,cmd.value||0);break;
-      case "volume":
-        browserAudio.volume=Math.max(0,Math.min(1,(cmd.value||80)/100));break;
+      case "trim_db": {
+        // Browser audio: linear gain = 10^(trim_db / 20), clamped to
+        // [0, 1] (HTML5 audio.volume can't exceed 1, so positive trim
+        // just means "no attenuation"). Phone master volume is the
+        // user's real ceiling.
+        const db = Number(cmd.value) || 0;
+        browserAudio.volume = Math.max(0, Math.min(1, Math.pow(10, db / 20)));
+        break;
+      }
     }
     return;
   }

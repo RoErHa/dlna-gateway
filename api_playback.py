@@ -293,17 +293,18 @@ def control(h, body):
                 queue.next_track()
             elif action == "prev":
                 queue.prev_track()
-            elif action == "volume":
+            elif action == "trim_db":
                 # User moved the gateway volume slider while OUT was UPnP.
-                # Per-track loudness math is offset from this new reference;
-                # the renderer also gets SetVolume immediately so the
-                # change is audible without waiting for the next track.
+                # The slider is a relative trim around the renderer's
+                # natural volume (NOT an absolute SetVolume) — default 0
+                # so a tap can't accidentally blast the room. Clamped
+                # ±5 dB inside RendererQueue.set_user_trim_db.
                 try:
-                    level = int(cmd.get("value", 0))
+                    trim = float(cmd.get("value", 0))
                 except (TypeError, ValueError):
-                    h._json(400, {"error": "value must be int 0-100"})
+                    h._json(400, {"error": "value must be a float (dB)"})
                     return
-                queue.set_user_volume(level)
+                queue.set_user_trim_db(trim)
             else:
                 log.debug(f"Renderer control: {action!r} not implemented")
             h._json(200, {"ok": True})
