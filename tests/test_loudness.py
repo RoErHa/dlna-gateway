@@ -236,6 +236,34 @@ class TestLoudnessScanner(unittest.TestCase):
         self.assertEqual(n, 0,
                          "no rows should be written when ffmpeg is missing")
 
+    def test_ffmpeg_disappears_midrun_does_not_poison_cache(self):
+        """Regression guard (2026-05-05): if ffmpeg vanishes mid-scan
+        (Homebrew updating /opt/homebrew/bin/ffmpeg leaves the symlink
+        target briefly missing), the scan must bail WITHOUT caching the
+        in-flight track as a sticky negative. Otherwise a few seconds
+        of brew activity costs a permanent partial-poisoned cache."""
+        # Two tracks succeed; the third raises FileNotFoundError as if
+        # ffmpeg disappeared partway.
+        call_count = {"n": 0}
+        def fake_analyze(audio_src):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                return -18.0
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'ffmpeg'")
+
+        with patch.object(LoudnessScanner, "_analyze", side_effect=fake_analyze):
+            self.scanner.run_once()
+
+        with self.db._pool.read() as conn:
+            ok   = conn.execute("SELECT COUNT(*) AS n FROM track_loudness "
+                                "WHERE lufs IS NOT NULL").fetchone()["n"]
+            fail = conn.execute("SELECT COUNT(*) AS n FROM track_loudness "
+                                "WHERE lufs IS NULL").fetchone()["n"]
+        self.assertEqual(ok, 2, "the two pre-failure tracks should be cached")
+        self.assertEqual(fail, 0,
+                         "ffmpeg-vanish must NOT cache anything as failed — "
+                         "next trigger will re-try the remaining tracks")
+
     def test_start_initial_scan_fires_after_delay(self):
         with patch.object(LoudnessScanner, "_analyze", return_value=-18.0):
             self.scanner.start_initial_scan(delay=0.05)
