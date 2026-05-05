@@ -39,6 +39,13 @@ def _dur_to_sec(dur) -> int:
         return 0
 
 
+# Per-track loudness gain → renderer-volume-unit conversion.
+# A value of 2 means "one Naim volume unit ≈ 0.5 dB". Approximation —
+# the renderer's volume curve is logarithmic and renderer-specific.
+# Tune by ear after the first listen on the actual hardware.
+GAIN_TO_VOLUME_RATIO: int = 2
+
+
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
 class RendererQueue:
@@ -60,11 +67,17 @@ class RendererQueue:
         self._tracks: list  = []
         self._index:  int   = 0
         self._av_url: str   = ""
+        self._rc_url: str   = ""   # RenderingControl SOAP endpoint (volume)
         self._rnd_name: str = ""
         self._stop_event    = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._started_at: float = 0.0
         self._consecutive_fails: int = 0
+        # Reference volume — the user's "level zero" against which the
+        # per-track gain is offset. None on first play means "haven't
+        # read the renderer's current volume yet"; we adopt whatever
+        # the user has set on the Naim's own remote as the reference.
+        self._user_volume: Optional[int] = None
         # Pre-populate with a "stopped" default so concurrent callers
         # during the first fetch have something to return rather than
         # block waiting for the SOAP.
@@ -80,12 +93,17 @@ class RendererQueue:
 
     # ── Public API ────────────────────────────────────────────────
 
-    def start(self, av_url: str, tracks: list, renderer_name: str = ""):
+    def start(self, av_url: str, tracks: list, renderer_name: str = "",
+              rc_url: str = ""):
         """
         Start playing a list of tracks on the renderer.
         Cancels any currently active queue, and explicitly stops the renderer
         before sending the new URI+Play so the renderer isn't mid-transition
         when the new Play lands (which returns HTTP 500 on Naim/Rygel).
+
+        rc_url is the RenderingControl SOAP endpoint (used for loudness
+        normalization SetVolume calls). Optional — when empty, no
+        per-track volume adjustment happens.
         """
         from dlna_content import avtransport_stop
         self._log_track_end("queue_replaced")
@@ -103,11 +121,13 @@ class RendererQueue:
 
         with self._lock:
             self._av_url             = av_url
+            self._rc_url             = rc_url
             self._tracks             = list(tracks)
             self._index              = 0
             self._rnd_name           = renderer_name
             self._consecutive_fails  = 0
             self._started_at         = 0.0
+            self._user_volume        = None  # re-read on first play
             self._stop_event.clear()
 
         self._invalidate_snap()
@@ -133,6 +153,19 @@ class RendererQueue:
         if url:
             avtransport_stop(url)
         self._invalidate_snap()
+
+    def set_user_volume(self, level: int):
+        """User moved the gateway volume slider while OUT is this UPnP
+        renderer. (1) push the new level to the renderer immediately so
+        the change is audible; (2) update _user_volume so the next
+        track's per-track gain math is offset from the new reference."""
+        from dlna_content import set_volume
+        level = max(0, min(100, int(level)))
+        with self._lock:
+            self._user_volume = level
+            rc_url = self._rc_url
+        if rc_url:
+            set_volume(rc_url, level)
 
     def pause(self):
         """Toggle pause on the renderer."""
@@ -287,6 +320,42 @@ class RendererQueue:
         with self._lock:
             self._started_at = 0.0
 
+    def _apply_loudness_gain(self, t: dict):
+        """Compute and send per-track SetVolume just before SetURI/Play.
+        No-op if rc_url is empty (renderer has no RenderingControl URL).
+
+        On the very first track, GetVolume is called once to adopt the
+        renderer's current volume (whatever the user has on the Naim
+        remote) as the reference. Subsequent tracks reuse the cached
+        reference."""
+        from dlna_content import set_volume, get_volume
+        with self._lock:
+            rc_url = self._rc_url
+        if not rc_url:
+            return
+        # First-play reference adoption
+        if self._user_volume is None:
+            cur = get_volume(rc_url)
+            if cur is None:
+                log.debug(f"RendererQueue: GetVolume failed on {rc_url} — "
+                          f"skipping loudness gain")
+                return
+            with self._lock:
+                self._user_volume = cur
+        # Per-track gain
+        from dlna_library import DB
+        try:
+            gain_db = DB.gain_db_for_url(t.get("url", ""))
+        except Exception:
+            gain_db = 0.0
+        offset = round(gain_db * GAIN_TO_VOLUME_RATIO)
+        level  = max(0, min(100, self._user_volume + offset))
+        set_volume(rc_url, level)
+        if abs(offset) >= 1:
+            log.debug(f"RendererQueue: loudness gain {gain_db:+.1f} dB → "
+                      f"SetVolume({level}) (ref={self._user_volume}, "
+                      f"offset={offset:+d})")
+
     def _send_current(self) -> bool:
         """Send SetURI + Play for tracks[_index]. Returns True on success.
         On failure, logs the skip, auto-advances, and aborts the queue
@@ -313,6 +382,11 @@ class RendererQueue:
 
         with self._lock:
             self._started_at = time.monotonic()
+
+        # Apply per-track loudness normalization BEFORE the Play —
+        # changing volume after the audio is already streaming would be
+        # audible as a step.
+        self._apply_loudness_gain(t)
 
         ok = avtransport_send(av_url, t.get("url",""),
                               t.get("title",""), t.get("mime",""))

@@ -7,11 +7,17 @@ def test_volume_initial_value(app):
 
 
 def test_volume_input_updates_label_and_posts_for_upnp(page, stub, gateway):
+    """Tighter assertion: the POST body must address the *specific* renderer
+    (device='upnp:<udn>') and carry both action+value. Loose substring
+    matches let regressions through where the body lacks the device field
+    and the gateway can't route the volume action to the right queue."""
+    import json
     gateway.renderers = [{"udn": "uuid:naim", "name": "Naim"}]
     page.goto(stub.base_url + "/")
     page.wait_for_function(
         "document.querySelectorAll('#output-sel option').length >= 2", timeout=4000)
     page.select_option("#output-sel", "upnp:uuid:naim")
+    gateway.clear_requests()
     page.evaluate("""
       const v=document.getElementById('vol');
       v.value=42;
@@ -19,7 +25,28 @@ def test_volume_input_updates_label_and_posts_for_upnp(page, stub, gateway):
     """)
     assert page.locator("#vol-label").text_content().strip() == "42"
     req = gateway.wait_for_request("/api/control", method="POST", timeout=2.0)
-    assert req is not None and "volume" in req["body"] and "42" in req["body"]
+    assert req is not None
+    body = json.loads(req["body"])
+    assert body.get("action") == "volume", f"unexpected body: {body}"
+    assert body.get("value") == 42
+    assert body.get("device") == "upnp:uuid:naim", (
+        "frontend must send device='upnp:<udn>' so the gateway routes "
+        "the volume action to the right RendererQueue")
+
+
+def test_loudness_status_endpoint(app, gateway):
+    """The /api/loudness/status endpoint is the contract the PWA reads to
+    show scanner progress. Stub gateway returns a sensible default; the
+    test just asserts the endpoint exists and shape is right."""
+    import json
+    txt = app.evaluate("fetch('/api/loudness/status').then(r => r.text())")
+    data = json.loads(txt)
+    for key in ("scanned", "total", "in_progress", "target_lufs"):
+        assert key in data, f"loudness status missing {key}: {data}"
+    assert isinstance(data["in_progress"], bool)
+    assert isinstance(data["scanned"], int)
+    assert isinstance(data["total"], int)
+    assert isinstance(data["target_lufs"], (int, float))
 
 
 def test_shuffle_toggle_persists(page, stub, gateway):
