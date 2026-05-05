@@ -79,7 +79,7 @@ def loudness_status(h, params):
             "SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
         bare = conn.execute(
             "SELECT COUNT(*) AS n FROM tracks t "
-            "WHERE t.file_path != '' "
+            "WHERE t.url != '' "
             "  AND NOT EXISTS (SELECT 1 FROM track_loudness l "
             "                   WHERE l.url = t.url)").fetchone()["n"]
     in_progress = bool(LOUDNESS_SCANNER._thread
