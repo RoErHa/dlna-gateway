@@ -79,20 +79,16 @@ class TestLoudnessScanner(unittest.TestCase):
         self.db = LibraryDB(db_file=self._path)
         self.udn = "uuid:test"
         self.scanner = LoudnessScanner(self.db)
-        # 5 tracks with file_path set; 2 without (HTTP-only servers)
+        # 7 tracks — every track has a URL (file_path is irrelevant since
+        # AssetUPnP-style servers never populate it; ffmpeg accepts the
+        # HTTP URL directly).
         with self.db._pool.write() as conn:
-            for i in range(5):
+            for i in range(7):
                 conn.execute(
-                    "INSERT INTO tracks (udn, obj_id, url, title, artist, album, file_path) "
-                    "VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                    "VALUES (?,?,?,?,?,?)",
                     (self.udn, f"obj{i}", f"http://t/{i}", f"T{i}", "A",
-                     f"Album", f"/music/{i}.flac"))
-            for i in range(5, 7):
-                conn.execute(
-                    "INSERT INTO tracks (udn, obj_id, url, title, artist, album, file_path) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (self.udn, f"obj{i}", f"http://t/{i}", f"T{i}", "A",
-                     "Album", ""))
+                     "Album"))
 
     def tearDown(self):
         try:
@@ -100,13 +96,13 @@ class TestLoudnessScanner(unittest.TestCase):
         finally:
             os.unlink(self._path)
 
-    def test_bare_tracks_excludes_no_file_path(self):
+    def test_bare_tracks_returns_all_unscanned(self):
         bare = self.scanner.bare_tracks()
-        urls = [b[0] for b in bare]
-        self.assertEqual(len(bare), 5)
-        for i in range(5, 7):
-            self.assertNotIn(f"http://t/{i}", urls,
-                             "tracks with empty file_path should be excluded")
+        self.assertEqual(len(bare), 7)
+        # Each entry is a (url,) tuple
+        for b in bare:
+            self.assertEqual(len(b), 1)
+            self.assertTrue(b[0].startswith("http://t/"))
 
     def test_bare_tracks_excludes_already_scanned(self):
         # Mark two as already analysed
@@ -120,7 +116,7 @@ class TestLoudnessScanner(unittest.TestCase):
         urls = [b[0] for b in bare]
         self.assertNotIn("http://t/0", urls)
         self.assertNotIn("http://t/1", urls)
-        self.assertEqual(len(bare), 3)
+        self.assertEqual(len(bare), 5)
 
     def test_negative_cache_blocks_rescan(self):
         # Failed scans must persist a row (with NULL lufs) so we don't retry
@@ -143,17 +139,19 @@ class TestLoudnessScanner(unittest.TestCase):
         self.assertEqual(n, 1, "track_loudness rows must survive clear(udn)")
 
     def test_run_once_writes_lufs_and_gain(self):
-        # Mock the ffmpeg subprocess to return a known LUFS for each file.
-        per_file = {
-            "/music/0.flac": -10.0,   # loud
-            "/music/1.flac": -18.0,   # at target
-            "/music/2.flac": -25.0,   # quiet
-            "/music/3.flac": -14.0,   # mildly loud
-            "/music/4.flac": -22.0,   # mildly quiet
+        # Mock _analyze to return a known LUFS for each track URL.
+        per_url = {
+            "http://t/0": -10.0,   # loud
+            "http://t/1": -18.0,   # at target
+            "http://t/2": -25.0,   # quiet
+            "http://t/3": -14.0,   # mildly loud
+            "http://t/4": -22.0,   # mildly quiet
+            "http://t/5": -16.0,   # near target
+            "http://t/6": -20.0,   # slightly quiet
         }
 
-        def fake_analyze(path):
-            return per_file[path]
+        def fake_analyze(audio_src):
+            return per_url[audio_src]
 
         with patch.object(LoudnessScanner, "_analyze", side_effect=fake_analyze):
             self.scanner.run_once()
@@ -161,7 +159,7 @@ class TestLoudnessScanner(unittest.TestCase):
         with self.db._pool.read() as conn:
             rows = {r["url"]: r for r in
                     conn.execute("SELECT * FROM track_loudness").fetchall()}
-        self.assertEqual(len(rows), 5)
+        self.assertEqual(len(rows), 7)
         # gain_db == TARGET_LUFS - lufs
         self.assertAlmostEqual(rows["http://t/0"]["gain_db"],
                                TARGET_LUFS - (-10.0), places=2)
@@ -172,10 +170,10 @@ class TestLoudnessScanner(unittest.TestCase):
         self.assertEqual(rows["http://t/3"]["lufs"], -14.0)
 
     def test_run_once_records_failure_as_negative_cache(self):
-        # _analyze returns None for a broken file → row written with lufs=NULL,
+        # _analyze returns None for a broken track → row written with lufs=NULL,
         # gain_db=0.0 so we don't retry forever.
-        def fake_analyze(path):
-            if path == "/music/0.flac":
+        def fake_analyze(audio_src):
+            if audio_src == "http://t/0":
                 return None
             return -18.0  # rest at-target
 
@@ -221,6 +219,23 @@ class TestLoudnessScanner(unittest.TestCase):
             block[0] = False  # let it finish
             self.scanner.stop()
 
+    def test_ffmpeg_missing_does_not_poison_cache(self):
+        """Regression guard for the launchd PATH bug (2026-05-05): when
+        ffmpeg can't be found, run_once must bail BEFORE iterating —
+        otherwise every track gets sticky-cached as failed and the scan
+        permanently can't recover, even after ffmpeg is installed."""
+        import dlna_loudness
+        # Simulate ffmpeg not being on PATH
+        with patch.object(dlna_loudness, "_FFMPEG_PATH", None):
+            stats = self.scanner.run_once()
+        self.assertEqual(stats["total"], 0,
+                         "scanner must not iterate when ffmpeg is missing")
+        with self.db._pool.read() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
+        self.assertEqual(n, 0,
+                         "no rows should be written when ffmpeg is missing")
+
     def test_start_initial_scan_fires_after_delay(self):
         with patch.object(LoudnessScanner, "_analyze", return_value=-18.0):
             self.scanner.start_initial_scan(delay=0.05)
@@ -228,7 +243,7 @@ class TestLoudnessScanner(unittest.TestCase):
             self.scanner.stop()
         with self.db._pool.read() as conn:
             n = conn.execute("SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
-        self.assertEqual(n, 5)
+        self.assertEqual(n, 7)
 
 
 # ── gain_db_for_url query helper ─────────────────────────────────

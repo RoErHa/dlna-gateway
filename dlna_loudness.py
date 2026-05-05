@@ -22,12 +22,32 @@ Lifecycle hooks (mirror `AlbumArtFetcher`):
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
 from typing import Optional
 
 log = logging.getLogger("dlna.library")
+
+
+# launchd-spawned processes have a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`)
+# that excludes Homebrew. shutil.which honours that PATH; check the common
+# install locations explicitly as a fallback so the gateway works under
+# launchctl without forcing the user to edit the LaunchAgent .plist.
+def _find_ffmpeg() -> Optional[str]:
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for cand in ("/opt/homebrew/bin/ffmpeg",   # Apple-Silicon Homebrew
+                 "/usr/local/bin/ffmpeg",       # Intel-Mac Homebrew
+                 "/usr/bin/ffmpeg"):            # system / Linux
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+_FFMPEG_PATH: Optional[str] = _find_ffmpeg()
 
 
 # Reference loudness target. -18 LUFS = audiophile / max-headroom: quiet
@@ -83,26 +103,40 @@ class LoudnessScanner:
     # ── Public API ─────────────────────────────────────────────────
 
     def bare_tracks(self) -> list:
-        """Tracks with a known local file_path that haven't been analysed
-        yet. The negative-cache rows (`lufs IS NULL`) count as "scanned"
-        — they're already present in `track_loudness` so they don't
-        appear here."""
+        """Tracks that haven't been analysed yet. The negative-cache rows
+        (`lufs IS NULL`) count as "scanned" — they're already present in
+        `track_loudness` so they don't appear here.
+
+        ffmpeg accepts both local file paths and HTTP URLs as input;
+        AssetUPnP exposes everything over HTTP (file_path stays empty
+        for HTTP-only servers), so we feed `t.url` straight to ffmpeg.
+        For servers that DO expose `file://` URIs (e.g. MinimServer),
+        the URL still works — http or file: makes no difference here."""
         with self._db._pool.read() as conn:
             rows = conn.execute("""
-                SELECT t.url, t.file_path
+                SELECT t.url
                   FROM tracks t
-                 WHERE t.file_path != ''
+                 WHERE t.url != ''
                    AND NOT EXISTS (
                        SELECT 1 FROM track_loudness l WHERE l.url = t.url)
                  GROUP BY t.url
                  ORDER BY t.id
             """).fetchall()
-        return [(r["url"], r["file_path"]) for r in rows]
+        return [(r["url"],) for r in rows]
 
     def run_once(self) -> dict:
         """Process bare tracks until none remain. Re-queries between
         batches so triggers arriving mid-run are absorbed."""
         stats = {"total": 0, "ok": 0, "failed": 0}
+        # Bail before iterating if ffmpeg isn't installed — otherwise every
+        # track gets falsely sticky-cached as "failed" and the scan never
+        # recovers when ffmpeg is later installed.
+        if not _FFMPEG_PATH:
+            log.warning("LoudnessScanner: ffmpeg not found in PATH or "
+                        "common install locations — skipping scan. "
+                        "Install ffmpeg (e.g. `brew install ffmpeg`) and "
+                        "restart the gateway.")
+            return stats
         # Be a polite background citizen — don't starve the renderer
         # heartbeat or the indexer of CPU.
         try:
@@ -117,20 +151,20 @@ class LoudnessScanner:
             stats["total"] += n
             log.info(f"LoudnessScanner: analysing {n} track(s) "
                      f"(target={TARGET_LUFS} LUFS)")
-            for url, file_path in tracks[:_BATCH_SIZE]:
+            for (url,) in tracks[:_BATCH_SIZE]:
                 if self._stop.is_set():
                     log.info("LoudnessScanner: stop requested — exiting early")
                     break
-                lufs = self._analyze(file_path)
+                lufs = self._analyze(url)
                 self._persist(url, lufs)
                 if lufs is None:
                     stats["failed"] += 1
-                    log.info(f"LoudnessScanner ✗ {file_path} — cached "
+                    log.info(f"LoudnessScanner ✗ {url[:80]} — cached "
                              f"as negative (won't retry)")
                 else:
                     stats["ok"] += 1
                     gain = self._compute_gain(lufs)
-                    log.debug(f"LoudnessScanner ✓ {file_path} → "
+                    log.debug(f"LoudnessScanner ✓ {url[:80]} → "
                               f"{lufs:+.1f} LUFS, gain {gain:+.1f} dB")
         if stats["total"]:
             log.info(f"LoudnessScanner: done — ok={stats['ok']}, "
@@ -174,19 +208,20 @@ class LoudnessScanner:
 
     # ── Internal helpers ──────────────────────────────────────────
 
-    def _analyze(self, file_path: str) -> Optional[float]:
-        """Shell out to ffmpeg, return the parsed integrated LUFS or None."""
-        if not file_path:
+    def _analyze(self, audio_src: str) -> Optional[float]:
+        """Shell out to ffmpeg with the source (HTTP URL or local path),
+        return the parsed integrated LUFS or None."""
+        if not audio_src or not _FFMPEG_PATH:
             return None
         try:
             proc = subprocess.run(
-                ["ffmpeg", "-nostats", "-hide_banner", "-i", file_path,
+                [_FFMPEG_PATH, "-nostats", "-hide_banner", "-i", audio_src,
                  "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
                 capture_output=True, text=True,
                 timeout=_FFMPEG_TIMEOUT_SEC,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning(f"LoudnessScanner: ffmpeg failed for {file_path}: {e}")
+            log.warning(f"LoudnessScanner: ffmpeg failed for {audio_src[:80]}: {e}")
             return None
         # ebur128 writes the summary to stderr regardless of exit code.
         return _parse_ebur128(proc.stderr or "")
