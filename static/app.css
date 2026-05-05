@@ -75,8 +75,8 @@ header{display:flex;align-items:center;gap:12px;padding:0 16px;height:52px;backg
 .btn:hover{color:var(--ink);background:var(--raised);border-color:var(--amber-d)}
 .btn.primary{background:var(--amber);border-color:var(--amber);color:#000;font-weight:600;padding:8px 20px;font-size:14px}
 .btn.primary:hover{background:#e8b84e}
-.vol-row{display:flex;align-items:center;gap:8px;color:var(--ink-dim);font-size:11px}
-input[type=range].vol{width:100px;-webkit-appearance:none;height:3px;background:var(--border);border-radius:2px;outline:none;cursor:pointer}
+.vol-row{display:flex;align-items:center;gap:6px;color:var(--ink-dim);font-size:11px;flex-wrap:wrap;justify-content:center}
+input[type=range].vol{width:64px;-webkit-appearance:none;height:3px;background:var(--border);border-radius:2px;outline:none;cursor:pointer}
 input[type=range].vol::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--ink-dim);cursor:pointer}
 input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 /* playlists panel */

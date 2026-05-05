@@ -1177,23 +1177,44 @@ $("btn-radio").addEventListener("click", startRadio);
 // ── Volume slider — RELATIVE TRIM (-5..+5 dB), default 0 ─────────
 // Each slider step = 0.5 dB (range -10..+10 in slider units → -5..+5 dB).
 // Default 0 means "no change" — tapping the slider can't blast the room.
+//
+// Slider drags fire `input` ~30+ times/sec, which used to flood the
+// renderer's single-threaded SOAP server with SetVolume calls and
+// produce audible stair-stepping. We update the on-screen label
+// instantly (no perceived lag) but coalesce the actual control() call
+// to the LAST value after the user pauses for ≥120 ms — so a drag
+// produces one SetVolume, not thirty. Buttons fire immediately because
+// each click is one event.
+const _TRIM_DEBOUNCE_MS = 120;
+let _trimDebounceTimer = null;
 function _trimDbFromSlider(){ return parseInt($("vol").value, 10) / 2; }
 function _formatTrim(db){ return (db >= 0 ? "+" : "") + db.toFixed(1) + " dB"; }
-function _sendTrim(){
-  const db = _trimDbFromSlider();
-  $("vol-label").textContent = _formatTrim(db);
-  control({action: "trim_db", value: db});
+function _updateTrimLabel(){
+  $("vol-label").textContent = _formatTrim(_trimDbFromSlider());
 }
-$("vol").addEventListener("input", _sendTrim);
+function _sendTrimNow(){
+  control({action: "trim_db", value: _trimDbFromSlider()});
+}
+function _sendTrimDebounced(){
+  _updateTrimLabel();
+  clearTimeout(_trimDebounceTimer);
+  _trimDebounceTimer = setTimeout(_sendTrimNow, _TRIM_DEBOUNCE_MS);
+}
+$("vol").addEventListener("input", _sendTrimDebounced);
+// Pointerup / change fires when the user releases the slider — flush
+// any pending debounced call so the final value lands without delay.
+$("vol").addEventListener("change", () => {
+  clearTimeout(_trimDebounceTimer); _sendTrimNow();
+});
 $("btn-vol-up").addEventListener("click", () => {
   const v = $("vol");
   v.value = Math.min(parseInt(v.max, 10), parseInt(v.value, 10) + 1);
-  _sendTrim();
+  _updateTrimLabel(); _sendTrimNow();
 });
 $("btn-vol-down").addEventListener("click", () => {
   const v = $("vol");
   v.value = Math.max(parseInt(v.min, 10), parseInt(v.value, 10) - 1);
-  _sendTrim();
+  _updateTrimLabel(); _sendTrimNow();
 });
 async function control(cmd){
   if(activeDevice==="browser"){

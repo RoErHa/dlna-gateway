@@ -60,6 +60,55 @@ def test_vol_down_clamps_at_minus_5_db(app):
     assert "-5.0" in app.locator("#vol-label").text_content()
 
 
+def test_slider_drag_coalesces_to_one_post(page, stub, gateway):
+    """Regression guard for the slider-flood bug (2026-05-05): dragging
+    the slider used to fire 30+ POST /api/control per second, choking
+    Naim's single-threaded SOAP server and producing audible
+    stair-stepping. Now coalesced via debounce: 10 input events in
+    rapid succession → AT MOST 2 POSTs (one debounced + one optional
+    'change' flush)."""
+    gateway.renderers = [{"udn": "uuid:naim", "name": "Naim"}]
+    page.goto(stub.base_url + "/")
+    page.wait_for_function(
+        "document.querySelectorAll('#output-sel option').length >= 2", timeout=4000)
+    page.select_option("#output-sel", "upnp:uuid:naim")
+    gateway.clear_requests()
+    # Simulate a 10-step rapid drag (no inter-event sleep — same as
+    # what the browser dispatches at high pointer-event rates).
+    page.evaluate("""
+      const v = document.getElementById('vol');
+      for (let i = 0; i < 10; i++) {
+        v.value = i;
+        v.dispatchEvent(new Event('input'));
+      }
+    """)
+    # Wait long enough for the debounce window to elapse + flush
+    page.wait_for_timeout(300)
+    posts = gateway.captured(method="POST", path_contains="/api/control")
+    assert len(posts) <= 2, (
+        f"slider drag must coalesce to at most 2 POSTs; got {len(posts)} "
+        f"({[p['body'] for p in posts]})")
+    assert len(posts) >= 1, "must still send at least the final value"
+
+
+def test_buttons_post_immediately(page, stub, gateway):
+    """The ± buttons are NOT debounced — each click is a deliberate
+    user action and must reach the renderer at once."""
+    import time as _t
+    gateway.renderers = [{"udn": "uuid:naim", "name": "Naim"}]
+    page.goto(stub.base_url + "/")
+    page.wait_for_function(
+        "document.querySelectorAll('#output-sel option').length >= 2", timeout=4000)
+    page.select_option("#output-sel", "upnp:uuid:naim")
+    gateway.clear_requests()
+    t0 = _t.time()
+    page.locator("#btn-vol-up").click()
+    req = gateway.wait_for_request("/api/control", method="POST", timeout=0.5)
+    elapsed = (_t.time() - t0) * 1000
+    assert req is not None, "+ button must POST immediately, no debounce"
+    assert elapsed < 200, f"button POST took {elapsed:.0f} ms — should be near-instant"
+
+
 def test_volume_input_posts_trim_db_for_upnp(page, stub, gateway):
     """The POST body must use action='trim_db' (NOT 'volume' — that
     semantic was the absolute-volume regression that blasted Naim) and
