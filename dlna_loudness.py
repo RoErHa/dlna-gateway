@@ -155,7 +155,16 @@ class LoudnessScanner:
                 if self._stop.is_set():
                     log.info("LoudnessScanner: stop requested — exiting early")
                     break
-                lufs = self._analyze(url)
+                try:
+                    lufs = self._analyze(url)
+                except FileNotFoundError as e:
+                    # ffmpeg binary disappeared mid-scan (Homebrew update?).
+                    # Don't poison the cache — bail and let the next trigger
+                    # re-resolve the path.
+                    log.warning(f"LoudnessScanner: ffmpeg binary missing "
+                                f"({e}) — aborting scan without caching. "
+                                f"Will retry on next trigger / restart.")
+                    return stats
                 self._persist(url, lufs)
                 if lufs is None:
                     stats["failed"] += 1
@@ -210,7 +219,14 @@ class LoudnessScanner:
 
     def _analyze(self, audio_src: str) -> Optional[float]:
         """Shell out to ffmpeg with the source (HTTP URL or local path),
-        return the parsed integrated LUFS or None."""
+        return the parsed integrated LUFS or None on per-track failure
+        (broken file, ffmpeg-can't-decode-this-format, network slow).
+
+        **Raises FileNotFoundError** if the ffmpeg binary itself can't
+        be invoked. That's an environmental problem (e.g. Homebrew was
+        updating /opt/homebrew/bin/ffmpeg mid-scan, leaving the symlink
+        target briefly missing); the scan should bail without caching
+        the track as a sticky negative — the next trigger will re-try."""
         if not audio_src or not _FFMPEG_PATH:
             return None
         try:
@@ -220,8 +236,11 @@ class LoudnessScanner:
                 capture_output=True, text=True,
                 timeout=_FFMPEG_TIMEOUT_SEC,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning(f"LoudnessScanner: ffmpeg failed for {audio_src[:80]}: {e}")
+        except FileNotFoundError:
+            # Propagate up so run_once() bails. Don't poison the cache.
+            raise
+        except subprocess.TimeoutExpired as e:
+            log.warning(f"LoudnessScanner: ffmpeg timed out for {audio_src[:80]}: {e}")
             return None
         # ebur128 writes the summary to stderr regardless of exit code.
         return _parse_ebur128(proc.stderr or "")
