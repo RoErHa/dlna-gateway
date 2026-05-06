@@ -143,12 +143,12 @@ def test_loudness_status_endpoint(app, gateway):
     import json
     txt = app.evaluate("fetch('/api/loudness/status').then(r => r.text())")
     data = json.loads(txt)
-    for key in ("scanned", "total", "in_progress", "target_lufs"):
+    for key in ("scanned", "total", "in_progress", "target_peak_dbtp"):
         assert key in data, f"loudness status missing {key}: {data}"
     assert isinstance(data["in_progress"], bool)
     assert isinstance(data["scanned"], int)
     assert isinstance(data["total"], int)
-    assert isinstance(data["target_lufs"], (int, float))
+    assert isinstance(data["target_peak_dbtp"], (int, float))
 
 
 def test_shuffle_toggle_persists(page, stub, gateway):

@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
 """
-dlna_loudness.py — per-track integrated-loudness scanner.
+dlna_loudness.py — per-track true-peak scanner (peak normalisation).
 
-Walks tracks with a known local file_path and computes the integrated
-loudness via `ffmpeg -af ebur128`. Stores the measured LUFS value plus a
-per-track `gain_db = TARGET_LUFS - measured` (clamped ±20 dB) into the
-`track_loudness` cache.
+Walks tracks and measures their true peak (dBTP) via
+`ffmpeg -af ebur128=peak=true`. Stores the measured peak plus a per-track
+`gain_db = TARGET_PEAK_DBTP - peak_db` (clamped ±2 dB) into the
+`track_loudness` cache. The integrated LUFS is captured from the same
+ffmpeg run as informational metadata but does NOT drive the gain.
+
+Why peak rather than LUFS: peak normalisation produces tiny per-track
+adjustments (most modern masters peak near 0 dBFS, so all tracks land
+within a fraction of a dB of each other) — minimal interference with
+the user's chosen volume, low risk of clipping a renderer that has no
+DSP headroom (the Naim is purely SetVolume-controlled). Trade-off:
+peak-normalising does NOT equalise *perceived* loudness; loud rock
+will still sound louder than quiet classical even after correction.
 
 The cache is independent of `tracks` (keyed by URL, no FK), so it
 survives `clear(udn)` — same persistence pattern as `album_art` and
 `play_counts`. Failed scans get a sticky negative-cache row
-(`lufs IS NULL`) so we don't re-attempt every restart.
+(`peak_db IS NULL` AND `lufs IS NULL`) so we don't re-attempt every
+restart.
 
 The `LOUDNESS_SCANNER` singleton is created in `dlna_library` (the
 composition root) and re-exported from there for backward compat.
@@ -26,7 +36,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 log = logging.getLogger("dlna.library")
 
@@ -50,14 +60,16 @@ def _find_ffmpeg() -> Optional[str]:
 _FFMPEG_PATH: Optional[str] = _find_ffmpeg()
 
 
-# Reference loudness target. -18 LUFS = audiophile / max-headroom: quiet
-# classical stays present, loud rock gets attenuated rather than chasing
-# the user's amp into clipping.
-TARGET_LUFS: float = -18.0
+# True-peak target. -1.0 dBTP is the typical audiophile choice — keeps
+# 1 dB of safety headroom under 0 dBFS so inter-sample peaks can't clip
+# the DAC or the renderer's downstream chain.
+TARGET_PEAK_DBTP: float = -1.0
 
-# Bound the per-track gain. Tracks measured at -70 LUFS (effectively
-# silence) would otherwise produce +52 dB and blow the renderer.
-_MAX_ABS_GAIN_DB: float = 20.0
+# Tight clamp on the per-track adjustment. Peak normalisation between
+# modern masters typically lands within fractions of a dB; ±2 dB caps
+# the worst-case correction (e.g. an unusually quiet vinyl rip) without
+# letting the renderer volume swing audibly between tracks.
+_MAX_ABS_GAIN_DB: float = 2.0
 
 # ffmpeg per-call wall-clock cap. ebur128 on a typical FLAC takes ~1 sec;
 # we leave generous headroom for high-bitrate / multi-channel files.
@@ -73,7 +85,17 @@ _BATCH_SIZE: int = 50
 #   Integrated loudness:
 #     I:         -16.4 LUFS
 _LUFS_RE = re.compile(
-    r"Integrated loudness:\s*\n\s*I:\s*(-?\d+(?:\.\d+)?)\s*LUFS",
+    r"Integrated loudness:\s*\n\s*I:\s*([+-]?\d+(?:\.\d+)?)\s*LUFS",
+    re.MULTILINE)
+
+# With `ebur128=peak=true` ffmpeg appends a True peak block to the same
+# summary:
+#   True peak:
+#     Peak:       -0.4 dBFS
+# (units are dBFS-equivalent; this is the inter-sample-reconstructed
+# peak that a real DAC will produce, i.e. dBTP.)
+_TRUE_PEAK_RE = re.compile(
+    r"True peak:\s*\n\s*Peak:\s*([+-]?\d+(?:\.\d+)?)\s*dBFS",
     re.MULTILINE)
 
 
@@ -90,10 +112,24 @@ def _parse_ebur128(stderr: str) -> Optional[float]:
         return None
 
 
+def _parse_true_peak(stderr: str) -> Optional[float]:
+    """Extract the True peak (dBTP-equivalent) value from ffmpeg's
+    ebur128 stderr output. Returns None if the True peak block is
+    missing (peak=true wasn't passed, or ffmpeg crashed)."""
+    m = _TRUE_PEAK_RE.search(stderr or "")
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
 class LoudnessScanner:
-    """Background worker that analyses tracks with `ffmpeg -af ebur128`
-    and stores the per-track gain in `track_loudness`. Mirrors
-    `AlbumArtFetcher` (`dlna_art_fetcher.py:98-212`)."""
+    """Background worker that analyses tracks with
+    `ffmpeg -af ebur128=peak=true` and stores the per-track true-peak
+    plus gain in `track_loudness`. Mirrors `AlbumArtFetcher`
+    (`dlna_art_fetcher.py:98-212`)."""
 
     def __init__(self, db):
         self._db     = db
@@ -150,13 +186,13 @@ class LoudnessScanner:
             n = len(tracks)
             stats["total"] += n
             log.info(f"LoudnessScanner: analysing {n} track(s) "
-                     f"(target={TARGET_LUFS} LUFS)")
+                     f"(target={TARGET_PEAK_DBTP} dBTP)")
             for (url,) in tracks[:_BATCH_SIZE]:
                 if self._stop.is_set():
                     log.info("LoudnessScanner: stop requested — exiting early")
                     break
                 try:
-                    lufs = self._analyze(url)
+                    lufs, peak_db = self._analyze(url)
                 except FileNotFoundError as e:
                     # ffmpeg binary disappeared mid-scan (Homebrew update?).
                     # Don't poison the cache — bail and let the next trigger
@@ -165,16 +201,18 @@ class LoudnessScanner:
                                 f"({e}) — aborting scan without caching. "
                                 f"Will retry on next trigger / restart.")
                     return stats
-                self._persist(url, lufs)
-                if lufs is None:
+                self._persist(url, lufs, peak_db)
+                if peak_db is None:
                     stats["failed"] += 1
                     log.info(f"LoudnessScanner ✗ {url[:80]} — cached "
                              f"as negative (won't retry)")
                 else:
                     stats["ok"] += 1
-                    gain = self._compute_gain(lufs)
+                    gain = self._compute_gain(peak_db)
+                    lufs_s = f"{lufs:+.1f} LUFS" if lufs is not None else "LUFS=?"
                     log.debug(f"LoudnessScanner ✓ {url[:80]} → "
-                              f"{lufs:+.1f} LUFS, gain {gain:+.1f} dB")
+                              f"peak {peak_db:+.1f} dBTP ({lufs_s}), "
+                              f"gain {gain:+.1f} dB")
         if stats["total"]:
             log.info(f"LoudnessScanner: done — ok={stats['ok']}, "
                      f"failed={stats['failed']}")
@@ -217,10 +255,11 @@ class LoudnessScanner:
 
     # ── Internal helpers ──────────────────────────────────────────
 
-    def _analyze(self, audio_src: str) -> Optional[float]:
+    def _analyze(self, audio_src: str) -> Tuple[Optional[float], Optional[float]]:
         """Shell out to ffmpeg with the source (HTTP URL or local path),
-        return the parsed integrated LUFS or None on per-track failure
-        (broken file, ffmpeg-can't-decode-this-format, network slow).
+        return `(lufs, true_peak_dbtp)`. Either may be None if the
+        corresponding ffmpeg summary block didn't parse (broken file,
+        garbled output) — peak_db is the one that drives the gain.
 
         **Raises FileNotFoundError** if the ffmpeg binary itself can't
         be invoked. That's an environmental problem (e.g. Homebrew was
@@ -228,11 +267,11 @@ class LoudnessScanner:
         target briefly missing); the scan should bail without caching
         the track as a sticky negative — the next trigger will re-try."""
         if not audio_src or not _FFMPEG_PATH:
-            return None
+            return None, None
         try:
             proc = subprocess.run(
                 [_FFMPEG_PATH, "-nostats", "-hide_banner", "-i", audio_src,
-                 "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
+                 "-af", "ebur128=framelog=quiet:peak=true", "-f", "null", "-"],
                 capture_output=True, text=True,
                 timeout=_FFMPEG_TIMEOUT_SEC,
             )
@@ -241,25 +280,29 @@ class LoudnessScanner:
             raise
         except subprocess.TimeoutExpired as e:
             log.warning(f"LoudnessScanner: ffmpeg timed out for {audio_src[:80]}: {e}")
-            return None
+            return None, None
         # ebur128 writes the summary to stderr regardless of exit code.
-        return _parse_ebur128(proc.stderr or "")
+        stderr = proc.stderr or ""
+        return _parse_ebur128(stderr), _parse_true_peak(stderr)
 
-    def _compute_gain(self, lufs: float) -> float:
-        """gain = TARGET - measured, clamped ±_MAX_ABS_GAIN_DB."""
-        gain = TARGET_LUFS - lufs
+    def _compute_gain(self, peak_db: float) -> float:
+        """gain = TARGET_PEAK_DBTP - measured peak, clamped ±_MAX_ABS_GAIN_DB."""
+        gain = TARGET_PEAK_DBTP - peak_db
         if gain >  _MAX_ABS_GAIN_DB: gain =  _MAX_ABS_GAIN_DB
         if gain < -_MAX_ABS_GAIN_DB: gain = -_MAX_ABS_GAIN_DB
         return gain
 
-    def _persist(self, url: str, lufs: Optional[float]):
-        """Store the row. lufs=None → sticky negative cache (gain_db=0)."""
-        gain = self._compute_gain(lufs) if lufs is not None else 0.0
+    def _persist(self, url: str, lufs: Optional[float],
+                 peak_db: Optional[float]):
+        """Store the row. peak_db=None → sticky negative cache (gain_db=0).
+        lufs is informational only and may be None even on a successful
+        peak read (we don't fail the scan if only LUFS failed to parse)."""
+        gain = self._compute_gain(peak_db) if peak_db is not None else 0.0
         with self._db._pool.write() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO track_loudness "
-                "(url, lufs, gain_db, scanned_at) VALUES (?,?,?,?)",
-                (url, lufs, gain, int(time.time())))
+                "(url, lufs, peak_db, gain_db, scanned_at) VALUES (?,?,?,?,?)",
+                (url, lufs, peak_db, gain, int(time.time())))
 
 
 if __name__ == "__main__":

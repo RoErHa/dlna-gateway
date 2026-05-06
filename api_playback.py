@@ -73,7 +73,7 @@ def loudness_status(h, params):
     contract shape. `total` includes both analysed AND sticky-negative
     rows, since both count as "the scanner has done its job."""
     from dlna_library import LOUDNESS_SCANNER
-    from dlna_loudness import TARGET_LUFS
+    from dlna_loudness import TARGET_PEAK_DBTP
     with DB._pool.read() as conn:
         scanned = conn.execute(
             "SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
@@ -85,10 +85,10 @@ def loudness_status(h, params):
     in_progress = bool(LOUDNESS_SCANNER._thread
                        and LOUDNESS_SCANNER._thread.is_alive())
     h._json(200, {
-        "scanned":     int(scanned),
-        "total":       int(scanned + bare),
-        "in_progress": in_progress,
-        "target_lufs": float(TARGET_LUFS),
+        "scanned":          int(scanned),
+        "total":            int(scanned + bare),
+        "in_progress":      in_progress,
+        "target_peak_dbtp": float(TARGET_PEAK_DBTP),
     })
 
 
@@ -190,6 +190,66 @@ def art(h, params):
         if conn:
             try: conn.close()
             except Exception: pass
+
+
+def lyrics(h, params):
+    """GET /api/lyrics?url=<track-url>
+
+    Cache-first: returns from the `lyrics` table if any row exists
+    (success OR sticky-notfound). Cache miss → query lrclib once, cache
+    the outcome, return. Network is hit at most once per track URL.
+
+    Response shape:
+      { plain: str|null, synced: str|null, source: str, cached: bool }
+        source ∈ {'lrclib', 'notfound', 'manual'}
+    """
+    from dlna_player import _dur_to_sec
+    import dlna_lyrics
+
+    url = params.get("url", "")
+    if not url:
+        h._json(400, {"error": "missing url"})
+        return
+
+    cached = DB.get_lyrics(url)
+    if cached is not None:
+        h._json(200, {
+            "plain":  cached["plain"],
+            "synced": cached["synced"],
+            "source": cached["source"],
+            "cached": True,
+        })
+        return
+
+    meta = DB.track_meta_by_url(url)
+    if not meta or not (meta.get("title") and meta.get("artist")):
+        h._json(404, {"error": "track not in library", "source": "notfound"})
+        return
+
+    duration_sec = _dur_to_sec(meta.get("duration") or 0)
+    try:
+        result = dlna_lyrics.fetch_lrclib(
+            meta["title"], meta["artist"],
+            meta.get("album") or "", duration_sec)
+    except dlna_lyrics.LrclibNotFound:
+        DB.set_lyrics(url, None, None, "notfound")
+        h._json(200, {"plain": None, "synced": None,
+                      "source": "notfound", "cached": False})
+        return
+
+    if not result:
+        # Network error — DON'T cache, so the next tap retries.
+        h._json(502, {"error": "lyrics provider unreachable",
+                      "source": "error"})
+        return
+
+    DB.set_lyrics(url, result.get("plain"), result.get("synced"), "lrclib")
+    h._json(200, {
+        "plain":  result.get("plain"),
+        "synced": result.get("synced"),
+        "source": "lrclib",
+        "cached": False,
+    })
 
 
 # ── POST handlers ─────────────────────────────────────────────────

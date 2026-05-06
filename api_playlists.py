@@ -58,3 +58,41 @@ def playlist_remove(h, params):
     url   = params.get("url", "")
     ok    = DB.pl_remove_track(pl_id, url)
     h._json(200, {"ok": ok})
+
+
+# ── Album favourites ─────────────────────────────────────────────
+# Whole-album bookmarks, distinct from the track-level Favourites
+# playlist. Identity = (artist, album); see LibraryDB.album_fav_*.
+
+def album_favourites(h, params):
+    """List every favourited album (newest first)."""
+    h._json(200, DB.album_fav_list())
+
+
+def album_favourite_check(h, params):
+    artist = params.get("artist", "")
+    album  = params.get("album", "")
+    if not album:
+        h._json(400, {"error": "Missing album"})
+        return
+    h._json(200, {"is_favourite": DB.album_fav_is(artist, album)})
+
+
+def album_favourite_add(h, params):
+    artist = params.get("artist", "")
+    album  = params.get("album", "")
+    if not album:
+        h._json(400, {"error": "Missing album"})
+        return
+    created = DB.album_fav_add(artist, album)
+    h._json(200, {"ok": True, "created": created})
+
+
+def album_favourite_remove(h, params):
+    artist = params.get("artist", "")
+    album  = params.get("album", "")
+    if not album:
+        h._json(400, {"error": "Missing album"})
+        return
+    ok = DB.album_fav_remove(artist, album)
+    h._json(200, {"ok": ok})
