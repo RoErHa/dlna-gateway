@@ -1,0 +1,62 @@
+<!--
+  com.roha.dlna-cert-renew.plist
+  ──────────────────────────────
+  LaunchAgent — weekly Tailscale cert renewal for the DLNA gateway.
+
+  Runs renew-cert.sh every Monday at 04:30 local. The script is a no-op
+  unless the cert has < 30 days left, so the actual `tailscale cert` call
+  fires roughly every 60 days (90-day certs renewed at 30-days-left).
+
+  Output goes to cert-renewal.log (script-managed). The plist's
+  StandardOut/Error catch only launchd-level errors before the script
+  starts.
+
+  INSTALL:
+    cp com.roha.dlna-cert-renew.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
+
+  MANAGE:
+    launchctl list | grep cert-renew                    # confirm loaded
+    launchctl kickstart gui/$(id -u)/com.roha.dlna-cert-renew   # run now
+    tail -f ~/dlna-gateway/cert-renewal.log             # see results
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roha.dlna-cert-renew</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ronhamersma/dlna-gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ronhamersma/dlna-gateway/renew-cert.sh</string>
+    </array>
+
+    <!-- Weekly: Monday 04:30 (Weekday 1 = Mon on macOS launchd) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- If the Mac was asleep at the scheduled time, run as soon as it wakes -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dlna-cert-renew.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dlna-cert-renew.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

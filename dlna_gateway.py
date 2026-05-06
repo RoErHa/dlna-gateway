@@ -79,6 +79,31 @@ def _on_server_found(server):
     INDEXER.start(server, force=False)
 
 
+def _warn_if_cert_expiring_soon(cert_path: str, threshold_days: int = 14):
+    # Backup safety net for the weekly renew-cert.sh LaunchAgent. If that
+    # silently dies we still want a loud signal in gateway.log when the cert
+    # gets close to expiry.
+    try:
+        out = subprocess.run(
+            ["openssl", "x509", "-in", cert_path, "-noout", "-enddate"],
+            capture_output=True, text=True, timeout=5)
+        if out.returncode != 0:
+            log.warning(f"cert expiry check: openssl failed: {out.stderr.strip()}")
+            return
+        end_str = out.stdout.strip().split("=", 1)[1] if "=" in out.stdout else ""
+        end_t = time.strptime(end_str, "%b %d %H:%M:%S %Y %Z")
+        days_left = (time.mktime(end_t) - time.time()) / 86400
+        if days_left < threshold_days:
+            log.warning(
+                f"TLS cert {os.path.basename(cert_path)} expires in "
+                f"{days_left:.1f} days — renew-cert.sh may have failed; "
+                f"run ./renew-cert.sh --force or check cert-renewal.log")
+        else:
+            log.info(f"TLS cert valid for {days_left:.0f} more days")
+    except Exception as e:
+        log.warning(f"cert expiry check failed: {e}")
+
+
 # ── Main ──────────────────────────────────────────────────────────
 
 def main():
@@ -280,6 +305,7 @@ Examples:
                     daemon=True, name="https").start()
                 server.tls_port = args.tls_port   # tells HTTP handler where to redirect
                 log.info(f"HTTPS ready → https://localhost:{args.tls_port}/")
+                _warn_if_cert_expiring_soon(tls_cert)
             except Exception as e:
                 log.warning(f"HTTPS failed to start: {e}")
                 tls_server = None
