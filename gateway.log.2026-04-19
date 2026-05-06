@@ -1,8 +1,0 @@
-2026-04-19 01:43:14 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Heartbeat timeout, resetting connection
-2026-04-19 01:43:14 [INFO    ] pychromecast.controllers: Receiver:channel_disconnected
-2026-04-19 01:43:44 [ERROR   ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Failed to connect to service MDNSServiceInfo(name='4K-TV-Box-3940c7566a457af737baf5d149196428._googlecast._tcp.local.'), retrying in 5.0s
-2026-04-19 07:45:07 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Connection reestablished!
-2026-04-19 07:45:24 [INFO    ] dlna.library: Indexer: cancelled for UDN uuid:eb6e78f9-e8…
-2026-04-19 23:32:42 [INFO    ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Heartbeat timeout, resetting connection
-2026-04-19 23:32:42 [INFO    ] pychromecast.controllers: Receiver:channel_disconnected
-2026-04-19 23:33:12 [ERROR   ] pychromecast.socket_client: [4K TV Box(192.168.1.194):8009] Failed to connect to service MDNSServiceInfo(name='4K-TV-Box-3940c7566a457af737baf5d149196428._googlecast._tcp.local.'), retrying in 5.0s
