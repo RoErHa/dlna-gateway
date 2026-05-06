@@ -49,6 +49,9 @@ class StubGateway:
         self.playlists: list[dict] = [
             {"id": "__favourites__", "name": "Favourites", "count": 0, "tracks": []}
         ]
+        # whole-album favourites — distinct from the track-level Favourites
+        # playlist. Each entry: {artist, album, art, track_count, udn, added_at}
+        self.album_favourites: list[dict] = []
         # radio tracks pool
         self.radio_tracks: list[dict] = []
         # renderer state
@@ -64,7 +67,7 @@ class StubGateway:
         # loudness scanner status — set by Phase-1 LoudnessScanner work
         self.loudness_status: dict = {"scanned": 0, "total": 0,
                                       "in_progress": False,
-                                      "target_lufs": -18.0}
+                                      "target_peak_dbtp": -1.0}
         # /api/render_queue can be told to reject with 409 once
         self.render_queue_busy: dict | None = None
         # captured requests: list of {method, path, query, body, headers}
@@ -366,6 +369,42 @@ class _Handler(BaseHTTPRequestHandler):
                     p["count"] = len(p["tracks"])
                     break
             self._send_json({"ok": True})
+            return
+        if path == "/api/album_favourites":
+            self._send_json(gw.album_favourites)
+            return
+        if path == "/api/album_favourites/check":
+            artist = q.get("artist", "")
+            album  = q.get("album", "")
+            is_fav = any(f["artist"] == artist and f["album"] == album
+                         for f in gw.album_favourites)
+            self._send_json({"is_favourite": is_fav})
+            return
+        if path == "/api/album_favourites/add":
+            artist = q.get("artist", "")
+            album  = q.get("album", "")
+            if not album:
+                self._send_json({"error": "Missing album"}, status=400)
+                return
+            existing = any(f["artist"] == artist and f["album"] == album
+                           for f in gw.album_favourites)
+            if not existing:
+                gw.album_favourites.insert(0, {
+                    "artist": artist, "album": album,
+                    "art": "", "track_count": 0,
+                    "udn": gw.servers[0]["udn"] if gw.servers else "",
+                    "added_at": int(time.time()),
+                })
+            self._send_json({"ok": True, "created": not existing})
+            return
+        if path == "/api/album_favourites/remove":
+            artist = q.get("artist", "")
+            album  = q.get("album", "")
+            before = len(gw.album_favourites)
+            gw.album_favourites = [f for f in gw.album_favourites
+                                   if not (f["artist"] == artist
+                                           and f["album"] == album)]
+            self._send_json({"ok": before != len(gw.album_favourites)})
             return
         if path == "/api/radio":
             limit = int(q.get("limit", "100") or 100)

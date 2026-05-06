@@ -10,6 +10,7 @@ Handles: GET /gw/device.xml, /gw/cd/desc.xml, /gw/cd/events
 
 Also exports: GW_UDN, GW_NAME, gw_ssdp_announcer, gw_ssdp_byebye
 """
+import base64
 import logging
 import socket
 import struct
@@ -155,9 +156,14 @@ def _gw_browse(obj_id: str, browse_flag: str,
 
     if obj_id == "0":
         if browse_flag == "BrowseMetadata":
-            return OPEN + container("0", "-1", GW_NAME, 1) + CLOSE, 1, 1
-        n_pls = len(DB.pl_list())
-        return OPEN + container("playlists", "0", "Playlists", n_pls) + CLOSE, 1, 1
+            return OPEN + container("0", "-1", GW_NAME, 2) + CLOSE, 1, 1
+        n_pls  = len(DB.pl_list())
+        n_favs = len(DB.album_fav_list())
+        items  = [
+            container("favalbums", "0", "⭐ Favourite Albums", n_favs),
+            container("playlists", "0", "Playlists",          n_pls),
+        ]
+        return OPEN + "".join(items) + CLOSE, 2, 2
 
     if obj_id == "playlists":
         pls   = DB.pl_list()
@@ -182,7 +188,68 @@ def _gw_browse(obj_id: str, browse_flag: str,
         items = [track_item(t, obj_id) for t in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
 
+    if obj_id == "favalbums":
+        favs  = DB.album_fav_list()
+        total = len(favs)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN
+                    + container("favalbums", "0", "⭐ Favourite Albums", total)
+                    + CLOSE, 1, 1)
+        page  = favs[start:start + count] if count else favs[start:]
+        items = [container(_encode_album_id(f["artist"], f["album"]),
+                           "favalbums",
+                           f"{f['album']} — {f['artist']}" if f["artist"]
+                                                          else f["album"],
+                           f["track_count"])
+                 for f in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("favalbum:"):
+        artist, album = _decode_album_id(obj_id)
+        # Resolve the udn lazily — the favourite is keyed by (artist, album),
+        # not by server. If the album isn't in any indexed library we
+        # silently return an empty container rather than 500 — a Naim
+        # control point handles "0 results" gracefully.
+        fav = next((f for f in DB.album_fav_list()
+                    if f["artist"] == artist and f["album"] == album), None)
+        if not fav or not fav["udn"]:
+            return OPEN + CLOSE, 0, 0
+        tracks = DB.album_tracks(fav["udn"], artist, album)
+        total  = len(tracks)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN
+                    + container(obj_id, "favalbums",
+                                album or "(album)", total)
+                    + CLOSE, 1, 1)
+        page  = tracks[start:start + count] if count else tracks[start:]
+        items = [track_item(t, obj_id) for t in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
     return OPEN + CLOSE, 0, 0
+
+
+# ── Album-favourite ObjectID encoding ────────────────────────────
+# UPnP ObjectIDs travel through SOAP XML and back; an artist or album
+# can contain any unicode character (incl. quotes, ampersands, NULs).
+# Base64-urlsafe of "artist\x00album" is unambiguous and round-trips
+# cleanly through XML escaping.
+
+def _encode_album_id(artist: str, album: str) -> str:
+    raw = f"{artist}\x00{album}".encode("utf-8")
+    return "favalbum:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_album_id(obj_id: str) -> tuple:
+    if not obj_id.startswith("favalbum:"):
+        return ("", "")
+    payload = obj_id[len("favalbum:"):]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(payload).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ("", "")
+    artist, _, album = raw.partition("\x00")
+    return (artist, album)
 
 
 def _gw_browse_response(result_xml: str, n_returned: int,

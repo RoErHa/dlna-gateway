@@ -216,15 +216,21 @@ Payload fields are clamped defensively (40 chars for `kind`, 120 for fields, 200
 
 The gateway auto-detects `*.crt` + `*.key` in the working directory on startup. Currently uses a Tailscale-issued Let's Encrypt cert: `ronsmacmini.tail5be6ad.ts.net.{crt,key}`. Mobile devices on the tailnet get a trusted cert with no install or exception needed.
 
-**Cert renewal is NOT automated.** Tailscale-issued certs are valid 90 days. To renew:
+**Cert renewal is automated** via `renew-cert.sh` + `com.roha.dlna-cert-renew` LaunchAgent (Mondays 04:30). The script no-ops unless the cert has < 30 days left, then runs `tailscale cert …` and `launchctl kickstart` of the gateway. All output appended to `cert-renewal.log` (separate from `gateway.log` for grep-ability). Belt-and-braces: on every successful HTTPS bind the gateway logs a WARN if the cert has < 14 days left (`_warn_if_cert_expiring_soon` in `dlna_gateway.py`) — surfaces a silently-dead LaunchAgent.
+
+Manual override:
 
 ```bash
-cd ~/dlna-gateway
-tailscale cert ronsmacmini.tail5be6ad.ts.net   # writes new .crt + .key
-launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
+./renew-cert.sh --force        # force a renewal NOW regardless of remaining days
+launchctl kickstart gui/$(id -u)/com.roha.dlna-cert-renew   # dry-run the weekly job
 ```
 
-Set a calendar reminder; an expired cert will make mobile PWA access fail silently (browser blocks with "not private" warning). When it breaks, `gateway.log` shows `HTTPS failed to start: ...` or continues to serve with the expired cert — the gateway doesn't check expiry.
+Install (one-time, after first clone):
+
+```bash
+cp com.roha.dlna-cert-renew.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
+```
 
 ### Mobile / PWA testing checklist
 
@@ -249,7 +255,7 @@ rich>=13.7.0              # colored terminal logging
 python-json-logger>=2.0.7 # structured JSON logging
 ```
 
-Standard library only for core UPnP functionality. `requirements.txt` still lists `PyChromecast` but Chromecast support was removed (commit `2a8d81e`); the package is not imported anywhere and can be dropped on next cleanup pass.
+Standard library only for core UPnP functionality. Chromecast support was removed in commit `2a8d81e`; `PyChromecast` was dropped from `requirements.txt` accordingly.
 
 ## Album art persistence (Phase A + Phase B)
 
@@ -358,14 +364,157 @@ DELETE FROM play_counts;
 
 Tests: `tests/test_library.py::TestRadioPlayCountBias` covers the invariants — disjoint-from-prior-call, full-library cycling, persistence across `clear()`.
 
+## On-demand lyrics (lrclib)
+
+📜 button in the now-playing panel fetches lyrics via lrclib.net on
+first tap and caches the result in the `lyrics` table forever (sticky
+positive AND negative). Re-taps are pure DB reads — lrclib is contacted
+**at most once per track URL**.
+
+### `lyrics` table — survives `clear(udn)`
+
+```sql
+CREATE TABLE IF NOT EXISTS lyrics (
+    url        TEXT PRIMARY KEY,
+    plain      TEXT,                  -- NULL only when source='notfound'
+    synced     TEXT,                  -- LRC with [mm:ss.xx] timestamps if available
+    source     TEXT NOT NULL,         -- 'lrclib' | 'notfound' | 'manual'
+    fetched_at INTEGER NOT NULL
+);
+```
+
+Same persistence pattern as `album_art` / `play_counts` / `track_loudness`.
+Rebuild-index does NOT wipe lyrics.
+
+### Endpoint
+
+```
+GET /api/lyrics?url=<track-url>
+→ { plain, synced, source, cached }
+  source ∈ {'lrclib', 'notfound', 'manual'}
+  cached = true → row was already in DB; no network hit
+```
+
+Errors: `400 missing url`, `404 track not in library`,
+`502 lyrics provider unreachable` (transient; **not cached**, so the
+next tap retries).
+
+### Sticky negative cache
+
+A 404 from lrclib (or a 200 with both `plainLyrics` and `syncedLyrics`
+null) gets cached as `source='notfound'` so we don't re-hammer lrclib
+each time the user taps. To force a retry on a single track:
+
+```sql
+DELETE FROM lyrics WHERE source='notfound' AND url='…';
+```
+
+### Display
+
+Frontend modal (`#lyrics-modal` in `index.html`, handler in `app.js`)
+shows the plain text. If only synced (LRC) is available, the
+`[mm:ss.xx]` timestamps are stripped client-side for readable display.
+Karaoke-style sync is deferred.
+
+Tests: `tests/test_lyrics.py` — 15 unit tests covering DB round-trip,
+`clear(udn)` survival, cache-hit short-circuit, sticky-notfound, and
+network-error pass-through.
+
+## Album favourites (whole-album bookmarks)
+
+Distinct from the track-level "⭐ Favourites" playlist (id
+`__favourites__`). Album favourites bookmark whole albums by
+`(artist, album)`, independent of `tracks` so they survive
+`clear(udn)` / re-indexing — same contract as `album_art`,
+`play_counts`, `lyrics`, `track_loudness`.
+
+### `album_favourites` table
+
+```sql
+CREATE TABLE IF NOT EXISTS album_favourites (
+  artist     TEXT NOT NULL,
+  album      TEXT NOT NULL,
+  added_at   INTEGER NOT NULL,
+  PRIMARY KEY (artist, album)
+);
+```
+
+### LibraryDB methods
+
+- `album_fav_add(artist, album) → bool` — INSERT OR IGNORE; returns
+  True if a new row was created. Empty album rejected.
+- `album_fav_remove(artist, album) → bool`
+- `album_fav_is(artist, album) → bool`
+- `album_fav_list() → [{artist, album, added_at, art, track_count, udn}]`
+  — joins `album_art` for cover and `tracks` for count + udn; orphan
+  favourites (no matching tracks anywhere) still appear with
+  `track_count=0, udn=""` so the user can prune them.
+
+### HTTP endpoints
+
+```
+GET /api/album_favourites
+    → [{artist, album, art, track_count, udn, added_at}, …]
+GET /api/album_favourites/check?artist=X&album=Y
+    → {is_favourite: bool}
+GET /api/album_favourites/add?artist=X&album=Y
+    → {ok: true, created: bool}
+GET /api/album_favourites/remove?artist=X&album=Y
+    → {ok: bool}   (false if it wasn't there)
+```
+
+### UI
+
+- **Album header** (`#browse-fav-album`): a star button next to "▶ Play
+  all" in `browse-section-hdr`. **Visible only when the album has more
+  than one track** — single-track "albums" are typically metadata-less
+  orphans and shouldn't be favouritable. `data-fav="0"` shows ☆,
+  `data-fav="1"` shows ★. Click toggles via /add or /remove with
+  optimistic UI flip.
+- **Right column**: a synthetic first row (`#album-fav-pl-item`,
+  "⭐ Favourite Albums") at the top of the Playlists list — above the
+  existing track-level "⭐ Favourites" and any user playlists.
+  Clicking it swaps the `pl-list` / `pl-tracks` panels (same UX as
+  opening any playlist) and renders the favourites as
+  `.album-fav-row` rows with thumbnail + artist/album. Click a row
+  → drills into `showAlbumTracks(artist, album)` (same destination as
+  Browse → Artist → Album).
+- **Module state**: `albumFavouritesCache` in app.js is set to `null`
+  on add/remove so the next view-open refetches; this avoids
+  add-then-immediately-view showing stale state.
+
+### UPnP exposure (Naim)
+
+`api_upnp._gw_browse` exposes "⭐ Favourite Albums" as the **first**
+top-level container under root (above the existing "Playlists"). One
+level deeper: a container per favourited album titled
+`"<album> — <artist>"`. One more level deeper: the album's tracks,
+resolved against `album_fav_list()[i]['udn']` via `DB.album_tracks`.
+
+ObjectID encoding for individual albums:
+`favalbum:{base64-urlsafe(artist + "\x00" + album)}` — round-trips
+arbitrary unicode (non-ASCII names, ampersands, slashes, NUL bytes
+fine) through SOAP/XML. See `_encode_album_id` / `_decode_album_id`
+in `api_upnp.py`. Garbled / non-base64 IDs decode to `("", "")` and
+return an empty container rather than 500.
+
+### Tests
+
+| File | What it covers |
+|---|---|
+| `tests/test_album_favourites.py` | DB round-trip + idempotent add, dedupe, ordering newest-first, orphan-album survival, `clear(udn)` invariant, handler 400/200 paths. 14 tests. |
+| `tests/test_upnp_album_favourites.py` | Album-id codec round-trip (incl. unicode/specials), root browse lists fav-albums first, "favalbums" lists each favourite, "favalbum:{...}" lists tracks, unknown album → empty container. 9 tests. |
+| `tests/frontend/test_album_favourites.py` | Star button gated by `track_count>1`, initial state from `/check`, click → /add or /remove with optimistic flip, "⭐ Favourite Albums" rendered first in `pl-list`, clicking it opens album-list view, clicking a row drills into `showAlbumTracks()`. 9 Playwright tests. |
+
 ## External services (outbound HTTP)
 
-The gateway is LAN-only except for album-art lookups. Two hosts are contacted, both over TLS:
+The gateway is LAN-only except for album-art and lyrics lookups. Three hosts are contacted, all over TLS:
 
 | Host | Purpose | Method + path |
 |---|---|---|
 | `musicbrainz.org` | Resolve `(artist, album)` → release-group MBID | `GET /ws/2/release-group/?query=…&fmt=json&limit=5` |
 | `coverartarchive.org` | Confirm a front cover exists for that MBID | `HEAD /release-group/{mbid}/front-500` — 200/301/302/307 counts as "have it", 404 counts as "no cover" |
+| `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
 
 Required contract:
 
@@ -376,25 +525,46 @@ Required contract:
 
 ## Loudness normalization (Phase 1, in flight)
 
-Every track gets analysed once with `ffmpeg -af ebur128`, the integrated
-loudness (LUFS) is stored, and a per-track gain is applied on playback so
-all tracks sit at the same reference loudness. **Phase 1 covers UPnP
+Every track gets analysed once with `ffmpeg -af ebur128=peak=true`, the
+true peak (dBTP) is stored, and a per-track gain is applied on playback
+so all tracks sit just below a common ceiling. **Phase 1 covers UPnP
 renderers only** (Naim Uniti is the primary device). Browser-audio Web
 Audio gain is deferred to Phase 2.
 
+The integrated LUFS value is captured from the same ffmpeg run as
+informational metadata only; **peak drives the gain**, not LUFS.
+
+### Mode: peak normalisation (chosen 2026-05-06)
+
+Trade-off vs. EBU R128:
+- **Pro:** very small per-track adjustments. Modern masters all peak
+  near 0 dBFS, so corrections typically land within fractions of a dB.
+  Minimal interference with the user's chosen volume; the Naim's
+  hardware volume swings barely at all between tracks.
+- **Con:** does **not** equalise *perceived* loudness. Quiet classical
+  vs. loud rock both get ~0 dB correction even though they sound very
+  different. If perceptual loudness equalising becomes the goal, switch
+  back to LUFS-driven gain (the `lufs` column is still captured, so no
+  re-scan needed for that switch).
+
 ### Reference target
 
-`TARGET_LUFS = -18.0` — audiophile / max-headroom. Quiet classical stays
-present; loud rock gets attenuated rather than chasing the user's amp
-into clipping. Defined in `dlna_loudness.py`.
+`TARGET_PEAK_DBTP = -1.0` — typical audiophile choice; keeps 1 dB of
+safety headroom under 0 dBFS so inter-sample peaks can't clip the DAC
+or the renderer's downstream chain. Defined in `dlna_loudness.py`.
+
+`_MAX_ABS_GAIN_DB = 2.0` — hard clamp on per-track adjustment. Prevents
+an outlier (e.g. an unusually quiet vinyl rip at -10 dBFS peak) from
+producing a +9 dB jump that would be jarring between tracks.
 
 ### `track_loudness` table — survives `clear(udn)`
 
 ```sql
 CREATE TABLE IF NOT EXISTS track_loudness (
   url        TEXT PRIMARY KEY,   -- matches tracks.url; orphans harmless
-  lufs       REAL,               -- measured integrated loudness; NULL on scan failure
-  gain_db    REAL DEFAULT 0.0,   -- = TARGET_LUFS - lufs (clamped ±20)
+  lufs       REAL,               -- integrated loudness (informational); NULL ok
+  peak_db    REAL,               -- true peak (dBTP); NULL on scan failure
+  gain_db    REAL DEFAULT 0.0,   -- = TARGET_PEAK_DBTP - peak_db (clamped ±2)
   scanned_at INTEGER NOT NULL    -- epoch seconds
 );
 ```
@@ -403,18 +573,24 @@ Same persistence pattern as `album_art` and `play_counts` — independent
 of `tracks`, so a rebuild-index doesn't trigger a full re-scan.
 **`clear(udn)` deliberately leaves this table alone.**
 
+The `peak_db` column was added on 2026-05-06 when the gateway switched
+from LUFS-based to peak-based normalisation; the migration in
+`dlna_library._setup` adds the column AND wipes existing rows so the
+scanner re-analyses every track and stores both values together.
+
 ### `LoudnessScanner` background worker
 
 Mirrors `AlbumArtFetcher` (see `dlna_art_fetcher.py:98-212`). Public
 surface in `dlna_loudness.py`:
 
-- `bare_tracks() → [(url, file_path), …]` — tracks with `file_path != ''`
-  and no `track_loudness` row.
+- `bare_tracks() → [(url,)]` — tracks with no `track_loudness` row.
 - `run_once()` — drain in batches of 50; re-queries between batches so
   triggers arriving mid-run are absorbed into the current pass.
-- `_analyze(file_path)` — subprocess `ffmpeg -nostats -i {path} -af
-  ebur128=framelog=quiet -f null -`, parse `Integrated loudness: -X.X
-  LUFS`. Returns `None` on parse failure.
+- `_analyze(audio_src) → (lufs, peak_db)` — subprocess
+  `ffmpeg -nostats -i {audio_src} -af ebur128=framelog=quiet:peak=true
+  -f null -`, parses both the `Integrated loudness:` and `True peak:`
+  summary blocks. Either field may be `None` on parse failure;
+  **only `peak_db is None` marks the scan as a failed/sticky-negative.**
 - `trigger()` / `start_initial_scan(delay=120)` / `stop()` — same
   contract as `ART_FETCHER`.
 
@@ -423,12 +599,13 @@ CPU posture: **single thread, `os.nice(10)`.** ~1 sec per track. A
 
 ### Sticky negative cache
 
-Failed scans (unreadable file, ffmpeg crash) get a row with `lufs=NULL,
-gain_db=0.0` so we don't retry every restart — same convention as
-`album_art.source='notfound'`. To force a retry on a single track:
+Failed scans (unreadable file, ffmpeg crash) get a row with
+`peak_db=NULL, gain_db=0.0` so we don't retry every restart — same
+convention as `album_art.source='notfound'`. To force a retry on a
+single track:
 
 ```sql
-DELETE FROM track_loudness WHERE url = '...' AND lufs IS NULL;
+DELETE FROM track_loudness WHERE url = '...' AND peak_db IS NULL;
 ```
 
 ### UPnP `RenderingControl` — new SOAP helpers
@@ -478,7 +655,7 @@ renderer AND updates the reference for next-track gain math.
 
 ```json
 { "scanned": 1234, "total": 4321, "in_progress": true,
-  "target_lufs": -18.0 }
+  "target_peak_dbtp": -1.0 }
 ```
 
 Routed via `dlna_routes.GET_ROUTES`; future PWA work will surface the
@@ -499,7 +676,7 @@ progress in the index bar.
 
 | File | What it covers |
 |---|---|
-| `tests/test_loudness.py` | 15 tests — `_parse_ebur128`, `bare_tracks` query (excludes empty file_path / already-scanned / negative-cache), `clear(udn)` survival, `run_once` writes lufs+gain, failed-scan negative cache, gain clamped ±20 dB, `trigger()` idempotent, `start_initial_scan`, `gain_db_for_url` helper |
+| `tests/test_loudness.py` | `_parse_ebur128` + `_parse_true_peak` (incl. `+`-prefixed positive peaks), `bare_tracks` query (excludes already-scanned / negative-cache), `clear(udn)` survival, `run_once` writes lufs + peak_db + gain, failed-scan negative cache (`peak_db IS NULL`), gain clamped ±2 dB, `trigger()` idempotent, `start_initial_scan`, `gain_db_for_url` helper |
 | `tests/test_avtransport_volume.py` | 9 tests — `set_volume` body shape (RenderingControl namespace, `<Channel>Master</Channel>`, `<DesiredVolume>`), clamping 0/100, SOAP-fault and connection-error paths; `get_volume` parses `<CurrentVolume>`, returns None on fault/garbled/error |
 | `tests/test_player_volume.py` | 9 tests — first play calls GetVolume once then SetVolume, subsequent tracks skip GetVolume, gain math with RATIO=2, clamp at 0/100, no-row → reference passed through, `set_user_volume` updates reference + fires SetVolume immediately and is sticky for next track |
 | `tests/frontend/test_vol_extras.py` | Extended: tighter UPnP volume body assertion (`device="upnp:<udn>"` required); new `test_loudness_status_endpoint` asserts `/api/loudness/status` shape |

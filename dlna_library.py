@@ -102,11 +102,37 @@ class LibraryDB:
                 -- survives clear(udn) — same invariant as album_art and
                 -- play_counts. lufs IS NULL marks a sticky negative
                 -- cache (scan failed, don't retry forever).
+                -- peak_db is the measured true-peak (dBTP) and drives
+                -- gain_db = TARGET_PEAK_DBTP - peak_db (clamped ±2 dB);
+                -- lufs is kept as an informational side measurement.
                 CREATE TABLE IF NOT EXISTS track_loudness (
                     url        TEXT PRIMARY KEY,
                     lufs       REAL,
+                    peak_db    REAL,
                     gain_db    REAL DEFAULT 0.0,
                     scanned_at INTEGER NOT NULL
+                );
+                -- On-demand lyrics cache. Same survival contract as the
+                -- other auxiliary tables: keyed by URL, no FK, untouched
+                -- by clear(udn). source='notfound' is a sticky negative
+                -- cache — to retry a single track:
+                --   DELETE FROM lyrics WHERE source='notfound' AND url=?
+                CREATE TABLE IF NOT EXISTS lyrics (
+                    url        TEXT PRIMARY KEY,
+                    plain      TEXT,
+                    synced     TEXT,
+                    source     TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
+                -- User-favourited albums. Identity = (artist, album) so it
+                -- survives clear(udn) and re-indexing — same convention as
+                -- album_art / play_counts / lyrics. Distinct from the
+                -- track-level "⭐ Favourites" playlist.
+                CREATE TABLE IF NOT EXISTS album_favourites (
+                    artist     TEXT NOT NULL,
+                    album      TEXT NOT NULL,
+                    added_at   INTEGER NOT NULL,
+                    PRIMARY KEY (artist, album)
                 );
                 CREATE TABLE IF NOT EXISTS index_meta (
                     udn        TEXT PRIMARY KEY,
@@ -178,6 +204,18 @@ class LibraryDB:
                 log.info(f"DB migration: {col_sql[:60]}")
             except Exception:
                 pass  # column already exists
+        # Loudness mode switch: LUFS-based → true-peak normalisation.
+        # When peak_db is added to an existing DB, the old gain_db values
+        # were computed from LUFS — wipe them so the scanner re-analyses
+        # every track and stores the true peak.
+        try:
+            with self._pool.write() as conn:
+                conn.execute("ALTER TABLE track_loudness ADD COLUMN peak_db REAL")
+                conn.execute("DELETE FROM track_loudness")
+            log.info("DB migration: track_loudness.peak_db added — "
+                     "existing rows wiped, re-scan will run on next trigger")
+        except Exception:
+            pass  # column already exists; nothing to migrate
         # Ensure Favourites always exists
         with self._pool.write() as conn:
             conn.execute(
@@ -718,6 +756,31 @@ class LibraryDB:
                 (url,)).fetchone()
         return float(row["gain_db"]) if row and row["gain_db"] is not None else 0.0
 
+    def track_meta_by_url(self, url: str):
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT title, artist, album, duration "
+                "FROM tracks WHERE url=? LIMIT 1", (url,)).fetchone()
+        return dict(row) if row else None
+
+    def get_lyrics(self, url: str):
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT plain, synced, source, fetched_at "
+                "FROM lyrics WHERE url=?", (url,)).fetchone()
+        return dict(row) if row else None
+
+    def set_lyrics(self, url: str, plain, synced, source: str):
+        import time as _t
+        with self._pool.write() as conn:
+            conn.execute(
+                "INSERT INTO lyrics(url, plain, synced, source, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(url) DO UPDATE SET "
+                "plain=excluded.plain, synced=excluded.synced, "
+                "source=excluded.source, fetched_at=excluded.fetched_at",
+                (url, plain, synced, source, int(_t.time())))
+
     def genre_tracks(self, udn: str, genre: str) -> list:
         """All tracks in a genre."""
         with self._pool.read() as conn:
@@ -857,6 +920,64 @@ class LibraryDB:
                 secs = _dur_to_secs(dur)
                 f.write(f"#EXTINF:{secs},{t.get('title','')}\n{t['url']}\n")
         return output_path
+
+    # ── Album favourites ──────────────────────────────────────────
+    # Distinct from the track-level Favourites playlist: these are
+    # whole-album entries keyed by (artist, album) so they survive
+    # clear(udn) and re-indexing. Same persistence pattern as
+    # album_art, play_counts, lyrics, track_loudness.
+
+    def album_fav_add(self, artist: str, album: str) -> bool:
+        """Mark an album as favourite. Idempotent — re-adding is a no-op
+        and doesn't bump added_at. Returns True if a new row was created."""
+        if not album:
+            return False
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO album_favourites "
+                "(artist, album, added_at) VALUES (?,?,?)",
+                (artist, album, int(time.time())))
+        return cur.rowcount > 0
+
+    def album_fav_remove(self, artist: str, album: str) -> bool:
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                "DELETE FROM album_favourites WHERE artist=? AND album=?",
+                (artist, album))
+        return cur.rowcount > 0
+
+    def album_fav_is(self, artist: str, album: str) -> bool:
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM album_favourites "
+                "WHERE artist=? AND album=? LIMIT 1",
+                (artist, album)).fetchone()
+        return row is not None
+
+    def album_fav_list(self) -> list:
+        """Return all favourited albums with art, track_count, and the
+        UDN of a server that holds them. Albums with zero matching tracks
+        across any server (e.g. server gone away) still appear so the user
+        can prune them. Sorted most-recently-added first."""
+        with self._pool.read() as conn:
+            rows = conn.execute("""
+                SELECT
+                    f.artist,
+                    f.album,
+                    f.added_at,
+                    COALESCE(aa.art_url, MAX(t.art), '') AS art,
+                    COUNT(t.id)                          AS track_count,
+                    COALESCE(MAX(t.udn), '')             AS udn
+                FROM album_favourites f
+                LEFT JOIN tracks t
+                       ON t.artist = f.artist AND t.album = f.album
+                LEFT JOIN album_art aa
+                       ON aa.artist = f.artist AND aa.album = f.album
+                GROUP BY f.artist, f.album
+                ORDER BY f.added_at DESC
+            """).fetchall()
+        return [dict(r) for r in rows]
+
 
 def _dur_to_secs(dur: str) -> int:
     """'H:MM:SS' → integer seconds, -1 if unparseable."""

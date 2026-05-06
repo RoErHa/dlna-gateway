@@ -33,6 +33,9 @@ let servers={},curServer=null,navStack=[{id:"0",title:"Root"}],curItemId=null,ps
 let seeking=false,seekTarget=0;
 let curTab="browse";
 let playlists=[],curPlId=null;
+// Album favourites: cached list (null = stale, refetch on next view).
+// Distinct from playlists / curPlId — these are whole-album bookmarks.
+let albumFavouritesCache=null;
 
 // ── Browser audio queue ───────────────────────────────────────────
 const browserAudio=document.getElementById("browser-audio");
@@ -592,10 +595,51 @@ async function showAlbumTracks(artist, album, artistItem=null){
   $("browse-section-hdr").style.display = "";
   $("browse-section-title").textContent = esc(artist||"Various Artists");
   $("browse-play-all").onclick = ()=>playAlbumFromDB(artist, album);
+  // Hide the star until the track count is known so single-track
+  // "albums" (orphan metadata-less tracks) never expose it.
+  _setAlbumFavStar(false, false);
   const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
   const data = await r.json();
-  renderListAppend({containers:[], items: data.tracks||[]});
+  const tracks = data.tracks||[];
+  renderListAppend({containers:[], items: tracks});
+  if(tracks.length > 1){ _wireAlbumFavStar(artist, album); }
+}
+
+// ── Album favourite star (album header) ──────────────────────────
+function _setAlbumFavStar(visible, isFav){
+  const btn = $("browse-fav-album");
+  if(!btn) return;
+  btn.style.display = visible ? "" : "none";
+  btn.dataset.fav = isFav ? "1" : "0";
+  btn.textContent = isFav ? "★" : "☆";
+  btn.title = isFav ? "Remove from Favourite Albums" : "Add to Favourite Albums";
+}
+
+async function _wireAlbumFavStar(artist, album){
+  const btn = $("browse-fav-album");
+  if(!btn) return;
+  // Show empty by default, then upgrade to filled after the check
+  // round-trip — UI is responsive even if the call is slow.
+  _setAlbumFavStar(true, false);
+  try {
+    const r = await api(`/api/album_favourites/check?artist=${enc(artist)}&album=${enc(album)}`);
+    if(!r) return;
+    const j = await r.json();
+    _setAlbumFavStar(true, !!j.is_favourite);
+  } catch(e){ /* leave as ☆ */ }
+  btn.onclick = async ()=>{
+    const wasFav = btn.dataset.fav === "1";
+    // Optimistic flip — feels snappy, reverts on failure.
+    _setAlbumFavStar(true, !wasFav);
+    const path = wasFav ? "/api/album_favourites/remove" : "/api/album_favourites/add";
+    try {
+      const r = await api(`${path}?artist=${enc(artist)}&album=${enc(album)}`);
+      if(!r){ _setAlbumFavStar(true, wasFav); return; }
+      // Invalidate the cached list so the right-column view refetches.
+      albumFavouritesCache = null;
+    } catch(e){ _setAlbumFavStar(true, wasFav); }
+  };
 }
 
 // ── Browse navigation stack helpers ──────────────────────────────
@@ -640,6 +684,15 @@ function drillBack(){
     _showArtistAlbumsInner(prev);
   } else if(prev.type==="genre"){
     _showGenreAlbumsInner(prev);
+  } else if(prev.type==="album_favourites"){
+    // Back from an album opened via the right-column favourites view —
+    // bounce back to that list, NOT into the Browse drill chain.
+    drillArtist=null;
+    drillAlbum=null;
+    _drillShowChrome(false);
+    $("browse-section-hdr").style.display="none";
+    mobileTab("playlists");
+    showAlbumFavourites();
   }
 }
 
@@ -952,7 +1005,22 @@ async function showPlaylists(){
   $("pl-actions").innerHTML=`<button class="btn" style="font-size:11px;padding:5px 10px" onclick="newPlaylist()">+ New playlist</button>`;
   const list=$("pl-list");
   list.innerHTML="";
-  if(!playlists.length){list.innerHTML='<div class="msg" style="padding:20px">No playlists yet</div>';return;}
+  // Synthetic top row: whole-album bookmarks. Always present; the album
+  // count is fetched lazily so we don't pay a round-trip on every tab
+  // switch.
+  const favAlbums=document.createElement("div");
+  favAlbums.id="album-fav-pl-item";
+  favAlbums.className="pl-item";
+  favAlbums.innerHTML=`<div class="pl-item-name">⭐ Favourite Albums</div><div class="pl-item-count">albums</div>`;
+  favAlbums.addEventListener("click",showAlbumFavourites);
+  list.appendChild(favAlbums);
+  if(!playlists.length){
+    const msg=document.createElement("div");
+    msg.className="msg";msg.style.padding="12px 20px 20px";
+    msg.textContent="No playlists yet";
+    list.appendChild(msg);
+    return;
+  }
   playlists.forEach(pl=>{
     const div=document.createElement("div");
     div.className="pl-item"+(curPlId===pl.id?" active":"");
@@ -960,6 +1028,89 @@ async function showPlaylists(){
     div.addEventListener("click",()=>openPlaylist(pl.id));
     list.appendChild(div);
   });
+}
+
+// ── Favourite Albums view ────────────────────────────────────────
+async function showAlbumFavourites(){
+  curPlId="__album_favourites__";
+  $("pl-panel-title").textContent="⭐ Favourite Albums";
+  $("pl-back-btn").style.display="";
+  $("pl-list").style.display="none";
+  $("pl-tracks").classList.add("visible");
+  $("pl-actions").innerHTML="";
+  const tracks=$("pl-tracks");
+  tracks.innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  if(albumFavouritesCache===null){
+    const r=await api("/api/album_favourites");
+    if(!r){tracks.innerHTML='<div class="msg" style="padding:20px">Could not load.</div>';return;}
+    albumFavouritesCache=await r.json();
+  }
+  tracks.innerHTML="";
+  if(!albumFavouritesCache.length){
+    tracks.innerHTML='<div class="msg" style="padding:20px">No favourite albums yet — open an album and tap the ☆ in the header.</div>';
+    return;
+  }
+  albumFavouritesCache.forEach(fa=>{
+    const div=document.createElement("div");
+    div.className="pl-track album-fav-row";
+    div.dataset.artist=fa.artist||"";
+    div.dataset.album=fa.album||"";
+    const artHTML=fa.art
+      ? `<img src="/art?url=${encodeURIComponent(fa.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
+      : "";
+    const sub=[fa.artist, fa.track_count?`${fa.track_count} tracks`:""]
+      .filter(Boolean).join(" · ");
+    div.innerHTML=`${artHTML}<div class="pl-track-body"><div class="pl-track-title">${esc(fa.album||"")}</div><div class="pl-track-sub">${esc(sub)}</div></div>`;
+    div.addEventListener("click",()=>{
+      // Drill into the album. If the favourite has a known UDN,
+      // switch curServer to it; otherwise keep the current server
+      // (defensive — list() always returns the udn it has).
+      if(fa.udn && (!curServer || curServer.udn!==fa.udn)){
+        const srv=servers[fa.udn];
+        if(srv) curServer=srv;
+      }
+      _showFavAlbumTracks(fa.artist, fa.album);
+    });
+    tracks.appendChild(div);
+  });
+}
+
+// Drill into an album from the right-column favourites view. Distinct
+// from showAlbumTracks (which assumes a Browse → Artist → Album drill
+// chain): we reset the nav stack to a single sentinel so drillBack
+// returns the user to the favourites list, NOT to a bogus
+// "Pink Floyd albums" view that they never visited.
+async function _showFavAlbumTracks(artist, album){
+  if(!curServer) return;
+  // Reset Browse drill state — we're not coming from a drill chain.
+  browseNavStack = [{type: "album_favourites", label: "⭐ Favourite Albums"}];
+  drillArtist = null;
+  drillAlbum  = album;
+  // On mobile the click was in the playlists tab; swap the body class
+  // so the Browse panel comes to the front. We deliberately do NOT
+  // call mobileTab/showTab here — those would fire loadBrowsePage()
+  // which races against our /api/album_tracks fetch and ends up
+  // appending the album tracks below a freshly-loaded letter-bar
+  // listing of artists/albums/tracks. No-op on desktop (the body
+  // class only matters under mobile media queries).
+  document.body.classList.remove(..._mobileClasses);
+  document.body.classList.add("m-browse");
+  ["browse","search","playlists","favourites","nowplaying"].forEach(t=>
+    $("bnav-"+t)?.classList.toggle("active", t==="browse"));
+  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  _drillShowChrome(true);
+  $("browse-pager").classList.add("hidden");
+  $("browse-back-title").textContent = "⭐ Favourite Albums";
+  $("browse-section-hdr").style.display = "";
+  $("browse-section-title").textContent = esc(artist || "Various Artists");
+  $("browse-play-all").onclick = () => playAlbumFromDB(artist, album);
+  _setAlbumFavStar(false, false);
+  const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}`);
+  if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
+  const data = await r.json();
+  const tracks = data.tracks || [];
+  renderListAppend({containers:[], items: tracks});
+  if(tracks.length > 1){ _wireAlbumFavStar(artist, album); }
 }
 
 async function openPlaylist(plId){
@@ -1498,6 +1649,43 @@ $("np-btn-edit").addEventListener("click",()=>{
 $("np-btn-add").addEventListener("click",(e)=>{
   if(!npTrack){toast("Nothing playing");return;}
   showAddToPlaylistForItem(e, npTrack);
+});
+
+// ── Lyrics modal ──────────────────────────────────────────────────
+$("np-btn-lyrics").addEventListener("click", async ()=>{
+  if(!npTrack || !npTrack.url){ toast("Nothing playing"); return; }
+  const overlay = $("lyrics-modal");
+  const body    = $("lyrics-body");
+  const sub     = $("lyrics-modal-sub");
+  sub.textContent = `${npTrack.title || ""}${npTrack.artist ? " — " + npTrack.artist : ""}`;
+  body.textContent = "Loading…";
+  overlay.classList.add("open");
+  let r;
+  try { r = await api("/api/lyrics?url=" + encodeURIComponent(npTrack.url)); }
+  catch(e){ body.textContent = "Error contacting gateway."; return; }
+  if(!r){ body.textContent = "Error contacting gateway."; return; }
+  let d;
+  try { d = await r.json(); } catch(e){ body.textContent = "Bad response."; return; }
+  if(d.error && d.source !== "notfound"){
+    body.textContent = "Could not fetch lyrics: " + d.error;
+    return;
+  }
+  if(d.source === "notfound" || (!d.plain && !d.synced)){
+    body.textContent = "No lyrics found for this track.";
+    return;
+  }
+  // Prefer plain text for v1; if only synced (LRC) is available, strip
+  // the [mm:ss.xx] timestamps for readable display.
+  let text = d.plain;
+  if(!text && d.synced){
+    text = d.synced.replace(/\[\d+:\d+(?:\.\d+)?\]\s?/g, "");
+  }
+  body.textContent = text || "(empty)";
+  body.scrollTop = 0;
+});
+$("lyrics-close").addEventListener("click", ()=>$("lyrics-modal").classList.remove("open"));
+$("lyrics-modal").addEventListener("click", e=>{
+  if(e.target===$("lyrics-modal")) $("lyrics-modal").classList.remove("open");
 });
 
 // Initialise output selector on first load

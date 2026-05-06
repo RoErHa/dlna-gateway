@@ -391,7 +391,7 @@ else:
     check("GET /api/loudness/status returns 200", status == 200, f"got {status}")
     if status == 200 and data:
         for key, kind in (("scanned", int), ("total", int),
-                          ("in_progress", bool), ("target_lufs", (int, float))):
+                          ("in_progress", bool), ("target_peak_dbtp", (int, float))):
             check(f"  field {key!r} is {kind.__name__ if isinstance(kind, type) else 'numeric'}",
                   isinstance(data.get(key), kind),
                   f"got {data.get(key)!r}")

@@ -3,9 +3,9 @@
 tests/test_loudness.py — LoudnessScanner unit tests against a temp SQLite.
 
 Focus: the data invariants — what bare_tracks returns, how ffmpeg output
-parses into LUFS, how gain_db is computed against the -18 LUFS target,
-and what survives a clear(udn). All ffmpeg subprocess calls are mocked
-so the suite stays under 1 second.
+parses into true-peak (dBTP), how gain_db is computed against the
+-1 dBTP target, and what survives a clear(udn). All ffmpeg subprocess
+calls are mocked so the suite stays under 1 second.
 
 Run standalone:
     python3 -m unittest tests.test_loudness -v
@@ -22,12 +22,14 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 from dlna_library import LibraryDB
-from dlna_loudness import LoudnessScanner, TARGET_LUFS, _parse_ebur128
+from dlna_loudness import (LoudnessScanner, TARGET_PEAK_DBTP,
+                           _parse_ebur128, _parse_true_peak)
 
 
-# Real ffmpeg output (-af ebur128 with -framelog=quiet) — captured from
-# a 30-second test track. The "Integrated loudness" block at the tail
-# is the only thing we parse.
+# Real ffmpeg output (-af ebur128=peak=true with -framelog=quiet) —
+# captured from a 30-second test track. We parse both the "Integrated
+# loudness" and "True peak" blocks; peak drives gain, lufs is
+# informational.
 _REAL_EBUR128_OUTPUT = """\
 [Parsed_ebur128_0 @ 0x600000d8c000] Summary:
 
@@ -40,6 +42,9 @@ _REAL_EBUR128_OUTPUT = """\
     Threshold: -36.4 LUFS
     LRA low:   -19.5 LUFS
     LRA high:  -13.9 LUFS
+
+  True peak:
+    Peak:       -0.4 dBFS
 
 [out#0/null @ 0x600000d8c180] video:0KiB audio:5kB subtitle:0kB other streams:0kB
 """
@@ -67,6 +72,33 @@ class TestParser(unittest.TestCase):
                     "I: NaN LUFS", "ffmpeg crashed"):
             with self.subTest(bad=bad):
                 self.assertIsNone(_parse_ebur128(bad))
+
+
+class TestTruePeakParser(unittest.TestCase):
+
+    def test_real_ebur128_true_peak_block(self):
+        # The True peak block is in dBFS (dBTP-equivalent).
+        self.assertEqual(_parse_true_peak(_REAL_EBUR128_OUTPUT), -0.4)
+
+    def test_zero_peak(self):
+        out = "  True peak:\n    Peak:        0.0 dBFS\n"
+        self.assertEqual(_parse_true_peak(out), 0.0)
+
+    def test_positive_peak_intersample(self):
+        # Inter-sample peaks can exceed 0 dBFS (lossy codecs / loud masters).
+        out = "  True peak:\n    Peak:       +0.6 dBFS\n"
+        self.assertEqual(_parse_true_peak(out), 0.6)
+
+    def test_missing_block_returns_none(self):
+        # ebur128 was called without peak=true — only the LUFS block exists.
+        only_lufs = "  Integrated loudness:\n    I:         -16.4 LUFS\n"
+        self.assertIsNone(_parse_true_peak(only_lufs))
+
+    def test_garbled_returns_none(self):
+        for bad in ("", "no useful data", "True peak: nope",
+                    "Peak: NaN dBFS"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(_parse_true_peak(bad))
 
 
 # ── DB-level scanner tests ────────────────────────────────────────
@@ -108,10 +140,10 @@ class TestLoudnessScanner(unittest.TestCase):
         # Mark two as already analysed
         with self.db._pool.write() as conn:
             now = int(time.time())
-            conn.execute("INSERT INTO track_loudness (url, lufs, gain_db, scanned_at) "
-                         "VALUES (?,?,?,?)", ("http://t/0", -16.0, -2.0, now))
-            conn.execute("INSERT INTO track_loudness (url, lufs, gain_db, scanned_at) "
-                         "VALUES (?,?,?,?)", ("http://t/1", -20.0, 2.0, now))
+            conn.execute("INSERT INTO track_loudness (url, lufs, peak_db, gain_db, scanned_at) "
+                         "VALUES (?,?,?,?,?)", ("http://t/0", -16.0, -0.5, -0.5, now))
+            conn.execute("INSERT INTO track_loudness (url, lufs, peak_db, gain_db, scanned_at) "
+                         "VALUES (?,?,?,?,?)", ("http://t/1", -20.0, -3.0, +2.0, now))
         bare = self.scanner.bare_tracks()
         urls = [b[0] for b in bare]
         self.assertNotIn("http://t/0", urls)
@@ -119,11 +151,11 @@ class TestLoudnessScanner(unittest.TestCase):
         self.assertEqual(len(bare), 5)
 
     def test_negative_cache_blocks_rescan(self):
-        # Failed scans must persist a row (with NULL lufs) so we don't retry
-        # every restart — same convention as album_art.source='notfound'.
+        # Failed scans must persist a row (with NULL peak_db) so we don't
+        # retry every restart — same convention as album_art.source='notfound'.
         with self.db._pool.write() as conn:
-            conn.execute("INSERT INTO track_loudness (url, lufs, gain_db, scanned_at) "
-                         "VALUES (?,?,?,?)", ("http://t/0", None, 0.0, int(time.time())))
+            conn.execute("INSERT INTO track_loudness (url, lufs, peak_db, gain_db, scanned_at) "
+                         "VALUES (?,?,?,?,?)", ("http://t/0", None, None, 0.0, int(time.time())))
         bare = self.scanner.bare_tracks()
         urls = [b[0] for b in bare]
         self.assertNotIn("http://t/0", urls)
@@ -131,23 +163,23 @@ class TestLoudnessScanner(unittest.TestCase):
     def test_clear_does_not_delete_loudness(self):
         # Survives clear(udn) — same invariant as album_art and play_counts.
         with self.db._pool.write() as conn:
-            conn.execute("INSERT INTO track_loudness (url, lufs, gain_db, scanned_at) "
-                         "VALUES (?,?,?,?)", ("http://t/0", -14.0, -4.0, int(time.time())))
+            conn.execute("INSERT INTO track_loudness (url, lufs, peak_db, gain_db, scanned_at) "
+                         "VALUES (?,?,?,?,?)", ("http://t/0", -14.0, -2.5, +1.5, int(time.time())))
         self.db.clear(self.udn)
         with self.db._pool.read() as conn:
             n = conn.execute("SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
         self.assertEqual(n, 1, "track_loudness rows must survive clear(udn)")
 
-    def test_run_once_writes_lufs_and_gain(self):
-        # Mock _analyze to return a known LUFS for each track URL.
+    def test_run_once_writes_peak_and_gain(self):
+        # Mock _analyze to return a known (lufs, peak_db) for each URL.
         per_url = {
-            "http://t/0": -10.0,   # loud
-            "http://t/1": -18.0,   # at target
-            "http://t/2": -25.0,   # quiet
-            "http://t/3": -14.0,   # mildly loud
-            "http://t/4": -22.0,   # mildly quiet
-            "http://t/5": -16.0,   # near target
-            "http://t/6": -20.0,   # slightly quiet
+            "http://t/0": (-10.0,  0.0),   # peak at ceiling → gain -1 dB
+            "http://t/1": (-18.0, -1.0),   # peak at target → gain 0 dB
+            "http://t/2": (-25.0, -3.0),   # quiet → gain +2 dB (clamped)
+            "http://t/3": (-14.0, -0.5),   # gain -0.5 dB
+            "http://t/4": (-22.0, -1.8),   # gain +0.8 dB
+            "http://t/5": (-16.0, -2.0),   # gain +1.0 dB
+            "http://t/6": (-20.0, -2.5),   # gain +1.5 dB
         }
 
         def fake_analyze(audio_src):
@@ -160,22 +192,23 @@ class TestLoudnessScanner(unittest.TestCase):
             rows = {r["url"]: r for r in
                     conn.execute("SELECT * FROM track_loudness").fetchall()}
         self.assertEqual(len(rows), 7)
-        # gain_db == TARGET_LUFS - lufs
+        # gain_db == TARGET_PEAK_DBTP - peak_db (clamped ±2)
         self.assertAlmostEqual(rows["http://t/0"]["gain_db"],
-                               TARGET_LUFS - (-10.0), places=2)
+                               TARGET_PEAK_DBTP - 0.0, places=2)
         self.assertAlmostEqual(rows["http://t/1"]["gain_db"], 0.0, places=2)
-        self.assertAlmostEqual(rows["http://t/2"]["gain_db"],
-                               TARGET_LUFS - (-25.0), places=2)
-        # And the LUFS value itself was persisted
+        # -25 LUFS, peak -3 dBFS → desired +2; ±2 clamp keeps it at +2
+        self.assertAlmostEqual(rows["http://t/2"]["gain_db"], 2.0, places=2)
+        # peak_db AND lufs both persisted
+        self.assertEqual(rows["http://t/3"]["peak_db"], -0.5)
         self.assertEqual(rows["http://t/3"]["lufs"], -14.0)
 
     def test_run_once_records_failure_as_negative_cache(self):
-        # _analyze returns None for a broken track → row written with lufs=NULL,
-        # gain_db=0.0 so we don't retry forever.
+        # _analyze returns (None, None) for a broken track → row written
+        # with peak_db=NULL, gain_db=0.0 so we don't retry forever.
         def fake_analyze(audio_src):
             if audio_src == "http://t/0":
-                return None
-            return -18.0  # rest at-target
+                return (None, None)
+            return (-18.0, -1.0)  # rest at-target
 
         with patch.object(LoudnessScanner, "_analyze", side_effect=fake_analyze):
             self.scanner.run_once()
@@ -185,19 +218,20 @@ class TestLoudnessScanner(unittest.TestCase):
                 "SELECT * FROM track_loudness WHERE url=?",
                 ("http://t/0",)).fetchone()
         self.assertIsNotNone(row, "failed scans must still leave a sticky row")
-        self.assertIsNone(row["lufs"], "failed scan must store lufs=NULL")
+        self.assertIsNone(row["peak_db"], "failed scan must store peak_db=NULL")
         self.assertEqual(row["gain_db"], 0.0)
 
     def test_gain_db_clamped(self):
-        # Tracks at extreme loudness (e.g. silence at -70 LUFS) must not
-        # produce absurd gain values like +52 dB. Clamp ±20 dB.
-        with patch.object(LoudnessScanner, "_analyze", return_value=-70.0):
+        # An extreme silence-rip (peak -60 dBFS) would naively want +59 dB.
+        # ±2 dB clamp prevents the renderer volume from blowing up.
+        with patch.object(LoudnessScanner, "_analyze",
+                          return_value=(-70.0, -60.0)):
             self.scanner.run_once()
         with self.db._pool.read() as conn:
             row = conn.execute(
                 "SELECT gain_db FROM track_loudness LIMIT 1").fetchone()
-        self.assertLessEqual(row["gain_db"], 20.0)
-        self.assertGreaterEqual(row["gain_db"], -20.0)
+        self.assertLessEqual(row["gain_db"], 2.0)
+        self.assertGreaterEqual(row["gain_db"], -2.0)
 
     def test_trigger_idempotent_while_running(self):
         # Block one run forever, then call trigger() again — should be a no-op,
@@ -207,7 +241,7 @@ class TestLoudnessScanner(unittest.TestCase):
         def slow_analyze(path):
             while block[0]:
                 time.sleep(0.01)
-            return -18.0
+            return (-18.0, -1.0)
 
         with patch.object(LoudnessScanner, "_analyze", side_effect=slow_analyze):
             self.scanner.trigger()
@@ -248,7 +282,7 @@ class TestLoudnessScanner(unittest.TestCase):
         def fake_analyze(audio_src):
             call_count["n"] += 1
             if call_count["n"] <= 2:
-                return -18.0
+                return (-18.0, -1.0)
             raise FileNotFoundError("[Errno 2] No such file or directory: 'ffmpeg'")
 
         with patch.object(LoudnessScanner, "_analyze", side_effect=fake_analyze):
@@ -256,16 +290,17 @@ class TestLoudnessScanner(unittest.TestCase):
 
         with self.db._pool.read() as conn:
             ok   = conn.execute("SELECT COUNT(*) AS n FROM track_loudness "
-                                "WHERE lufs IS NOT NULL").fetchone()["n"]
+                                "WHERE peak_db IS NOT NULL").fetchone()["n"]
             fail = conn.execute("SELECT COUNT(*) AS n FROM track_loudness "
-                                "WHERE lufs IS NULL").fetchone()["n"]
+                                "WHERE peak_db IS NULL").fetchone()["n"]
         self.assertEqual(ok, 2, "the two pre-failure tracks should be cached")
         self.assertEqual(fail, 0,
                          "ffmpeg-vanish must NOT cache anything as failed — "
                          "next trigger will re-try the remaining tracks")
 
     def test_start_initial_scan_fires_after_delay(self):
-        with patch.object(LoudnessScanner, "_analyze", return_value=-18.0):
+        with patch.object(LoudnessScanner, "_analyze",
+                          return_value=(-18.0, -1.0)):
             self.scanner.start_initial_scan(delay=0.05)
             time.sleep(0.5)
             self.scanner.stop()
@@ -283,8 +318,8 @@ class TestGainDbForUrl(unittest.TestCase):
         os.close(self._fd)
         self.db = LibraryDB(db_file=self._path)
         with self.db._pool.write() as conn:
-            conn.execute("INSERT INTO track_loudness (url, lufs, gain_db, scanned_at) "
-                         "VALUES (?,?,?,?)", ("http://x.flac", -16.0, -2.0, 0))
+            conn.execute("INSERT INTO track_loudness (url, lufs, peak_db, gain_db, scanned_at) "
+                         "VALUES (?,?,?,?,?)", ("http://x.flac", -16.0, +1.0, -2.0, 0))
 
     def tearDown(self):
         os.unlink(self._path)
