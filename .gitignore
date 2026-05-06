@@ -21,6 +21,7 @@ build/
 # Docker / misc
 docker-compose.override.yml
 *.log
+gateway.log*
 logs/
 .snapshots/
 *.zip
@@ -29,5 +30,6 @@ project docs/
 
 # DB / runtime
 *.sqlite3
+library.db*
 data/
 db/
