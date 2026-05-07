@@ -273,6 +273,15 @@ class LoudnessScanner:
                 [_FFMPEG_PATH, "-nostats", "-hide_banner", "-i", audio_src,
                  "-af", "ebur128=framelog=quiet:peak=true", "-f", "null", "-"],
                 capture_output=True, text=True,
+                # ffmpeg embeds the source file's metadata (artist / title)
+                # verbatim in its stderr banner. Track tags can be Latin-1
+                # / cp1252 / mojibake — strict UTF-8 decoding crashes the
+                # scanner on the first such track and re-crashes on
+                # restart since the same track surfaces again. errors=
+                # "replace" substitutes U+FFFD for bad bytes; the
+                # ebur128 summary block at the tail is pure ASCII so the
+                # LUFS / peak regexes are unaffected.
+                errors="replace",
                 timeout=_FFMPEG_TIMEOUT_SEC,
             )
         except FileNotFoundError:
