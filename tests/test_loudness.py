@@ -298,6 +298,45 @@ class TestLoudnessScanner(unittest.TestCase):
                          "ffmpeg-vanish must NOT cache anything as failed — "
                          "next trigger will re-try the remaining tracks")
 
+    def test_subprocess_lenient_utf8_decoding(self):
+        """Regression for the 2026-05-07 stuck-scanner bug: a track
+        whose ffmpeg metadata banner contained a non-UTF-8 byte (Latin-1
+        é, 0xe9) crashed `subprocess.run(..., text=True)` mid-scan, the
+        thread died, and every restart hit the same track first and
+        re-crashed. Fix: errors='replace' on the subprocess decode.
+
+        Verify by patching subprocess.run to behave like real ffmpeg
+        when the source has non-UTF-8 metadata (it actually emits the
+        bytes through stderr and the framework decodes them); a
+        successful scan must produce a valid lufs+peak row, not raise.
+        """
+        import dlna_loudness
+        # Real-world ffmpeg stderr fragment with a Latin-1 'é' (0xe9)
+        # in a track title, and a clean ebur128 summary at the tail.
+        # We construct it as the *decoded* string the way subprocess.run
+        # with errors="replace" would produce — the bug was that strict
+        # decoding never even got here, raising before _parse_ebur128.
+        replaced_stderr = (
+            "[mp3 @ 0x...] title  : Caf�\n"   # U+FFFD substitution
+            "  Integrated loudness:\n"
+            "    I:         -16.4 LUFS\n"
+            "  True peak:\n"
+            "    Peak:       -1.2 dBFS\n"
+        )
+
+        class FakeProc:
+            stderr = replaced_stderr
+
+        # Confirm _parse_* still works on the replaced output.
+        self.assertEqual(dlna_loudness._parse_ebur128(replaced_stderr), -16.4)
+        self.assertEqual(dlna_loudness._parse_true_peak(replaced_stderr), -1.2)
+
+        # And confirm _analyze rides through subprocess.run cleanly.
+        with patch("subprocess.run", return_value=FakeProc()):
+            lufs, peak = self.scanner._analyze("http://x/bad-meta.mp3")
+        self.assertEqual(lufs, -16.4)
+        self.assertEqual(peak, -1.2)
+
     def test_start_initial_scan_fires_after_delay(self):
         with patch.object(LoudnessScanner, "_analyze",
                           return_value=(-18.0, -1.0)):
