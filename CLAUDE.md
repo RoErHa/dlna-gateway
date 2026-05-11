@@ -681,3 +681,108 @@ progress in the index bar.
 | `tests/test_player_volume.py` | 9 tests — first play calls GetVolume once then SetVolume, subsequent tracks skip GetVolume, gain math with RATIO=2, clamp at 0/100, no-row → reference passed through, `set_user_volume` updates reference + fires SetVolume immediately and is sticky for next track |
 | `tests/frontend/test_vol_extras.py` | Extended: tighter UPnP volume body assertion (`device="upnp:<udn>"` required); new `test_loudness_status_endpoint` asserts `/api/loudness/status` shape |
 | `tests/run_all.py` | Live-gateway integration: `GET /api/loudness/status` returns the four expected fields with right types |
+
+## Library housekeeping tools
+
+### `tools/prune_empty_music_dirs.py`
+
+Walks the music root and **moves to Trash** any directory whose entire
+subtree contains zero music files. The user's library lives at
+`/Volumes/SAMDATA/Music` (external drive — see project memory).
+
+Music extensions (default): `.mp3 .flac .ogg .opus .m4a .aac .wav .wma
+.ape .aiff .aif .dff .dsf .alac`. **`.mp4` is deliberately excluded**
+so a music-video MP4 in a folder doesn't mark that folder as "kept".
+
+#### Protection rule (Rule B — subtree-protect)
+
+As soon as the walker descends into a directory whose **subtree** (any
+depth) contains a music file, that directory is "an album root" and
+*all* of its descendants — including non-music siblings of music — are
+preserved. This protects:
+- `Album/scans/`, `Album/coverart/`, `Album/booklet/` next to music.
+- Multi-disc albums: `Album/CD1/track.flac` AND `Album/scans/cover.jpg`
+  both survive even though the cover-art subdir is a sibling of (not
+  under) the music subdir.
+
+The root music folder itself is **never** treated as an album root —
+loose music files at root don't grant blanket protection to root's
+other subdirs.
+
+**Documented trade-off:** the rule cannot tell apart a multi-disc
+album's `scans/` (you want kept) from a junk subdir next to a music
+subdir (you might want deleted). If you have a folder that mixes
+music subfolders and pure-junk subfolders at the same level, the
+junk is **preserved**. The rule errs on the side of preservation;
+clean such mixed dirs manually.
+
+#### Defaults & safety
+
+- **Trash, not delete.** Default behaviour moves directories to the
+  macOS Trash via `osascript` — recoverable from Finder for ~30 days.
+- **Confirmation prompt** — shows the first 20 dirs that would be
+  deleted + total count, then `Y/n`. Pass `-y` to skip.
+- **Limit acts as a safety belt** — if `--limit N` halts the walk
+  early, the script does NOT execute deletions for that run (you're
+  not seeing the full picture, so we never act on a partial list).
+
+#### Usage
+
+```bash
+# Required first step — preview without acting:
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run
+
+# Verbose preview (logs every kept directory too):
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run -v
+
+# Stop after 200 dirs (safety/sanity check; no deletions when limit hit):
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run -v --limit 200
+
+# Real run — Trash, with confirmation prompt:
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music
+
+# Real run — non-interactive (e.g. cron / a script):
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music -y
+
+# Override extension list:
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --exts mp3,flac,ogg
+
+# Permanent rm -rf (NOT recoverable — use only if you're sure):
+python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --hard-delete -y
+```
+
+#### Flags
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | Print decisions without acting |
+| `-v` / `--verbose` | Log every kept directory too (default: only deletions print) |
+| `--limit N` | Stop after evaluating N directories (no deletions executed when limit is hit) |
+| `--exts a,b,c` | Override the music extension list (commas, with or without leading dot) |
+| `--hard-delete` | Permanent `rm -rf` instead of Trash. NOT recoverable. |
+| `-y` / `--yes` | Skip the confirmation prompt |
+
+#### Why this is safe for the gateway
+
+The gateway frontend never references files in the music root
+directly — every `tracks.art` and `album_art.art_url` value in
+`library.db` is `http://` or `https://` (AssetUPnP-served or Cover
+Art Archive). Album art is fetched through `/art` proxying an HTTP
+URL, never a filesystem path. Music-less directories are also
+not indexed by AssetUPnP (it indexes albums = folders with audio
+files), so they have no entry in the gateway DB at all. Pruning
+them is invisible to the gateway.
+
+#### Tests
+
+`tools/test_prune_empty_music_dirs.py` — 14 unit tests over
+throw-away tempdirs. Cover: album-with-music kept, multi-disc
+support dirs (`scans/`, `booklet/`) kept, root-level music doesn't
+protect siblings, branch with deep-only music kept, split-branch
+trade-off (junk-next-to-music preserved), symlinks not followed,
+case-insensitive extension match, `mp4` treated as non-music,
+`--limit` halts cleanly. Run standalone:
+
+```bash
+python3 -m unittest tools.test_prune_empty_music_dirs -v
+```
