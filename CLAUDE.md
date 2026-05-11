@@ -682,6 +682,88 @@ progress in the index bar.
 | `tests/frontend/test_vol_extras.py` | Extended: tighter UPnP volume body assertion (`device="upnp:<udn>"` required); new `test_loudness_status_endpoint` asserts `/api/loudness/status` shape |
 | `tests/run_all.py` | Live-gateway integration: `GET /api/loudness/status` returns the four expected fields with right types |
 
+## Bit-perfect notes
+
+**Verdict:** the gateway is byte-perfect on every path it controls.
+No resampler, EQ, mixer, or DSP exists anywhere in the playback
+code. Confirmed by audit on 2026-05-11.
+
+**Naim / UPnP path.** The gateway is not in the audio path. AssetUPnP
+serves bytes directly to the renderer; the gateway only sends
+`AVTransport::SetURI` + `Play` SOAP. Loudness gain and the user trim
+slider are applied via `RenderingControl::SetVolume` SOAP, which
+adjusts the renderer's **hardware volume** — never PCM modification.
+See `RendererQueue` in `dlna_player.py:57-591` and
+`dlna_avtransport.py:29-94`/`278-287`.
+
+**Browser stream proxy (`/stream`).** Byte-perfect Range pass-through.
+`dlna_stream_proxy.proxy_stream` (`dlna_stream_proxy.py:45-138`)
+relays bytes verbatim; the only mutation is a `Content-Type` header
+normalisation (`audio/x-flac` → `audio/flac`) for Safari quirks.
+
+**Browser `<audio>` caveat (not a gateway behaviour).** In
+browser-output mode the trim slider sets
+`browserAudio.volume = 10^(db/20)` (`static/app.js:1396-1403`). When
+non-zero, the **browser** scales every PCM sample by that factor —
+HTML5 `<audio>` behaviour, not the gateway. Default = 0 dB
+(volume = 1.0 = no scaling), so unmodified playback is the default.
+**Keep the slider at 0 dB for bit-perfect browser playback.** UPnP
+output is unaffected — the same slider then routes through
+`/api/control` and the gateway calls `SetVolume` on the renderer
+hardware.
+
+**Loudness scanner.** ffmpeg is invoked only for measurement
+(`ebur128=peak=true -f null -`) in `dlna_loudness.py:258-295`;
+output bytes are discarded, only stderr is parsed. Never on the
+playback path.
+
+## Bit-perfect on macOS
+
+**Best chain.** Play to the Naim via UPnP. Gateway is not in the
+audio path; macOS / CoreAudio is not in the audio path; AssetUPnP
+serves directly to the renderer. This is the recommended setup when
+bit-perfect matters.
+
+**For browser playback on macOS,** the chain is:
+AssetUPnP → gateway `/stream` proxy → browser HTML5 `<audio>` →
+CoreAudio → output device. macOS still applies sample-rate conversion
+if the output device's rate doesn't match the source.
+
+### Audio MIDI Setup
+
+`/System/Applications/Utilities/Audio MIDI Setup.app`:
+- Select the output device.
+- Set **Format** sample rate to match the source material:
+  - CD rips: 44100 Hz / 16-bit
+  - Hi-res FLAC: 96000 Hz / 24-bit
+  - DXD: 192000 Hz / 24-bit
+- Mismatched rates cause CoreAudio SRC. With a mixed-rate library
+  the only "right" choice is to either pick the rate of your majority
+  format, or switch to UPnP/Naim for hi-res sources.
+
+### System Settings → Sound → Output
+
+- Turn off any **Spatial Audio** / **Audio Enhancements** on the
+  selected output device.
+- Bluetooth / AirPods are **always lossy** on macOS (codec
+  re-compression); use wired output for bit-perfect listening.
+
+### Limits of browser bit-perfect on macOS
+
+Browsers always go through CoreAudio's shared mixer; you can minimise
+but not fully eliminate it. For true hog-mode / exclusive-mode
+bit-perfect listening from a Mac, use Audirvana or Roon — outside the
+gateway's scope.
+
+### iOS / iPadOS PWA
+
+Ensure these are **off**:
+- Settings → Accessibility → Audio/Visual → **Headphone
+  Accommodations**.
+- Settings → Music → EQ (set to **Off**, not "Flat").
+- Settings → Sounds & Haptics → Headphone Audio → Volume Limit.
+- Spatial Audio toggles on connected headphones.
+
 ## Library housekeeping tools
 
 ### `tools/prune_empty_music_dirs.py`
