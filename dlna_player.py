@@ -51,6 +51,51 @@ GAIN_TO_VOLUME_RATIO: int = 2
 # to widen/narrow the slider.
 MAX_USER_TRIM_DB: float = 5.0
 
+# Monitor stall guards. The monitor advances a track on the normal
+# PLAYING → STOPPED transition. But when the renderer goes unreachable
+# mid-track, GetTransportInfo SOAP starts failing and the state reads
+# UNKNOWN — the PLAYING → STOPPED transition is never observed and the
+# queue would otherwise stall on one track forever (the real-world
+# 2026-05-20 incident: 'Starman' stuck for 36 minutes).
+#
+# WATCHDOG_GRACE_SEC — once wall-clock playback runs this far past the
+#   track's own declared duration while the renderer is NOT actively
+#   PLAYING/TRANSITIONING/PAUSED, advance regardless of observed state.
+# UNKNOWN_ABORT_SEC — if the renderer reads UNKNOWN continuously for
+#   this long (and the track has no duration for the watchdog to use),
+#   abort the queue rather than poll a dead renderer indefinitely.
+WATCHDOG_GRACE_SEC: float = 90.0
+UNKNOWN_ABORT_SEC:  float = 300.0
+
+
+def _monitor_decision(prev_state: str, cur_state: str,
+                      elapsed: float, dur: float):
+    """Pure decision helper for ``RendererQueue._monitor``.
+
+    Given the previous and current transport state, how long the
+    current track has been playing (wall-clock seconds since its Play
+    was sent), and its declared duration, decide whether to advance.
+
+    Returns ``(advance: bool, reason: str)`` — reason is ``'finished'``
+    for the normal end-of-track transition, ``'watchdog'`` when the
+    duration-based stall guard fires, and ``''`` when not advancing.
+    """
+    # Normal end-of-track: the renderer reported PLAYING and is now
+    # STOPPED (or has no media) → the track played out.
+    if (prev_state in ("PLAYING", "TRANSITIONING") and
+            cur_state in ("STOPPED", "NO_MEDIA_PRESENT")):
+        return True, "finished"
+    # Watchdog: the renderer is not observably progressing (typically
+    # UNKNOWN from a failed SOAP poll, or wedged in STOPPED) yet
+    # wall-clock playback has run past the track's own duration plus a
+    # grace margin. PAUSED_PLAYBACK is excluded so a deliberately
+    # paused queue is never skipped.
+    if (cur_state not in ("PLAYING", "TRANSITIONING", "PAUSED_PLAYBACK")
+            and elapsed > 0 and dur > 0
+            and elapsed > dur + WATCHDOG_GRACE_SEC):
+        return True, "watchdog"
+    return False, ""
+
 
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
@@ -482,12 +527,23 @@ class RendererQueue:
 
     def _monitor(self):
         """
-        Poll GetTransportInfo every 2 s.
-        When a track finishes (PLAYING → STOPPED) advance to the next one.
+        Poll GetTransportInfo every 2 s and advance the queue.
+
+        A track ends one of three ways:
+          * normal   — PLAYING/TRANSITIONING → STOPPED/NO_MEDIA_PRESENT.
+          * watchdog — wall-clock playback runs past the track's own
+            duration + WATCHDOG_GRACE_SEC while the renderer is not
+            actively PLAYING (typically UNKNOWN because GetTransportInfo
+            SOAP is failing). Without this a renderer that goes
+            unreachable mid-track strands the queue forever.
+          * abort    — the renderer reads UNKNOWN continuously for
+            UNKNOWN_ABORT_SEC with no duration for the watchdog to use;
+            the queue stops rather than poll a dead renderer.
         """
-        from dlna_content import avtransport_get_state
-        POLL_SEC   = 2.0
-        prev_state = "UNKNOWN"
+        from dlna_content import avtransport_probe_state
+        POLL_SEC      = 2.0
+        prev_state    = "UNKNOWN"
+        unknown_since = 0.0
         self._stop_event.wait(4.0)
 
         while not self._stop_event.is_set():
@@ -495,21 +551,52 @@ class RendererQueue:
                 av_url = self._av_url
                 idx    = self._index
                 total  = len(self._tracks)
+                start  = self._started_at
+                cur_t  = (self._tracks[idx]
+                          if 0 <= idx < len(self._tracks) else None)
 
             if not av_url:
                 break
 
-            cur_state = avtransport_get_state(av_url)
+            cur_state, detail = avtransport_probe_state(av_url)
             if cur_state != prev_state:
-                log.info(f"RendererQueue: state {prev_state} → {cur_state} "
-                         f"[{idx+1}/{total}]")
+                # UNREACHABLE means the SOAP call itself failed — name
+                # the transport error so the cause (renderer powered
+                # off, network drop, HTTP fault) is in the log, not
+                # guessed. avtransport_probe_state rate-limits the
+                # underlying WARN; this transition line fires once.
+                if cur_state == "UNREACHABLE":
+                    log.warning(f"RendererQueue: state {prev_state} → "
+                                f"UNREACHABLE [{idx+1}/{total}] — "
+                                f"{detail or 'transport failed'}")
+                else:
+                    log.info(f"RendererQueue: state {prev_state} → "
+                             f"{cur_state} [{idx+1}/{total}]")
             else:
                 log.debug(f"RendererQueue monitor: state={cur_state} "
                           f"[{idx+1}/{total}]")
 
-            if (prev_state in ("PLAYING", "TRANSITIONING") and
-                    cur_state in ("STOPPED", "NO_MEDIA_PRESENT")):
-                self._log_track_end("finished")
+            # Track how long the renderer has been out of contact —
+            # either genuinely UNKNOWN or UNREACHABLE (SOAP failing).
+            if cur_state in ("UNKNOWN", "UNREACHABLE"):
+                if unknown_since == 0.0:
+                    unknown_since = time.monotonic()
+            else:
+                unknown_since = 0.0
+
+            elapsed = (time.monotonic() - start) if start > 0 else 0.0
+            dur     = _dur_to_sec(cur_t.get("duration")) if cur_t else 0
+            advance, reason = _monitor_decision(prev_state, cur_state,
+                                                elapsed, dur)
+            prev_state = cur_state
+
+            if advance:
+                if reason == "watchdog":
+                    log.warning(f"RendererQueue ⚠ WATCHDOG [{idx+1}/{total}] "
+                                f"{cur_t.get('title','?')!r} — renderer "
+                                f"state {cur_state!r}, {elapsed:.0f}s since "
+                                f"start vs {dur}s duration; advancing")
+                self._log_track_end(reason)
                 with self._lock:
                     more = self._index < len(self._tracks) - 1
                     if more:
@@ -525,8 +612,19 @@ class RendererQueue:
                              f"playlist finished ({total} track(s))")
                     self._stop_event.set()
                     break
+                continue
 
-            prev_state = cur_state
+            # Renderer unreachable too long with nothing the watchdog
+            # could act on — stop instead of polling a dead device.
+            if (unknown_since and
+                    time.monotonic() - unknown_since > UNKNOWN_ABORT_SEC):
+                log.warning(f"RendererQueue ⚠ ABORT renderer out of contact "
+                            f"(state {cur_state}) for >{UNKNOWN_ABORT_SEC:.0f}s "
+                            f"[{idx+1}/{total}] — stopping queue")
+                self._log_track_end("renderer_lost")
+                self._stop_event.set()
+                break
+
             self._stop_event.wait(POLL_SEC)
 
 

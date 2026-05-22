@@ -18,7 +18,8 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_player
-from dlna_player import _dur_to_sec, QueueRegistry, RendererQueue
+from dlna_player import (_dur_to_sec, _monitor_decision,
+                         QueueRegistry, RendererQueue, WATCHDOG_GRACE_SEC)
 
 
 # ── _dur_to_sec — regression guard for today's ValueError bug ─────
@@ -132,7 +133,7 @@ class TestRendererQueueDurationSafety(unittest.TestCase):
         # without raising.
         with patch("dlna_content.avtransport_stop", return_value=True), \
              patch("dlna_content.avtransport_send", return_value=True), \
-             patch("dlna_content.avtransport_get_state", return_value="STOPPED"):
+             patch("dlna_content.avtransport_probe_state", return_value=("STOPPED", "")):
             try:
                 q.start("http://fake-av-url/ctrl",
                         [self._make_track("0:04:51.000")],
@@ -152,7 +153,7 @@ class TestRendererQueueDurationSafety(unittest.TestCase):
         ]
         with patch("dlna_content.avtransport_stop", return_value=True), \
              patch("dlna_content.avtransport_send", return_value=True) as send, \
-             patch("dlna_content.avtransport_get_state", return_value="STOPPED"):
+             patch("dlna_content.avtransport_probe_state", return_value=("STOPPED", "")):
             try:
                 q.start("http://fake-av-url/ctrl", tracks, "TestRenderer")
             finally:
@@ -161,6 +162,72 @@ class TestRendererQueueDurationSafety(unittest.TestCase):
         # may have advanced further but that's not what we're asserting.
         self.assertGreaterEqual(send.call_count, 1,
                                 "SetURI/Play must be attempted at least once")
+
+
+# ── _monitor_decision — stall-guard regression (2026-05-20) ───────
+
+class TestMonitorDecision(unittest.TestCase):
+    """Regression for the 'Starman stuck 36 minutes' incident: the
+    renderer went STOPPED → UNKNOWN mid-track and the monitor, which
+    only advanced on PLAYING → STOPPED, stalled on one track forever.
+    The watchdog must advance on a duration-based timeout once the
+    renderer stops reporting a usable state."""
+
+    GRACE = WATCHDOG_GRACE_SEC
+
+    def test_normal_finish(self):
+        advance, reason = _monitor_decision("PLAYING", "STOPPED", 250, 242)
+        self.assertEqual((advance, reason), (True, "finished"))
+
+    def test_finish_from_transitioning(self):
+        advance, reason = _monitor_decision(
+            "TRANSITIONING", "NO_MEDIA_PRESENT", 250, 242)
+        self.assertTrue(advance)
+        self.assertEqual(reason, "finished")
+
+    def test_playing_does_not_advance(self):
+        advance, _ = _monitor_decision("PLAYING", "PLAYING", 30, 242)
+        self.assertFalse(advance)
+
+    def test_unknown_before_duration_holds(self):
+        # Renderer unreachable but the track hasn't run past its
+        # duration yet — a transient blip, do NOT skip.
+        advance, _ = _monitor_decision("PLAYING", "UNKNOWN", 100, 242)
+        self.assertFalse(advance)
+
+    def test_watchdog_fires_when_stuck_unknown_past_duration(self):
+        # The exact incident: state UNKNOWN, well past duration+grace.
+        advance, reason = _monitor_decision(
+            "UNKNOWN", "UNKNOWN", 242 + self.GRACE + 10, 242)
+        self.assertTrue(advance)
+        self.assertEqual(reason, "watchdog")
+
+    def test_watchdog_fires_when_wedged_in_stopped(self):
+        # Renderer never reached PLAYING and sits in STOPPED forever.
+        advance, reason = _monitor_decision(
+            "STOPPED", "STOPPED", 242 + self.GRACE + 10, 242)
+        self.assertTrue(advance)
+        self.assertEqual(reason, "watchdog")
+
+    def test_watchdog_does_not_skip_a_paused_queue(self):
+        # A deliberately paused track may sit far past its duration —
+        # never skip it.
+        advance, _ = _monitor_decision(
+            "PAUSED_PLAYBACK", "PAUSED_PLAYBACK",
+            242 + self.GRACE + 999, 242)
+        self.assertFalse(advance)
+
+    def test_watchdog_inert_without_a_duration(self):
+        # No duration → watchdog can't time out; the UNKNOWN-abort
+        # guard in _monitor handles this case instead.
+        advance, _ = _monitor_decision("UNKNOWN", "UNKNOWN", 99999, 0)
+        self.assertFalse(advance)
+
+    def test_long_playing_track_never_watchdogged(self):
+        # A track still genuinely PLAYING is excluded even if its DB
+        # duration metadata is wrong/short.
+        advance, _ = _monitor_decision("PLAYING", "PLAYING", 99999, 60)
+        self.assertFalse(advance)
 
 
 # ── RendererQueue — send-failure abort logic ──────────────────────
@@ -180,7 +247,7 @@ class TestRendererQueueSendFailure(unittest.TestCase):
         ]
         with patch("dlna_content.avtransport_stop", return_value=True), \
              patch("dlna_content.avtransport_send", return_value=False) as send, \
-             patch("dlna_content.avtransport_get_state", return_value="STOPPED"):
+             patch("dlna_content.avtransport_probe_state", return_value=("STOPPED", "")):
             try:
                 q.start("http://fake-av-url/ctrl", tracks, "Wedged")
             finally:

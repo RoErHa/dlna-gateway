@@ -14,11 +14,19 @@ and the AVTransport side (renderer control) live in their own modules
 """
 import http.client
 import logging
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import Optional
+from typing import Optional, Tuple
 
 log = logging.getLogger("dlna.content")
+
+# Per-renderer rate limiter for "renderer unreachable" WARN lines. The
+# monitor polls GetTransportInfo every 2 s and the snapshot poller hits
+# it too — without this, a powered-off renderer would flood gateway.log
+# with one WARN per poll. Key: av_url → monotonic ts of last WARN.
+_state_fail_log: dict = {}
+_STATE_FAIL_WARN_SEC = 30.0
 
 
 def _xml_esc(s: str) -> str:
@@ -131,8 +139,19 @@ def avtransport_pause(av_url: str) -> bool:
         except Exception: pass
 
 
-def _av_soap(av_url: str, action: str, body_inner: str) -> Optional[str]:
-    """Generic AVTransport SOAP helper; returns response body text or None."""
+def _av_soap(av_url: str, action: str,
+             body_inner: str) -> Tuple[Optional[str], Optional[str]]:
+    """Generic AVTransport SOAP helper.
+
+    Returns ``(text, err)``:
+      * success → ``(response_body, None)``
+      * failure → ``(None, "<short reason>")`` — the reason is the
+        underlying transport error (e.g. ``[Errno 61] Connection
+        refused``, ``timed out``) or ``HTTP <status>`` for a non-2xx.
+
+    Callers use the reason to distinguish "renderer unreachable" from
+    "renderer genuinely reported UNKNOWN" instead of collapsing both
+    into a bare None."""
     envelope = (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
@@ -149,33 +168,67 @@ def _av_soap(av_url: str, action: str, body_inner: str) -> Optional[str]:
         })
         resp = conn.getresponse()
         text = resp.read().decode("utf-8", errors="replace")
-        return text if resp.status in (200, 204) else None
+        if resp.status in (200, 204):
+            return text, None
+        return None, f"HTTP {resp.status}"
     except Exception as e:
         log.debug(f"_av_soap {action}: {e}")
-        return None
+        return None, (str(e) or type(e).__name__)
     finally:
         try: conn.close()
         except Exception: pass
 
 
-def avtransport_get_state(av_url: str) -> str:
-    """
-    Returns the CurrentTransportState string, e.g.:
-      PLAYING | PAUSED_PLAYBACK | STOPPED | NO_MEDIA_PRESENT | TRANSITIONING | UNKNOWN
-    """
-    raw = _av_soap(av_url, "GetTransportInfo",
+def avtransport_probe_state(av_url: str) -> Tuple[str, str]:
+    """Query CurrentTransportState, distinguishing a lost renderer from
+    a renderer that genuinely reports UNKNOWN.
+
+    Returns ``(state, detail)``:
+      * ``state`` is the real UPnP state (PLAYING / PAUSED_PLAYBACK /
+        STOPPED / NO_MEDIA_PRESENT / TRANSITIONING / UNKNOWN), OR the
+        gateway-synthesised ``UNREACHABLE`` when the GetTransportInfo
+        SOAP call could not be completed (renderer powered off, network
+        drop, HTTP error).
+      * ``detail`` is the transport failure reason for an UNREACHABLE
+        result (e.g. ``[Errno 61] Connection refused``), or ``""``.
+
+    A WARN line naming the failure reason is emitted on the first
+    failure for a given renderer and then at most once per
+    ``_STATE_FAIL_WARN_SEC`` — the 2 s monitor poll would otherwise
+    flood the log while a renderer stays down. A recovery is logged
+    once when the renderer answers again."""
+    raw, err = _av_soap(av_url, "GetTransportInfo",
         '<u:GetTransportInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
         '<InstanceID>0</InstanceID></u:GetTransportInfo>')
+    if err is not None:
+        now  = time.monotonic()
+        last = _state_fail_log.get(av_url)
+        if last is None or now - last > _STATE_FAIL_WARN_SEC:
+            log.warning(f"avtransport_get_state: renderer unreachable "
+                        f"({av_url}) — {err}")
+            _state_fail_log[av_url] = now
+        return "UNREACHABLE", err
+    if _state_fail_log.pop(av_url, None) is not None:
+        log.info(f"avtransport_get_state: renderer reachable again ({av_url})")
     if not raw:
-        return "UNKNOWN"
+        return "UNKNOWN", ""
     try:
         root = ET.fromstring(raw)
         for el in root.iter():
             if el.tag.endswith("CurrentTransportState"):
-                return (el.text or "UNKNOWN").strip()
+                return (el.text or "UNKNOWN").strip(), ""
     except ET.ParseError:
         pass
-    return "UNKNOWN"
+    return "UNKNOWN", ""
+
+
+def avtransport_get_state(av_url: str) -> str:
+    """Thin wrapper over avtransport_probe_state() returning just the
+    state string. ``UNREACHABLE`` means the SOAP call failed (renderer
+    lost); ``UNKNOWN`` means the renderer answered but reported no
+    usable state. Callers that need the failure reason should use
+    avtransport_probe_state() directly."""
+    return avtransport_probe_state(av_url)[0]
 
 
 def avtransport_get_position(av_url: str) -> dict:
@@ -185,7 +238,7 @@ def avtransport_get_position(av_url: str) -> dict:
        "title": str, "state": str}
     All fields may be None on failure.
     """
-    raw = _av_soap(av_url, "GetPositionInfo",
+    raw, _err = _av_soap(av_url, "GetPositionInfo",
         '<u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
         '<InstanceID>0</InstanceID></u:GetPositionInfo>')
 
