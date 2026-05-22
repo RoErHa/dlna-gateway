@@ -165,6 +165,21 @@ class TestRadioFavouritesDB(unittest.TestCase):
         self.db.radio_fav_add(_station())
         self.assertFalse(self.db.radio_fav_reorder([]))
 
+    def test_update_changes_editable_fields(self):
+        self.db.radio_fav_add(_station())
+        self.assertTrue(self.db.radio_fav_update(
+            "u1", name="BBC Renamed", stream_url="http://new/stream"))
+        row = self.db.radio_fav_list()[0]
+        self.assertEqual(row["name"], "BBC Renamed")
+        self.assertEqual(row["stream_url"], "http://new/stream")
+
+    def test_update_unknown_uuid_returns_false(self):
+        self.assertFalse(self.db.radio_fav_update("nope", name="X"))
+
+    def test_update_with_no_fields_returns_false(self):
+        self.db.radio_fav_add(_station())
+        self.assertFalse(self.db.radio_fav_update("u1"))
+
     def test_bitrate_garbage_coerced_to_zero(self):
         s = _station()
         s["bitrate"] = "not-a-number"

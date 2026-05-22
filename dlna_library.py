@@ -1094,6 +1094,28 @@ class LibraryDB:
                     "WHERE station_uuid=?", (i, uuid))
         return True
 
+    def radio_fav_update(self, station_uuid: str, *, name: str = None,
+                         stream_url: str = None,
+                         homepage: str = None) -> bool:
+        """Update an existing favourite's editable fields — backs
+        Subsonic's updateInternetRadioStation. Only non-None arguments
+        are written. Returns True if a row was changed."""
+        sets, vals = [], []
+        if name is not None:
+            sets.append("name=?");       vals.append(name)
+        if stream_url is not None:
+            sets.append("stream_url=?"); vals.append(stream_url)
+        if homepage is not None:
+            sets.append("homepage=?");   vals.append(homepage)
+        if not sets:
+            return False
+        vals.append(station_uuid)
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                f"UPDATE radio_favourites SET {', '.join(sets)} "
+                f"WHERE station_uuid=?", vals)
+        return cur.rowcount > 0
+
 
 def _dur_to_secs(dur: str) -> int:
     """'H:MM:SS' → integer seconds, -1 if unparseable."""

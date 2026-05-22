@@ -231,7 +231,8 @@ class TestSimpleEndpoints(_BaseDB):
         self.assertEqual(folders[0]["name"], "Music")
 
     def test_unimplemented_method_returns_not_found(self):
-        _, body = _call("getInternetRadioStations", {}, db=self.db)
+        # getPodcasts is deliberately out of scope (see CLAUDE.md).
+        _, body = _call("getPodcasts", {}, db=self.db)
         self.assertEqual(body["status"], "failed")
         self.assertEqual(body["error"]["code"], 70)
 
@@ -515,6 +516,84 @@ class TestXmlFormat(unittest.TestCase):
         self.assertIn('Mick &amp; Keith &lt;2&gt;', xml)
         self.assertIn('Back in &quot;Black&quot;', xml)
         self.assertNotIn(' & ', xml)  # raw ampersand would be a bug
+
+
+# ── Internet radio ───────────────────────────────────────────────
+
+def _radio_station(uuid_, name, **kw):
+    return {"station_uuid": uuid_, "name": name,
+            "stream_url": kw.get("stream_url", f"http://ice/{uuid_}"),
+            "homepage": kw.get("homepage", ""), "favicon": "",
+            "codec": "MP3", "bitrate": 128, "country": "GB", "tags": "rock"}
+
+
+class TestInternetRadio(_BaseDB):
+
+    def test_radio_id_round_trip(self):
+        sid = api_subsonic._radio_id("abc-123")
+        self.assertEqual(sid, "rs:abc-123")
+        self.assertEqual(api_subsonic._radio_id_decode(sid), "abc-123")
+        self.assertIsNone(api_subsonic._radio_id_decode("tr:xxx"))
+        self.assertIsNone(api_subsonic._radio_id_decode(""))
+
+    def test_get_internet_radio_stations_lists_favourites(self):
+        self.db.radio_fav_add(_radio_station("u1", "BBC 6"))
+        self.db.radio_fav_add(_radio_station("u2", "FIP"))
+        h, body = _call("getInternetRadioStations", {}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        stations = body["internetRadioStations"]["internetRadioStation"]
+        self.assertEqual(len(stations), 2)
+        self.assertEqual({s["name"] for s in stations}, {"BBC 6", "FIP"})
+        self.assertTrue(all(s["id"].startswith("rs:") for s in stations))
+
+    def test_create_internet_radio_station(self):
+        h, body = _call("createInternetRadioStation",
+                        {"name": "KEXP", "streamUrl": "http://ice/kexp",
+                         "homepageUrl": "http://kexp.org"}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        favs = self.db.radio_fav_list()
+        self.assertEqual(len(favs), 1)
+        self.assertEqual(favs[0]["name"], "KEXP")
+        self.assertEqual(favs[0]["stream_url"], "http://ice/kexp")
+
+    def test_create_missing_params_fails(self):
+        h, body = _call("createInternetRadioStation",
+                        {"name": "No URL"}, db=self.db)
+        self.assertEqual(body["status"], "failed")
+        self.assertEqual(body["error"]["code"], 10)
+
+    def test_create_honours_25_cap(self):
+        for i in range(self.db.RADIO_FAV_MAX):
+            self.db.radio_fav_add(_radio_station(f"u{i}", f"S{i}"))
+        h, body = _call("createInternetRadioStation",
+                        {"name": "Overflow", "streamUrl": "http://ice/of"},
+                        db=self.db)
+        self.assertEqual(body["status"], "failed")
+        self.assertEqual(self.db.radio_fav_count(), 25)
+
+    def test_update_internet_radio_station(self):
+        self.db.radio_fav_add(_radio_station("u1", "Old Name",
+                                             stream_url="http://ice/old"))
+        h, body = _call("updateInternetRadioStation",
+                        {"id": api_subsonic._radio_id("u1"),
+                         "name": "New Name",
+                         "streamUrl": "http://ice/new"}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        fav = self.db.radio_fav_list()[0]
+        self.assertEqual(fav["name"], "New Name")
+        self.assertEqual(fav["stream_url"], "http://ice/new")
+
+    def test_delete_internet_radio_station(self):
+        self.db.radio_fav_add(_radio_station("u1", "BBC 6"))
+        h, body = _call("deleteInternetRadioStation",
+                        {"id": api_subsonic._radio_id("u1")}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(self.db.radio_fav_count(), 0)
+
+    def test_delete_bad_id_fails(self):
+        h, body = _call("deleteInternetRadioStation", {"id": "garbage"},
+                        db=self.db)
+        self.assertEqual(body["status"], "failed")
 
 
 if __name__ == "__main__":
