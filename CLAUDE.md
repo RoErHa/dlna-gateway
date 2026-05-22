@@ -868,3 +868,156 @@ case-insensitive extension match, `mp4` treated as non-music,
 ```bash
 python3 -m unittest tools.test_prune_empty_music_dirs -v
 ```
+
+## Subsonic API (Phase 1, in flight)
+
+A read-only-ish Subsonic-compatible HTTP API that lets any third-party
+Subsonic iOS client (Amperfy, substreamer, play:Sub, …) browse the
+gateway's library and stream from it. **The primary motivator is
+CarPlay**: those clients have polished CarPlay implementations, the
+gateway PWA fundamentally can't (CarPlay is a closed iOS-native
+framework). Subsonic API is also pure HTTP, so it traverses Tailscale
+cleanly — unlike UPnP's SSDP multicast discovery which doesn't.
+
+### What the iOS client sees
+
+The Subsonic client connects to **the gateway**, not AssetUPnP. The
+flow:
+
+```
+iPhone Subsonic client (CarPlay)
+    ↓ HTTPS over Tailscale
+dlna-gateway  /rest/*
+    ↓ library.db reads for browse/playlists/favourites/search
+    ↓ proxies audio bytes from AssetUPnP for /rest/stream
+AssetUPnP (invisible to the client; just a byte source)
+```
+
+Every piece of gateway state is exposed:
+- Tracks, artists, albums (as indexed from AssetUPnP into library.db).
+- User playlists + the existing `__favourites__` track-level playlist.
+- `album_favourites` is exposed as Subsonic's "starred albums".
+- `play_counts` increments via `/rest/scrobble` so radio bias keeps
+  working from cars too.
+- Cover art (gateway's `album_art` cache + AssetUPnP-served art via
+  the existing `/art` proxy).
+
+Lyrics aren't exposed (not in the Subsonic spec); still work in the
+PWA.
+
+### Endpoints
+
+Mounted under `/rest/*`. Both response formats are supported: XML is
+the spec default (and what Amperfy and other clients send when no `f=`
+is given), `?f=json` selects JSON. The format is resolved once in
+`handle()` and stashed on the handler as `_subsonic_format`. JSON
+wrapper:
+
+```json
+{"subsonic-response":
+  {"status":"ok", "version":"1.16.1",
+   "type":"dlna-gateway", "serverVersion":"1.0", ...payload}}
+```
+
+Errors: `"status":"failed"` with `{"error": {"code": N, "message": "…"}}`.
+
+| Endpoint | Maps to | Purpose |
+|---|---|---|
+| `/rest/ping` | — | Connectivity test |
+| `/rest/getLicense` | — | Hard-coded `{valid:true}` |
+| `/rest/getMusicFolders` | — | Single folder, id=1, name="Music" |
+| `/rest/getIndexes` | `DB.all_artists` aggregated A-Z | Legacy artist index |
+| `/rest/getArtists` | `DB.all_artists` | Modern artist list |
+| `/rest/getArtist?id=` | `DB.artist_albums(udn, artist)` | Albums under an artist |
+| `/rest/getAlbum?id=` | `DB.album_tracks(udn, artist, album)` | Tracks in an album |
+| `/rest/getAlbumList2?type=&size=&offset=` | `DB.all_albums` + sort by `type` | type ∈ newest/alphabeticalByName/recent/random/frequent/starred |
+| `/rest/search3?query=` | `DB.search` | Existing FTS5 search |
+| `/rest/getPlaylists` | `DB.pl_list()` | All playlists |
+| `/rest/getPlaylist?id=` | `DB.pl_get(pl_id)` | One playlist's tracks |
+| `/rest/createPlaylist` `/updatePlaylist` `/deletePlaylist` | `DB.pl_create / pl_add_track / pl_remove_track / pl_delete` | Bidirectional sync |
+| `/rest/star` `/unstar` | `DB.album_fav_add / album_fav_remove` | Album-level starring → reuses Album Favourites |
+| `/rest/getStarred2` | `DB.album_fav_list()` | Starred albums |
+| `/rest/stream?id=` | track ID → URL → `dlna_player.proxy_stream` | Audio (Range supported via existing proxy) |
+| `/rest/getCoverArt?id=` | album/track ID → art URL → `api_playback.art` | Cover image |
+| `/rest/scrobble?id=&submission=true` | `play_counts.count += 1` | Bumps radio bias from cars |
+
+### ID encoding
+
+Subsonic clients treat IDs as opaque strings. The gateway uses
+base64-urlsafe-encoded payloads (same pattern as
+`api_upnp._encode_album_id`):
+
+- Track:    `tr:<base64(track.url)>`
+- Album:    `al:<base64(artist + \x00 + album)>`
+- Artist:   `ar:<base64(artist)>`
+- Playlist: `pl:<plid>` (already opaque in the DB)
+
+Round-trips arbitrary unicode through XML/JSON/URL transports.
+
+### Authentication
+
+Single-user, single shared-secret. Read at startup from environment:
+
+```
+SUBSONIC_USER=user        # default "user" if unset
+SUBSONIC_PASSWORD=<set>   # REQUIRED; no default
+can be set using 
+launchctl unsetenv SUBSONIC_PASSWORD (delete old password)
+launchctl setenv SUBSONIC_PASSWORD=password (set new password)
+launchctl getenv SUBSONIC_PASSWORD (show new password)
+```
+
+The gateway accepts either the modern token+salt flow:
+
+```
+?u=<user>&t=MD5(password+salt)&s=<salt>&v=1.16.1&c=<clientname>
+```
+
+…or the legacy plaintext flow (clients can negotiate either):
+
+```
+?u=<user>&p=<password>            # plain
+?u=<user>&p=enc:<hex(password)>   # hex-encoded
+```
+
+If `SUBSONIC_PASSWORD` is unset the API returns 503 on every call —
+deliberate, prevents accidental auth-disabled exposure. Auth is a
+defence-in-depth layer; the primary access control is Tailscale (the
+gateway is not exposed to the public internet).
+
+### What's intentionally NOT implemented
+
+Subsonic's full spec has 60+ endpoints; about 45 are out of scope for
+this user / this gateway. Notable omissions:
+
+- Multiple users / roles / per-user playlists.
+- Podcasts, bookmarks, chat, internet radio, shares, jukebox mode,
+  video, transcoding, server-side resampling (`maxBitRate` ignored —
+  always serve the original).
+- `getNowPlaying` (gateway isn't a player from Subsonic's POV — the
+  iPhone is the player).
+- Track-level starring (only album-level via `getStarred2`). Could
+  extend with a `track_favourites` table later if needed; for now,
+  starring a track no-ops gracefully.
+
+### Connecting an iOS client
+
+Recommended: **Amperfy** (free, open source, well-rated, CarPlay).
+
+1. Set `SUBSONIC_PASSWORD` in the gateway's environment (LaunchAgent
+   plist or `.env`) and restart.
+2. Install Amperfy on the iPhone.
+3. Add server:
+   - URL: `https://ronsmacmini.tail5be6ad.ts.net:8443/rest`
+   - Username: `user` (or whatever `SUBSONIC_USER` is set to)
+   - Password: the value of `SUBSONIC_PASSWORD`
+4. Tap a playlist or starred album. Plug into CarPlay. Drive.
+
+Phone-call interruption recovery works because Amperfy is a native
+iOS app — it uses `AVAudioSession` properly, which the PWA can't.
+
+### Tests
+
+| File | What it covers |
+|---|---|
+| `tests/test_subsonic.py` | 38 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status |

@@ -66,6 +66,22 @@
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+
+        <!-- Subsonic API credentials (used by api_subsonic.py).
+             Edit the LIVE plist (~/Library/LaunchAgents/) to set
+             your real password — do NOT commit a real password to
+             this repo copy. After editing, reload:
+
+               launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+               launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+
+             If SUBSONIC_PASSWORD is unset (or empty) the /rest/*
+             endpoints return 503 — deliberate refuse-all to prevent
+             accidental auth-disabled exposure. -->
+        <key>SUBSONIC_USER</key>
+        <string>ronhamer</string>
+        <key>SUBSONIC_PASSWORD</key>
+        <string></string>
     </dict>
 </dict>
 </plist>
