@@ -21,7 +21,9 @@ import logging
 import random
 import urllib.parse
 
+import dlna_stream_proxy
 from dlna_library import DB
+from dlna_player import QUEUES
 
 log = logging.getLogger("dlna.api.radio")
 
@@ -168,3 +170,46 @@ def favourite_reorder(h, body):
         return
     ok = DB.radio_fav_reorder(order)
     h._json(200, {"ok": ok})
+
+
+def radio_stream(h, params):
+    """GET /radio_stream?url=<stream_url>
+
+    Browser-audio proxy for an internet-radio stream — de-interleaves
+    ICY metadata so <audio> gets clean audio and the StreamTitle is
+    parked for /api/radio/nowplaying. The UPnP/Naim path does NOT use
+    this — the renderer streams the station URL directly.
+    """
+    url = params.get("url", "")
+    if not url:
+        h.send_error(400, "Missing url")
+        return
+    dlna_stream_proxy.proxy_radio_stream(url, h)
+
+
+def nowplaying(h, params):
+    """GET /api/radio/nowplaying
+
+    Current "now playing" text for the radio screen, from one of:
+      ?stream=<url>  — browser path: the ICY StreamTitle the
+                       proxy_radio_stream de-interleaver last saw.
+      ?udn=<udn>     — UPnP path: the renderer's CurrentTrackMetaData
+                       (the Naim parses ICY itself; it surfaces in the
+                       existing queue snapshot as media_title).
+    Returns {title, source}. An empty title means nothing is known yet
+    (stream just started, or the station sends no metadata).
+    """
+    stream = params.get("stream", "")
+    udn    = params.get("udn", "")
+    if stream:
+        info = dlna_stream_proxy.icy_now(stream)
+        h._json(200, {"title":  (info or {}).get("title", ""),
+                      "source": "icy", "stream": stream})
+        return
+    if udn:
+        q    = QUEUES.peek(udn)
+        snap = q.snapshot() if q else {}
+        h._json(200, {"title":  snap.get("media_title", ""),
+                      "source": "upnp", "udn": udn})
+        return
+    h._json(400, {"error": "need stream or udn"})

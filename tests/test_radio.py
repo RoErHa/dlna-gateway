@@ -17,6 +17,7 @@ Covers the data contract of the radio_favourites table and the
 Run standalone:
     python3 -m unittest tests.test_radio -v
 """
+import io
 import json
 import os
 import sys
@@ -295,6 +296,94 @@ class TestRadioHandlers(unittest.TestCase):
         with patch.object(self.api, "_radiobrowser_get", return_value=None):
             self.api.search(h, {"q": "music"})
         self.assertEqual(h.last[0], 502)
+
+
+# ── ICY metadata de-interleaving ──────────────────────────────────
+
+def _icy_meta_block(title: str) -> bytes:
+    """Build one ICY metadata block: 1 length byte (in 16-byte units)
+    followed by `StreamTitle='…';` NUL-padded to a 16-byte multiple."""
+    raw = f"StreamTitle='{title}';".encode("utf-8")
+    raw += b"\x00" * ((-len(raw)) % 16)
+    return bytes([len(raw) // 16]) + raw
+
+
+class TestICYDeinterleave(unittest.TestCase):
+    """proxy_radio_stream's ICY parser — synthetic byte streams, no
+    network. Covers StreamTitle extraction and clean audio passthrough.
+    """
+
+    def setUp(self):
+        import dlna_stream_proxy
+        self.sp = dlna_stream_proxy
+
+    def test_parse_title_plain(self):
+        block = _icy_meta_block("Bowie - Starman")
+        # Drop the leading length byte — _parse_icy_title takes the body.
+        self.assertEqual(self.sp._parse_icy_title(block[1:]),
+                         "Bowie - Starman")
+
+    def test_parse_title_strips_nul_padding(self):
+        block = _icy_meta_block("X")
+        self.assertEqual(self.sp._parse_icy_title(block[1:]), "X")
+
+    def test_parse_title_absent_returns_none(self):
+        self.assertIsNone(self.sp._parse_icy_title(b"StreamUrl='http://x';"))
+        self.assertIsNone(self.sp._parse_icy_title(b"\x00" * 16))
+
+    def test_parse_title_empty(self):
+        # A station between tracks may send StreamTitle='';
+        self.assertEqual(self.sp._parse_icy_title(b"StreamTitle='';"), "")
+
+    def test_parse_title_unicode(self):
+        block = _icy_meta_block("Sigur Rós — Hoppípolla")
+        self.assertEqual(self.sp._parse_icy_title(block[1:]),
+                         "Sigur Rós — Hoppípolla")
+
+    def test_read_exact_loops_until_full(self):
+        # BytesIO.read(n) returns up to n; _read_exact must accumulate.
+        src = io.BytesIO(b"abcdefghij")
+        self.assertEqual(self.sp._read_exact(src, 4), b"abcd")
+        self.assertEqual(self.sp._read_exact(src, 4), b"efgh")
+        # Past EOF: returns the short remainder.
+        self.assertEqual(self.sp._read_exact(src, 4), b"ij")
+
+    def test_deinterleave_separates_audio_from_metadata(self):
+        metaint = 16
+        stream = (
+            b"A" * metaint + _icy_meta_block("Song One")  +
+            b"B" * metaint + bytes([0])                   +  # no-meta cycle
+            b"C" * metaint + _icy_meta_block("Song Two")  +
+            b"D" * 8                                          # short → EOF
+        )
+        audio  = bytearray()
+        titles = []
+        reason = self.sp._deinterleave_icy(
+            io.BytesIO(stream), metaint,
+            lambda b: (audio.extend(b) or True),
+            titles.append)
+        # Every audio byte passed through; not one metadata byte did.
+        self.assertEqual(bytes(audio), b"A" * 16 + b"B" * 16 +
+                                       b"C" * 16 + b"D" * 8)
+        self.assertEqual(titles, ["Song One", "Song Two"])
+        self.assertEqual(reason, "upstream_eof")
+
+    def test_deinterleave_aborts_when_writer_rejects(self):
+        # write() returning False (client gone) stops the loop cleanly.
+        metaint = 16
+        stream  = b"A" * metaint + _icy_meta_block("T") + b"B" * metaint
+        reason  = self.sp._deinterleave_icy(
+            io.BytesIO(stream), metaint,
+            lambda b: False, lambda t: None)
+        self.assertEqual(reason, "")
+
+    def test_icy_now_store_roundtrip(self):
+        url = "http://stream.example/icy-test-roundtrip"
+        self.sp._icy_set(url, "Now Playing X")
+        info = self.sp.icy_now(url)
+        self.assertEqual(info["title"], "Now Playing X")
+        self.assertGreater(info["updated"], 0)
+        self.assertIsNone(self.sp.icy_now("http://never-seen"))
 
 
 if __name__ == "__main__":

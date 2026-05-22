@@ -1046,13 +1046,16 @@ iOS app — it uses `AVAudioSession` properly, which the PWA can't.
 |---|---|
 | `tests/test_subsonic.py` | 38 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status |
 
-## Internet radio (Phase 1 done — Phases 2-3 pending)
+## Internet radio (Phase 1 + Phase 2 backend done)
 
-> Status: **Phase 1 implemented** — `radio_favourites` table,
-> `LibraryDB.radio_fav_*` methods, the `/api/radio/*` endpoints, and
-> radio-browser search. **Phases 2-3 (ICY metadata + now-playing
-> screen, Subsonic exposure) are not yet built** — those subsections
-> below remain design spec.
+> Status: **Phase 1 + Phase 2 backend implemented** — `radio_favourites`
+> table, `LibraryDB.radio_fav_*`, all `/api/radio/*` endpoints,
+> radio-browser search, `proxy_radio_stream()` ICY de-interleaving,
+> the `/radio_stream` proxy route, `/api/radio/nowplaying`, and the
+> `is_stream` guard in `RendererQueue._monitor`. **Still pending: the
+> Phase 2 frontend** (radio browse/search UI + the now-playing screen
+> variant in `app.js`) and **Phase 3** (Subsonic exposure). Those two
+> subsections below remain design spec.
 
 Internet radio (Icecast/Shoutcast streams) is in scope; **commercial
 streaming services (Spotify, Tidal, Apple Music, Qobuz) are not** —
@@ -1245,8 +1248,13 @@ A **4th outbound host** (add it to the "External services" table):
    single `is_stream` "track"); no `RendererQueue` change was needed
    since an extra dict key is harmless and a 0-duration single-track
    queue already behaves. No ICY yet (title = station name).
-2. **Phase 2** — `proxy_radio_stream()` ICY parsing +
-   `/api/radio/nowplaying` + the radio now-playing screen variant.
+2. **Phase 2** — *backend ✅ done*: `proxy_radio_stream()` ICY
+   de-interleaving, the `/radio_stream` route, `/api/radio/nowplaying`
+   (browser `?stream=` ICY path + UPnP `?udn=` snapshot path), and the
+   `is_stream` guard in `_monitor_decision` (radio never auto-advances
+   — a momentary `STOPPED` is a rebuffer). *Frontend ⏳ pending*: the
+   radio browse/search UI and the now-playing screen variant in
+   `app.js`.
 3. **Phase 3** — Subsonic `getInternetRadioStations` family → radio in
    CarPlay.
 
