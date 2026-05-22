@@ -37,6 +37,12 @@ let playlists=[],curPlId=null;
 // Distinct from playlists / curPlId — these are whole-album bookmarks.
 let albumFavouritesCache=null;
 
+// Internet radio ("📡 Stations"): favourites cache (null = stale), the
+// cap, and the station currently playing — when non-null the
+// now-playing panel is in its radio variant.
+let radioFavCache=null, radioFavLimit=25, currentRadioStation=null;
+let _radioSearchTimer=null, _radioActiveTag="", _icyPollTimer=null;
+
 // ── Browser audio queue ───────────────────────────────────────────
 const browserAudio=document.getElementById("browser-audio");
 let browserQueue=[],browserIdx=0;
@@ -909,6 +915,7 @@ async function sendRenderQueue(udn, tracks){
 
 // Central function: play a list of track objects via whatever output is selected
 async function playTracklist(tracks, title, artist){
+  _exitRadioMode();   // a normal queue replaces any radio session
   // Apply shuffle before anything else so art/title reflect actual first track
   if(shuffleEnabled) tracks=shuffle(tracks);
   const out=$("output-sel").value;
@@ -1014,6 +1021,13 @@ async function showPlaylists(){
   favAlbums.innerHTML=`<div class="pl-item-name">⭐ Favourite Albums</div><div class="pl-item-count">albums</div>`;
   favAlbums.addEventListener("click",showAlbumFavourites);
   list.appendChild(favAlbums);
+  // Synthetic second row: internet-radio stations ("📡 Stations").
+  const favRadio=document.createElement("div");
+  favRadio.id="radio-pl-item";
+  favRadio.className="pl-item";
+  favRadio.innerHTML=`<div class="pl-item-name">📡 Radio Stations</div><div class="pl-item-count">internet radio</div>`;
+  favRadio.addEventListener("click",showRadioStations);
+  list.appendChild(favRadio);
   if(!playlists.length){
     const msg=document.createElement("div");
     msg.className="msg";msg.style.padding="12px 20px 20px";
@@ -1111,6 +1125,284 @@ async function _showFavAlbumTracks(artist, album){
   const tracks = data.tracks || [];
   renderListAppend({containers:[], items: tracks});
   if(tracks.length > 1){ _wireAlbumFavStar(artist, album); }
+}
+
+// ── Internet radio ("📡 Stations") ───────────────────────────────
+const RADIO_GENRES=["Prog","Prog-rock","Jazz","Pop","Rock","Classical"];
+
+// Open the right-column radio view: search box + genre chips + list.
+async function showRadioStations(){
+  curPlId="__radio__";
+  $("pl-panel-title").textContent="📡 Radio Stations";
+  $("pl-back-btn").style.display="";
+  $("pl-list").style.display="none";
+  $("pl-tracks").classList.add("visible");
+  $("pl-actions").innerHTML="";
+  $("pl-tracks").innerHTML=`
+    <div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:6px">
+        <input id="radio-search" type="text" placeholder="🔍 Search stations…" autocomplete="off"
+          style="flex:1;background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:6px 8px;border-radius:var(--r);outline:none">
+        <span id="radio-cap" style="font-size:11px;color:var(--ink-dim);white-space:nowrap"></span>
+      </div>
+      <div id="radio-genre-chips" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+    </div>
+    <div id="radio-list"></div>`;
+  $("radio-search").addEventListener("input",e=>{
+    clearTimeout(_radioSearchTimer);
+    const q=e.target.value.trim();
+    _radioSearchTimer=setTimeout(()=>radioSearch({q}),350);
+  });
+  renderGenreChips();
+  await renderRadioFavourites();
+}
+
+function renderGenreChips(){
+  const box=$("radio-genre-chips");
+  if(!box) return;
+  box.innerHTML="";
+  RADIO_GENRES.forEach(g=>{
+    const tag=g.toLowerCase();
+    const chip=document.createElement("button");
+    chip.className="radio-chip";
+    chip.dataset.tag=tag;
+    chip.dataset.active="0";
+    chip.textContent=g;
+    chip.style.cssText="font-size:11px;padding:3px 9px;border-radius:11px;cursor:pointer;"
+      +"font-family:var(--fm);background:var(--raised);border:1px solid var(--border);color:var(--ink-dim)";
+    chip.addEventListener("click",()=>{
+      _radioActiveTag=(_radioActiveTag===tag)?"":tag;
+      _markActiveChip();
+      const inp=$("radio-search"); if(inp) inp.value="";
+      if(_radioActiveTag) radioSearch({tag:_radioActiveTag});
+      else renderRadioFavourites();
+    });
+    box.appendChild(chip);
+  });
+  _markActiveChip();
+}
+
+function _markActiveChip(){
+  document.querySelectorAll(".radio-chip").forEach(c=>{
+    const on=c.dataset.tag===_radioActiveTag;
+    c.dataset.active=on?"1":"0";
+    c.style.background=on?"var(--amber)":"var(--raised)";
+    c.style.color=on?"#000":"var(--ink-dim)";
+  });
+}
+
+// Search the radio-browser catalogue. q (name) and tag (genre chip)
+// combine; with neither set, fall back to the favourites list.
+async function radioSearch({q="",tag=""}={}){
+  const inp=$("radio-search");
+  q   = q   || (inp?inp.value.trim():"");
+  tag = tag || _radioActiveTag;
+  if(!q && !tag){ renderRadioFavourites(); return; }
+  const list=$("radio-list");
+  if(list) list.innerHTML='<div class="msg" style="padding:16px">Searching…</div>';
+  const params=new URLSearchParams();
+  if(q)   params.set("q",q);
+  if(tag) params.set("tag",tag);
+  const r=await api("/api/radio/search?"+params.toString());
+  if(!r){ if(list) list.innerHTML='<div class="msg" style="padding:16px">Search failed.</div>'; return; }
+  let stations=[];
+  try{ stations=await r.json(); }catch(e){ stations=[]; }
+  renderRadioResults(Array.isArray(stations)?stations:[]);
+}
+
+async function renderRadioFavourites(){
+  const list=$("radio-list");
+  if(!list) return;
+  list.innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  if(radioFavCache===null){
+    const r=await api("/api/radio/favourites");
+    if(!r){ list.innerHTML='<div class="msg" style="padding:16px">Could not load.</div>'; return; }
+    const d=await r.json();
+    radioFavCache=d.stations||[];
+    if(typeof d.limit==="number") radioFavLimit=d.limit;
+  }
+  _updateRadioCap();
+  list.innerHTML="";
+  if(!radioFavCache.length){
+    list.innerHTML='<div class="msg" style="padding:16px">No stations yet — search above to add one.</div>';
+    return;
+  }
+  radioFavCache.forEach(st=>list.appendChild(_radioRow(st,true)));
+}
+
+function renderRadioResults(stations){
+  const list=$("radio-list");
+  if(!list) return;
+  _updateRadioCap();
+  list.innerHTML="";
+  if(!stations.length){
+    list.innerHTML='<div class="msg" style="padding:16px">No stations found.</div>';
+    return;
+  }
+  stations.forEach(st=>list.appendChild(_radioRow(st,false)));
+}
+
+function _radioIsFav(uuid){
+  return !!(radioFavCache||[]).find(s=>s.station_uuid===uuid);
+}
+
+function _updateRadioCap(){
+  const cap=$("radio-cap");
+  if(!cap) return;
+  const n=(radioFavCache||[]).length;
+  cap.textContent=`${n}/${radioFavLimit}`;
+  cap.style.color=n>=radioFavLimit?"var(--amber)":"var(--ink-dim)";
+}
+
+// One station row. isFav rows carry a ✕ remove; search-result rows
+// carry a ☆/★ favourite toggle. The genre tags lead the sub-line.
+function _radioRow(st,isFav){
+  const div=document.createElement("div");
+  div.className="pl-track radio-row";
+  div.dataset.uuid=st.station_uuid||"";
+  const art=st.favicon
+    ? `<img src="${artUrl(st.favicon)}" style="width:32px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
+    : `<div class="row-icon">📻</div>`;
+  const genre=(st.tags||"").split(",").map(s=>s.trim()).filter(Boolean).slice(0,2).join(", ");
+  const tech=[st.codec,st.bitrate?st.bitrate+"k":"",st.country].filter(Boolean).join(" ");
+  const sub=[genre,tech].filter(Boolean).join(" · ");
+  const fav=isFav || _radioIsFav(st.station_uuid);
+  const ctrl=isFav
+    ? `<button class="pl-remove radio-remove" title="Remove station">✕</button>`
+    : `<button class="radio-star" data-fav="${fav?1:0}" title="${fav?"Favourited":"Add to favourites"}" style="background:none;border:none;color:var(--amber);font-size:16px;cursor:pointer;padding:0 4px">${fav?"★":"☆"}</button>`;
+  div.innerHTML=`${art}<div class="pl-track-body"><div class="pl-track-title">${esc(st.name||"")}</div><div class="pl-track-sub">${esc(sub)}</div></div>${ctrl}`;
+  div.querySelector(".pl-track-body").addEventListener("click",()=>playStation(st));
+  const star=div.querySelector(".radio-star");
+  if(star) star.addEventListener("click",e=>{e.stopPropagation();toggleRadioFav(st,star);});
+  const rm=div.querySelector(".radio-remove");
+  if(rm) rm.addEventListener("click",e=>{e.stopPropagation();removeRadioFav(st,div);});
+  return div;
+}
+
+async function toggleRadioFav(st,star){
+  if(star.dataset.fav==="1"){
+    star.dataset.fav="0";star.textContent="☆";star.title="Add to favourites";
+    await removeRadioFav(st,null);
+    return;
+  }
+  // Optimistic flip to ★ — reverts on failure or a full-cap 409.
+  star.dataset.fav="1";star.textContent="★";star.title="Favourited";
+  const r=await api("/api/radio/favourites/add",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(st)});
+  if(!r||r.status>=500){
+    star.dataset.fav="0";star.textContent="☆";toast("Add failed");return;
+  }
+  if(r.status===409){
+    star.dataset.fav="0";star.textContent="☆";
+    toast(`Radio favourites full (${radioFavLimit}) — remove one first`);
+    return;
+  }
+  if(Array.isArray(radioFavCache) && !_radioIsFav(st.station_uuid))
+    radioFavCache.push(st);
+  _updateRadioCap();
+  toast(`📡 Added ${st.name}`);
+}
+
+async function removeRadioFav(st,rowEl){
+  const r=await api("/api/radio/favourites/remove",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({station_uuid:st.station_uuid})});
+  if(!r){ toast("Remove failed"); return; }
+  if(Array.isArray(radioFavCache))
+    radioFavCache=radioFavCache.filter(s=>s.station_uuid!==st.station_uuid);
+  _updateRadioCap();
+  if(rowEl) rowEl.remove();
+  toast(`Removed ${st.name}`);
+}
+
+// Play an internet-radio station. Browser output → the /radio_stream
+// ICY-de-interleaving proxy; UPnP output → an is_stream track posted
+// to the renderer queue (which never auto-advances it).
+async function playStation(st){
+  currentRadioStation=st;
+  const out=$("output-sel").value;
+  activeDevice=out;
+  $("np-title").textContent=st.name||"Radio";
+  $("np-artist").textContent="";   // ICY metadata fills this
+  $("np-album").textContent="";
+  $("np-meta").textContent="";
+  if(st.favicon){
+    $("art").innerHTML=`<img src="${artUrl(st.favicon)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='📻'">`;
+  } else { $("art").textContent="📻"; }
+  $("player").className="playing is-audio is-radio";
+  $("btn-pp").textContent="⏸ Pause";
+  $("hdr-status").textContent=st.name||"";
+  setNpTrack(null);          // hide track-level actions
+  _applyRadioLayout(true);
+  _updateMiniPlayer({title:st.name,artist:"📻 Radio",art:st.favicon||""});
+
+  if(out==="browser"){
+    browserQueue=[];browserIdx=0;
+    browserAudio.src=`/radio_stream?url=${enc(st.stream_url)}`;
+    _playBrowserAudio("radio_station");
+    toast(`📡 ${st.name}`);
+  } else {
+    const rendUdn=out.replace("upnp:","");
+    const track={url:st.stream_url,title:st.name,artist:"Radio",
+                 album:"",art:st.favicon||"",duration:"",is_stream:true};
+    if(await sendRenderQueue(rendUdn,[track]))
+      toast(`📡 ${st.name} → ${renderers[rendUdn]?.name||rendUdn}`);
+  }
+  _startIcyPoll();
+}
+
+// Show/hide now-playing chrome for the radio variant. on=false
+// restores the normal track layout (#np-actions stays governed by
+// setNpTrack()).
+function _applyRadioLayout(on){
+  const sk=$("seek-section"); if(sk) sk.style.display=on?"none":"";
+  const lv=$("np-live");      if(lv) lv.style.display=on?"":"none";
+  $("btn-rew").style.display=on?"none":"";
+  $("btn-fwd").style.display=on?"none":"";
+  if(on) $("np-actions").style.display="none";
+}
+
+// Leave radio mode — called by every non-radio play path.
+function _exitRadioMode(){
+  if(!currentRadioStation && !_icyPollTimer) return;
+  currentRadioStation=null;
+  _stopIcyPoll();
+  _applyRadioLayout(false);
+}
+
+function _startIcyPoll(){
+  _stopIcyPoll();
+  pollIcy();
+  _icyPollTimer=setInterval(pollIcy,10000);
+}
+function _stopIcyPoll(){
+  if(_icyPollTimer){ clearInterval(_icyPollTimer); _icyPollTimer=null; }
+}
+// Poll the current station's "now playing" text into #np-artist.
+async function pollIcy(){
+  if(!currentRadioStation) return;
+  const out=$("output-sel").value;
+  const url=(out==="browser")
+    ? `/api/radio/nowplaying?stream=${enc(currentRadioStation.stream_url)}`
+    : `/api/radio/nowplaying?udn=${enc(out.replace("upnp:",""))}`;
+  const r=await api(url);
+  if(!r) return;
+  let d={};
+  try{ d=await r.json(); }catch(e){ return; }
+  if(d.title) $("np-artist").textContent=d.title;
+}
+
+// ⏮ / ⏭ in radio mode step through the favourites like presets.
+async function radioPreset(dir){
+  if(!radioFavCache || !radioFavCache.length){
+    const r=await api("/api/radio/favourites");
+    if(r){ const d=await r.json(); radioFavCache=d.stations||[]; }
+  }
+  const favs=radioFavCache||[];
+  if(!favs.length){ toast("No favourite stations"); return; }
+  let idx=favs.findIndex(s=>s.station_uuid===(currentRadioStation||{}).station_uuid);
+  idx=((idx<0?0:idx)+dir+favs.length)%favs.length;
+  playStation(favs[idx]);
 }
 
 async function openPlaylist(plId){
@@ -1257,6 +1549,7 @@ async function startPlay(item,rowEl){
 }
 
 async function PLAYER_play(url,title,art,mtype,artist,album){
+  _exitRadioMode();   // a normal track replaces any radio session
   $("np-title").textContent=title||"";
   $("np-artist").textContent=artist||"";
   $("np-album").textContent=album||"";
@@ -1294,8 +1587,12 @@ $("btn-pp").addEventListener("click",()=>control({action:"pause"}));
 $("btn-stop").addEventListener("click",()=>{control({action:"stop"});resetPlayer();});
 $("btn-rew").addEventListener("click",()=>control({action:"seek",value:-30}));
 $("btn-fwd").addEventListener("click",()=>control({action:"seek",value:30}));
-$("btn-prev").addEventListener("click",()=>control({action:"prev"}));
-$("btn-next").addEventListener("click",()=>control({action:"next"}));
+$("btn-prev").addEventListener("click",()=>{
+  if(currentRadioStation) radioPreset(-1); else control({action:"prev"});
+});
+$("btn-next").addEventListener("click",()=>{
+  if(currentRadioStation) radioPreset(1);  else control({action:"next"});
+});
 $("btn-shuffle").addEventListener("click",()=>{
   shuffleEnabled=!shuffleEnabled;
   localStorage.setItem("dlna_shuffle", shuffleEnabled?"1":"0");
@@ -1410,6 +1707,7 @@ async function control(cmd){
 }
 
 function resetPlayer(){
+  _exitRadioMode();
   $("np-title").textContent="Nothing playing";$("np-artist").textContent="";$("np-album").textContent="";
   $("np-meta").textContent="Browse or search your library";
   $("art").textContent="🎵";$("btn-pp").textContent="▶ Play";$("player").className="";
@@ -1455,14 +1753,18 @@ async function pollState(){
   $("sb-uri").textContent=ps.media_title||ps.title||"—";
   if(ps.alive){
     $("btn-pp").textContent=ps.paused?"▶ Play":"⏸ Pause";
-    if(ps.media_title||ps.title){
-      $("np-title").textContent=ps.media_title||ps.title||"";
-      $("hdr-status").textContent=ps.media_title||ps.title||"";
+    // In radio mode the station name + ICY title own the panel — don't
+    // let the renderer snapshot clobber them.
+    if(!currentRadioStation){
+      if(ps.media_title||ps.title){
+        $("np-title").textContent=ps.media_title||ps.title||"";
+        $("hdr-status").textContent=ps.media_title||ps.title||"";
+      }
+      if(ps.artist) $("np-artist").textContent=ps.artist;
+      if(ps.album)  $("np-album").textContent=ps.album;
+      if(ps.queue_len>1)
+        $("np-meta").textContent=`Track ${ps.queue_pos} of ${ps.queue_len}`;
     }
-    if(ps.artist) $("np-artist").textContent=ps.artist;
-    if(ps.album)  $("np-album").textContent=ps.album;
-    if(ps.queue_len>1)
-      $("np-meta").textContent=`Track ${ps.queue_pos} of ${ps.queue_len}`;
     if(!seeking&&ps.duration&&ps.position!=null){
       const p=(ps.position/ps.duration)*100;
       $("seek-fill").style.width=p+"%";$("seek-thumb").style.left=p+"%";

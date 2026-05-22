@@ -70,6 +70,11 @@ class StubGateway:
                                       "target_peak_dbtp": -1.0}
         # /api/render_queue can be told to reject with 409 once
         self.render_queue_busy: dict | None = None
+        # internet radio ("📡 Stations") — Phase 2 frontend
+        self.radio_favourites: list[dict] = []
+        self.radio_search_results: list[dict] = []
+        self.radio_fav_full: bool = False      # force /add to 409
+        self.icy_title: str = ""               # /api/radio/nowplaying
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -448,6 +453,25 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self._safe_write(wav)
             return
+        if path == "/api/radio/favourites":
+            self._send_json({"stations": gw.radio_favourites, "limit": 25})
+            return
+        if path == "/api/radio/search":
+            # The real endpoint filters HLS / proxies radio-browser; the
+            # stub just returns whatever the test seeded.
+            self._send_json(gw.radio_search_results)
+            return
+        if path == "/api/radio/nowplaying":
+            self._send_json({"title": gw.icy_title, "source": "icy"})
+            return
+        if path == "/radio_stream":
+            wav = self._silent_wav(seconds=1)
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", str(len(wav)))
+            self.end_headers()
+            self._safe_write(wav)
+            return
 
         self.send_error(404)
 
@@ -481,6 +505,27 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
             return
         if path == "/api/client_log":
+            self._send_json({"ok": True})
+            return
+        if path == "/api/radio/favourites/add":
+            if gw.radio_fav_full or len(gw.radio_favourites) >= 25:
+                self._send_json({"error": "favourites_full", "limit": 25},
+                                status=409)
+                return
+            uuid = payload.get("station_uuid", "")
+            if uuid and not any(s.get("station_uuid") == uuid
+                                for s in gw.radio_favourites):
+                gw.radio_favourites.append(payload)
+            self._send_json({"ok": True, "created": True})
+            return
+        if path == "/api/radio/favourites/remove":
+            uuid = payload.get("station_uuid", "")
+            before = len(gw.radio_favourites)
+            gw.radio_favourites = [s for s in gw.radio_favourites
+                                   if s.get("station_uuid") != uuid]
+            self._send_json({"ok": before != len(gw.radio_favourites)})
+            return
+        if path == "/api/radio/favourites/reorder":
             self._send_json({"ok": True})
             return
 
