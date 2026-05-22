@@ -539,6 +539,7 @@ The gateway is LAN-only except for album-art and lyrics lookups. Three hosts are
 | `musicbrainz.org` | Resolve `(artist, album)` → release-group MBID | `GET /ws/2/release-group/?query=…&fmt=json&limit=5` |
 | `coverartarchive.org` | Confirm a front cover exists for that MBID | `HEAD /release-group/{mbid}/front-500` — 200/301/302/307 counts as "have it", 404 counts as "no cover" |
 | `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
+| `*.api.radio-browser.info` | Internet-radio station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&hidebroken=true` — see the "Internet radio" section |
 
 Required contract:
 
@@ -1015,9 +1016,10 @@ Subsonic's full spec has 60+ endpoints; about 45 are out of scope for
 this user / this gateway. Notable omissions:
 
 - Multiple users / roles / per-user playlists.
-- Podcasts, bookmarks, chat, internet radio, shares, jukebox mode,
-  video, transcoding, server-side resampling (`maxBitRate` ignored —
-  always serve the original).
+- Podcasts, bookmarks, chat, shares, jukebox mode, video,
+  transcoding, server-side resampling (`maxBitRate` ignored —
+  always serve the original). *(Internet radio IS implemented — see
+  the "Internet radio" section.)*
 - `getNowPlaying` (gateway isn't a player from Subsonic's POV — the
   iPhone is the player).
 - Track-level starring (only album-level via `getStarred2`). Could
@@ -1230,7 +1232,7 @@ URL/XML-safe, so no base64 wrapping (unlike `tr:` / `al:`).
 
 ### radio-browser.info integration
 
-A **4th outbound host** (add it to the "External services" table):
+A **4th outbound host** (also listed in the "External services" table above):
 
 | Host | Purpose | Method + path |
 |---|---|---|
