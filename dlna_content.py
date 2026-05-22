@@ -321,7 +321,7 @@ def cd_search(control_url: str, query: str, count: int = 200) -> dict:
 # existing callers (dlna_player, api_playback) without touching them.
 from dlna_avtransport import (  # noqa: F401
     avtransport_send, avtransport_stop, avtransport_pause,
-    avtransport_get_state, avtransport_get_position,
+    avtransport_get_state, avtransport_probe_state, avtransport_get_position,
     set_volume, get_volume,
 )
 
