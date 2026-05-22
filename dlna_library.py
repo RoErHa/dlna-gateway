@@ -134,6 +134,25 @@ class LibraryDB:
                     added_at   INTEGER NOT NULL,
                     PRIMARY KEY (artist, album)
                 );
+                -- User-favourited internet-radio stations. Capped at
+                -- RADIO_FAV_MAX (25), enforced server-side in
+                -- radio_fav_add(). Identity = radio-browser stationuuid,
+                -- so favourites survive clear(udn) / re-indexing — same
+                -- convention as album_favourites. Radio has no udn; the
+                -- radio-browser catalogue itself is never persisted.
+                CREATE TABLE IF NOT EXISTS radio_favourites (
+                    station_uuid TEXT PRIMARY KEY,
+                    name         TEXT NOT NULL,
+                    stream_url   TEXT NOT NULL,
+                    homepage     TEXT,
+                    favicon      TEXT,
+                    codec        TEXT,
+                    bitrate      INTEGER,
+                    country      TEXT,
+                    tags         TEXT,
+                    added_at     INTEGER NOT NULL,
+                    sort_order   INTEGER NOT NULL DEFAULT 0
+                );
                 CREATE TABLE IF NOT EXISTS index_meta (
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
@@ -977,6 +996,103 @@ class LibraryDB:
                 ORDER BY f.added_at DESC
             """).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Internet-radio favourites ────────────────────────────────
+    # Saved stations from radio-browser.info, capped at RADIO_FAV_MAX.
+    # Identity = station_uuid so they survive clear(udn) / re-indexing,
+    # same persistence pattern as album_favourites. The radio-browser
+    # catalogue itself is never stored — only the user's favourites.
+
+    RADIO_FAV_MAX = 25
+
+    def radio_fav_count(self) -> int:
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM radio_favourites").fetchone()
+        return row["n"] if row else 0
+
+    def radio_fav_is(self, station_uuid: str) -> bool:
+        if not station_uuid:
+            return False
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM radio_favourites WHERE station_uuid=? LIMIT 1",
+                (station_uuid,)).fetchone()
+        return row is not None
+
+    def radio_fav_add(self, station: dict) -> str:
+        """Add a station to favourites. Returns one of:
+          'ok'     — new row created
+          'exists' — already favourited (idempotent no-op)
+          'full'   — at RADIO_FAV_MAX and this is a NEW station
+          'bad'    — missing station_uuid / name / stream_url
+
+        The 25-cap is enforced HERE, server-side — never trust the
+        client. Re-adding an existing favourite is always allowed and
+        never counts against the cap.
+        """
+        uuid   = (station.get("station_uuid") or "").strip()
+        name   = (station.get("name") or "").strip()
+        stream = (station.get("stream_url") or "").strip()
+        if not uuid or not name or not stream:
+            return "bad"
+        if self.radio_fav_is(uuid):
+            return "exists"
+        if self.radio_fav_count() >= self.RADIO_FAV_MAX:
+            return "full"
+        try:
+            bitrate = int(station.get("bitrate") or 0)
+        except (TypeError, ValueError):
+            bitrate = 0
+        with self._pool.write() as conn:
+            # New favourites land last in the preset order.
+            row = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 "
+                               "AS nxt FROM radio_favourites").fetchone()
+            conn.execute(
+                "INSERT OR IGNORE INTO radio_favourites "
+                "(station_uuid, name, stream_url, homepage, favicon, "
+                " codec, bitrate, country, tags, added_at, sort_order) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (uuid, name, stream,
+                 station.get("homepage") or "",
+                 station.get("favicon")  or "",
+                 station.get("codec")    or "",
+                 bitrate,
+                 station.get("country")  or "",
+                 station.get("tags")     or "",
+                 int(time.time()), row["nxt"] if row else 0))
+        return "ok"
+
+    def radio_fav_remove(self, station_uuid: str) -> bool:
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                "DELETE FROM radio_favourites WHERE station_uuid=?",
+                (station_uuid,))
+        return cur.rowcount > 0
+
+    def radio_fav_list(self) -> list:
+        """All favourited stations, ordered by sort_order then added_at."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT station_uuid, name, stream_url, homepage, favicon, "
+                "       codec, bitrate, country, tags, added_at, sort_order "
+                "FROM radio_favourites "
+                "ORDER BY sort_order ASC, added_at ASC").fetchall()
+        return [dict(r) for r in rows]
+
+    def radio_fav_reorder(self, uuid_list: list) -> bool:
+        """Persist a new preset ordering: each UUID's sort_order is set
+        to its index in uuid_list. UUIDs not in the favourites table are
+        silently ignored; favourites not named keep their old order
+        value (so they sort after the listed ones if those start at 0)."""
+        if not uuid_list:
+            return False
+        with self._pool.write() as conn:
+            for i, uuid in enumerate(uuid_list):
+                conn.execute(
+                    "UPDATE radio_favourites SET sort_order=? "
+                    "WHERE station_uuid=?", (i, uuid))
+        return True
 
 
 def _dur_to_secs(dur: str) -> int:
