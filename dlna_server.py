@@ -25,6 +25,7 @@ from socketserver import ThreadingMixIn
 import api_browse
 import api_playback
 import api_playlists
+import api_subsonic
 import api_upnp
 from dlna_routes import GET_ROUTES, POST_ROUTES
 
@@ -154,12 +155,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, data):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
+        # Wrap the WHOLE send in try/except — clients can disconnect
+        # between send_response and end_headers (rare with /api/* but
+        # common with Subsonic clients that probe-then-cancel) and the
+        # header flush itself writes to the socket.
         try:
+            self.send_response(code)
+            self._send_cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -176,12 +181,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             pass
 
     def _xml_response(self, code: int, body: bytes):
-        self.send_response(code)
-        self._send_cors()
-        self.send_header("Content-Type", "text/xml; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
         try:
+            self.send_response(code)
+            self._send_cors()
+            self.send_header("Content-Type", "text/xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -251,6 +256,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         params = dict(urllib.parse.parse_qsl(parsed.query))
+
+        # ── Subsonic API (/rest/*) ────────────────────────────────
+        # Dispatched as a prefix because Subsonic methods are open-set;
+        # registering each path in GET_ROUTES would bloat the table.
+        # api_subsonic owns its own param parsing (multi-value fields).
+        if path.startswith("/rest/"):
+            api_subsonic.handle(self, "GET", path, parsed.query)
+            return
 
         # ── Web UI ────────────────────────────────────────────────
         if path in ("/", "/index.html"):
@@ -349,6 +362,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except Exception as e:
             log.warning(f"do_POST: cannot read body: {e}")
             body = b""
+
+        # ── Subsonic API also accepts POST with form-encoded body ──
+        if path.startswith("/rest/"):
+            api_subsonic.handle(self, "POST", path, parsed.query, body)
+            return
 
         fn = POST_ROUTES.get(path)
         if fn:
