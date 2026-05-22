@@ -1046,10 +1046,13 @@ iOS app — it uses `AVAudioSession` properly, which the PWA can't.
 |---|---|
 | `tests/test_subsonic.py` | 38 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status |
 
-## Internet radio (SPEC — not yet implemented)
+## Internet radio (Phase 1 done — Phases 2-3 pending)
 
-> Status: **design spec only.** No code exists yet. This section is
-> the agreed plan; implement in the phases at the end.
+> Status: **Phase 1 implemented** — `radio_favourites` table,
+> `LibraryDB.radio_fav_*` methods, the `/api/radio/*` endpoints, and
+> radio-browser search. **Phases 2-3 (ICY metadata + now-playing
+> screen, Subsonic exposure) are not yet built** — those subsections
+> below remain design spec.
 
 Internet radio (Icecast/Shoutcast streams) is in scope; **commercial
 streaming services (Spotify, Tidal, Apple Music, Qobuz) are not** —
@@ -1122,7 +1125,7 @@ radio_fav_count()              -> int
 |---|---|
 | `GET /api/radio/search?q=&country=&tag=&limit=` | Proxy radio-browser `/json/stations/search`; **filters out `hls=1`**; returns normalized station objects |
 | `GET /api/radio/favourites` | The ≤25 saved stations, ordered |
-| `POST /api/radio/favourites/add` `{station_uuid}` | Gateway re-fetches the full record from radio-browser by UUID (anti-tamper), inserts. **409 `{error:"favourites_full", limit:25}`** when full |
+| `POST /api/radio/favourites/add` | Body = the full station object as returned by `/api/radio/search`. Inserts; **409 `{error:"favourites_full", limit:25}`** when at the cap. Missing `station_uuid`/`name`/`stream_url` → 400 |
 | `POST /api/radio/favourites/remove` `{station_uuid}` | Delete; `{ok:false}` if absent |
 | `POST /api/radio/favourites/reorder` `{order:[uuid,…]}` | Preset ordering for now-playing prev/next |
 | `GET /api/radio/nowplaying?udn=` *(or* `?stream=`*)* | Current ICY metadata for the live screen |
@@ -1236,9 +1239,12 @@ A **4th outbound host** (add it to the "External services" table):
 
 ### Implementation phases
 
-1. **Phase 1** — `radio_favourites` table + `LibraryDB` methods +
-   native endpoints + `/api/radio/search`. Play via `render_queue`
-   with `is_stream`. No ICY yet (title = station name).
+1. **Phase 1** ✅ *done* — `radio_favourites` table + `LibraryDB`
+   methods + native endpoints + `/api/radio/search`. Playback is the
+   caller's job via the existing `/api/render_queue` (a station is a
+   single `is_stream` "track"); no `RendererQueue` change was needed
+   since an extra dict key is harmless and a 0-duration single-track
+   queue already behaves. No ICY yet (title = station name).
 2. **Phase 2** — `proxy_radio_stream()` ICY parsing +
    `/api/radio/nowplaying` + the radio now-playing screen variant.
 3. **Phase 3** — Subsonic `getInternetRadioStations` family → radio in

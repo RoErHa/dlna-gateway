@@ -14,6 +14,7 @@ Adding a new endpoint:
 import api_browse
 import api_playback
 import api_playlists
+import api_radio
 import api_upnp
 
 
@@ -31,6 +32,8 @@ GET_ROUTES = {
     "/api/artist_albums":  api_browse.artist_albums,
     "/api/browse_letter":  api_browse.browse_letter,
     "/api/radio":          api_browse.radio,
+    "/api/radio/search":     api_radio.search,
+    "/api/radio/favourites": api_radio.favourites,
     "/api/renderer_state": api_playback.renderer_state,
     "/api/index/status":    api_playback.index_status,
     "/api/index/rebuild":   api_playback.index_rebuild,
@@ -59,5 +62,8 @@ POST_ROUTES = {
     "/api/control":      api_playback.control,
     "/api/edit_track":   api_playback.edit_track,
     "/api/client_log":   api_playback.client_log,
+    "/api/radio/favourites/add":     api_radio.favourite_add,
+    "/api/radio/favourites/remove":  api_radio.favourite_remove,
+    "/api/radio/favourites/reorder": api_radio.favourite_reorder,
     "/gw/cd/control":    api_upnp.cd_control,
 }
