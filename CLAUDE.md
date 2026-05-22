@@ -1046,17 +1046,17 @@ iOS app — it uses `AVAudioSession` properly, which the PWA can't.
 |---|---|
 | `tests/test_subsonic.py` | 38 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status |
 
-## Internet radio (Phases 1 & 2 done — Phase 3 pending)
+## Internet radio (complete — all 3 phases done)
 
-> Status: **Phases 1 & 2 fully implemented** — `radio_favourites`
-> table, `LibraryDB.radio_fav_*`, all `/api/radio/*` endpoints,
-> radio-browser search, `proxy_radio_stream()` ICY de-interleaving,
-> `/radio_stream`, `/api/radio/nowplaying`, the `is_stream` monitor
-> guard, **and the frontend**: the "📡 Radio Stations" right-column
-> view (search box + genre chips + favourites), `playStation()`, and
-> the now-playing radio variant in `app.js`. **Still pending: Phase 3**
-> (Subsonic `getInternetRadioStations` exposure for CarPlay) — that
-> subsection below remains design spec.
+> Status: **fully implemented, all phases.** `radio_favourites` table,
+> `LibraryDB.radio_fav_*` (incl. `radio_fav_update`), all
+> `/api/radio/*` endpoints, radio-browser search,
+> `proxy_radio_stream()` ICY de-interleaving, `/radio_stream`,
+> `/api/radio/nowplaying`, the `is_stream` monitor guard, the
+> "📡 Radio Stations" frontend (search + genre chips + favourites +
+> now-playing radio variant), **and** the Subsonic radio methods
+> (`getInternetRadioStations` / `create` / `update` /
+> `deleteInternetRadioStation`) — radio works in CarPlay via Amperfy.
 >
 > Naming note: the pre-existing "📻 Radio" button is a *different*
 > feature (a play-count-biased shuffle of the local library); internet
@@ -1265,14 +1265,18 @@ A **4th outbound host** (add it to the "External services" table):
    favourites view, `playStation()` (browser → `/radio_stream`, UPnP →
    `is_stream` render-queue track), and the now-playing radio variant
    (LIVE badge, no seek bar, `⏮/⏭` cycle favourites as presets).
-3. **Phase 3** — Subsonic `getInternetRadioStations` family → radio in
-   CarPlay.
+3. **Phase 3** ✅ *done* — the four Subsonic radio methods
+   (`getInternetRadioStations` / `create` / `update` /
+   `deleteInternetRadioStation`) in `api_subsonic.py`, mapped onto
+   `radio_favourites` via the `rs:<station_uuid>` id codec. A
+   Subsonic-created station gets a synthesised `uuid4`; `create`
+   honours the 25-cap. Radio now works in CarPlay via Amperfy.
 
-### Tests (to write alongside the code)
+### Tests
 
 | File | What it covers |
 |---|---|
-| `tests/test_radio.py` | DB round-trip; **25-cap enforced / `'full'` returned / re-add idempotent and doesn't count**; `clear(udn)` survival; reorder; handler 400/409/200; HLS filtered from search |
-| `tests/test_subsonic.py` | Extend: `getInternetRadioStations` lists favourites, `create` honours the cap, `delete` removes, `rs:` ID round-trip |
+| `tests/test_radio.py` | DB round-trip; **25-cap enforced / `'full'` returned / re-add idempotent and doesn't count**; `radio_fav_update`; `clear(udn)` survival; reorder; handler 400/409/200; HLS filtered from search; ICY parse / `_read_exact` / de-interleave round-trip |
+| `tests/test_subsonic.py` | `TestInternetRadio` — `rs:` id round-trip, `getInternetRadioStations` lists favourites, `create` (+ missing-param fail, 25-cap fail), `update` changes fields, `delete` removes (+ bad-id fail) |
 | `tests/frontend/test_radio.py` | 16 Playwright tests — synthetic `#radio-pl-item` placement, opening the view, debounced name search, genre-chip tag search, clearing→favourites, optimistic ☆→★ add, cap-full 409 toast, favourite list + ✕ remove, genre shown on rows, browser vs UPnP playback, radio now-playing layout (LIVE badge, no seek bar), ICY poll into `#np-artist`, `⏮/⏭` cycle favourites |
 | ICY parser unit test | Feed a synthetic `icy-metaint` byte stream through the `proxy_radio_stream` parser; assert `StreamTitle` extraction + clean audio passthrough |

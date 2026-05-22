@@ -25,6 +25,7 @@ import logging
 import os
 import time
 import urllib.parse
+import uuid
 from typing import Callable, Optional
 
 from dlna_discovery import SERVERS
@@ -252,6 +253,13 @@ def _album_id_decode(s: str) -> Optional[tuple]:
 
 def _artist_id(artist: str) -> str:        return _enc("ar:", artist)
 def _artist_id_decode(s: str) -> Optional[str]: return _dec("ar:", s)
+
+# Radio station ids are NOT base64-wrapped — radio-browser station
+# UUIDs (and our uuid4 for client-created stations) are already
+# URL/XML/JSON-safe, so a bare `rs:` prefix round-trips fine.
+def _radio_id(station_uuid: str) -> str:   return "rs:" + (station_uuid or "")
+def _radio_id_decode(s: str) -> Optional[str]:
+    return s[3:] if s and s.startswith("rs:") else None
 
 
 # ── udn resolution ────────────────────────────────────────────────
@@ -811,6 +819,72 @@ def _scrobble(h, params):
     _ok(h, {})
 
 
+# ── Internet radio ───────────────────────────────────────────────
+# Subsonic's native radio methods, mapped onto radio_favourites.
+# Subsonic clients see the gateway's ≤25 favourite stations and can
+# create / update / delete them — bidirectional sync with the PWA's
+# "📡 Stations" view.
+
+def _so_radio(st: dict) -> dict:
+    """radio_favourites row → Subsonic <internetRadioStation>."""
+    return {
+        "id":          _radio_id(st.get("station_uuid", "")),
+        "name":        st.get("name", ""),
+        "streamUrl":   st.get("stream_url", ""),
+        "homepageUrl": st.get("homepage", ""),
+    }
+
+
+def _get_internet_radio_stations(h, params):
+    stations = DB.radio_fav_list()
+    _ok(h, {"internetRadioStations": {
+        "internetRadioStation": [_so_radio(s) for s in stations],
+    }})
+
+
+def _create_internet_radio_station(h, params):
+    """createInternetRadioStation?streamUrl=&name=&homepageUrl=
+    The Subsonic client has no radio-browser UUID, so we synthesise
+    one. Honours the 25-cap — a full cache returns a generic error."""
+    stream = (params.get("streamUrl") or "").strip()
+    name   = (params.get("name") or "").strip()
+    if not stream or not name:
+        return _fail(h, ERR_MISSING_PARAM, "streamUrl and name required")
+    result = DB.radio_fav_add({
+        "station_uuid": str(uuid.uuid4()),
+        "name":         name,
+        "stream_url":   stream,
+        "homepage":     (params.get("homepageUrl") or "").strip(),
+        "favicon": "", "codec": "", "bitrate": 0, "country": "", "tags": "",
+    })
+    if result == "full":
+        return _fail(h, ERR_GENERIC,
+                     f"Radio favourites full (limit {DB.RADIO_FAV_MAX})")
+    _ok(h, {})
+
+
+def _update_internet_radio_station(h, params):
+    """updateInternetRadioStation?id=&streamUrl=&name=&homepageUrl="""
+    sid = _radio_id_decode(params.get("id", ""))
+    stream = (params.get("streamUrl") or "").strip()
+    name   = (params.get("name") or "").strip()
+    if not sid or not stream or not name:
+        return _fail(h, ERR_MISSING_PARAM,
+                     "id, streamUrl and name required")
+    DB.radio_fav_update(sid, name=name, stream_url=stream,
+                        homepage=(params.get("homepageUrl") or "").strip())
+    _ok(h, {})
+
+
+def _delete_internet_radio_station(h, params):
+    """deleteInternetRadioStation?id="""
+    sid = _radio_id_decode(params.get("id", ""))
+    if not sid:
+        return _fail(h, ERR_MISSING_PARAM, "valid id required")
+    DB.radio_fav_remove(sid)
+    _ok(h, {})
+
+
 # ── Dispatcher ───────────────────────────────────────────────────
 
 _METHODS: dict[str, Callable] = {
@@ -837,6 +911,10 @@ _METHODS: dict[str, Callable] = {
     "getCoverArt":      _get_cover_art,
     "scrobble":         _scrobble,
     "getUser":          _get_user,
+    "getInternetRadioStations":   _get_internet_radio_stations,
+    "createInternetRadioStation": _create_internet_radio_station,
+    "updateInternetRadioStation": _update_internet_radio_station,
+    "deleteInternetRadioStation": _delete_internet_radio_station,
     "getGenres":        _get_genres,
     "getScanStatus":    _get_scan_status,
     "getOpenSubsonicExtensions": _get_open_subsonic_extensions,
