@@ -27,6 +27,7 @@ logs/
 .snapshots/
 *.zip
 *.tar
+*.odt
 project docs/
 
 # DB / runtime
