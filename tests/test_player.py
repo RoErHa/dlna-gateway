@@ -229,6 +229,21 @@ class TestMonitorDecision(unittest.TestCase):
         advance, _ = _monitor_decision("PLAYING", "PLAYING", 99999, 60)
         self.assertFalse(advance)
 
+    def test_stream_never_finishes_on_stopped(self):
+        # Internet radio: a momentary STOPPED is a rebuffer, not an end.
+        # The normal PLAYING→STOPPED finish must NOT fire for a stream.
+        advance, reason = _monitor_decision("PLAYING", "STOPPED", 250, 0,
+                                            is_stream=True)
+        self.assertFalse(advance)
+        self.assertEqual(reason, "")
+
+    def test_stream_never_watchdogged(self):
+        # A stream has no real duration; even with a bogus short one and
+        # huge elapsed, the watchdog must stay inert for is_stream.
+        advance, _ = _monitor_decision("UNKNOWN", "UNKNOWN", 99999, 180,
+                                       is_stream=True)
+        self.assertFalse(advance)
+
 
 # ── RendererQueue — send-failure abort logic ──────────────────────
 

@@ -69,7 +69,8 @@ UNKNOWN_ABORT_SEC:  float = 300.0
 
 
 def _monitor_decision(prev_state: str, cur_state: str,
-                      elapsed: float, dur: float):
+                      elapsed: float, dur: float,
+                      is_stream: bool = False):
     """Pure decision helper for ``RendererQueue._monitor``.
 
     Given the previous and current transport state, how long the
@@ -79,7 +80,13 @@ def _monitor_decision(prev_state: str, cur_state: str,
     Returns ``(advance: bool, reason: str)`` — reason is ``'finished'``
     for the normal end-of-track transition, ``'watchdog'`` when the
     duration-based stall guard fires, and ``''`` when not advancing.
+
+    ``is_stream`` (internet radio) suppresses both: a live stream has
+    no end and no duration, and a momentary ``STOPPED`` is a rebuffer,
+    not a track ending. Radio is ended only by an explicit user stop.
     """
+    if is_stream:
+        return False, ""
     # Normal end-of-track: the renderer reported PLAYING and is now
     # STOPPED (or has no media) → the track played out.
     if (prev_state in ("PLAYING", "TRANSITIONING") and
@@ -584,10 +591,11 @@ class RendererQueue:
             else:
                 unknown_since = 0.0
 
-            elapsed = (time.monotonic() - start) if start > 0 else 0.0
-            dur     = _dur_to_sec(cur_t.get("duration")) if cur_t else 0
+            elapsed   = (time.monotonic() - start) if start > 0 else 0.0
+            dur       = _dur_to_sec(cur_t.get("duration")) if cur_t else 0
+            is_stream = bool(cur_t.get("is_stream")) if cur_t else False
             advance, reason = _monitor_decision(prev_state, cur_state,
-                                                elapsed, dur)
+                                                elapsed, dur, is_stream)
             prev_state = cur_state
 
             if advance:
