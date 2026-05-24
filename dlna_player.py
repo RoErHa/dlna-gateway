@@ -508,7 +508,7 @@ class RendererQueue:
 
         log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "
                     f"{t.get('title','?')!r} — SetURI/Play returned False "
-                    f"(url={t.get('url','')[:80]})")
+                    f"(url={t.get('url','')})")
         self._log_track_end("send_failed")
 
         with self._lock:
