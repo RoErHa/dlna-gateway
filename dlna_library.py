@@ -1094,6 +1094,31 @@ class LibraryDB:
                     "WHERE station_uuid=?", (i, uuid))
         return True
 
+    def repair_fts(self) -> None:
+        """Drop, recreate, and rebuild ``tracks_fts`` from the ``tracks``
+        table — used to recover from FTS5 shadow-table corruption (the
+        recurring ``database disk image is malformed`` error in
+        ``clear()`` / ``upsert_tracks()`` that ``PRAGMA integrity_check``
+        does NOT catch because it only validates B-trees, not FTS5
+        internals).
+
+        Track rows are not touched. ``tracks_fts`` is an external-content
+        FTS table (``content=tracks``), so a full rebuild produces an
+        identical index from the live row data. The ``tracks_ai`` /
+        ``tracks_ad`` triggers reference ``tracks_fts`` by name and keep
+        working after the recreate.
+        """
+        with self._pool.write() as conn:
+            conn.execute("DROP TABLE IF EXISTS tracks_fts")
+            conn.execute(
+                "CREATE VIRTUAL TABLE tracks_fts USING fts5("
+                "title, artist, album, content=tracks, content_rowid=id, "
+                "tokenize='unicode61 remove_diacritics 1')")
+            conn.execute("INSERT INTO tracks_fts(tracks_fts) "
+                         "VALUES('rebuild')")
+        log.warning("LibraryDB.repair_fts: tracks_fts dropped, recreated, "
+                    "and rebuilt from tracks")
+
     def radio_fav_update(self, station_uuid: str, *, name: str = None,
                          stream_url: str = None,
                          homepage: str = None) -> bool:

@@ -119,5 +119,77 @@ class TestRadioPlayCountBias(unittest.TestCase):
         self.assertEqual(n, 0)
 
 
+# ── FTS5 repair — recovers from "database disk image is malformed" ──
+# The data-behaviour side of LibraryDB.repair_fts(); the indexer's
+# heal+retry wrapper around it is unit-tested in tests/test_indexer.py.
+
+class TestRepairFts(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+        # Seed a handful of tracks so FTS has something to match on.
+        with self.db._pool.write() as c:
+            for i in range(5):
+                c.execute(
+                    "INSERT INTO tracks(udn, obj_id, url, title, artist, "
+                    "album, duration, art, mime, genre, file_path) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    ("uuid:srv1", f"t{i}", f"http://x/t{i}.flac",
+                     f"Love Song {i}", "Artist A", "Album X",
+                     "0:03:00", "", "audio/flac", "", ""))
+
+    def tearDown(self):
+        self.db._pool.close()
+        os.unlink(self.tmp.name)
+
+    def _count(self):
+        with self.db._pool.read() as c:
+            return c.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+
+    def _fts_hits(self, term):
+        with self.db._pool.read() as c:
+            return c.execute(
+                "SELECT COUNT(*) FROM tracks_fts WHERE tracks_fts MATCH ?",
+                (term,)).fetchone()[0]
+
+    def test_repair_preserves_tracks(self):
+        before = self._count()
+        self.db.repair_fts()
+        self.assertEqual(self._count(), before)
+
+    def test_repair_regenerates_searchable_index(self):
+        self.db.repair_fts()
+        # All 5 seeded "Love Song" titles are searchable again.
+        self.assertEqual(self._fts_hits("love"), 5)
+
+    def test_repair_is_idempotent(self):
+        self.db.repair_fts()
+        self.db.repair_fts()   # second call must not raise
+        self.assertEqual(self._fts_hits("love"), 5)
+
+    def test_triggers_still_fire_after_repair(self):
+        """The tracks_ai / tracks_ad triggers write into tracks_fts by
+        name; after a DROP+CREATE the new vtable picks them up."""
+        self.db.repair_fts()
+        # tracks_ai: an INSERT must populate the FTS index for the new row.
+        with self.db._pool.write() as c:
+            c.execute(
+                "INSERT INTO tracks(udn, obj_id, url, title, artist, "
+                "album, duration, art, mime, genre, file_path) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("uuid:srv1", "t99", "http://x/t99.flac",
+                 "Fresh Track After Repair", "Artist B", "Album Y",
+                 "0:03:00", "", "audio/flac", "", ""))
+        self.assertEqual(self._fts_hits("fresh"), 1)
+        # tracks_ad: the DELETE that fails on a corrupt FTS index now
+        # succeeds — this is the exact path that died in the wild.
+        with self.db._pool.write() as c:
+            c.execute("DELETE FROM tracks WHERE obj_id='t99'")
+        self.assertEqual(self._count(), 5)
+        self.assertEqual(self._fts_hits("fresh"), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -14,6 +14,7 @@ The `INDEXER` singleton is created in dlna_library (composition root)
 and re-exported from there for backward compat.
 """
 import logging
+import sqlite3
 import threading
 from typing import Optional
 
@@ -81,9 +82,30 @@ class Indexer:
             daemon=True, name=f"indexer-{server.udn[:8]}")
         self._thread.start()
 
-    def _run(self, server, force: bool):
-        from dlna_content import cd_browse, browse_all
+    def _run_with_fts_heal(self, body_fn, *args, **kwargs):
+        """Run ``body_fn(*args, **kwargs)``; if it raises a
+        ``sqlite3.DatabaseError`` whose message contains "malformed"
+        (the FTS5 shadow-table corruption symptom — see
+        ``LibraryDB.repair_fts`` for the details), drop+recreate+rebuild
+        ``tracks_fts`` and retry the body once.
 
+        Any other exception, or a malformed error on the retry, is
+        re-raised — we never loop indefinitely. The recurring failure
+        in the wild (Apr 2026 ×2, May 2026) was a single FTS-corruption
+        event that one repair always cleared.
+        """
+        for attempt in (1, 2):
+            try:
+                return body_fn(*args, **kwargs)
+            except sqlite3.DatabaseError as e:
+                if attempt == 1 and "malformed" in str(e).lower():
+                    log.warning(f"Indexer: FTS index malformed ({e}) — "
+                                f"rebuilding tracks_fts and retrying once")
+                    self.library.repair_fts()
+                    continue
+                raise
+
+    def _run(self, server, force: bool):
         udn = server.udn
 
         if self._is_cancelled(udn):
@@ -101,6 +123,19 @@ class Indexer:
         self.state.update(status="running", progress=0, total=0,
                           tracks=0, server=server.name, error="")
         log.info(f"Indexer started for {server.name}")
+
+        try:
+            self._run_with_fts_heal(self._index_body, server, force)
+        except Exception as e:
+            log.exception(f"Indexer error: {e}")
+            self.state.update(status="error", error=str(e))
+
+    def _index_body(self, server, force: bool):
+        """The actual crawl — separated from ``_run`` so that
+        ``_run_with_fts_heal`` can retry the full body once after a
+        ``repair_fts()``."""
+        from dlna_content import cd_browse, browse_all
+        udn = server.udn
 
         try:
             # Find Album Artist/Album container.
@@ -210,6 +245,10 @@ class Indexer:
             except Exception:
                 pass   # module not yet fully initialised (test harness)
 
-        except Exception as e:
-            log.exception(f"Indexer error: {e}")
-            self.state.update(status="error", error=str(e))
+        except Exception:
+            # Let everything bubble up — _run wraps this call in
+            # _run_with_fts_heal, which catches a malformed-FTS
+            # DatabaseError and retries once after repair_fts(). Any
+            # other exception (or a malformed error on the retry) is
+            # logged + state-updated by _run's outer except.
+            raise
