@@ -1,20 +1,30 @@
 <!--
-  com.roha.dlna-gateway.plist
-  ───────────────────────────
-  LaunchAgent — starts the DLNA Gateway automatically when the Mac Mini
-  user session begins (i.e. after login or auto-login at boot).
+  com.roha.dlna-gateway.plist  —  TEMPLATE (macOS LaunchAgent)
+  ────────────────────────────────────────────────────────────
+  Starts the DLNA Gateway automatically when the user session
+  begins. **This is a template — edit the placeholders below before
+  installing.**
+
+  BEFORE YOU INSTALL:
+    1. Replace every `/path/to/dlna-gateway` with the absolute path
+       to your clone (e.g. /Users/<you>/dlna-gateway).
+    2. Optionally rename the file + the <Label> string to your own
+       namespace (e.g. `com.<you>.dlna-gateway.plist` /
+       `<Label>com.<you>.dlna-gateway</Label>`) — both must match.
+    3. Set SUBSONIC_PASSWORD (and optionally SUBSONIC_USER) — or
+       leave SUBSONIC_PASSWORD empty to refuse Subsonic calls. The
+       same vars can come from `.env` instead (see .env.example).
 
   INSTALL:
     cp com.roha.dlna-gateway.plist ~/Library/LaunchAgents/
-    launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
-    launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+    launchctl load ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
 
   MANAGE:
     launchctl list | grep dlna          # check it's loaded + PID
     launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
 
   LOGS:
-    tail -f ~/dlna-gateway/gateway.log   # rotating daily log
+    tail -f /path/to/dlna-gateway/gateway.log   # rotating daily log
     cat /tmp/dlna-gateway.out
     cat /tmp/dlna-gateway.err
 -->
@@ -24,12 +34,12 @@
     <string>com.roha.dlna-gateway</string>
 
     <key>WorkingDirectory</key>
-    <string>/Users/ronhamersma/dlna-gateway</string>
+    <string>/path/to/dlna-gateway</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ronhamersma/dlna-gateway/.venv/bin/python</string>
-        <string>/Users/ronhamersma/dlna-gateway/dlna_gateway.py</string>
+        <string>/path/to/dlna-gateway/.venv/bin/python</string>
+        <string>/path/to/dlna-gateway/dlna_gateway.py</string>
         <string>--no-browser</string>
     </array>
 
@@ -65,21 +75,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 
-        <!-- Subsonic API credentials (used by api_subsonic.py).
-             Edit the LIVE plist (~/Library/LaunchAgents/) to set
-             your real password — do NOT commit a real password to
-             this repo copy. After editing, reload:
-
-               launchctl unload ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
-               launchctl load   ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
-
-             If SUBSONIC_PASSWORD is unset (or empty) the /rest/*
-             endpoints return 503 — deliberate refuse-all to prevent
-             accidental auth-disabled exposure. -->
+        <!-- Subsonic API credentials. Prefer setting these in .env
+             (gitignored) instead of this plist — the gateway loads
+             .env at startup via python-dotenv. Values set here
+             override .env. Leaving SUBSONIC_PASSWORD empty makes the
+             /rest/* API return 503 on every call (safe default). -->
         <key>SUBSONIC_USER</key>
-        <string>ronhamer</string>
+        <string>user</string>
         <key>SUBSONIC_PASSWORD</key>
         <string></string>
     </dict>

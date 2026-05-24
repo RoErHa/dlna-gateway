@@ -18,6 +18,7 @@ no now-playing screen — playback is the caller's job via the existing
 import http.client
 import json
 import logging
+import os
 import random
 import urllib.parse
 
@@ -31,9 +32,11 @@ log = logging.getLogger("dlna.api.radio")
 # HTTPS; an identifying User-Agent is required, same contract as
 # MusicBrainz. The API is DNS round-robin across several mirrors; we
 # shuffle a small static list so load spreads and one dead mirror
-# doesn't kill search.
+# doesn't kill search. Contact email comes from GATEWAY_CONTACT_EMAIL
+# (set in .env — see dlna_art_fetcher for the placeholder-warning).
 _RB_HOSTS      = ["de1.api.radio-browser.info", "nl1.api.radio-browser.info"]
-_RB_USER_AGENT = "DLNAGateway/1.0 ( hintt@me.com )"
+_RB_USER_AGENT = (f"DLNAGateway/1.0 ( "
+                  f"{os.environ.get('GATEWAY_CONTACT_EMAIL','you@example.com').strip() or 'you@example.com'} )")
 _RB_TIMEOUT    = 10.0
 
 
