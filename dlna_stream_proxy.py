@@ -55,11 +55,12 @@ def proxy_stream(upstream_url: str, handler):
     path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
     use_ssl = parsed.scheme == "https"
 
-    sent_bytes = 0
-    reason     = "unknown"
-    t_start    = time.monotonic()
-    range_hdr  = handler.headers.get("Range", "")
-    log.info(f"proxy_stream ▶ START {host}{path[:80]}"
+    sent_bytes      = 0
+    reason          = "unknown"
+    upstream_status = 0
+    t_start         = time.monotonic()
+    range_hdr       = handler.headers.get("Range", "")
+    log.info(f"proxy_stream ▶ START {host}{path}"
              f"{' range=' + range_hdr if range_hdr else ''}")
 
     conn = None
@@ -77,6 +78,7 @@ def proxy_stream(upstream_url: str, handler):
 
         conn.request("GET", path, headers=req_headers)
         resp = conn.getresponse()
+        upstream_status = resp.status
 
         handler.send_response(resp.status)
         for h in ("Content-Type", "Content-Length", "Content-Range",
@@ -129,9 +131,9 @@ def proxy_stream(upstream_url: str, handler):
             pass
     finally:
         elapsed = time.monotonic() - t_start
-        log.info(f"proxy_stream ■ END   {host}{path[:60]} "
-                 f"sent={sent_bytes} bytes in {elapsed:.1f}s "
-                 f"reason={reason}")
+        log.info(f"proxy_stream ■ END   {host}{path} "
+                 f"upstream={upstream_status} sent={sent_bytes} bytes "
+                 f"in {elapsed:.1f}s reason={reason}")
         if conn:
             try:
                 conn.close()
