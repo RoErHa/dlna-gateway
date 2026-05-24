@@ -7,6 +7,10 @@
 # env / secrets
 .env
 .env.*
+!.env.example          # template IS tracked
+
+# personal prep checklist (operational recipe, not public docs)
+PREPARE_PUBLIC_RELEASE.md
 
 # Python
 __pycache__/
