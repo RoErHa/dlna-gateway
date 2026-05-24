@@ -37,6 +37,10 @@ logs/
 *.tgz
 *.odt
 *.rtf
+# Stray PDF exports (e.g. printed CLAUDE.md/README.md). Real docs
+# under docs/ are still tracked via the negation below.
+*.pdf
+!docs/*.pdf
 project docs/
 
 # DB / runtime
