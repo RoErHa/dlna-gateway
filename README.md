@@ -199,7 +199,5 @@ This project would not exist without:
 
 ## License
 
-**TBD** — see the project README discussion / repository owner for
-licensing terms. While the LICENSE file is absent the code is "all
-rights reserved" by default under copyright law. A LICENSE file will
-be added before the repository goes public.
+[MIT](LICENSE). Use it, fork it, modify it — just keep the copyright
++ licence notice in copies.
