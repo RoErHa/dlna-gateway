@@ -17,6 +17,7 @@ root) and re-exported from there for backward compat.
 import http.client
 import json
 import logging
+import os
 import threading
 import urllib.parse
 from typing import Optional
@@ -28,9 +29,19 @@ log = logging.getLogger("dlna.library")
 #   - UA must identify + include contact info
 #   - 1 req/sec sustained max; we go 1.1s for a safety margin
 #   - 10s per-connection timeout; failures become sticky notfound
-_MB_USER_AGENT     = "DLNAGateway/1.0 ( hintt@me.com )"
+# Contact email is read from GATEWAY_CONTACT_EMAIL — set it in .env so
+# MusicBrainz can identify you per their ToS. A clearly-placeholder
+# fallback ("you@example.com") triggers a one-time WARN at startup so
+# you don't silently look anonymous to MB.
+_CONTACT_EMAIL     = os.environ.get("GATEWAY_CONTACT_EMAIL",
+                                    "you@example.com").strip() or "you@example.com"
+_MB_USER_AGENT     = f"DLNAGateway/1.0 ( {_CONTACT_EMAIL} )"
 _MB_RATE_LIMIT_SEC = 1.1
 _MB_TIMEOUT        = 10.0
+if _CONTACT_EMAIL == "you@example.com":
+    log.warning("GATEWAY_CONTACT_EMAIL not set in .env — using placeholder "
+                "in MusicBrainz / Cover Art Archive User-Agent. MusicBrainz "
+                "may throttle anonymous-looking requests.")
 
 
 def _lucene_escape(s: str) -> str:

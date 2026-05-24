@@ -7,3 +7,9 @@ rich>=13.7.0
 
 # Structured JSON logging for log aggregators (optional, --json-log)
 python-json-logger>=2.0.7
+
+# .env file loader — lets you keep secrets out of the launchd plist /
+# systemd unit / shell rc. Optional: if missing, env vars must come
+# from the process environment (launchctl setenv, systemd
+# EnvironmentFile, etc.) as before.
+python-dotenv>=1.0.0

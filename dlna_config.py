@@ -18,6 +18,19 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE   = os.path.join(_BASE_DIR, "library.db")
 CFG_FILE  = os.path.join(_BASE_DIR, "config.json")
 LOG_FILE  = os.path.join(_BASE_DIR, "gateway.log")
+
+# ── .env loader (optional) ────────────────────────────────────────
+# Load <repo>/.env into os.environ BEFORE any other module reads it.
+# Imported here because dlna_config is the first module imported by
+# dlna_gateway and by every api_*/dlna_* module. python-dotenv only
+# sets variables that aren't already in os.environ, so launchd
+# plist / systemd EnvironmentFile values still win.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_BASE_DIR, ".env"))
+except ImportError:
+    pass   # python-dotenv is optional; deployments setting env via
+           # other means don't need it.
 # Ensure the base directory exists as soon as this module is imported.
 # LibraryDB is a module-level singleton that calls _connect() before
 # setup_logging() runs, so we cannot rely on setup_logging to create it.

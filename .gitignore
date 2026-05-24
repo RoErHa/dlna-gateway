@@ -27,7 +27,10 @@ logs/
 .snapshots/
 *.zip
 *.tar
+*.tar.gz
+*.tgz
 *.odt
+*.rtf
 project docs/
 
 # DB / runtime
@@ -35,3 +38,15 @@ project docs/
 library.db*
 data/
 db/
+config.json
+
+# TLS / Tailscale cert material — NEVER commit private keys
+*.crt
+*.crt.bak
+*.key
+*.key.bak
+*.pem
+
+# Personal SQL dumps (use schema.sql in the repo for structure)
+dump.sql
+library_dump.sql

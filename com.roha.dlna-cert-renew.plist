@@ -1,24 +1,33 @@
 <!--
-  com.roha.dlna-cert-renew.plist
-  ──────────────────────────────
-  LaunchAgent — weekly Tailscale cert renewal for the DLNA gateway.
+  com.roha.dlna-cert-renew.plist  —  TEMPLATE (macOS LaunchAgent)
+  ───────────────────────────────────────────────────────────────
+  Weekly Tailscale cert renewal for the DLNA gateway. **Only useful
+  on macOS with Tailscale installed.** On Linux use a systemd timer;
+  on Windows use Task Scheduler.
 
-  Runs renew-cert.sh every Monday at 04:30 local. The script is a no-op
-  unless the cert has < 30 days left, so the actual `tailscale cert` call
-  fires roughly every 60 days (90-day certs renewed at 30-days-left).
-
+  Runs renew-cert.sh every Monday at 04:30 local. The script no-ops
+  unless the cert has < 30 days left, so `tailscale cert` fires
+  roughly every 60 days (90-day certs renewed at 30-days-left).
   Output goes to cert-renewal.log (script-managed). The plist's
-  StandardOut/Error catch only launchd-level errors before the script
-  starts.
+  StandardOut/Error catch only launchd-level errors before the
+  script starts.
+
+  BEFORE YOU INSTALL:
+    1. Replace `/path/to/dlna-gateway` with your clone's absolute
+       path.
+    2. Set TAILSCALE_CERT_HOST in .env to your tailnet hostname,
+       e.g. mymachine.tailXXXXX.ts.net  (renew-cert.sh reads it
+       from .env at run time).
+    3. Optionally rename the file + the <Label> to your namespace.
 
   INSTALL:
     cp com.roha.dlna-cert-renew.plist ~/Library/LaunchAgents/
     launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 
   MANAGE:
-    launchctl list | grep cert-renew                    # confirm loaded
+    launchctl list | grep cert-renew                            # confirm
     launchctl kickstart gui/$(id -u)/com.roha.dlna-cert-renew   # run now
-    tail -f ~/dlna-gateway/cert-renewal.log             # see results
+    tail -f /path/to/dlna-gateway/cert-renewal.log              # results
 -->
 <plist version="1.0">
 <dict>
@@ -26,11 +35,11 @@
     <string>com.roha.dlna-cert-renew</string>
 
     <key>WorkingDirectory</key>
-    <string>/Users/ronhamersma/dlna-gateway</string>
+    <string>/path/to/dlna-gateway</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ronhamersma/dlna-gateway/renew-cert.sh</string>
+        <string>/path/to/dlna-gateway/renew-cert.sh</string>
     </array>
 
     <!-- Weekly: Monday 04:30 (Weekday 1 = Mon on macOS launchd) -->
