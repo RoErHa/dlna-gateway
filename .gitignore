@@ -7,9 +7,11 @@
 # env / secrets
 .env
 .env.*
-!.env.example          # template IS tracked
+# .env.example IS tracked (the template). Inline comments aren't
+# supported by .gitignore, so the negation must be on its own line:
+!.env.example
 
-# personal prep checklist (operational recipe, not public docs)
+# Personal prep recipe — operational, not public docs.
 PREPARE_PUBLIC_RELEASE.md
 
 # Python
