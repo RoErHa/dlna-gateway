@@ -26,6 +26,11 @@ usable from any device with a browser.
   album-level favourites, lyrics (via lrclib), album art (sibling
   → MusicBrainz / Cover Art Archive fallback), per-track loudness
   normalisation (peak-based, ±2 dB clamp).
+- **Metadata enrichment (in flight).** Background worker fingerprints
+  tracks via Chromaprint and resolves them to MusicBrainz metadata
+  through AcoustID, fixing mistagged / untagged tracks. SQLite-only
+  by design — the worker fills `metadata_overrides`, never rewrites
+  on-disk file tags.
 - **Internet radio ("📡 Stations").** Search the radio-browser.info
   catalogue, favourite up to 25 stations, play with ICY now-playing
   metadata in a dedicated radio screen.
@@ -51,6 +56,8 @@ Hard requirements:
 
 - Python 3.9+
 - (Optional) `ffmpeg` on `PATH` — only needed for the loudness scanner.
+- (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
+  on macOS) — only needed for the AcoustID metadata-enrichment worker.
 - Network access to a UPnP MediaServer on your LAN.
 - Inbound TCP 8765 (HTTP) and 8443 (HTTPS) to the gateway from your
   clients; UDP 1900 multicast for SSDP discovery.
@@ -164,9 +171,19 @@ to `.env` and edit. Variables:
 - `TAILSCALE_CERT_HOST` — only needed if you use `renew-cert.sh`
   for automated Tailscale cert renewal. Your tailnet hostname,
   e.g. `mymachine.tailXXXXX.ts.net`.
+- `ACOUSTID_API_KEY` — only needed for the AcoustID metadata-
+  enrichment worker. **Must be an application key**, not a user key:
+  register a free application at
+  [acoustid.org/applications](https://acoustid.org/applications). The
+  user-account key from `/api-key` is for *submitting* fingerprints
+  and will be rejected on lookup with `HTTP 400 invalid API key`.
 
 Values set in the process environment (launchd plist, systemd
-`EnvironmentFile`, shell `export`) override `.env`.
+`EnvironmentFile`, shell `export`) override `.env`. **`.env` requires
+`python-dotenv`** (in `requirements.txt`, installed automatically by
+`setup.sh` / `pip install -r requirements.txt`) — without it, the file
+is silently ignored and env vars must come from the process
+environment.
 
 ## Database
 

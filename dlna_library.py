@@ -216,6 +216,13 @@ class LibraryDB:
         for col_sql in [
             "ALTER TABLE tracks ADD COLUMN genre TEXT DEFAULT ''",
             "ALTER TABLE tracks ADD COLUMN file_path TEXT DEFAULT ''",
+            # 2026-05-25: metadata_overrides.source distinguishes user edits
+            # ('manual') from the AcoustID background worker's writes
+            # ('acoustid', 'notfound'). Existence of a row replaces the need
+            # for a separate `meta_update` flag — same sticky-negative
+            # convention as album_art / lyrics.
+            "ALTER TABLE metadata_overrides ADD COLUMN source TEXT "
+            "NOT NULL DEFAULT 'manual'",
         ]:
             try:
                 with self._pool.write() as conn:
@@ -765,6 +772,124 @@ class LibraryDB:
                 "SELECT file_path FROM tracks WHERE url=?", (url,)).fetchone()
         return (row["file_path"] or "") if row else ""
 
+    # ── AcoustID metadata enrichment (used by dlna_acoustid) ──────
+
+    def bare_metadata_tracks(self) -> list:
+        """Tracks that have no `metadata_overrides` row of any source
+        (including 'notfound' sticky negatives). Mirrors the contract
+        of LoudnessScanner.bare_tracks / AlbumArtFetcher.bare_albums:
+        anything cached in any form is excluded so the worker doesn't
+        re-hit the AcoustID API for tracks it already processed.
+
+        Returns a list of (url,) tuples. URLs only — the AcoustID
+        lookup needs duration, but fpcalc reports it from the audio
+        itself, so we don't carry the DB-side value through."""
+        with self._pool.read() as conn:
+            rows = conn.execute("""
+                SELECT t.url
+                  FROM tracks t
+                 WHERE t.url != ''
+                   AND NOT EXISTS (
+                       SELECT 1 FROM metadata_overrides m WHERE m.url = t.url)
+                 GROUP BY t.url
+                 ORDER BY t.id
+            """).fetchall()
+        return [(r["url"],) for r in rows]
+
+    def metadata_override_set(self, url: str, source: str,
+                              artist: Optional[str] = None,
+                              album: Optional[str] = None,
+                              title: Optional[str] = None,
+                              genre: Optional[str] = None) -> bool:
+        """Write a metadata_overrides row from a non-user source (e.g.
+        AcoustID match) AND apply it onto `tracks` so the UI sees it
+        without waiting for the next re-index. Only non-None fields are
+        carried through — a missing album stays as whatever `tracks`
+        already had.
+
+        Use `metadata_override_mark_notfound()` for sticky negatives;
+        this method is for positive matches only.
+
+        Returns True if a row was written (always True for non-empty
+        URLs)."""
+        if not url:
+            return False
+        fields = {k: v for k, v in
+                  (("artist", artist), ("album", album),
+                   ("title", title), ("genre", genre))
+                  if v is not None and v != ""}
+        with self._pool.write() as conn:
+            # Upsert into overrides preserving any non-overwritten fields.
+            existing = conn.execute(
+                "SELECT artist, album, title, genre FROM metadata_overrides "
+                "WHERE url=?", (url,)).fetchone()
+            if existing:
+                merged = dict(existing)
+                merged.update(fields)
+                conn.execute(
+                    "UPDATE metadata_overrides "
+                    "SET artist=?, album=?, title=?, genre=?, source=?, "
+                    "    updated_at=datetime('now') WHERE url=?",
+                    (merged["artist"], merged["album"], merged["title"],
+                     merged["genre"], source, url))
+            else:
+                row = conn.execute(
+                    "SELECT artist, album, title, genre FROM tracks WHERE url=?",
+                    (url,)).fetchone()
+                base = dict(row) if row else {"artist": "", "album": "",
+                                              "title": "", "genre": ""}
+                base.update(fields)
+                conn.execute(
+                    "INSERT INTO metadata_overrides "
+                    "(url, artist, album, title, genre, source) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (url, base["artist"], base["album"], base["title"],
+                     base["genre"], source))
+            # Push the change onto tracks too — only the fields the caller
+            # supplied; others are untouched. The Indexer's COALESCE pass
+            # would do this on next re-index, but that may be weeks away.
+            #
+            # Catch UNIQUE(udn,artist,album,title) collisions: if two tracks
+            # would end up with identical artist/album/title after this
+            # update (e.g. AcoustID returned the same metadata for two
+            # duplicate-uploads), the override row is still the source of
+            # truth — we just can't push it onto `tracks` live. A future
+            # re-index will skip it too (same constraint); user-visible
+            # impact is that one of the duplicates keeps its old metadata
+            # in the tracks list. Acceptable; flagged at WARN so it's
+            # diagnosable.
+            if fields:
+                set_clause = ", ".join(f"{k}=?" for k in fields)
+                try:
+                    conn.execute(
+                        f"UPDATE tracks SET {set_clause} WHERE url=?",
+                        list(fields.values()) + [url])
+                except sqlite3.IntegrityError as e:
+                    log.warning(
+                        f"metadata_override_set: tracks UPDATE collided on "
+                        f"UNIQUE(udn,artist,album,title) for {url[:80]} "
+                        f"({e}); override row saved, tracks row unchanged")
+        return True
+
+    def metadata_override_mark_notfound(self, url: str) -> bool:
+        """Write a sticky-negative row so the AcoustID worker doesn't
+        retry this URL on every restart. INSERT OR IGNORE — never
+        overwrites a real ('manual' / 'acoustid') override.
+
+        Same convention as `album_art.source='notfound'` and
+        `lyrics.source='notfound'`. To force a retry on one track:
+            DELETE FROM metadata_overrides
+             WHERE source='notfound' AND url='…'
+        """
+        if not url:
+            return False
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO metadata_overrides "
+                "(url, artist, album, title, genre, source) "
+                "VALUES (?, NULL, NULL, NULL, NULL, 'notfound')", (url,))
+        return (cur.rowcount or 0) > 0
+
     def gain_db_for_url(self, url: str) -> float:
         """Per-track loudness gain in dB. Returns 0.0 for unknown tracks
         (don't fail-fast — missing analysis just means no normalization
@@ -1166,11 +1291,13 @@ from dlna_devices      import DeviceRoleCache
 from dlna_indexer      import Indexer, IndexState  # noqa: F401 re-exported
 from dlna_art_fetcher  import AlbumArtFetcher
 from dlna_loudness     import LoudnessScanner
+from dlna_acoustid     import AcoustIDFetcher
 
 DEVICE_ROLES     = DeviceRoleCache(DB)
 INDEXER          = Indexer(DB)
 ART_FETCHER      = AlbumArtFetcher(DB)
 LOUDNESS_SCANNER = LoudnessScanner(DB)
+ACOUSTID_FETCHER = AcoustIDFetcher(DB, api_key=os.environ.get("ACOUSTID_API_KEY"))
 
 
 # ── Standalone test ───────────────────────────────────────────────
