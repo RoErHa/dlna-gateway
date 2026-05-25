@@ -206,6 +206,9 @@ This project would not exist without:
 
 - [MusicBrainz](https://musicbrainz.org/) + [Cover Art Archive](https://coverartarchive.org/)
   — album art lookup.
+- [AcoustID](https://acoustid.org/) + [Chromaprint](https://acoustid.org/chromaprint)
+  — automatic metadata recognition via audio fingerprinting (the
+  metadata-enrichment worker).
 - [lrclib.net](https://lrclib.net/) — on-demand lyrics.
 - [radio-browser.info](https://www.radio-browser.info/) — internet
   radio station directory.
