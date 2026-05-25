@@ -248,14 +248,26 @@ When something goes wrong, the diagnostic order is (1) `gateway.log` `dlna.clien
 
 ## Dependencies
 
-All optional — the gateway degrades gracefully if missing:
+Python packages — all optional, the gateway degrades gracefully if missing (see `requirements.txt` for the canonical list):
 
 ```
 rich>=13.7.0              # colored terminal logging
 python-json-logger>=2.0.7 # structured JSON logging
+python-dotenv>=1.0.0      # .env file loader (see caveat below)
 ```
 
 Standard library only for core UPnP functionality. Chromecast support was removed in commit `2a8d81e`; `PyChromecast` was dropped from `requirements.txt` accordingly.
+
+External CLI binaries — optional per feature:
+
+| Binary | Used by | Install |
+|---|---|---|
+| `ffmpeg` | `LoudnessScanner` (per-track true-peak analysis) | `brew install ffmpeg` |
+| `fpcalc` (Chromaprint) | `AcoustIDFetcher` (fingerprint generation) | `brew install chromaprint` |
+
+Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
+
+**`.env` caveat:** if `python-dotenv` isn't installed in the runtime Python, `dlna_config.py` silently catches the ImportError and the `.env` file is **never loaded** — env vars must then come from the process environment (`launchctl setenv` on macOS, systemd `EnvironmentFile`, shell `export`). The warnings `GATEWAY_CONTACT_EMAIL not set in .env — using placeholder` at startup are a symptom of dotenv-not-installed, even if the `.env` file looks populated.
 
 ## Album art persistence (Phase A + Phase B)
 
@@ -532,7 +544,7 @@ return an empty container rather than 500.
 
 ## External services (outbound HTTP)
 
-The gateway is LAN-only except for album-art and lyrics lookups. Three hosts are contacted, all over TLS:
+The gateway is LAN-only except for album-art, lyrics, radio-catalogue, and (in flight) AcoustID metadata lookups. All over TLS:
 
 | Host | Purpose | Method + path |
 |---|---|---|
@@ -540,6 +552,7 @@ The gateway is LAN-only except for album-art and lyrics lookups. Three hosts are
 | `coverartarchive.org` | Confirm a front cover exists for that MBID | `HEAD /release-group/{mbid}/front-500` — 200/301/302/307 counts as "have it", 404 counts as "no cover" |
 | `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
 | `*.api.radio-browser.info` | Internet-radio station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&hidebroken=true` — see the "Internet radio" section |
+| `api.acoustid.org` | AcoustID fingerprint → MusicBrainz metadata enrichment | `POST /v2/lookup` form body `client=&meta=recordings+releasegroups&duration=&fingerprint=` — see the "Metadata enrichment" section |
 
 Required contract:
 
@@ -547,6 +560,7 @@ Required contract:
 - **Rate limit** — `_MB_RATE_LIMIT_SEC = 1.1` between calls, enforced in `AlbumArtFetcher.run_once()`. MB allows 1 req/sec sustained; 1.1s gives a small safety margin.
 - **Timeout** — `_MB_TIMEOUT = 10.0` per connection. Exceptions inside `_mb_lookup_cover()` are caught and returned as `None` (album gets cached as `notfound`).
 - **No retries** — a transient failure ends up as `notfound` and stays sticky; see the "Sticky notfound cache" subsection above for how to force a retry.
+- **AcoustID has TWO key types — use the right one.** `https://acoustid.org/api-key` gives you a **user** key, intended for *submitting* fingerprints to the AcoustID database. `https://acoustid.org/applications` (register a new application) gives you an **application** key, which is what `/v2/lookup` requires. Calling `/v2/lookup` with a user key returns `HTTP 400 {"error":{"code":4,"message":"invalid API key"}}` — distinctive failure mode worth remembering. `ACOUSTID_API_KEY` in `.env` must be the application key.
 
 ## Loudness normalization (Phase 1, in flight)
 
@@ -706,6 +720,131 @@ progress in the index bar.
 | `tests/test_player_volume.py` | 9 tests — first play calls GetVolume once then SetVolume, subsequent tracks skip GetVolume, gain math with RATIO=2, clamp at 0/100, no-row → reference passed through, `set_user_volume` updates reference + fires SetVolume immediately and is sticky for next track |
 | `tests/frontend/test_vol_extras.py` | Extended: tighter UPnP volume body assertion (`device="upnp:<udn>"` required); new `test_loudness_status_endpoint` asserts `/api/loudness/status` shape |
 | `tests/run_all.py` | Live-gateway integration: `GET /api/loudness/status` returns the four expected fields with right types |
+
+## Metadata enrichment via AcoustID (Phase 1, in flight)
+
+Background worker that fingerprints library tracks via Chromaprint's
+`fpcalc`, resolves the fingerprint to MusicBrainz metadata through the
+AcoustID API, and writes the result back into `metadata_overrides`.
+Fixes mistagged or untagged tracks (`title="Track 03"`, missing artist,
+etc.) **without ever rewriting the on-disk file tags** — only the
+gateway's SQLite cache is touched. This is deliberate: confirmed
+2026-05-25 that nothing browses AssetUPnP directly, so the gateway
+PWA / Subsonic clients / Naim-via-gateway-playlists are the only
+consumers, and they all see `metadata_overrides` via the existing
+COALESCE pass in `upsert_tracks`. File-tag rewriting via mutagen is
+deferred to a possible Phase 2.
+
+### `dlna_acoustid.AcoustIDFetcher` — background worker
+
+Mirrors `LoudnessScanner` (`dlna_loudness.py`) and `AlbumArtFetcher`
+(`dlna_art_fetcher.py`) line-for-line in lifecycle surface: `trigger()`,
+`stop()`, `start_initial_scan(delay=120)`, `status()`. Daemon thread,
+batched drain (`_BATCH_SIZE=50`) with `bare_tracks` re-queried between
+batches so triggers arriving mid-run get absorbed into the current
+pass. `os.nice(10)` so it doesn't steal CPU from playback.
+
+### What enters `metadata_overrides`
+
+Three sources, distinguished by the new `source` column (migration in
+`LibraryDB._init_schema`):
+
+| source | Written by | Carries data |
+|---|---|---|
+| `manual` | `LibraryDB.update_track_meta()` (user edits in the PWA) | yes |
+| `acoustid` | `AcoustIDFetcher` on a confident match | yes (artist / album / title) |
+| `notfound` | `AcoustIDFetcher` on a miss or fingerprint failure | sentinel; all metadata columns NULL |
+
+**Existence of a row of ANY source means "we've processed this URL".**
+That's how `bare_metadata_tracks()` decides what to fingerprint — it
+excludes URLs that already have any override row, including the sticky
+`notfound` sentinel. There is intentionally no separate `meta_update`
+flag on `tracks`; the override row is the single source of truth.
+
+### Confidence threshold
+
+`ACOUSTID_CONFIDENCE_THRESHOLD = 0.85` in `dlna_acoustid.py`. AcoustID
+returns matches with 0-1 scores; covers, live versions, and remasters
+routinely score in 0.4–0.7 territory, and a wrong-match write is more
+damaging than no write. Sub-threshold results are treated as
+`notfound`. Tune by ear once running — lowering admits more questionable
+matches; raising costs hit rate on genuinely-good fingerprints.
+
+### Partial matches are honoured
+
+AcoustID sometimes returns a title but no album, or an artist but no
+title. `LibraryDB.metadata_override_set()` only updates the fields the
+caller supplied; the others are left as the indexer originally found
+them. So a track that has `title="Track 03"` but a correct
+`(artist, album)` gets only the title fixed.
+
+### UNIQUE-constraint collisions
+
+`tracks` has `UNIQUE(udn, artist, album, title)`. If AcoustID returns
+the same metadata for two different track URLs (duplicate uploads, or
+the same recording on a compilation), the second live-UPDATE on
+`tracks` would violate the constraint. `metadata_override_set` catches
+`sqlite3.IntegrityError` and continues — **the override row is saved
+either way** (it's the source of truth); only the in-place `tracks`
+UPDATE is skipped, with a WARN. The next re-index's COALESCE pass hits
+the same constraint and skips too; user-visible impact is that one of
+the colliding duplicates keeps its old `tracks`-row metadata in
+browse listings until manually resolved.
+
+### Sticky-negative cache
+
+The `'notfound'` row is sticky by design — same convention as
+`album_art.source='notfound'` and `lyrics.source='notfound'`. If you've
+since cleaned up the source metadata in AssetUPnP and want the worker
+to retry one track:
+
+```sql
+DELETE FROM metadata_overrides WHERE source='notfound' AND url='…';
+```
+
+Or wholesale retry every miss:
+
+```sql
+DELETE FROM metadata_overrides WHERE source='notfound';
+```
+
+Those URLs become bare again on the next `ACOUSTID_FETCHER.trigger()`.
+
+### Survives `clear(udn)`
+
+`metadata_overrides` is independent of `tracks` (keyed by URL, no FK),
+so a rebuild-index doesn't trigger a full re-fingerprint. Same
+invariant as `album_art` / `play_counts` / `lyrics` / `track_loudness`.
+
+### Dependencies
+
+- **Chromaprint `fpcalc`** — required CLI binary. Install via
+  `brew install chromaprint`. Worker bails (no rows written) if
+  missing; mirror of the `ffmpeg`-missing guard in `LoudnessScanner`.
+- **`ACOUSTID_API_KEY`** — free key from acoustid.org, stored in
+  `.env`. If unset, the singleton constructs but every `run_once()`
+  is a no-op with a one-time WARN — `start_initial_scan` is a no-op
+  too so an unconfigured deployment is silent.
+- Reuses `GATEWAY_CONTACT_EMAIL` (already set in `.env` for
+  MusicBrainz) for the AcoustID User-Agent.
+
+### What's NOT done yet
+
+Step 4 (wiring) and Step 5 (HTTP endpoints / frontend) are not in
+this slice. The `ACOUSTID_FETCHER` singleton exists in
+`dlna_library` but no startup `start_initial_scan` call and no
+`Indexer._run()`-tail `trigger()` is wired yet. To exercise it
+manually for now:
+
+```bash
+ACOUSTID_API_KEY=… python3 -c "from dlna_library import ACOUSTID_FETCHER; ACOUSTID_FETCHER.run_once()"
+```
+
+### Tests
+
+| File | What it covers |
+|---|---|
+| `tests/test_acoustid.py` | 43 tests — `_parse_fpcalc_output` (JSON shape, float-rounding, garbled-input → None), `_reconstruct_artist` (joinphrase, ' & ' fallback, blank skip), `_extract_best_match` (threshold gating at boundary, album-over-single preference, multi-result top-score selection, malformed-response → None); `bare_metadata_tracks` excludes `'manual'` / `'acoustid'` / `'notfound'` rows and empty URLs; `clear(udn)` survival; `run_once` writes `'acoustid'` on hit, `'notfound'` on miss, treats fingerprint failure as notfound; `ACOUSTID_API_KEY` unset → no-op; `fpcalc`-missing-at-start and `fpcalc`-disappears-mid-run guardrails don't poison cache; `trigger()` idempotent; `start_initial_scan` skipped when disabled; `status()` shape; partial-match only overwrites supplied fields; LibraryDB method tests: `metadata_override_set` merges with existing row + updates tracks, `mark_notfound` is sticky + never overwrites manual edits |
 
 ## Bit-perfect notes
 
@@ -892,6 +1031,95 @@ case-insensitive extension match, `mp4` treated as non-music,
 
 ```bash
 python3 -m unittest tools.test_prune_empty_music_dirs -v
+```
+
+### `tools/find_corrupt_audio.py`
+
+Walks the music root and flags audio files whose first 16 bytes are
+wrong for their extension — catches the failure mode the AcoustID
+worker surfaced on 2026-05-25 (13 MB FLAC files starting with `\x00`
+instead of `fLaC` magic). Per-format magic-byte validators cover the
+full default extension set: `.flac .mp3 .ogg .opus .m4a .alac .aac
+.wav .aiff .aif .wma .ape .dsf .dff`.
+
+#### Three reasons a file gets flagged
+
+| reason | What it means |
+|---|---|
+| `zero-size` | File is 0 bytes on disk |
+| `zero-header` | First 16 bytes are all `\x00` — the actual failure mode found in the user's library |
+| `magic-mismatch:.<ext>` | Header isn't valid for the file's extension (e.g. a `.flac` not starting with `fLaC` or `ID3`) |
+
+#### Defaults & safety
+
+- **Scan-only by default.** No file is touched unless `--trash` or
+  `--hard-delete` is explicitly passed. Default run only PRINTS the
+  findings and WRITES them to `./corrupt-audio.txt` (one
+  `<reason>\t<path>` per line) — usable as input to any downstream
+  cleanup script the user wants to write.
+- **`--trash` and `--hard-delete` are mutually exclusive** and both
+  prompt for confirmation unless `-y` is passed.
+- **`--limit N` is a safety belt**: when the limit is hit, the run
+  is reported as PARTIAL and any delete flags are ignored — you only
+  act on a complete picture.
+- **Symlinks are not followed** (`os.walk(followlinks=False)`) —
+  avoids loops and accidental scans of foreign volumes.
+- **Unreadable files** (permission errors) go into a separate
+  `read_errors` bucket, never `files_corrupt` — we don't delete what
+  we couldn't even open.
+
+#### Usage
+
+```bash
+# Default — scan only, write list to ./corrupt-audio.txt:
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music
+
+# Verbose preview (logs every OK file too):
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music -v
+
+# Stop after scanning 1000 files (no deletions even if --trash passed):
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --limit 1000
+
+# Move flagged files to Trash, with confirmation prompt:
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --trash
+
+# Non-interactive permanent delete (NOT recoverable):
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --hard-delete -y
+
+# Restrict to one or two formats:
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --exts flac,mp3
+
+# Different output path for the list:
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --out /tmp/broken.txt
+
+# Suppress the list file (just print):
+python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --out /dev/null
+```
+
+#### Flags
+
+| Flag | Effect |
+|---|---|
+| `-v` / `--verbose` | Also log every OK file (default: only corrupt) |
+| `--limit N` | Stop after scanning N files (0 = no limit); halts the delete step |
+| `--exts a,b,c` | Override the audio extension list (commas, with or without leading dot) |
+| `--out path` | Write the corrupt-paths list here (default: `./corrupt-audio.txt`; pass `/dev/null` to suppress) |
+| `--trash` | Move flagged files to macOS Trash via `osascript` |
+| `--hard-delete` | Permanent `unlink()` instead of Trash. NOT recoverable. Mutually exclusive with `--trash` |
+| `-y` / `--yes` | Skip the confirmation prompt before deleting |
+
+#### Tests
+
+`tools/test_find_corrupt_audio.py` — 23 unit tests over throw-away
+tempdirs. Cover: every format's valid-magic happy path, raw-MP3-sync
+without ID3 prefix, AIFC variant of AIFF, zero-size flagged,
+zero-header flagged across multiple extensions, per-format magic-
+mismatch, non-audio extensions skipped by the walker, case-insensitive
+extension match, `--limit` halts cleanly, symlinks not followed,
+unreadable files recorded separately (not auto-deleted). Run standalone:
+
+```bash
+python3 -m unittest tools.test_find_corrupt_audio -v
 ```
 
 ## Subsonic API (Phase 1, in flight)
