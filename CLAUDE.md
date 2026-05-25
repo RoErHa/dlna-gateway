@@ -120,10 +120,18 @@ These are shared state across all request handler threads:
 SQLite at `library.db`, WAL mode, accessed via `db_pool.Pool`:
 
 ```
-tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path)
-  UNIQUE(udn, artist, album, title)
+tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate)
+  UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+  UNIQUE(udn, url) via idx_tracks_udn_url  -- created by _migrate_unique_url
+  bit_depth + sample_rate are parsed from the URL at index time
+  (AssetUPnP pattern /b<N>/f<MMMMM>/). They participate in UNIQUE so a
+  16-bit and 24-bit copy of the same album coexist as distinct rows.
+  The separate UNIQUE(udn, url) index dedups same-URL inserts (AssetUPnP
+  serves each file via multiple browse-container paths).
+  Browse-side queries hide lower-quality dupes via _dedup_clause.
 tracks_fts — FTS5 virtual table over (title, artist, album)
-metadata_overrides(url, artist, album, title, genre, updated_at)
+metadata_overrides(url, artist, album, title, genre, updated_at, source)
+  source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
 index_meta(udn, indexed_at)
 playlists(id, name, created_at, sort_order)
 playlist_tracks(id, pl_id, url, title, artist, album, duration, art, added_at)
@@ -832,16 +840,117 @@ them. So a track that has `title="Track 03"` but a correct
 
 ### UNIQUE-constraint collisions
 
-`tracks` has `UNIQUE(udn, artist, album, title)`. If AcoustID returns
-the same metadata for two different track URLs (duplicate uploads, or
-the same recording on a compilation), the second live-UPDATE on
-`tracks` would violate the constraint. `metadata_override_set` catches
-`sqlite3.IntegrityError` and continues — **the override row is saved
-either way** (it's the source of truth); only the in-place `tracks`
-UPDATE is skipped, with a WARN. The next re-index's COALESCE pass hits
-the same constraint and skips too; user-visible impact is that one of
-the colliding duplicates keeps its old `tracks`-row metadata in
-browse listings until manually resolved.
+As of 2026-05-25 the `tracks` UNIQUE is **widened** to
+`(udn, artist, album, title, bit_depth, sample_rate)` so a 16-bit + 24-bit
+copy of the same album coexist as distinct rows. See the
+"16/24-bit duplicate handling" section below for the full design.
+
+A residual collision case still exists: AcoustID resolves two different
+URLs **with the same bit_depth + sample_rate** to identical metadata
+(e.g. the same recording appearing on both an original album and a
+compilation, both at 16-bit/44.1kHz). `metadata_override_set` catches
+`sqlite3.IntegrityError` on the in-place `tracks` UPDATE and continues —
+**the override row is saved either way** (source of truth); only the
+live UPDATE is skipped, with a WARN. `upsert_tracks` uses
+`UPDATE OR IGNORE` for the same reason — a future re-index's COALESCE
+pass silently skips the collider too. User-visible impact: one of the
+colliding duplicates keeps its old `tracks`-row metadata in browse
+until manually resolved.
+
+### 16/24-bit duplicate handling (`bit_depth` + `sample_rate`)
+
+**Problem (surfaced 2026-05-25):** the user's library has 16-bit and
+24-bit copies of several albums. Pre-AcoustID, their metadata differed
+enough (different tag-cleanliness) that the narrow
+`UNIQUE(udn, artist, album, title)` accepted both. After the AcoustID
+worker normalised both to identical metadata, the second copy collided
+on every COALESCE update and every re-index — a single collision aborts
+the whole indexer-side bulk UPDATE → indexer crashes → empty `tracks`
+table.
+
+**Solution (option 7, accepted 2026-05-25):** widen the UNIQUE to
+include audio-quality columns, so the two copies are legitimately
+distinct rows; then dedup at the **browse-view** layer so the user only
+sees the higher-quality version.
+
+Schema:
+
+```
+tracks(... , bit_depth INTEGER, sample_rate INTEGER)
+  UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+```
+
+`bit_depth` and `sample_rate` are parsed from the URL at insert time
+by `_parse_audio_params` (regex `/b(\d+)/f(\d+)/` over the URL). This
+is AssetUPnP-specific; non-AssetUPnP servers leave both columns NULL.
+SQLite treats NULL as distinct in UNIQUE, so NULL tracks don't collide
+with each other either.
+
+**Browse-side filter (`_dedup_clause`):** a SQL `NOT EXISTS` fragment
+that excludes the current row when a same-(udn,artist,album,title) row
+with strictly higher (bit_depth, sample_rate) exists. NULL is treated
+as 0 (lowest) via `COALESCE`, so any non-NULL beats a NULL.
+
+Applied to **browse-view query methods** in `dlna_library`:
+`search` (tracks/albums/artists subqueries), `album_tracks`,
+`all_albums`, `artist_albums`, `all_artists`, `all_genres`,
+`genre_albums`, `genre_tracks`. Track counts in album/artist listings
+also reflect the deduped (browse-visible) count.
+
+**NOT applied to:**
+- **`playlist_tracks` queries** — playlists already pointing at 16-bit
+  URLs stay valid; per user policy "if it's already in the playlists,
+  leave it there" (2026-05-25).
+- **`radio_tracks`** — the play-count-biased shuffle wants the full
+  pool, not the browse-deduped subset.
+- **`bare_metadata_tracks`** — the AcoustID worker needs to process
+  every URL (both 16-bit and 24-bit copies should get metadata).
+- **The UPnP/Subsonic API code paths** still pass through the
+  LibraryDB methods, so they pick up dedup automatically.
+
+**Migration (two steps):**
+
+`_migrate_widen_tracks_unique` detects the old narrow UNIQUE via
+`sqlite_master`, drops FTS5 triggers, renames the old `tracks` table,
+creates the new wide-UNIQUE table, INSERTs every old row with parsed
+bit_depth/sample_rate, drops the renamed table, recreates FTS5
+triggers, and rebuilds FTS5. Idempotent.
+
+`_migrate_unique_url` follows: when the widened UNIQUE is in place but
+no `idx_tracks_udn_url` exists, the indexer can accumulate same-URL
+phantom dupes (one row has AcoustID-corrected metadata, the other has
+raw-from-AssetUPnP — both legitimate under the wide UNIQUE since their
+title/album differ). The migration `DELETE`s duplicates keeping
+`MIN(id) per (udn,url)` (the older, corrected row), then `CREATE UNIQUE
+INDEX idx_tracks_udn_url ON tracks(udn, url)` to prevent recurrence.
+After this, `INSERT OR IGNORE` in the indexer dedups by URL
+automatically. Idempotent.
+
+Both migrations run at `LibraryDB.__init__`. **Their log lines don't
+appear in `gateway.log`** because LibraryDB is constructed as a
+module-level singleton at import time, before `setup_logging` runs.
+Verify they ran by counting: `SELECT COUNT(*) = COUNT(DISTINCT url) FROM tracks`
+(must be true) and `SELECT name FROM sqlite_master WHERE name='idx_tracks_udn_url'`
+(must return a row).
+
+**Caveat — UPDATE OR IGNORE collisions during indexing:** for tracks
+that *do* have identical (udn, artist, album, title, bit_depth,
+sample_rate) after override application — e.g. the same recording at
+the same bit-depth appearing on multiple compilations — the COALESCE
+UPDATE in `upsert_tracks` uses `UPDATE OR IGNORE`. This was a separate
+fix (2026-05-25) for an indexer crash. Without it, one collision
+aborts the entire bulk UPDATE and leaves `tracks` empty after a
+`clear(udn)`.
+
+Tests: `tests/test_dedup.py` — 30 tests covering URL parser
+(`_parse_audio_params`), widen-UNIQUE migration (idempotent, preserves
+rows, backfills, rebuilds FTS, no-op on fresh DB), URL-unique
+migration (dedup keeps MIN(id), UNIQUE index created, subsequent
+same-URL INSERT skipped, idempotent, fresh DB has the index), browse
+dedup (`album_tracks` / `search` / `all_albums` / `artist_albums` /
+`all_artists` hide 16-bit when 24-bit exists, higher sample-rate wins
+within same bit-depth, NULL loses to non-NULL, two NULLs both
+survive), upsert population, and `_dedup_clause` smoke.
 
 ### Sticky-negative cache
 
