@@ -105,6 +105,40 @@ _BATCH_SIZE: int = 50
 ACOUSTID_CONFIDENCE_THRESHOLD: float = 0.85
 
 
+# Video files served by AssetUPnP (music-videos in the user's library).
+# fpcalc can fingerprint them but it's slow (30s timeout in practice)
+# and the user typically doesn't want videos AcoustID-tagged anyway.
+# Skip on URL extension and persist a distinct 'video_skip' sentinel
+# in metadata_overrides so we don't revisit. Greppable by source.
+_VIDEO_EXTENSIONS = {
+    ".mp4", ".m4v", ".avi", ".mkv", ".mov", ".mpeg", ".mpg", ".wmv",
+}
+
+
+def _is_video_url(url: str) -> bool:
+    """True iff the URL ends with a known video extension (case-insensitive).
+    AssetUPnP URLs include the file's real extension in the path."""
+    if not url:
+        return False
+    lo = url.lower()
+    return any(lo.endswith(ext) for ext in _VIDEO_EXTENSIONS)
+
+
+class AcoustIDTransientError(Exception):
+    """Raised by `_lookup` on transient AcoustID-side failures: HTTP
+    5xx responses, connection errors, socket timeouts. The worker
+    catches these and leaves the URL **bare** rather than poisoning
+    the cache with a 'notfound' row, so the next run picks the track
+    up again. Permanent failures (4xx, malformed JSON, no-match) still
+    get the sticky 'notfound' treatment because retrying won't help.
+
+    Prior to the 2026-05-25 fix every HTTP non-200 was lumped together
+    and cached as notfound; an AcoustID outage during the first 24k-
+    track pass left ~10 false notfound rows that needed manual cleanup.
+    See `tools/retry_notfound_metadata.py` for the cleanup recipe."""
+    pass
+
+
 # ── Pure parsing helpers (no I/O, easy to unit-test) ──────────────
 
 def _parse_fpcalc_output(stdout: str) -> Tuple[Optional[str], Optional[int]]:
@@ -294,9 +328,17 @@ class AcoustIDFetcher:
         with self._lock:
             self._in_progress = True
             self._processed   = 0
+        # URLs that raised AcoustIDTransientError this run. They stay
+        # bare in the DB (correctly), so without this filter the outer
+        # while-loop would re-query bare_tracks → same set → spin
+        # forever. Tracking them in-memory lets each URL be tried at
+        # most once per run; the user re-runs later when the outage
+        # has cleared. Reset implicitly because it's a local.
+        transient_this_run: set = set()
         try:
             while not self._stop.is_set():
-                tracks = self.bare_tracks()
+                tracks = [(u,) for (u,) in self.bare_tracks()
+                          if u not in transient_this_run]
                 if not tracks:
                     break
                 n = len(tracks)
@@ -308,6 +350,26 @@ class AcoustIDFetcher:
                     if self._stop.is_set():
                         log.info("AcoustIDFetcher: stop requested — exiting early")
                         break
+
+                    # Music-video skip: cheap up-front check, never
+                    # touches fpcalc or AcoustID. Persist a sticky
+                    # 'video_skip' row so future runs don't re-encounter
+                    # this URL. Greppable: `grep 'video_skip'` in the log.
+                    if _is_video_url(url):
+                        with self._db._pool.write() as conn:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO metadata_overrides "
+                                "(url, artist, album, title, genre, source) "
+                                "VALUES (?, NULL, NULL, NULL, NULL, 'video_skip')",
+                                (url,))
+                        stats["video_skipped"] = stats.get("video_skipped", 0) + 1
+                        log.info(f"AcoustIDFetcher ⊘ video_skip {url[:80]} — "
+                                 f"video extension, not fingerprinted")
+                        with self._lock:
+                            self._processed += 1
+                        # No rate-limit wait — we didn't talk to AcoustID.
+                        continue
+
                     try:
                         fp, dur = self._fingerprint(url)
                     except FileNotFoundError as e:
@@ -325,10 +387,26 @@ class AcoustIDFetcher:
                         # convention as AlbumArtFetcher caches MB misses.
                         self._db.metadata_override_mark_notfound(url)
                         stats["errors"] += 1
-                        log.info(f"AcoustIDFetcher ✗ {url[:80]} — "
+                        log.info(f"AcoustIDFetcher ✗ fpcalc_fail {url[:80]} — "
                                  f"fingerprint failed, cached as notfound")
                     else:
-                        match = self._lookup(fp, dur)
+                        try:
+                            match = self._lookup(fp, dur)
+                        except AcoustIDTransientError as e:
+                            # AcoustID-side outage. Leave the URL bare so
+                            # the next run picks it up — DO NOT poison the
+                            # cache with a notfound row. Add to the in-
+                            # memory skip set so this run's outer while-
+                            # loop doesn't re-queue the same URL forever.
+                            transient_this_run.add(url)
+                            stats["transient"] = stats.get("transient", 0) + 1
+                            log.info(f"AcoustIDFetcher ↺ transient {url[:80]} "
+                                     f"— {e}, leaving bare for retry")
+                            with self._lock:
+                                self._processed += 1
+                            if self._stop.wait(_AC_RATE_LIMIT_SEC):
+                                break
+                            continue
                         if match:
                             self._db.metadata_override_set(
                                 url, source="acoustid",
@@ -346,8 +424,8 @@ class AcoustIDFetcher:
                         else:
                             self._db.metadata_override_mark_notfound(url)
                             stats["notfound"] += 1
-                            log.info(f"AcoustIDFetcher ✗ {url[:80]} — "
-                                     f"no confident match, cached as notfound")
+                            log.info(f"AcoustIDFetcher ✗ no_match {url[:80]} "
+                                     f"— no confident match, cached as notfound")
                     with self._lock:
                         self._processed += 1
                     if self._stop.wait(_AC_RATE_LIMIT_SEC):
@@ -359,7 +437,10 @@ class AcoustIDFetcher:
             log.debug("AcoustIDFetcher: no bare tracks to enrich")
         else:
             log.info(f"AcoustIDFetcher: done — hits={stats['hits']}, "
-                     f"notfound={stats['notfound']}, errors={stats['errors']}")
+                     f"notfound={stats['notfound']}, "
+                     f"errors={stats.get('errors', 0)}, "
+                     f"video_skipped={stats.get('video_skipped', 0)}, "
+                     f"transient={stats.get('transient', 0)}")
         return stats
 
     def trigger(self, delay: float = 0.0):
@@ -442,11 +523,24 @@ class AcoustIDFetcher:
 
     def _lookup(self, fingerprint: str, duration: int) -> Optional[dict]:
         """POST the fingerprint to AcoustID and return the best match
-        above ACOUSTID_CONFIDENCE_THRESHOLD, or None.
+        above ACOUSTID_CONFIDENCE_THRESHOLD, or None on a permanent miss.
 
         Uses POST (not GET) because fingerprints can run 1KB+ — well
         within typical GET-URL limits but POST is the AcoustID-
-        recommended pattern."""
+        recommended pattern.
+
+        **Raises AcoustIDTransientError** on:
+          - HTTP 5xx responses (server-side outage)
+          - Network-level failures (DNS, refused, timeout, broken pipe)
+
+        Returns None (caller treats as sticky 'notfound') on:
+          - HTTP 4xx (bad request, invalid key — retrying won't help)
+          - JSON parse failures (malformed response)
+          - `status: "error"` body or no confident match in results
+
+        The split exists because a 503 outage during the 2026-05-25
+        first pass cached ~10 transient failures as permanent notfound
+        rows — a bug the user had to clean up manually."""
         if not self._api_key:
             return None
         body = urllib.parse.urlencode({
@@ -467,17 +561,31 @@ class AcoustIDFetcher:
                                  "User-Agent":   _AC_USER_AGENT,
                                  "Content-Type": "application/x-www-form-urlencoded",
                              })
-                resp = conn.getresponse()
-                raw  = resp.read()
-                if resp.status != 200:
-                    log.warning(f"AcoustIDFetcher: HTTP {resp.status} from "
-                                f"AcoustID for fp[:16]={fingerprint[:16]}")
-                    return None
-                data = json.loads(raw)
+                resp   = conn.getresponse()
+                status = resp.status
+                raw    = resp.read()
             finally:
                 conn.close()
-        except Exception as e:
-            log.warning(f"AcoustIDFetcher: lookup error: {e}")
+        except (http.client.HTTPException, OSError) as e:
+            # Connection refused / DNS / socket.timeout / broken pipe.
+            # All transient — retry-worthy. Raise so the caller leaves
+            # the URL bare instead of caching as notfound.
+            raise AcoustIDTransientError(f"network error: {e}") from e
+
+        if 500 <= status < 600:
+            # Server-side outage. AcoustID has been observed returning
+            # 503 in short bursts.
+            raise AcoustIDTransientError(f"HTTP {status}")
+        if status != 200:
+            # 4xx — request was wrong (invalid key, malformed body).
+            # Retrying won't help; cache as a permanent miss.
+            log.warning(f"AcoustIDFetcher: HTTP {status} from AcoustID "
+                        f"for fp[:16]={fingerprint[:16]} — treating as miss")
+            return None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError) as e:
+            log.warning(f"AcoustIDFetcher: lookup parse error: {e}")
             return None
         return _extract_best_match(data, ACOUSTID_CONFIDENCE_THRESHOLD)
 

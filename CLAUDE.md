@@ -746,20 +746,72 @@ pass. `os.nice(10)` so it doesn't steal CPU from playback.
 
 ### What enters `metadata_overrides`
 
-Three sources, distinguished by the new `source` column (migration in
+Four sources, distinguished by the `source` column (migration in
 `LibraryDB._init_schema`):
 
 | source | Written by | Carries data |
 |---|---|---|
 | `manual` | `LibraryDB.update_track_meta()` (user edits in the PWA) | yes |
 | `acoustid` | `AcoustIDFetcher` on a confident match | yes (artist / album / title) |
-| `notfound` | `AcoustIDFetcher` on a miss or fingerprint failure | sentinel; all metadata columns NULL |
+| `notfound` | `AcoustIDFetcher` on a permanent miss (no confident match, fpcalc-fail, AcoustID HTTP 4xx) | sentinel; all metadata columns NULL |
+| `video_skip` | `AcoustIDFetcher` when the URL ends in a video extension (`.mp4` etc.) | sentinel; not fingerprinted |
 
 **Existence of a row of ANY source means "we've processed this URL".**
 That's how `bare_metadata_tracks()` decides what to fingerprint — it
-excludes URLs that already have any override row, including the sticky
-`notfound` sentinel. There is intentionally no separate `meta_update`
+excludes URLs that already have any override row, including all
+sticky sentinels. There is intentionally no separate `meta_update`
 flag on `tracks`; the override row is the single source of truth.
+
+### Transient AcoustID failures stay bare
+
+**Critical correctness rule**, regression-guarded by
+`TestRunOnceTransientBehaviour`:
+
+- HTTP 5xx responses from AcoustID → `_lookup` raises `AcoustIDTransientError` → the worker leaves the URL bare. NO row is written.
+- Network-level errors (DNS, refused, socket timeout, broken pipe) → same.
+- HTTP 4xx (invalid key, malformed request) → permanent, sticky `notfound`. Retrying won't help.
+- Garbled JSON from a 200 response → permanent, sticky `notfound`.
+
+Why this matters: on 2026-05-25 an AcoustID 503 burst during the first
+24k-track pass cached ~10 transient failures as permanent `notfound`
+rows, requiring manual cleanup via
+`tools/retry_notfound_metadata.py`. The split exists so a future
+outage doesn't repeat the bug.
+
+Per-run isolation: `run_once()` keeps an in-memory
+`transient_this_run` set so a URL that fails transiently can't
+re-queue forever inside the same run (the outer while loop re-queries
+`bare_tracks()` between batches; without the set, transient URLs
+would spin). User re-runs later when the upstream is healthy.
+
+### Music-video skip (`video_skip`)
+
+`_VIDEO_EXTENSIONS = {.mp4 .m4v .avi .mkv .mov .mpeg .mpg .wmv}`. URLs
+with these extensions short-circuit BEFORE fpcalc — the worker writes
+a `video_skip` sentinel row, logs `AcoustIDFetcher ⊘ video_skip <url>
+— video extension, not fingerprinted`, and moves on. No rate-limit
+penalty (no AcoustID call) and the row makes the skip sticky.
+
+To list all skipped videos for manual cleanup:
+
+```sql
+SELECT url FROM metadata_overrides WHERE source='video_skip';
+```
+
+### Greppable anomaly markers in `gateway.log`
+
+Every error / skip writes a recognisable line:
+
+```
+AcoustIDFetcher ✓ <url> → 'artist — title' (score=…)        — success
+AcoustIDFetcher ✗ no_match <url> — no confident match, …    — sticky notfound (real miss)
+AcoustIDFetcher ✗ fpcalc_fail <url> — fingerprint failed, … — sticky notfound (corrupt source / network)
+AcoustIDFetcher ⊘ video_skip <url> — video extension, …     — sticky video_skip
+AcoustIDFetcher ↺ transient <url> — HTTP 503, leaving bare  — bare, retry next run
+AcoustIDFetcher: HTTP 4xx from AcoustID …                   — permanent (key invalid etc.)
+```
+
+Greppable by source token: `grep 'fpcalc_fail\|video_skip\|transient' gateway.log`.
 
 ### Confidence threshold
 
@@ -844,7 +896,8 @@ ACOUSTID_API_KEY=… python3 -c "from dlna_library import ACOUSTID_FETCHER; ACOU
 
 | File | What it covers |
 |---|---|
-| `tests/test_acoustid.py` | 43 tests — `_parse_fpcalc_output` (JSON shape, float-rounding, garbled-input → None), `_reconstruct_artist` (joinphrase, ' & ' fallback, blank skip), `_extract_best_match` (threshold gating at boundary, album-over-single preference, multi-result top-score selection, malformed-response → None); `bare_metadata_tracks` excludes `'manual'` / `'acoustid'` / `'notfound'` rows and empty URLs; `clear(udn)` survival; `run_once` writes `'acoustid'` on hit, `'notfound'` on miss, treats fingerprint failure as notfound; `ACOUSTID_API_KEY` unset → no-op; `fpcalc`-missing-at-start and `fpcalc`-disappears-mid-run guardrails don't poison cache; `trigger()` idempotent; `start_initial_scan` skipped when disabled; `status()` shape; partial-match only overwrites supplied fields; LibraryDB method tests: `metadata_override_set` merges with existing row + updates tracks, `mark_notfound` is sticky + never overwrites manual edits |
+| `tests/test_acoustid.py` | 64 tests — `_parse_fpcalc_output` (JSON shape, float-rounding, garbled-input → None), `_reconstruct_artist` (joinphrase, ' & ' fallback, blank skip), `_extract_best_match` (threshold gating at boundary, album-over-single preference, multi-result top-score selection, malformed-response → None); `_is_video_url` (every video ext flagged, case-insensitive, audio not flagged, no-extension and substring-in-path not flagged); `_lookup` HTTP transient-vs-permanent split (HTTP 500/503/504 + OSError + socket.timeout + HTTPException → `AcoustIDTransientError`; HTTP 4xx + garbled JSON → None; happy path); `bare_metadata_tracks` excludes `'manual'` / `'acoustid'` / `'notfound'` / `'video_skip'` rows; `clear(udn)` survival; `run_once` writes `'acoustid'` on hit, `'notfound'` on miss, treats fingerprint failure as notfound, transient → leaves URL bare (no row written) + tracked in per-run set so no infinite loop, video URLs skipped before fpcalc + sticky `video_skip` row; `ACOUSTID_API_KEY` unset → no-op; `fpcalc`-missing-at-start and `fpcalc`-disappears-mid-run guardrails don't poison cache; `trigger()` idempotent; `start_initial_scan` skipped when disabled; `status()` shape; partial-match only overwrites supplied fields; LibraryDB method tests: `metadata_override_set` merges with existing row + updates tracks, `mark_notfound` is sticky + never overwrites manual edits |
+| `tools/test_retry_notfound_metadata.py` | 8 tests — default mode reports stats only (no deletions); `--all` deletes only `source='notfound'` rows and leaves `manual` / `acoustid` / `video_skip` untouched; `--since TIMESTAMP` deletes only newer notfound rows; `--dry-run` doesn't mutate; `--all` + `--since` rejected as mutually exclusive; missing DB fails cleanly; `_scan_log_for_5xx` counts only HTTP 5xx lines in a synthetic log, returns empty when log absent |
 
 ## Bit-perfect notes
 
@@ -1120,6 +1173,58 @@ unreadable files recorded separately (not auto-deleted). Run standalone:
 
 ```bash
 python3 -m unittest tools.test_find_corrupt_audio -v
+```
+
+### `tools/retry_notfound_metadata.py`
+
+Cleanup script that deletes bogus `'notfound'` rows from
+`metadata_overrides` so the AcoustID worker can re-try them on the
+next pass. Written 2026-05-25 after an AcoustID 503 outage left
+several transient lookup failures cached as permanent `notfound`
+rows. The runtime fix in `dlna_acoustid._lookup` prevents future
+poisoning (see "Transient AcoustID failures stay bare" above); this
+tool is for cleaning up the once-only damage from the pre-fix run.
+
+#### Defaults & safety
+
+- **Default mode = report only.** No deletions unless `--all` or
+  `--since TIMESTAMP` is passed explicitly.
+- The tool also scans `acoustid-firstpass.log` (or `--log <path>`)
+  for `HTTP 5xx` lines so you can size the bogus-notfound count
+  before acting.
+- `--all` and `--since` are mutually exclusive (one or the other).
+- `--dry-run` shows what would be deleted without acting.
+- `-y` / `--yes` skips the confirmation prompt before deleting.
+
+#### Usage
+
+```bash
+# Just report what's in metadata_overrides, plus HTTP 5xx count from log:
+python3 tools/retry_notfound_metadata.py
+
+# Surgical — delete only notfound rows updated after a known outage start:
+python3 tools/retry_notfound_metadata.py --since '2026-05-25 14:30:00'
+
+# Wholesale — delete every notfound (re-runs legit misses too, ~1.5s each):
+python3 tools/retry_notfound_metadata.py --all
+
+# Preview before acting:
+python3 tools/retry_notfound_metadata.py --all --dry-run
+
+# Non-interactive cleanup (CI / scripts):
+python3 tools/retry_notfound_metadata.py --all -y
+```
+
+#### Tests
+
+`tools/test_retry_notfound_metadata.py` — 8 tests over a throw-away
+SQLite, covering default report-only mode, `--all` scope (only
+`notfound` deleted), `--since` scope (only newer notfound deleted),
+`--dry-run` no-mutation, mutually-exclusive flag rejection, missing-DB
+clean failure, and the `_scan_log_for_5xx` helper.
+
+```bash
+python3 -m unittest tools.test_retry_notfound_metadata -v
 ```
 
 ## Subsonic API (Phase 1, in flight)
