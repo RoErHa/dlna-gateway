@@ -60,3 +60,7 @@ config.json
 # Personal SQL dumps (use schema.sql in the repo for structure)
 dump.sql
 library_dump.sql
+
+# Per-library scan output from tools/find_corrupt_audio.py — user-specific,
+# not project content.
+corrupt-audio.txt
