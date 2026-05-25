@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import sqlite3
 import threading
 import time
@@ -26,6 +27,60 @@ from db_pool import Pool
 log = logging.getLogger("dlna.library")
 
 FAVOURITES_ID = "__favourites__"
+
+
+# AssetUPnP encodes the source file's bit depth and sample rate in
+# the URL path (e.g. `/c2/b16/f44100/...` or `/c2/b24/f96000/...`).
+# We parse these out at index time to populate tracks.bit_depth and
+# tracks.sample_rate, which participate in the UNIQUE constraint so
+# 16-bit and 24-bit copies of the same (artist, album, title)
+# coexist as distinct rows. Browse-side queries then prefer the
+# higher-quality version. Other UPnP MediaServers usually don't
+# embed these in the URL; for them we leave both columns NULL.
+_AUDIO_PARAMS_RE = re.compile(r"/b(\d+)/f(\d+)/")
+
+
+def _parse_audio_params(url: str):
+    """Return (bit_depth, sample_rate) parsed from an AssetUPnP-style
+    URL, or (None, None) if the pattern doesn't match. Both values
+    are integers when present (bit_depth in bits, sample_rate in Hz)."""
+    if not url:
+        return None, None
+    m = _AUDIO_PARAMS_RE.search(url)
+    if not m:
+        return None, None
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except (ValueError, TypeError):
+        return None, None
+
+
+def _dedup_clause(outer_alias: str = "t") -> str:
+    """SQL fragment that filters out lower-quality duplicates from
+    a tracks-table query.
+
+    Excludes the current row when a same-(udn,artist,album,title) row
+    with strictly higher (bit_depth, sample_rate) exists. NULL values
+    are treated as 0 (lowest), so any non-NULL beats a NULL — giving
+    AssetUPnP-served tracks a clean prefer-24-bit, prefer-higher-rate
+    ordering, without affecting non-AssetUPnP servers (all NULL → all
+    treated as equal → all survive).
+
+    Use only in BROWSE views — listings the user sees in the UI.
+    The AcoustID worker, playlists, and radio scans should NOT dedup
+    (they need to process / play every URL the user has)."""
+    a = outer_alias
+    return f"""NOT EXISTS (
+        SELECT 1 FROM tracks _hq
+         WHERE _hq.udn    = {a}.udn
+           AND _hq.artist = {a}.artist
+           AND _hq.album  = {a}.album
+           AND _hq.title  = {a}.title
+           AND (   COALESCE(_hq.bit_depth, 0)   >  COALESCE({a}.bit_depth, 0)
+                OR (    COALESCE(_hq.bit_depth, 0)   = COALESCE({a}.bit_depth, 0)
+                    AND COALESCE(_hq.sample_rate, 0) > COALESCE({a}.sample_rate, 0)))
+    )"""
+
 
 # ── LibraryDB ─────────────────────────────────────────────────────
 
@@ -48,20 +103,32 @@ class LibraryDB:
 
     def _init_schema(self):
         self._pool.execute_script("""
+                -- bit_depth + sample_rate are parsed from the URL by
+                -- _parse_audio_params (AssetUPnP pattern /b<NN>/f<MMMMM>/).
+                -- They participate in the UNIQUE so a 16-bit and 24-bit
+                -- copy of the same (artist, album, title) coexist as
+                -- distinct rows — the gateway's browse-side filter then
+                -- shows only the higher-quality winner in browse listings.
+                -- For non-AssetUPnP MediaServers that don't encode these
+                -- in the URL, both columns stay NULL; SQLite treats NULLs
+                -- as distinct in UNIQUE, so such tracks don't collide
+                -- with each other either.
                 CREATE TABLE IF NOT EXISTS tracks (
-                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                    udn      TEXT NOT NULL,
-                    obj_id   TEXT,
-                    url      TEXT NOT NULL,
-                    title    TEXT,
-                    artist   TEXT,
-                    album    TEXT,
-                    duration TEXT,
-                    art      TEXT,
-                    mime     TEXT,
-                    genre    TEXT DEFAULT '',
-                    file_path TEXT DEFAULT '',
-                    UNIQUE(udn, artist, album, title)
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    udn         TEXT NOT NULL,
+                    obj_id      TEXT,
+                    url         TEXT NOT NULL,
+                    title       TEXT,
+                    artist      TEXT,
+                    album       TEXT,
+                    duration    TEXT,
+                    art         TEXT,
+                    mime        TEXT,
+                    genre       TEXT DEFAULT '',
+                    file_path   TEXT DEFAULT '',
+                    bit_depth   INTEGER,
+                    sample_rate INTEGER,
+                    UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
                 );
                 -- Genre migration: add column if upgrading from older schema
                 
@@ -157,6 +224,11 @@ class LibraryDB:
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
                 );
+                -- URL uniqueness per UDN is enforced by
+                -- idx_tracks_udn_url, but the CREATE INDEX is run by
+                -- `_migrate_unique_url` (which first dedupes existing
+                -- rows) NOT here — putting it in execute_script would
+                -- fail on existing DBs with pre-fix dupes.
                 CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
                     title, artist, album,
                     content=tracks, content_rowid=id,
@@ -242,6 +314,24 @@ class LibraryDB:
                      "existing rows wiped, re-scan will run on next trigger")
         except Exception:
             pass  # column already exists; nothing to migrate
+        # 2026-05-25: widen tracks UNIQUE to include bit_depth + sample_rate
+        # so 16-bit and 24-bit copies of the same album coexist without
+        # collision. Detect old schema by absence of the bit_depth column;
+        # if present, this migration is a no-op. Backfills the new columns
+        # by parsing existing rows' URLs.
+        with self._pool.write() as conn:
+            self._migrate_widen_tracks_unique(conn)
+        # 2026-05-25 follow-up: the widened UNIQUE accidentally let same-URL
+        # duplicates accumulate. The indexer's INSERT OR IGNORE uses the
+        # wider tuple, but same URL with raw-vs-corrected metadata becomes
+        # two distinct tuples → both insert → ~18k phantom dup rows. Add
+        # a UNIQUE(udn, url) index so URL uniqueness is enforced
+        # independently. Deduplicate existing rows first (keep MIN(id) per
+        # (udn,url) — those are the migration-inserted, AcoustID-corrected
+        # ones, since the indexer-inserted dupes have higher AUTOINCREMENT
+        # ids and raw metadata).
+        with self._pool.write() as conn:
+            self._migrate_unique_url(conn)
         # Ensure Favourites always exists
         with self._pool.write() as conn:
             conn.execute(
@@ -313,6 +403,161 @@ class LibraryDB:
                       AND album_art.album  = tracks.album){udn_clause}
         """, params)
         return harvested, cur.rowcount or 0
+
+    def _migrate_widen_tracks_unique(self, conn: sqlite3.Connection):
+        """One-time migration: widen `tracks` UNIQUE from
+        (udn,artist,album,title) to (udn,artist,album,title,bit_depth,sample_rate)
+        so 16/24-bit copies of the same album don't collide.
+
+        Detection: if `tracks.bit_depth` column already exists, the
+        migration has run. Otherwise: drop FTS triggers, rename old
+        table, create new table with widened UNIQUE and the two new
+        columns, INSERT-with-parsed-URLs into new, drop old, recreate
+        triggers, rebuild FTS5 index. Idempotent.
+
+        Heavy on row count but fast in practice (~100ms on 25k rows).
+        Locks the DB briefly — acceptable at startup."""
+        sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='tracks'").fetchone()
+        if not sql_row:
+            # Fresh DB — CREATE TABLE in _init_schema already used new schema.
+            return
+        if "bit_depth" in (sql_row[0] or ""):
+            # Already migrated.
+            return
+
+        old_rows = conn.execute(
+            "SELECT id, udn, obj_id, url, title, artist, album, duration, "
+            "       art, mime, genre, file_path "
+            "  FROM tracks").fetchall()
+        n_old = len(old_rows)
+        log.info(f"DB migration: widening tracks UNIQUE; rebuilding "
+                 f"{n_old:,} row(s) with parsed bit_depth + sample_rate")
+
+        # Triggers reference the table being renamed — drop first so
+        # they don't end up pointing at the obsolete renamed table.
+        conn.execute("DROP TRIGGER IF EXISTS tracks_ai")
+        conn.execute("DROP TRIGGER IF EXISTS tracks_ad")
+        conn.execute("ALTER TABLE tracks RENAME TO _tracks_pre_widen")
+        conn.execute("""
+            CREATE TABLE tracks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                udn         TEXT NOT NULL,
+                obj_id      TEXT,
+                url         TEXT NOT NULL,
+                title       TEXT,
+                artist      TEXT,
+                album       TEXT,
+                duration    TEXT,
+                art         TEXT,
+                mime        TEXT,
+                genre       TEXT DEFAULT '',
+                file_path   TEXT DEFAULT '',
+                bit_depth   INTEGER,
+                sample_rate INTEGER,
+                UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+            )
+        """)
+        inserts = []
+        for r in old_rows:
+            bd, sr = _parse_audio_params(r["url"])
+            inserts.append((r["id"], r["udn"], r["obj_id"], r["url"],
+                            r["title"], r["artist"], r["album"],
+                            r["duration"], r["art"], r["mime"],
+                            r["genre"], r["file_path"], bd, sr))
+        conn.executemany(
+            "INSERT OR IGNORE INTO tracks "
+            "(id, udn, obj_id, url, title, artist, album, duration, art, "
+            " mime, genre, file_path, bit_depth, sample_rate) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", inserts)
+        n_new = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+
+        conn.execute("DROP TABLE _tracks_pre_widen")
+        # Recreate the FTS5 sync triggers (they were dropped above).
+        conn.execute("""
+            CREATE TRIGGER tracks_ai
+                AFTER INSERT ON tracks BEGIN
+                    INSERT INTO tracks_fts(rowid, title, artist, album)
+                    VALUES (new.id, new.title, new.artist, new.album);
+                END
+        """)
+        conn.execute("""
+            CREATE TRIGGER tracks_ad
+                AFTER DELETE ON tracks BEGIN
+                    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                    VALUES ('delete', old.id, old.title, old.artist, old.album);
+                END
+        """)
+        conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
+
+        skipped = n_old - n_new
+        log.info(f"DB migration: tracks rebuilt — {n_old:,} → {n_new:,} rows "
+                 f"({skipped} skipped on new UNIQUE), FTS5 rebuilt")
+
+    def _migrate_unique_url(self, conn: sqlite3.Connection):
+        """Enforce `UNIQUE(udn, url)` so the indexer can't accumulate
+        same-URL duplicates when a URL's raw vs AcoustID-corrected
+        metadata differ. Pre-2026-05-25 the narrow UNIQUE collapsed
+        these implicitly; after the bit_depth/sample_rate widening
+        they survive as phantom dup rows. This migration:
+
+          1. DELETEs duplicate rows, keeping the MIN(id) per (udn,url)
+             (the original migration-inserted, AcoustID-corrected row).
+          2. CREATEs UNIQUE INDEX idx_tracks_udn_url.
+
+        Idempotent: detects the index by name and no-ops if present.
+        FTS triggers are dropped during the delete (avoiding 18k trigger
+        invocations) then recreated; FTS5 is rebuilt at the tail."""
+        idx = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='index' AND name='idx_tracks_udn_url'"
+        ).fetchone()
+        if idx:
+            return
+
+        n_dup = conn.execute("""
+            SELECT COUNT(*) FROM tracks
+             WHERE id NOT IN (
+               SELECT MIN(id) FROM tracks GROUP BY udn, url
+             )
+        """).fetchone()[0]
+
+        if n_dup > 0:
+            log.info(f"DB migration: removing {n_dup:,} same-URL "
+                     f"duplicate rows from tracks "
+                     f"(keeping MIN(id) per (udn,url))")
+            # Drop triggers so the FTS5 ad trigger doesn't fire per row.
+            conn.execute("DROP TRIGGER IF EXISTS tracks_ai")
+            conn.execute("DROP TRIGGER IF EXISTS tracks_ad")
+            conn.execute("""
+                DELETE FROM tracks
+                 WHERE id NOT IN (
+                   SELECT MIN(id) FROM tracks GROUP BY udn, url
+                 )
+            """)
+
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url)")
+        log.info("DB migration: added UNIQUE(udn, url) index")
+
+        if n_dup > 0:
+            # Recreate triggers + rebuild FTS5 from the surviving rows.
+            conn.execute("""
+                CREATE TRIGGER tracks_ai
+                    AFTER INSERT ON tracks BEGIN
+                        INSERT INTO tracks_fts(rowid, title, artist, album)
+                        VALUES (new.id, new.title, new.artist, new.album);
+                    END
+            """)
+            conn.execute("""
+                CREATE TRIGGER tracks_ad
+                    AFTER DELETE ON tracks BEGIN
+                        INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                        VALUES ('delete', old.id, old.title, old.artist, old.album);
+                    END
+            """)
+            conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
 
     def _migrate_json(self, conn: sqlite3.Connection):
         """One-time import from old playlists.json if present."""
@@ -430,27 +675,39 @@ class LibraryDB:
         """
         if not tracks:
             return 0
-        rows = [dict(
-            udn=udn,
-            obj_id=t.get("id", ""),
-            url=t.get("url", ""),
-            title=t.get("title", ""),
-            artist=t.get("artist", ""),
-            album=t.get("album", ""),
-            duration=t.get("duration", ""),
-            art=t.get("art", ""),
-            mime=t.get("mime", ""),
-            genre=t.get("genre", ""),
-            file_path=t.get("file_path", ""),
-        ) for t in tracks if t.get("url")]
+        # Parse bit_depth + sample_rate from the URL at row-build time.
+        # AssetUPnP URLs include `/b<bits>/f<rate>/`; non-AssetUPnP
+        # servers usually don't, in which case both stay None and the
+        # UNIQUE treats NULLs as distinct (so no cross-server collisions).
+        def _make_row(t: dict) -> dict:
+            url = t.get("url", "")
+            bd, sr = _parse_audio_params(url)
+            return dict(
+                udn=udn,
+                obj_id=t.get("id", ""),
+                url=url,
+                title=t.get("title", ""),
+                artist=t.get("artist", ""),
+                album=t.get("album", ""),
+                duration=t.get("duration", ""),
+                art=t.get("art", ""),
+                mime=t.get("mime", ""),
+                genre=t.get("genre", ""),
+                file_path=t.get("file_path", ""),
+                bit_depth=bd,
+                sample_rate=sr,
+            )
+        rows = [_make_row(t) for t in tracks if t.get("url")]
 
         with self._pool.write() as conn:
             before = conn.execute("SELECT changes()").fetchone()[0]
             # Step 1: insert new tracks (skip duplicates)
             conn.executemany(
                 "INSERT OR IGNORE INTO tracks "
-                "(udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path) "
-                "VALUES (:udn,:obj_id,:url,:title,:artist,:album,:duration,:art,:mime,:genre,:file_path)",
+                "(udn, obj_id, url, title, artist, album, duration, art, "
+                " mime, genre, file_path, bit_depth, sample_rate) "
+                "VALUES (:udn,:obj_id,:url,:title,:artist,:album,:duration,"
+                "        :art,:mime,:genre,:file_path,:bit_depth,:sample_rate)",
                 rows)
             inserted = conn.execute("SELECT changes()").fetchone()[0]
             # Step 2: update genre + art on already-indexed tracks
@@ -460,9 +717,19 @@ class LibraryDB:
                 "WHERE udn=:udn AND artist=:artist AND album=:album AND title=:title "
                 "  AND (genre='' OR genre IS NULL)",
                 rows)
-            # Apply any saved metadata overrides (survive re-index)
+            # Apply any saved metadata overrides (survive re-index).
+            # OR IGNORE tolerates UNIQUE(udn,artist,album,title) collisions:
+            # the AcoustID worker may have resolved two different track URLs
+            # to the same metadata (duplicate uploads, 16-bit + 24-bit pairs,
+            # compilation appearances). Without OR IGNORE a SINGLE colliding
+            # row aborts the entire UPDATE → indexer crashes → tracks table
+            # stays empty after clear(). User-visible impact of the IGNORE:
+            # one of the colliding duplicates keeps its pre-override metadata
+            # in the tracks row. That's identical to the live-update path in
+            # LibraryDB.metadata_override_set (which catches IntegrityError
+            # for the same reason).
             conn.execute("""
-                UPDATE tracks SET
+                UPDATE OR IGNORE tracks SET
                     artist    = COALESCE((SELECT artist FROM metadata_overrides WHERE url=tracks.url), artist),
                     album     = COALESCE((SELECT album  FROM metadata_overrides WHERE url=tracks.url), album),
                     title     = COALESCE((SELECT title  FROM metadata_overrides WHERE url=tracks.url), title),
@@ -512,36 +779,41 @@ class LibraryDB:
     def search(self, udn: str, query: str, limit: int = 300) -> dict:
         """
         Full-text search returning tracks, distinct albums, distinct artists.
+        Browse-side dedup is applied: lower-quality 16-bit duplicates of
+        a 24-bit track are hidden. See `_dedup_clause` docstring.
         """
         safe  = query.replace('"', '""')
         fts_q = f'"{safe}"'
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
 
             tracks = conn.execute(
-                """SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
+                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
                           t.duration, t.art, t.mime, 'audio' as type
                    FROM tracks_fts f
                    JOIN tracks t ON t.id = f.rowid
                    WHERE tracks_fts MATCH ? AND t.udn = ?
+                     AND {dedup}
                    ORDER BY t.artist, t.album, t.title
                    LIMIT ?""",
                 (fts_q, udn, limit)).fetchall()
 
             albums = conn.execute(
-                """SELECT t.artist, t.album,
+                f"""SELECT t.artist, t.album,
                           COUNT(*) as track_count,
                           MAX(t.art) as art
                    FROM tracks_fts f
                    JOIN tracks t ON t.id = f.rowid
                    WHERE tracks_fts MATCH ? AND t.udn = ?
                      AND t.album != ''
+                     AND {dedup}
                    GROUP BY t.artist, t.album
                    ORDER BY t.artist, t.album
                    LIMIT 100""",
                 (fts_q, udn)).fetchall()
 
             artists = conn.execute(
-                """SELECT t.artist,
+                f"""SELECT t.artist,
                           COUNT(DISTINCT t.album) as album_count,
                           COUNT(*) as track_count,
                           MAX(t.art) as art
@@ -549,6 +821,7 @@ class LibraryDB:
                    JOIN tracks t ON t.id = f.rowid
                    WHERE tracks_fts MATCH ? AND t.udn = ?
                      AND t.artist != ''
+                     AND {dedup}
                    GROUP BY t.artist
                    ORDER BY t.artist
                    LIMIT 50""",
@@ -561,60 +834,73 @@ class LibraryDB:
         }
 
     def all_artists(self, udn: str) -> list:
-        """Return all artists with album/track counts from SQLite."""
+        """Return all artists with album/track counts. Track count is
+        the browse-visible (deduped) count."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT artist,
-                          COUNT(DISTINCT album) as album_count,
+                f"""SELECT t.artist,
+                          COUNT(DISTINCT t.album) as album_count,
                           COUNT(*) as track_count,
-                          MAX(art) as art
-                   FROM tracks
-                   WHERE udn=? AND artist != ''
-                   GROUP BY artist
-                   ORDER BY artist COLLATE NOCASE""",
+                          MAX(t.art) as art
+                   FROM tracks t
+                   WHERE t.udn=? AND t.artist != ''
+                     AND {dedup}
+                   GROUP BY t.artist
+                   ORDER BY t.artist COLLATE NOCASE""",
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def album_tracks(self, udn: str, artist: str, album: str) -> list:
-        """Return all tracks for a given (artist, album) pair."""
+        """Return all tracks for a given (artist, album) pair, with
+        lower-quality 16/24-bit duplicates hidden from the browse view.
+        See `_dedup_clause` for the winner-selection rule."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT obj_id as id, url, title, artist, album,
-                          duration, art, mime, genre, 'audio' as type
-                   FROM tracks
-                   WHERE udn=? AND album=?
-                     AND (? = '' OR artist=?)
-                   ORDER BY title""",
+                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
+                          t.duration, t.art, t.mime, t.genre, 'audio' as type
+                   FROM tracks t
+                   WHERE t.udn=? AND t.album=?
+                     AND (? = '' OR t.artist=?)
+                     AND {dedup}
+                   ORDER BY t.title""",
                 (udn, album, artist, artist)).fetchall()
         return [dict(r) for r in rows]
 
     def all_albums(self, udn: str) -> list:
-        """All distinct albums, grouping compilations under 'Various Artists'."""
+        """All distinct albums, grouping compilations under 'Various Artists'.
+        Track count reflects browse-visible (deduped) tracks only."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT album,
-                          CASE WHEN COUNT(DISTINCT artist) > 1
+                f"""SELECT t.album,
+                          CASE WHEN COUNT(DISTINCT t.artist) > 1
                                THEN 'Various Artists'
-                               ELSE MAX(artist) END as artist,
+                               ELSE MAX(t.artist) END as artist,
                           COUNT(*) as track_count,
-                          MAX(art) as art
-                   FROM tracks
-                   WHERE udn=? AND album != ''
-                   GROUP BY album
-                   ORDER BY album COLLATE NOCASE""",
+                          MAX(t.art) as art
+                   FROM tracks t
+                   WHERE t.udn=? AND t.album != ''
+                     AND {dedup}
+                   GROUP BY t.album
+                   ORDER BY t.album COLLATE NOCASE""",
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def artist_albums(self, udn: str, artist: str) -> list:
-        """All albums for a given artist, A-Z."""
+        """All albums for a given artist, A-Z. Track count is the
+        browse-visible (deduped) count."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT album, artist,
+                f"""SELECT t.album, t.artist,
                           COUNT(*) as track_count,
-                          MAX(art) as art
-                   FROM tracks
-                   WHERE udn=? AND artist=?
-                   GROUP BY album
+                          MAX(t.art) as art
+                   FROM tracks t
+                   WHERE t.udn=? AND t.artist=?
+                     AND {dedup}
+                   GROUP BY t.album
                    ORDER BY album COLLATE NOCASE""",
                 (udn, artist)).fetchall()
         return [dict(r) for r in rows]
@@ -684,32 +970,38 @@ class LibraryDB:
                 "limit": limit, "letter": letter, "mode": mode}
 
     def all_genres(self, udn: str) -> list:
-        """All distinct genres with album/track counts, A-Z."""
+        """All distinct genres with album/track counts, A-Z. Counts are
+        browse-visible (deduped)."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT genre,
-                          COUNT(DISTINCT album) as album_count,
+                f"""SELECT t.genre,
+                          COUNT(DISTINCT t.album) as album_count,
                           COUNT(*) as track_count
-                   FROM tracks
-                   WHERE udn=? AND genre != ''
-                   GROUP BY genre
-                   ORDER BY genre COLLATE NOCASE""",
+                   FROM tracks t
+                   WHERE t.udn=? AND t.genre != ''
+                     AND {dedup}
+                   GROUP BY t.genre
+                   ORDER BY t.genre COLLATE NOCASE""",
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def genre_albums(self, udn: str, genre: str) -> list:
-        """All albums in a genre, grouping compilations under 'Various Artists'."""
+        """All albums in a genre, grouping compilations under 'Various Artists'.
+        Track count is browse-visible (deduped)."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT album,
-                          CASE WHEN COUNT(DISTINCT artist)>1 THEN 'Various Artists'
-                               ELSE MAX(artist) END as artist,
+                f"""SELECT t.album,
+                          CASE WHEN COUNT(DISTINCT t.artist)>1 THEN 'Various Artists'
+                               ELSE MAX(t.artist) END as artist,
                           COUNT(*) as track_count,
-                          MAX(art) as art
-                   FROM tracks
-                   WHERE udn=? AND genre=?
-                   GROUP BY album
-                   ORDER BY album COLLATE NOCASE""",
+                          MAX(t.art) as art
+                   FROM tracks t
+                   WHERE t.udn=? AND t.genre=?
+                     AND {dedup}
+                   GROUP BY t.album
+                   ORDER BY t.album COLLATE NOCASE""",
                 (udn, genre)).fetchall()
         return [dict(r) for r in rows]
 
@@ -926,14 +1218,16 @@ class LibraryDB:
                 (url, plain, synced, source, int(_t.time())))
 
     def genre_tracks(self, udn: str, genre: str) -> list:
-        """All tracks in a genre."""
+        """All tracks in a genre, browse-visible (deduped)."""
+        dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             rows = conn.execute(
-                """SELECT obj_id as id, url, title, artist, album,
-                          duration, art, mime, genre, 'audio' as type
-                   FROM tracks
-                   WHERE udn=? AND genre=?
-                   ORDER BY album COLLATE NOCASE, title COLLATE NOCASE""",
+                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
+                          t.duration, t.art, t.mime, t.genre, 'audio' as type
+                   FROM tracks t
+                   WHERE t.udn=? AND t.genre=?
+                     AND {dedup}
+                   ORDER BY t.album COLLATE NOCASE, t.title COLLATE NOCASE""",
                 (udn, genre)).fetchall()
         return [dict(r) for r in rows]
 
