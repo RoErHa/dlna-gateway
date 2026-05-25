@@ -23,8 +23,11 @@ PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
+import http.client
+
 from dlna_library import LibraryDB
 from dlna_acoustid import (AcoustIDFetcher, ACOUSTID_CONFIDENCE_THRESHOLD,
+                           AcoustIDTransientError, _is_video_url,
                            _parse_fpcalc_output, _extract_best_match,
                            _reconstruct_artist)
 
@@ -550,6 +553,372 @@ class TestLibraryDBMetadataMethods(unittest.TestCase):
         self.assertFalse(self.db.metadata_override_set(
             "", source="acoustid", title="X"))
         self.assertFalse(self.db.metadata_override_mark_notfound(""))
+
+
+# ── Video-URL detection ───────────────────────────────────────────
+
+class TestIsVideoUrl(unittest.TestCase):
+    """`_is_video_url` is the cheap pre-fingerprint check that diverts
+    music-video URLs into the `video_skip` sentinel path."""
+
+    def test_common_video_extensions_flagged(self):
+        for ext in (".mp4", ".m4v", ".avi", ".mkv", ".mov",
+                    ".mpeg", ".mpg", ".wmv"):
+            with self.subTest(ext=ext):
+                self.assertTrue(_is_video_url(f"http://x/y{ext}"),
+                                f"{ext} should be detected as video")
+
+    def test_case_insensitive(self):
+        # AssetUPnP sometimes serves uppercase-extension URLs.
+        self.assertTrue(_is_video_url("http://x/file.MP4"))
+        self.assertTrue(_is_video_url("http://x/file.Mp4"))
+        self.assertTrue(_is_video_url("http://x/file.MKV"))
+
+    def test_audio_extensions_not_flagged(self):
+        for ext in (".flac", ".mp3", ".m4a", ".ogg", ".wav", ".dsf"):
+            with self.subTest(ext=ext):
+                self.assertFalse(_is_video_url(f"http://x/y{ext}"))
+
+    def test_no_extension_not_flagged(self):
+        # AssetUPnP URLs always have extensions, but defend against
+        # non-AssetUPnP servers that omit them.
+        self.assertFalse(_is_video_url("http://x/some/path"))
+        self.assertFalse(_is_video_url("http://x/"))
+        self.assertFalse(_is_video_url(""))
+
+    def test_substring_in_path_not_flagged(self):
+        # An audio file in a folder called "videos" should still be
+        # treated as audio.
+        self.assertFalse(_is_video_url("http://x/videos/track.flac"))
+        self.assertFalse(_is_video_url("http://x/.mp4-archive/song.mp3"))
+
+
+# ── Transient-vs-permanent _lookup behaviour ──────────────────────
+
+class _FakeResponse:
+    """Minimal stand-in for http.client.HTTPResponse used in _lookup."""
+    def __init__(self, status: int, body: bytes = b"{}"):
+        self.status = status
+        self._body  = body
+    def read(self) -> bytes:
+        return self._body
+
+
+class _FakeConn:
+    """Captures the request and returns a configurable response or
+    raises a configurable exception when `getresponse()` is called."""
+    def __init__(self, response=None, raise_on_request=None,
+                 raise_on_getresponse=None):
+        self._response             = response
+        self._raise_on_request     = raise_on_request
+        self._raise_on_getresponse = raise_on_getresponse
+        self.closed                = False
+        self.request_args          = None
+    def request(self, method, path, body=None, headers=None):
+        self.request_args = (method, path, body, headers)
+        if self._raise_on_request:
+            raise self._raise_on_request
+    def getresponse(self):
+        if self._raise_on_getresponse:
+            raise self._raise_on_getresponse
+        return self._response
+    def close(self):
+        self.closed = True
+
+
+class TestLookupTransientVsPermanent(unittest.TestCase):
+    """Regression guard for the 2026-05-25 bug where HTTP 503 outages
+    cached transient failures as permanent 'notfound' rows. The fix
+    splits _lookup's failure modes: 5xx + network errors raise
+    AcoustIDTransientError; 4xx + parse errors return None (sticky)."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+        self.fetcher = AcoustIDFetcher(self.db, api_key="test-key")
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def _patch_conn(self, fake_conn):
+        return patch("dlna_acoustid.http.client.HTTPSConnection",
+                     return_value=fake_conn)
+
+    # ── HTTP 5xx → transient ──
+
+    def test_http_503_raises_transient(self):
+        fake = _FakeConn(response=_FakeResponse(503, b""))
+        with self._patch_conn(fake):
+            with self.assertRaises(AcoustIDTransientError):
+                self.fetcher._lookup("FP", 240)
+        self.assertTrue(fake.closed,
+                        "connection must be closed even on transient")
+
+    def test_http_500_raises_transient(self):
+        fake = _FakeConn(response=_FakeResponse(500))
+        with self._patch_conn(fake):
+            with self.assertRaises(AcoustIDTransientError):
+                self.fetcher._lookup("FP", 240)
+
+    def test_http_504_raises_transient(self):
+        fake = _FakeConn(response=_FakeResponse(504))
+        with self._patch_conn(fake):
+            with self.assertRaises(AcoustIDTransientError):
+                self.fetcher._lookup("FP", 240)
+
+    # ── Network errors → transient ──
+
+    def test_oserror_raises_transient(self):
+        # Connection refused, DNS failure, etc.
+        fake = _FakeConn(raise_on_getresponse=OSError("Connection refused"))
+        with self._patch_conn(fake):
+            with self.assertRaises(AcoustIDTransientError):
+                self.fetcher._lookup("FP", 240)
+
+    def test_timeout_raises_transient(self):
+        import socket
+        fake = _FakeConn(raise_on_getresponse=socket.timeout("timed out"))
+        with self._patch_conn(fake):
+            with self.assertRaises(AcoustIDTransientError):
+                self.fetcher._lookup("FP", 240)
+
+    def test_http_exception_raises_transient(self):
+        fake = _FakeConn(raise_on_request=http.client.BadStatusLine("\\x00"))
+        with self._patch_conn(fake):
+            with self.assertRaises(AcoustIDTransientError):
+                self.fetcher._lookup("FP", 240)
+
+    # ── HTTP 4xx → permanent (return None, caller marks notfound) ──
+
+    def test_http_400_returns_none(self):
+        # Invalid API key, malformed fingerprint — retrying won't help.
+        fake = _FakeConn(response=_FakeResponse(
+            400, b'{"error":{"code":4,"message":"invalid API key"}}'))
+        with self._patch_conn(fake):
+            self.assertIsNone(self.fetcher._lookup("FP", 240))
+
+    def test_http_403_returns_none(self):
+        fake = _FakeConn(response=_FakeResponse(403))
+        with self._patch_conn(fake):
+            self.assertIsNone(self.fetcher._lookup("FP", 240))
+
+    # ── HTTP 200 garbled body → permanent ──
+
+    def test_garbled_json_returns_none(self):
+        fake = _FakeConn(response=_FakeResponse(200, b"not json"))
+        with self._patch_conn(fake):
+            self.assertIsNone(self.fetcher._lookup("FP", 240))
+
+    # ── HTTP 200 with match passes through ──
+
+    def test_happy_path_returns_match(self):
+        body = json.dumps({
+            "status": "ok",
+            "results": [{
+                "score": 0.99,
+                "recordings": [{
+                    "title": "Money",
+                    "artists": [{"name": "Pink Floyd"}],
+                    "releasegroups": [{"title": "DSOTM", "type": "Album"}],
+                }],
+            }],
+        }).encode()
+        fake = _FakeConn(response=_FakeResponse(200, body))
+        with self._patch_conn(fake):
+            m = self.fetcher._lookup("FP", 240)
+        self.assertIsNotNone(m)
+        self.assertEqual(m["title"], "Money")
+        # Request shape sanity — meta uses space (becomes "+"), not "%2B".
+        self.assertIn("meta=recordings+releasegroups",
+                      fake.request_args[2])
+
+    # ── No API key short-circuits, returns None (no raise) ──
+
+    def test_no_api_key_returns_none(self):
+        no_key = AcoustIDFetcher(self.db, api_key=None)
+        # Should not even attempt a connection. We don't patch HTTPS here
+        # because the method must return before constructing one.
+        self.assertIsNone(no_key._lookup("FP", 240))
+
+
+class TestRunOnceTransientBehaviour(unittest.TestCase):
+    """Worker-level integration: AcoustIDTransientError from _lookup
+    must leave the URL bare in metadata_overrides. Critical: a transient
+    must NEVER produce a 'notfound' row, or we re-poison the cache the
+    fix was meant to prevent."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db  = LibraryDB(db_file=self._path)
+        self.udn = "uuid:test"
+        self.fetcher = AcoustIDFetcher(self.db, api_key="test-key")
+        with self.db._pool.write() as conn:
+            for i in range(3):
+                conn.execute(
+                    "INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (self.udn, f"obj{i}", f"http://t/{i}.flac", f"T{i}",
+                     "A", "Album"))
+
+    def tearDown(self):
+        try:
+            self.fetcher.stop()
+        finally:
+            os.unlink(self._path)
+
+    def test_transient_leaves_url_bare(self):
+        # Every track fingerprints fine; every lookup raises transient.
+        # Result: NO rows in metadata_overrides — they're all retry-able.
+        with patch.object(AcoustIDFetcher, "_fingerprint",
+                          return_value=("FP", 240)), \
+             patch.object(AcoustIDFetcher, "_lookup",
+                          side_effect=AcoustIDTransientError("HTTP 503")), \
+             patch("dlna_acoustid._AC_RATE_LIMIT_SEC", 0.0):
+            stats = self.fetcher.run_once()
+
+        self.assertEqual(stats.get("transient"), 3)
+        self.assertEqual(stats["hits"], 0)
+        self.assertEqual(stats["notfound"], 0,
+                         "transient MUST NOT poison the cache")
+        with self.db._pool.read() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM metadata_overrides "
+                "WHERE source IN ('acoustid','notfound')").fetchone()[0]
+        self.assertEqual(n, 0,
+                         "no override rows should be written for transients")
+        # bare_metadata_tracks should still return all 3 — they're
+        # available for retry.
+        self.assertEqual(len(self.fetcher.bare_tracks()), 3)
+
+    def test_mixed_run_classifies_correctly(self):
+        # Three tracks: one hit, one transient, one no-match.
+        lookup_results = {
+            "FP_0": {"artist": "A", "album": "B", "title": "T0",
+                     "score": 0.99},
+            "FP_1": "transient",  # special marker
+            "FP_2": None,
+        }
+
+        def fake_fingerprint(url):
+            return ("FP_" + url[-6], 240)  # FP_0, FP_1, FP_2
+
+        def fake_lookup(fp, dur):
+            r = lookup_results[fp]
+            if r == "transient":
+                raise AcoustIDTransientError("HTTP 503")
+            return r
+
+        with patch.object(AcoustIDFetcher, "_fingerprint",
+                          side_effect=fake_fingerprint), \
+             patch.object(AcoustIDFetcher, "_lookup",
+                          side_effect=fake_lookup), \
+             patch("dlna_acoustid._AC_RATE_LIMIT_SEC", 0.0):
+            stats = self.fetcher.run_once()
+
+        self.assertEqual(stats["hits"],     1)
+        self.assertEqual(stats["notfound"], 1)
+        self.assertEqual(stats.get("transient"), 1)
+        with self.db._pool.read() as conn:
+            by_source = {r["source"]: r["n"] for r in conn.execute(
+                "SELECT source, COUNT(*) AS n FROM metadata_overrides "
+                "GROUP BY source").fetchall()}
+        self.assertEqual(by_source.get("acoustid", 0), 1)
+        self.assertEqual(by_source.get("notfound", 0), 1)
+        # The transient URL is NOT in metadata_overrides → still bare
+        # for next pass.
+        self.assertEqual(by_source.get("transient", 0), 0,
+                         "no row should exist for transient URL")
+
+
+class TestRunOnceVideoSkip(unittest.TestCase):
+    """Worker-level: video-extension URLs short-circuit before fpcalc
+    and get a sticky 'video_skip' source so they're never revisited."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db  = LibraryDB(db_file=self._path)
+        self.udn = "uuid:test"
+        self.fetcher = AcoustIDFetcher(self.db, api_key="test-key")
+        with self.db._pool.write() as conn:
+            # 2 audio + 2 video URLs
+            conn.execute("INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                         "VALUES (?,?,?,?,?,?)",
+                         (self.udn, "a0", "http://t/a0.flac", "A0", "A", "Al"))
+            conn.execute("INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                         "VALUES (?,?,?,?,?,?)",
+                         (self.udn, "v0", "http://t/v0.mp4",  "V0", "A", "Al"))
+            conn.execute("INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                         "VALUES (?,?,?,?,?,?)",
+                         (self.udn, "a1", "http://t/a1.mp3", "A1", "A", "Al"))
+            conn.execute("INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                         "VALUES (?,?,?,?,?,?)",
+                         (self.udn, "v1", "http://t/v1.mkv",  "V1", "A", "Al"))
+
+    def tearDown(self):
+        try:
+            self.fetcher.stop()
+        finally:
+            os.unlink(self._path)
+
+    def test_video_urls_get_video_skip_without_fingerprinting(self):
+        # Mock _fingerprint so we can assert it was NOT called for videos.
+        # Audio tracks succeed with a confident match so we get clear stats.
+        fp_calls = []
+        def fake_fp(url):
+            fp_calls.append(url)
+            return ("FP", 240)
+
+        with patch.object(AcoustIDFetcher, "_fingerprint",
+                          side_effect=fake_fp), \
+             patch.object(AcoustIDFetcher, "_lookup",
+                          return_value={"artist": "A", "album": "B",
+                                        "title": "T", "score": 0.99}), \
+             patch("dlna_acoustid._AC_RATE_LIMIT_SEC", 0.0):
+            stats = self.fetcher.run_once()
+
+        self.assertEqual(stats.get("video_skipped"), 2)
+        self.assertEqual(stats["hits"], 2)
+        self.assertEqual(set(fp_calls), {"http://t/a0.flac", "http://t/a1.mp3"},
+                         "_fingerprint must not be called for video URLs")
+        with self.db._pool.read() as conn:
+            by_source = {r["source"]: r["n"] for r in conn.execute(
+                "SELECT source, COUNT(*) AS n FROM metadata_overrides "
+                "GROUP BY source").fetchall()}
+        self.assertEqual(by_source.get("video_skip"), 2)
+        self.assertEqual(by_source.get("acoustid"),   2)
+
+    def test_video_skip_excluded_from_bare_tracks(self):
+        # Once a video URL has a video_skip row, the next bare_tracks
+        # query must skip it — same convention as notfound.
+        with patch.object(AcoustIDFetcher, "_fingerprint",
+                          return_value=("FP", 240)), \
+             patch.object(AcoustIDFetcher, "_lookup",
+                          return_value={"artist": "A", "album": "B",
+                                        "title": "T", "score": 0.99}), \
+             patch("dlna_acoustid._AC_RATE_LIMIT_SEC", 0.0):
+            self.fetcher.run_once()
+        # After the run: all 4 tracks have rows; bare_tracks returns 0.
+        self.assertEqual(self.fetcher.bare_tracks(), [])
+
+    def test_uppercase_video_extension_also_skipped(self):
+        # AssetUPnP sometimes serves uppercase extensions.
+        with self.db._pool.write() as conn:
+            conn.execute("DELETE FROM tracks")
+            conn.execute("INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                         "VALUES (?,?,?,?,?,?)",
+                         (self.udn, "v", "http://t/uppercase.MP4", "V", "A", "Al"))
+        with patch.object(AcoustIDFetcher, "_fingerprint") as mock_fp, \
+             patch("dlna_acoustid._AC_RATE_LIMIT_SEC", 0.0):
+            self.fetcher.run_once()
+        mock_fp.assert_not_called()
+        with self.db._pool.read() as conn:
+            source = conn.execute(
+                "SELECT source FROM metadata_overrides WHERE url=?",
+                ("http://t/uppercase.MP4",)).fetchone()["source"]
+        self.assertEqual(source, "video_skip")
 
 
 if __name__ == "__main__":
