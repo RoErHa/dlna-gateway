@@ -192,6 +192,29 @@ def art(h, params):
             except Exception: pass
 
 
+def track_meta(h, params):
+    """GET /api/track_meta?url=<track-url>
+
+    Returns metadata for one track, including both year fields:
+      - `year`: file-tag year from DIDL-Lite (the edition you own)
+      - `year_original`: MusicBrainz first-release-date year if filled
+
+    Frontend uses this to render the year line in the now-playing panel
+    (prefers `year_original`; annotates `1987 (remastered)` when the
+    edition year differs by 3+).
+    Response: {title, artist, album, duration, year, year_original}
+    or 404 if not in library."""
+    url = params.get("url", "")
+    if not url:
+        h._json(400, {"error": "missing url"})
+        return
+    meta = DB.track_meta_by_url(url)
+    if not meta:
+        h._json(404, {"error": "track not in library"})
+        return
+    h._json(200, meta)
+
+
 def lyrics(h, params):
     """GET /api/lyrics?url=<track-url>
 

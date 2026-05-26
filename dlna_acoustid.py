@@ -84,6 +84,12 @@ _AC_RATE_LIMIT_SEC: float = 0.34
 # allow generous headroom for slow hops.
 _AC_TIMEOUT: float = 10.0
 
+# MusicBrainz rate limit for the release-group year lookup. MB allows
+# 1 req/sec sustained; 1.1s gives the same safety margin as the album-art
+# fetcher uses. See dlna_art_fetcher for the same constant.
+_MB_RATE_LIMIT_SEC: float = 1.1
+_MB_TIMEOUT: float = 10.0
+
 # How long to give fpcalc per track. ~1s on a healthy LAN file; the
 # cap is a circuit-breaker against a slow/dead AssetUPnP source.
 _FPCALC_TIMEOUT_SEC: float = 30.0
@@ -251,13 +257,17 @@ def _extract_best_match(response: dict,
     title = (rec.get("title") or "").strip()
     artist = _reconstruct_artist(rec.get("artists") or [])
     album = ""
+    rg_id = ""
     rgs = rec.get("releasegroups") or []
     if rgs:
         album = (rgs[0].get("title") or "").strip()
+        # MB id of the first release-group — used to look up the
+        # release-group's first-release-date for the "original year".
+        rg_id = (rgs[0].get("id") or "").strip()
     if not any((title, artist, album)):
         return None
     return {"artist": artist, "album": album, "title": title,
-            "score": score}
+            "score": score, "rg_id": rg_id}
 
 
 # ── Worker class ──────────────────────────────────────────────────
@@ -283,6 +293,10 @@ class AcoustIDFetcher:
         self._processed     = 0
         self._last_match    = ""   # "artist — title" of last positive
         self._last_url      = ""
+        # Per-run cache of MB release-group → year (or None for misses).
+        # Reset each run via `run_once`. Avoids re-querying MB once per
+        # track of a 12-track album → 1 query, not 12.
+        self._rg_year_cache: dict = {}
 
     # ── Public surface ────────────────────────────────────────────
 
@@ -306,6 +320,9 @@ class AcoustIDFetcher:
         """Process bare tracks until none remain. Re-queries between
         batches so triggers arriving mid-run are absorbed."""
         stats = {"total": 0, "hits": 0, "notfound": 0, "errors": 0}
+        # Reset per-run RG year cache. A previous run's cache might be
+        # stale (MB updated the date, RG renamed, etc.).
+        self._rg_year_cache = {}
         if self._api_key is None:
             log.warning("AcoustIDFetcher: ACOUSTID_API_KEY not set in env — "
                         "skipping. Get a free key at acoustid.org and add "
@@ -408,16 +425,24 @@ class AcoustIDFetcher:
                                 break
                             continue
                         if match:
+                            # Look up the release-group's first-release-date
+                            # for the "original year". Cached per-run so a
+                            # 12-track album costs 1 MB query, not 12.
+                            orig_year = self._mb_release_group_year(
+                                match.get("rg_id", ""))
                             self._db.metadata_override_set(
                                 url, source="acoustid",
                                 artist=match.get("artist") or None,
                                 album=match.get("album") or None,
-                                title=match.get("title") or None)
+                                title=match.get("title") or None,
+                                year=orig_year)
                             stats["hits"] += 1
+                            year_s = f" ({orig_year})" if orig_year else ""
                             label = (f"{match.get('artist','?')} — "
                                      f"{match.get('title','?')}").strip()
                             log.info(f"AcoustIDFetcher ✓ {url[:80]} → "
-                                     f"{label!r} (score={match['score']:.2f})")
+                                     f"{label!r}{year_s} "
+                                     f"(score={match['score']:.2f})")
                             with self._lock:
                                 self._last_match = label
                                 self._last_url   = url
@@ -588,6 +613,158 @@ class AcoustIDFetcher:
             log.warning(f"AcoustIDFetcher: lookup parse error: {e}")
             return None
         return _extract_best_match(data, ACOUSTID_CONFIDENCE_THRESHOLD)
+
+    def run_year_backfill(self) -> dict:
+        """One-shot pass: walk existing acoustid overrides whose year is
+        NULL, query MusicBrainz by (artist, album) for the release-group's
+        first-release-date, write year to ALL overrides matching that pair.
+
+        Cached per (artist_lower, album_lower) so a 12-track album costs
+        ONE MB query instead of 12. Rate-limited at _MB_RATE_LIMIT_SEC.
+
+        Distinct from `run_once`:
+          - run_once processes bare tracks (no override at all) end-to-end
+            (fingerprint + lookup + write), captures year inline.
+          - run_year_backfill processes existing acoustid overrides that
+            are missing year — pure MB lookups, no fpcalc.
+        """
+        stats = {"pairs_total": 0, "found": 0, "notfound": 0, "errors": 0}
+        # Reset the cache (run_once may have populated it with stale entries).
+        self._rg_year_cache = {}
+        with self._db._pool.read() as conn:
+            pairs = conn.execute("""
+                SELECT DISTINCT artist, album FROM metadata_overrides
+                 WHERE source='acoustid'
+                   AND year IS NULL
+                   AND artist IS NOT NULL AND artist != ''
+                   AND album  IS NOT NULL AND album  != ''
+                 ORDER BY artist, album
+            """).fetchall()
+        stats["pairs_total"] = len(pairs)
+        log.info(f"AcoustIDFetcher: year backfill — {stats['pairs_total']:,} "
+                 f"unique (artist, album) pairs to look up "
+                 f"(~{int(stats['pairs_total'] * _MB_RATE_LIMIT_SEC / 60)}min "
+                 f"at MB rate limit)")
+        for r in pairs:
+            if self._stop.is_set():
+                log.info("AcoustIDFetcher year backfill: stop requested")
+                break
+            artist, album = r["artist"], r["album"]
+            year = self._mb_search_year(artist, album)
+            if year:
+                with self._db._pool.write() as conn:
+                    conn.execute(
+                        "UPDATE metadata_overrides SET year=?, "
+                        "       updated_at=datetime('now') "
+                        " WHERE source='acoustid' AND year IS NULL "
+                        "   AND artist=? AND album=?",
+                        (year, artist, album))
+                stats["found"] += 1
+                log.info(f"MB ✓ {artist!r} / {album!r} → {year}")
+            else:
+                stats["notfound"] += 1
+                log.info(f"MB ✗ {artist!r} / {album!r} → no year")
+        log.info(f"AcoustIDFetcher: year backfill done — "
+                 f"found={stats['found']}, notfound={stats['notfound']}, "
+                 f"errors={stats['errors']}")
+        return stats
+
+    def _mb_search_year(self, artist: str, album: str) -> Optional[int]:
+        """Search MusicBrainz for a release-group matching (artist, album)
+        and return its first-release-date year. Used by `run_year_backfill`
+        since existing overrides don't have the rg_id stored.
+
+        Cache key: (artist_lower, album_lower) — mapped through
+        `_rg_year_cache` (reusing the dict; different key shape but
+        types are compatible)."""
+        if not artist or not album:
+            return None
+        key = (artist.lower(), album.lower())
+        if key in self._rg_year_cache:
+            return self._rg_year_cache[key]
+        if self._stop.wait(_MB_RATE_LIMIT_SEC):
+            return None
+        # Lucene-escape artist + album for MB's query syntax.
+        def _esc(s):
+            return s.replace("\\", "\\\\").replace('"', '\\"')
+        query = (f'artist:"{_esc(artist)}" '
+                 f'AND releasegroup:"{_esc(album)}"')
+        path = "/ws/2/release-group/?" + urllib.parse.urlencode({
+            "query": query, "fmt": "json", "limit": "5"})
+        try:
+            conn = http.client.HTTPSConnection(
+                "musicbrainz.org", timeout=_MB_TIMEOUT)
+            try:
+                conn.request("GET", path,
+                             headers={"User-Agent": _AC_USER_AGENT})
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    log.warning(f"MB: HTTP {resp.status} searching "
+                                f"{artist!r}/{album!r}")
+                    self._rg_year_cache[key] = None
+                    return None
+                data = json.loads(resp.read())
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f"MB: search error {artist!r}/{album!r}: {e}")
+            self._rg_year_cache[key] = None
+            return None
+        groups = data.get("release-groups") or []
+        for g in groups:
+            d = (g.get("first-release-date") or "").strip()
+            if d and len(d) >= 4 and d[:4].isdigit():
+                y = int(d[:4])
+                if 1900 <= y <= 2100:
+                    self._rg_year_cache[key] = y
+                    return y
+        self._rg_year_cache[key] = None
+        return None
+
+    def _mb_release_group_year(self, rg_id: str) -> Optional[int]:
+        """Query MusicBrainz for a release-group's first-release-date and
+        return its year (int), or None on any failure. Cached per-run in
+        `self._rg_year_cache` so a 12-track album only costs one MB query.
+
+        MB endpoint: GET /ws/2/release-group/{id}?fmt=json
+        Returns JSON including `first-release-date` like "1987-08-31".
+
+        Rate-limited to _MB_RATE_LIMIT_SEC between calls per MB ToS."""
+        if not rg_id:
+            return None
+        if rg_id in self._rg_year_cache:
+            return self._rg_year_cache[rg_id]
+        # Rate-limit only on actual MB calls (cache hits skip the wait).
+        if self._stop.wait(_MB_RATE_LIMIT_SEC):
+            return None
+        try:
+            conn = http.client.HTTPSConnection(
+                "musicbrainz.org", timeout=_MB_TIMEOUT)
+            try:
+                path = f"/ws/2/release-group/{rg_id}?fmt=json"
+                conn.request("GET", path,
+                             headers={"User-Agent": _AC_USER_AGENT})
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    log.warning(f"MB: HTTP {resp.status} for release-group "
+                                f"{rg_id}")
+                    self._rg_year_cache[rg_id] = None
+                    return None
+                data = json.loads(resp.read())
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f"MB: release-group lookup error for {rg_id}: {e}")
+            self._rg_year_cache[rg_id] = None
+            return None
+        date_str = (data.get("first-release-date") or "").strip()
+        year = None
+        if date_str and len(date_str) >= 4 and date_str[:4].isdigit():
+            y = int(date_str[:4])
+            if 1900 <= y <= 2100:
+                year = y
+        self._rg_year_cache[rg_id] = year
+        return year
 
 
 if __name__ == "__main__":
