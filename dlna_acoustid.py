@@ -307,8 +307,12 @@ class AcoustIDFetcher:
     # ── Public surface ────────────────────────────────────────────
 
     def bare_tracks(self) -> list:
-        """Delegates to LibraryDB so the SQL stays in one place."""
-        return self._db.bare_metadata_tracks()
+        """Delegates to LibraryDB. Filters to dedup-winners — lower-
+        quality duplicates of an unprocessed winner are deliberately
+        skipped here. Their metadata is propagated from the winner via
+        a SQL pass at the end of `run_once`. Saves ~7 hours on a hi-res
+        library where ~40% of tracks are bit-depth duplicates."""
+        return self._db.bare_metadata_tracks(winners_only=True)
 
     def status(self) -> dict:
         with self._lock:
@@ -440,12 +444,18 @@ class AcoustIDFetcher:
                             # MBID; one MB query per unique recording.
                             orig_year = self._mb_recording_year(
                                 match.get("rec_id", ""))
+                            # update_tracks=False so siblings stay matchable
+                            # by (artist, album, title) for the propagate
+                            # step at the end of the run. sync_tracks_from_
+                            # overrides() pushes onto tracks in bulk after
+                            # propagate finishes.
                             self._db.metadata_override_set(
                                 url, source="acoustid",
                                 artist=match.get("artist") or None,
                                 album=match.get("album") or None,
                                 title=match.get("title") or None,
-                                year=orig_year)
+                                year=orig_year,
+                                update_tracks=False)
                             stats["hits"] += 1
                             year_s = f" ({orig_year})" if orig_year else ""
                             label = (f"{match.get('artist','?')} — "
@@ -476,6 +486,24 @@ class AcoustIDFetcher:
                      f"errors={stats.get('errors', 0)}, "
                      f"video_skipped={stats.get('video_skipped', 0)}, "
                      f"transient={stats.get('transient', 0)}")
+            # 1. Propagate dedup-winner overrides to lower-quality
+            # siblings. Match by current tracks (artist, album, title),
+            # which works because we deferred tracks updates above
+            # (update_tracks=False). Cheap SQL — finishes in milliseconds.
+            propagated = self._db.propagate_overrides_to_siblings()
+            stats["propagated_to_siblings"] = propagated
+            if propagated:
+                log.info(f"AcoustIDFetcher: propagated overrides to "
+                         f"{propagated:,} lower-quality sibling track(s)")
+            # 2. Now sync the tracks table from metadata_overrides in
+            # bulk. Until this runs, browse listings still show the
+            # pre-AcoustID metadata for processed tracks. Single UPDATE,
+            # tolerates UNIQUE collisions via OR IGNORE.
+            synced = self._db.sync_tracks_from_overrides()
+            stats["tracks_synced"] = synced
+            if synced:
+                log.info(f"AcoustIDFetcher: synced overrides onto "
+                         f"{synced:,} tracks row(s)")
         return stats
 
     def trigger(self, delay: float = 0.0):
