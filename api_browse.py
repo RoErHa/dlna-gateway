@@ -160,6 +160,48 @@ def genre_tracks(h, params):
     h._json(200, {"tracks": DB.genre_tracks(udn, genre)})
 
 
+def decades(h, params):
+    """GET /api/decades?udn=… — list every decade present in the library
+    along with track_count + album_count. Decade is the floor of the
+    effective year (override.year > tracks.year)."""
+    udn = params.get("udn", "")
+    if not udn:
+        h._json(400, {"error": "Missing udn"})
+        return
+    h._json(200, DB.all_decades(udn))
+
+
+def decade_albums(h, params):
+    """GET /api/decade_albums?udn=…&decade=1980 — all albums whose
+    effective year falls in [decade, decade+10)."""
+    udn    = params.get("udn", "")
+    decade = params.get("decade", "")
+    if not udn or not decade:
+        h._json(400, {"error": "Missing udn or decade"})
+        return
+    try:
+        d = int(decade)
+    except ValueError:
+        h._json(400, {"error": "decade must be an integer"})
+        return
+    h._json(200, DB.decade_albums(udn, d))
+
+
+def decade_tracks(h, params):
+    """GET /api/decade_tracks?udn=…&decade=1980 — flat track list."""
+    udn    = params.get("udn", "")
+    decade = params.get("decade", "")
+    if not udn or not decade:
+        h._json(400, {"error": "Missing udn or decade"})
+        return
+    try:
+        d = int(decade)
+    except ValueError:
+        h._json(400, {"error": "decade must be an integer"})
+        return
+    h._json(200, {"tracks": DB.decade_tracks(udn, d)})
+
+
 def artist_albums(h, params):
     udn    = params.get("udn", "")
     artist = params.get("artist", "")

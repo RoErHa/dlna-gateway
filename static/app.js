@@ -405,11 +405,11 @@ function showArtists(){
 
 function setBrowseMode(mode, resetLetter=true){
   browseMode = mode;
-  ["artists","albums","tracks","genres"].forEach(m=>{
+  ["artists","albums","tracks","genres","decades"].forEach(m=>{
     $("bmode-"+m).classList.toggle("active", m===mode);
   });
-  // Genres browse uses its own list (no letter picker needed — usually short)
-  const hasLetters = mode !== "genres";
+  // Genres + decades use their own short lists — no letter picker.
+  const hasLetters = mode !== "genres" && mode !== "decades";
   $("letter-bar").style.display = hasLetters ? "" : "none";
   if(!hasLetters){ buildLetterBar(); }  // still build for when switching back
   if(resetLetter){ browseLetter="A"; browseOffset=0; }
@@ -450,6 +450,21 @@ async function loadBrowsePage(){
     const genres = await r.json();
     if(!genres.length){ $("item-list").innerHTML='<div class="msg">No genres in library.<br><small>Rebuild index to pick up genre tags.</small></div>'; return; }
     renderGenreList(genres);
+    return;
+  }
+
+  // Decades: same shape as genres. Year comes from MB original year
+  // (preferred) falling back to file-tag year; tracks with no year at
+  // all are excluded server-side.
+  if(browseMode === "decades"){
+    const r = await api(`/api/decades?udn=${enc(curServer.udn)}`);
+    if(!r){ $("item-list").innerHTML='<div class="msg">Could not load decades.</div>'; return; }
+    const decades = await r.json();
+    if(!decades.length){
+      $("item-list").innerHTML='<div class="msg">No year metadata yet.<br><small>Run a rebuild-index (for file-tag year) and the AcoustID year backfill (for MusicBrainz original year).</small></div>';
+      return;
+    }
+    renderDecadeList(decades);
     return;
   }
 
@@ -509,6 +524,57 @@ function renderGenreList(genres){
     div.className = "row";
     div.innerHTML = `<div class="row-icon">🎼</div><div class="row-body"><div class="row-title">${esc(g.genre)}</div><div class="row-sub">${g.album_count} album${g.album_count!==1?"s":""} · ${g.track_count} tracks</div></div>`;
     div.addEventListener("click", ()=>showGenreAlbums(g));
+    list.appendChild(div);
+  });
+}
+
+function renderDecadeList(decades){
+  const list = $("item-list");
+  list.innerHTML = "";
+  decades.forEach(d=>{
+    const div = document.createElement("div");
+    div.className = "row";
+    const label = `${d.decade}s`;
+    div.innerHTML = `<div class="row-icon">📅</div><div class="row-body"><div class="row-title">${label}</div><div class="row-sub">${d.album_count} album${d.album_count!==1?"s":""} · ${d.track_count} tracks</div></div>`;
+    div.addEventListener("click", ()=>showDecadeAlbums(d));
+    list.appendChild(div);
+  });
+}
+
+async function showDecadeAlbums(decadeItem){
+  if(!curServer) return;
+  browseNavStack.push({type:"root", label:"Decades"});
+  _showDecadeAlbumsInner(decadeItem);
+}
+
+async function _showDecadeAlbumsInner(decadeItem){
+  if(!curServer) return;
+  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  _drillShowChrome(true);
+  $("browse-pager").classList.add("hidden");
+  $("browse-back-title").textContent = browseNavStack.length>0
+    ? browseNavStack[browseNavStack.length-1].label : "Decades";
+  $("browse-section-hdr").style.display = "";
+  $("browse-section-title").textContent = `${decadeItem.decade}s · ${decadeItem.album_count} album${decadeItem.album_count!==1?"s":""}`;
+  $("browse-play-all").onclick = async ()=>{
+    const r=await api(`/api/decade_tracks?udn=${enc(curServer.udn)}&decade=${decadeItem.decade}`);
+    if(!r)return; const data=await r.json();
+    if(data.tracks && data.tracks.length) await playTracklist(data.tracks, `${decadeItem.decade}s`, "");
+  };
+  const r = await api(`/api/decade_albums?udn=${enc(curServer.udn)}&decade=${decadeItem.decade}`);
+  if(!r){ $("item-list").innerHTML='<div class="msg">Could not load decade albums.</div>'; return; }
+  const albums = await r.json();
+  const list = $("item-list");
+  list.innerHTML = "";
+  albums.forEach(a=>{
+    const div = document.createElement("div");
+    div.className = "row";
+    const artEl = a.art
+      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      : `<div class="row-icon">💿</div>`;
+    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
+    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album);});
+    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}));
     list.appendChild(div);
   });
 }
