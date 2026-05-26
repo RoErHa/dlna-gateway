@@ -652,12 +652,13 @@ async function _showArtistAlbumsInner(artistItem){
     ? browseNavStack[browseNavStack.length-1].label : "";
   $("browse-section-hdr").style.display = "";
   $("browse-section-title").textContent = `${artistItem.album_count||"?"} album${artistItem.album_count!==1?"s":""}`;
+  // Play all by this artist — clean endpoint, dedup applied, ordered
+  // by album then title.
   $("browse-play-all").onclick = async ()=>{
-    const r=await api(`/api/artist_albums?udn=${enc(curServer.udn)}&artist=${enc(artistItem.artist)}`);
-    if(!r)return; const d=await r.json();
-    const tracks_r=await api(`/api/search?udn=${enc(curServer.udn)}&q=${enc(artistItem.artist)}`);
-    if(!tracks_r)return; const td=await tracks_r.json();
-    const tracks=(td.tracks||[]).filter(t=>t.artist&&t.artist.toLowerCase()===artistItem.artist.toLowerCase());
+    const r=await api(`/api/artist_tracks?udn=${enc(curServer.udn)}&artist=${enc(artistItem.artist)}`);
+    if(!r) return;
+    const d = await r.json();
+    const tracks = d.tracks || [];
     if(tracks.length) await playTracklist(tracks, artistItem.artist, artistItem.artist);
   };
   const r = await api(`/api/artist_albums?udn=${enc(curServer.udn)}&artist=${enc(artistItem.artist)}`);
