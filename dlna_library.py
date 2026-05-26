@@ -1071,6 +1071,25 @@ class LibraryDB:
                 (udn, decade)).fetchall()
         return [dict(r) for r in rows]
 
+    def artist_tracks(self, udn: str, artist: str) -> list:
+        """All tracks by a given artist, with browse-side dedup applied
+        (16-bit hidden when 24-bit exists). Sorted by album then title
+        so a "Play all" of this list plays the artist's catalogue in a
+        reasonable order. Used by the artist-view "Play all" button —
+        replaces the prior search-and-filter hack."""
+        dedup = _dedup_clause("t")
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
+                          t.duration, t.art, t.mime, t.genre, 'audio' as type
+                     FROM tracks t
+                    WHERE t.udn = ? AND t.artist = ?
+                      AND {dedup}
+                 ORDER BY t.album COLLATE NOCASE,
+                          t.title COLLATE NOCASE""",
+                (udn, artist)).fetchall()
+        return [dict(r) for r in rows]
+
     def decade_tracks(self, udn: str, decade: int) -> list:
         """Flat list of every track whose effective year falls in
         [decade, decade+10)."""

@@ -211,6 +211,18 @@ def artist_albums(h, params):
     h._json(200, DB.artist_albums(udn, artist))
 
 
+def artist_tracks(h, params):
+    """GET /api/artist_tracks?udn=…&artist=… — flat list of every track
+    by the given artist, browse-deduped + ordered by album then title.
+    Backs the "Play all" button in the artist-albums view."""
+    udn    = params.get("udn", "")
+    artist = params.get("artist", "")
+    if not udn or not artist:
+        h._json(400, {"error": "Missing udn or artist"})
+        return
+    h._json(200, {"tracks": DB.artist_tracks(udn, artist)})
+
+
 def browse_letter(h, params):
     udn    = params.get("udn", "")
     mode   = params.get("mode", "artists")
