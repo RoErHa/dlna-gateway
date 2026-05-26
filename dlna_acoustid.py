@@ -256,18 +256,24 @@ def _extract_best_match(response: dict,
     rec = sorted(recordings, key=_rank)[0]
     title = (rec.get("title") or "").strip()
     artist = _reconstruct_artist(rec.get("artists") or [])
+    # MB recording id — used to look up the RECORDING'S first-release-date,
+    # which is when the song first appeared anywhere (across ALL releases
+    # including the original studio album). This is what the user thinks
+    # of as the "song's year" — e.g. BTO's "Hey You" = 1976, regardless
+    # of which compilation/anthology a given file is from.
+    rec_id = (rec.get("id") or "").strip()
     album = ""
     rg_id = ""
     rgs = rec.get("releasegroups") or []
     if rgs:
         album = (rgs[0].get("title") or "").strip()
-        # MB id of the first release-group — used to look up the
-        # release-group's first-release-date for the "original year".
+        # rg_id kept for backward compat / debugging; the year lookup
+        # now uses rec_id (the recording, not the release-group).
         rg_id = (rgs[0].get("id") or "").strip()
     if not any((title, artist, album)):
         return None
     return {"artist": artist, "album": album, "title": title,
-            "score": score, "rg_id": rg_id}
+            "score": score, "rg_id": rg_id, "rec_id": rec_id}
 
 
 # ── Worker class ──────────────────────────────────────────────────
@@ -425,11 +431,15 @@ class AcoustIDFetcher:
                                 break
                             continue
                         if match:
-                            # Look up the release-group's first-release-date
-                            # for the "original year". Cached per-run so a
-                            # 12-track album costs 1 MB query, not 12.
-                            orig_year = self._mb_release_group_year(
-                                match.get("rg_id", ""))
+                            # Look up the RECORDING's first-release-date
+                            # — the year the song first appeared on any
+                            # release, not the year of the specific
+                            # release-group AcoustID returned (which is
+                            # often a compilation/anthology when the user
+                            # owns the song on one). Cached by recording
+                            # MBID; one MB query per unique recording.
+                            orig_year = self._mb_recording_year(
+                                match.get("rec_id", ""))
                             self._db.metadata_override_set(
                                 url, source="acoustid",
                                 artist=match.get("artist") or None,
@@ -720,6 +730,60 @@ class AcoustIDFetcher:
                     return y
         self._rg_year_cache[key] = None
         return None
+
+    def _mb_recording_year(self, rec_id: str) -> Optional[int]:
+        """Query MusicBrainz for a recording's `first-release-date` and
+        return its year. This is the date the recording itself first
+        appeared anywhere — across the original studio album, singles,
+        compilations, anthologies, live albums, etc. → minimum date.
+
+        Distinct from `_mb_release_group_year`, which returns the year
+        of a specific release-group (e.g. the Anthology). For "Hey You"
+        on a 1993 Anthology, _release_group_year would return 1993;
+        _recording_year returns 1976 (when the song first came out).
+
+        Cached per-run in `self._rg_year_cache` (same cache used by
+        the release-group lookup — distinct keys via the `rec:` prefix).
+
+        MB endpoint: GET /ws/2/recording/{id}?fmt=json — returns the
+        recording with `first-release-date` field.
+
+        Rate-limited to _MB_RATE_LIMIT_SEC per MB ToS."""
+        if not rec_id:
+            return None
+        cache_key = ("rec", rec_id)
+        if cache_key in self._rg_year_cache:
+            return self._rg_year_cache[cache_key]
+        if self._stop.wait(_MB_RATE_LIMIT_SEC):
+            return None
+        try:
+            conn = http.client.HTTPSConnection(
+                "musicbrainz.org", timeout=_MB_TIMEOUT)
+            try:
+                path = f"/ws/2/recording/{rec_id}?fmt=json"
+                conn.request("GET", path,
+                             headers={"User-Agent": _AC_USER_AGENT})
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    log.warning(f"MB: HTTP {resp.status} for recording "
+                                f"{rec_id}")
+                    self._rg_year_cache[cache_key] = None
+                    return None
+                data = json.loads(resp.read())
+            finally:
+                conn.close()
+        except Exception as e:
+            log.warning(f"MB: recording lookup error for {rec_id}: {e}")
+            self._rg_year_cache[cache_key] = None
+            return None
+        date_str = (data.get("first-release-date") or "").strip()
+        year = None
+        if date_str and len(date_str) >= 4 and date_str[:4].isdigit():
+            y = int(date_str[:4])
+            if 1900 <= y <= 2100:
+                year = y
+        self._rg_year_cache[cache_key] = year
+        return year
 
     def _mb_release_group_year(self, rg_id: str) -> Optional[int]:
         """Query MusicBrainz for a release-group's first-release-date and
