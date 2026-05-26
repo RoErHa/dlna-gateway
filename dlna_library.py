@@ -1020,6 +1020,76 @@ class LibraryDB:
                 (udn, genre)).fetchall()
         return [dict(r) for r in rows]
 
+    # ── Decade browse ────────────────────────────────────────────
+    # A track's "effective year" is COALESCE(metadata_overrides.year,
+    # tracks.year) — i.e. the MusicBrainz original-release year when
+    # known, falling back to the file-tag year. Decade = effective_year
+    # // 10 * 10. Tracks with no year at all are excluded from decade
+    # listings (would show as "decade 0" otherwise).
+
+    def all_decades(self, udn: str) -> list:
+        """All decades present in the library with track + album counts.
+        Browse-side dedup is applied: a 16-bit duplicate of a 24-bit
+        track doesn't double-count. Ordered chronologically (oldest to
+        newest)."""
+        dedup = _dedup_clause("t")
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                f"""SELECT (COALESCE(m.year, t.year) / 10) * 10 AS decade,
+                          COUNT(*) AS track_count,
+                          COUNT(DISTINCT t.album) AS album_count
+                     FROM tracks t
+                LEFT JOIN metadata_overrides m ON m.url = t.url
+                    WHERE t.udn = ?
+                      AND COALESCE(m.year, t.year) IS NOT NULL
+                      AND {dedup}
+                 GROUP BY decade
+                 ORDER BY decade ASC""",
+                (udn,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def decade_albums(self, udn: str, decade: int) -> list:
+        """All albums whose effective year falls in [decade, decade+10).
+        Grouping mirrors `all_albums`: compilations with multiple
+        distinct artists collapse to 'Various Artists'."""
+        dedup = _dedup_clause("t")
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                f"""SELECT t.album,
+                          CASE WHEN COUNT(DISTINCT t.artist) > 1
+                               THEN 'Various Artists'
+                               ELSE MAX(t.artist) END as artist,
+                          COUNT(*) as track_count,
+                          MAX(t.art) as art
+                     FROM tracks t
+                LEFT JOIN metadata_overrides m ON m.url = t.url
+                    WHERE t.udn = ? AND t.album != ''
+                      AND (COALESCE(m.year, t.year) / 10) * 10 = ?
+                      AND {dedup}
+                 GROUP BY t.album
+                 ORDER BY t.album COLLATE NOCASE""",
+                (udn, decade)).fetchall()
+        return [dict(r) for r in rows]
+
+    def decade_tracks(self, udn: str, decade: int) -> list:
+        """Flat list of every track whose effective year falls in
+        [decade, decade+10)."""
+        dedup = _dedup_clause("t")
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
+                          t.duration, t.art, t.mime, t.genre, 'audio' as type
+                     FROM tracks t
+                LEFT JOIN metadata_overrides m ON m.url = t.url
+                    WHERE t.udn = ?
+                      AND (COALESCE(m.year, t.year) / 10) * 10 = ?
+                      AND {dedup}
+                 ORDER BY t.artist COLLATE NOCASE,
+                          t.album COLLATE NOCASE,
+                          t.title COLLATE NOCASE""",
+                (udn, decade)).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Metadata editing ─────────────────────────────────────────
 
     def update_track_meta(self, url: str,
