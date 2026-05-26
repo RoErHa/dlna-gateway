@@ -1170,34 +1170,80 @@ class LibraryDB:
 
     # ── AcoustID metadata enrichment (used by dlna_acoustid) ──────
 
-    def bare_metadata_tracks(self) -> list:
+    def bare_metadata_tracks(self, winners_only: bool = False) -> list:
         """Tracks that have no `metadata_overrides` row of any source
         (including 'notfound' sticky negatives). Mirrors the contract
         of LoudnessScanner.bare_tracks / AlbumArtFetcher.bare_albums:
         anything cached in any form is excluded so the worker doesn't
         re-hit the AcoustID API for tracks it already processed.
 
+        With `winners_only=True`, also filters by `_dedup_clause` so a
+        16-bit duplicate of a 24-bit track doesn't get its own fpcalc +
+        AcoustID + MB pass. The worker calls with True; the override
+        is then propagated to lower-quality siblings via SQL after the
+        main run completes (see `propagate_overrides_to_siblings`).
+        Saves ~7 hours of work on a hi-res-heavy library.
+
         Returns a list of (url,) tuples. URLs only — the AcoustID
         lookup needs duration, but fpcalc reports it from the audio
         itself, so we don't carry the DB-side value through."""
+        dedup_filter = f"AND {_dedup_clause('t')}" if winners_only else ""
         with self._pool.read() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT t.url
                   FROM tracks t
                  WHERE t.url != ''
                    AND NOT EXISTS (
                        SELECT 1 FROM metadata_overrides m WHERE m.url = t.url)
+                   {dedup_filter}
                  GROUP BY t.url
                  ORDER BY t.id
             """).fetchall()
         return [(r["url"],) for r in rows]
+
+    def propagate_overrides_to_siblings(self) -> int:
+        """For each track WITHOUT a metadata_overrides row, find a
+        higher-quality sibling (same udn+artist+album+title, higher
+        bit_depth/sample_rate) that DOES have an override, and copy
+        that override to the unprocessed sibling. INSERT OR IGNORE
+        never touches existing rows.
+
+        Returns the number of rows inserted.
+
+        Pairs with `bare_metadata_tracks(winners_only=True)`: the
+        worker processes only dedup winners, then this propagates the
+        winner's metadata to the 16-bit / lower-sample-rate siblings
+        so playlists / radio / Subsonic / direct URL lookups all see
+        the same metadata regardless of which quality variant they
+        happen to reference."""
+        with self._pool.write() as conn:
+            cur = conn.execute("""
+                INSERT OR IGNORE INTO metadata_overrides
+                    (url, artist, album, title, year, source)
+                SELECT lower.url, m.artist, m.album, m.title, m.year, m.source
+                  FROM tracks lower
+                  JOIN tracks winner
+                    ON winner.udn    = lower.udn
+                   AND winner.artist = lower.artist
+                   AND winner.album  = lower.album
+                   AND winner.title  = lower.title
+                   AND lower.url != winner.url
+                   AND (   COALESCE(winner.bit_depth, 0)   >  COALESCE(lower.bit_depth, 0)
+                        OR (    COALESCE(winner.bit_depth, 0)   = COALESCE(lower.bit_depth, 0)
+                            AND COALESCE(winner.sample_rate, 0) > COALESCE(lower.sample_rate, 0)))
+                  JOIN metadata_overrides m ON m.url = winner.url
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM metadata_overrides ml WHERE ml.url = lower.url)
+            """)
+            return cur.rowcount or 0
 
     def metadata_override_set(self, url: str, source: str,
                               artist: Optional[str] = None,
                               album: Optional[str] = None,
                               title: Optional[str] = None,
                               genre: Optional[str] = None,
-                              year: Optional[int] = None) -> bool:
+                              year: Optional[int] = None,
+                              update_tracks: bool = True) -> bool:
         """Write a metadata_overrides row from a non-user source (e.g.
         AcoustID match) AND apply it onto `tracks` so the UI sees it
         without waiting for the next re-index. Only non-None fields are
@@ -1268,7 +1314,13 @@ class LibraryDB:
             # impact is that one of the duplicates keeps its old metadata
             # in the tracks list. Acceptable; flagged at WARN so it's
             # diagnosable.
-            if fields:
+            if fields and update_tracks:
+                # The AcoustID worker passes update_tracks=False during
+                # its bulk run so sibling-by-(artist,album,title) matching
+                # in `propagate_overrides_to_siblings` works. After the
+                # propagate, `sync_tracks_from_overrides` does the bulk
+                # tracks update in one pass. For interactive user edits
+                # (update_track_meta), keep the inline tracks push.
                 set_clause = ", ".join(f"{k}=?" for k in fields)
                 try:
                     conn.execute(
@@ -1280,6 +1332,27 @@ class LibraryDB:
                         f"UNIQUE(udn,artist,album,title) for {url[:80]} "
                         f"({e}); override row saved, tracks row unchanged")
         return True
+
+    def sync_tracks_from_overrides(self) -> int:
+        """Bulk-update every tracks row to match its metadata_overrides
+        row (where one exists). Used by the AcoustID worker after a
+        full pass to push override values onto tracks in one go — done
+        separately from per-track override writes so siblings stay
+        matchable by (artist, album, title) during the run.
+
+        Mirrors the COALESCE UPDATE in upsert_tracks (uses OR IGNORE
+        for the same UNIQUE-collision tolerance). Returns the number
+        of rows affected."""
+        with self._pool.write() as conn:
+            cur = conn.execute("""
+                UPDATE OR IGNORE tracks SET
+                    artist = COALESCE((SELECT artist FROM metadata_overrides WHERE url=tracks.url), artist),
+                    album  = COALESCE((SELECT album  FROM metadata_overrides WHERE url=tracks.url), album),
+                    title  = COALESCE((SELECT title  FROM metadata_overrides WHERE url=tracks.url), title),
+                    genre  = COALESCE((SELECT genre  FROM metadata_overrides WHERE url=tracks.url), genre)
+                 WHERE url IN (SELECT url FROM metadata_overrides)
+            """)
+            return cur.rowcount or 0
 
     def metadata_override_mark_notfound(self, url: str) -> bool:
         """Write a sticky-negative row so the AcoustID worker doesn't
