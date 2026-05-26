@@ -222,12 +222,25 @@ def _parse_didl(soap_xml: str) -> dict:
                 art = child.findtext(f"{{{_UPP_NS}}}albumArtURI") or ""
 
                 genre = child.findtext(f"{{{_UPP_NS}}}genre") or ""
+                # File-tag year: dc:date is the DIDL-Lite standard; some
+                # servers expose upnp:originalTrackDate instead. Take the
+                # first 4 digits as the year (handles "1987", "1987-08-31",
+                # "1987-08", "1987/08/31"). Anything unparseable → None.
+                date_str = (child.findtext(f"{{{_DC_NS}}}date")
+                            or child.findtext(f"{{{_UPP_NS}}}originalTrackDate")
+                            or "")
+                year = None
+                if date_str and len(date_str) >= 4 and date_str[:4].isdigit():
+                    y = int(date_str[:4])
+                    if 1900 <= y <= 2100:
+                        year = y
                 items.append({
                     "id": obj_id, "parent": par_id, "title": title,
                     "artist": artist, "album": album,
                     "duration": res_dur, "url": res_url,
                     "mime": res_mime, "type": mtype, "art": art,
                     "genre": genre, "file_path": file_path,
+                    "year": year,
                 })
 
     except ET.ParseError as e:

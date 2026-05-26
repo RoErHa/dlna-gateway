@@ -53,9 +53,42 @@ function setNpTrack(t){
   const panel = $("np-actions");
   if(npTrack && npTrack.url){
     panel.style.display = "flex";
+    _renderNpYear(npTrack.url);
   } else {
     panel.style.display = "none";
+    $("np-year").textContent = "";
   }
+}
+
+// Fetch and render the year line under album in the now-playing panel.
+// Prefers MusicBrainz original year over file-tag (edition) year. If
+// both exist and the edition year is 3+ years later than the original,
+// annotate as "1987 (remastered)" — typical sign of a remaster reissue.
+let _npYearReqUrl = null;
+async function _renderNpYear(url){
+  if(!url){ $("np-year").textContent = ""; return; }
+  // Guard against races where successive setNpTrack() calls fire in
+  // close order — only the most-recent URL gets to write the field.
+  _npYearReqUrl = url;
+  $("np-year").textContent = "";  // clear instantly
+  try{
+    const r = await fetch(`/api/track_meta?url=${enc(url)}`);
+    if(!r.ok) return;
+    const m = await r.json();
+    if(_npYearReqUrl !== url) return;   // a newer fetch superseded us
+    const origYear = m.year_original;
+    const fileYear = m.year;
+    let display = "";
+    if(origYear){
+      display = String(origYear);
+      if(fileYear && fileYear - origYear >= 3){
+        display += " (remastered)";
+      }
+    } else if(fileYear){
+      display = String(fileYear);
+    }
+    $("np-year").textContent = display;
+  }catch(e){ /* best effort — silently fail */ }
 }
 // Persist shuffle preference across reloads
 let shuffleEnabled=(()=>{const v=localStorage.getItem("dlna_shuffle");return v===null?true:v==="1";})();
@@ -1708,7 +1741,7 @@ async function control(cmd){
 
 function resetPlayer(){
   _exitRadioMode();
-  $("np-title").textContent="Nothing playing";$("np-artist").textContent="";$("np-album").textContent="";
+  $("np-title").textContent="Nothing playing";$("np-artist").textContent="";$("np-album").textContent="";$("np-year").textContent="";
   $("np-meta").textContent="Browse or search your library";
   $("art").textContent="🎵";$("btn-pp").textContent="▶ Play";$("player").className="";
   $("seek-fill").style.width="0%";$("seek-thumb").style.left="0%";

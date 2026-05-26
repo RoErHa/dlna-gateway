@@ -128,6 +128,7 @@ class LibraryDB:
                     file_path   TEXT DEFAULT '',
                     bit_depth   INTEGER,
                     sample_rate INTEGER,
+                    year        INTEGER,    -- file-tag year (DIDL-Lite dc:date)
                     UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
                 );
                 -- Genre migration: add column if upgrading from older schema
@@ -138,6 +139,7 @@ class LibraryDB:
                     album     TEXT,
                     title     TEXT,
                     genre     TEXT,
+                    year      INTEGER,   -- original release year (MusicBrainz)
                     updated_at TEXT DEFAULT (datetime('now'))
                 );
                 -- Per-album cover art cache. Survives re-index so an album
@@ -295,6 +297,15 @@ class LibraryDB:
             # convention as album_art / lyrics.
             "ALTER TABLE metadata_overrides ADD COLUMN source TEXT "
             "NOT NULL DEFAULT 'manual'",
+            # 2026-05-26: year columns. tracks.year is the file-tag year
+            # (DIDL-Lite dc:date / upnp:originalTrackDate — the edition you
+            # own). metadata_overrides.year is the ORIGINAL release year
+            # captured from MusicBrainz release-group's first-release-date
+            # by the AcoustID worker. Frontend prefers the MB override year;
+            # falls back to file-tag year; annotates "(remastered)" when
+            # tag year - override year >= 3.
+            "ALTER TABLE tracks ADD COLUMN year INTEGER",
+            "ALTER TABLE metadata_overrides ADD COLUMN year INTEGER",
         ]:
             try:
                 with self._pool.write() as conn:
@@ -679,6 +690,8 @@ class LibraryDB:
         # AssetUPnP URLs include `/b<bits>/f<rate>/`; non-AssetUPnP
         # servers usually don't, in which case both stay None and the
         # UNIQUE treats NULLs as distinct (so no cross-server collisions).
+        # year is the file-tag year (DIDL-Lite dc:date / upnp:originalTrackDate),
+        # parsed in dlna_content._parse_didl.
         def _make_row(t: dict) -> dict:
             url = t.get("url", "")
             bd, sr = _parse_audio_params(url)
@@ -696,6 +709,7 @@ class LibraryDB:
                 file_path=t.get("file_path", ""),
                 bit_depth=bd,
                 sample_rate=sr,
+                year=t.get("year"),
             )
         rows = [_make_row(t) for t in tracks if t.get("url")]
 
@@ -705,9 +719,10 @@ class LibraryDB:
             conn.executemany(
                 "INSERT OR IGNORE INTO tracks "
                 "(udn, obj_id, url, title, artist, album, duration, art, "
-                " mime, genre, file_path, bit_depth, sample_rate) "
+                " mime, genre, file_path, bit_depth, sample_rate, year) "
                 "VALUES (:udn,:obj_id,:url,:title,:artist,:album,:duration,"
-                "        :art,:mime,:genre,:file_path,:bit_depth,:sample_rate)",
+                "        :art,:mime,:genre,:file_path,:bit_depth,:sample_rate,"
+                "        :year)",
                 rows)
             inserted = conn.execute("SELECT changes()").fetchone()[0]
             # Step 2: update genre + art on already-indexed tracks
@@ -1092,12 +1107,18 @@ class LibraryDB:
                               artist: Optional[str] = None,
                               album: Optional[str] = None,
                               title: Optional[str] = None,
-                              genre: Optional[str] = None) -> bool:
+                              genre: Optional[str] = None,
+                              year: Optional[int] = None) -> bool:
         """Write a metadata_overrides row from a non-user source (e.g.
         AcoustID match) AND apply it onto `tracks` so the UI sees it
         without waiting for the next re-index. Only non-None fields are
         carried through — a missing album stays as whatever `tracks`
         already had.
+
+        `year` here is the **original release year** (MusicBrainz
+        release-group's first-release-date); `tracks.year` is the
+        file-tag/edition year. The two are kept as separate fields so
+        the frontend can render "1987 (remastered)" when they differ.
 
         Use `metadata_override_mark_notfound()` for sticky negatives;
         this method is for positive matches only.
@@ -1106,24 +1127,32 @@ class LibraryDB:
         URLs)."""
         if not url:
             return False
+        # Keep `year` separate from `fields` — it's stored in
+        # metadata_overrides ONLY (it's the original release year), not
+        # in `tracks` (where year means file-tag/edition year, a
+        # different concept). The "push onto tracks" UPDATE below uses
+        # `fields` which must NOT include year.
         fields = {k: v for k, v in
                   (("artist", artist), ("album", album),
                    ("title", title), ("genre", genre))
                   if v is not None and v != ""}
+        override_year = year if (year is not None and year > 0) else None
         with self._pool.write() as conn:
             # Upsert into overrides preserving any non-overwritten fields.
             existing = conn.execute(
-                "SELECT artist, album, title, genre FROM metadata_overrides "
+                "SELECT artist, album, title, genre, year FROM metadata_overrides "
                 "WHERE url=?", (url,)).fetchone()
             if existing:
                 merged = dict(existing)
                 merged.update(fields)
+                if override_year is not None:
+                    merged["year"] = override_year
                 conn.execute(
                     "UPDATE metadata_overrides "
-                    "SET artist=?, album=?, title=?, genre=?, source=?, "
+                    "SET artist=?, album=?, title=?, genre=?, year=?, source=?, "
                     "    updated_at=datetime('now') WHERE url=?",
                     (merged["artist"], merged["album"], merged["title"],
-                     merged["genre"], source, url))
+                     merged["genre"], merged["year"], source, url))
             else:
                 row = conn.execute(
                     "SELECT artist, album, title, genre FROM tracks WHERE url=?",
@@ -1133,10 +1162,10 @@ class LibraryDB:
                 base.update(fields)
                 conn.execute(
                     "INSERT INTO metadata_overrides "
-                    "(url, artist, album, title, genre, source) "
-                    "VALUES (?,?,?,?,?,?)",
+                    "(url, artist, album, title, genre, year, source) "
+                    "VALUES (?,?,?,?,?,?,?)",
                     (url, base["artist"], base["album"], base["title"],
-                     base["genre"], source))
+                     base["genre"], override_year, source))
             # Push the change onto tracks too — only the fields the caller
             # supplied; others are untouched. The Indexer's COALESCE pass
             # would do this on next re-index, but that may be weeks away.
@@ -1193,10 +1222,22 @@ class LibraryDB:
         return float(row["gain_db"]) if row and row["gain_db"] is not None else 0.0
 
     def track_meta_by_url(self, url: str):
+        """Metadata for a single track, used by /api/track_meta and the
+        Subsonic /rest/* methods. Returns both year fields separately:
+          - `year`: file-tag year from DIDL-Lite (the edition you own)
+          - `year_original`: MusicBrainz first-release-date year if the
+            AcoustID worker has filled it in (the recording's original
+            release year).
+        Frontend prefers `year_original`; if it differs from `year` by
+        more than 2 years, renders as e.g. '1987 (remastered)'."""
         with self._pool.read() as conn:
-            row = conn.execute(
-                "SELECT title, artist, album, duration "
-                "FROM tracks WHERE url=? LIMIT 1", (url,)).fetchone()
+            row = conn.execute("""
+                SELECT t.title, t.artist, t.album, t.duration, t.year,
+                       m.year AS year_original
+                  FROM tracks t
+             LEFT JOIN metadata_overrides m ON m.url = t.url
+                 WHERE t.url = ? LIMIT 1
+            """, (url,)).fetchone()
         return dict(row) if row else None
 
     def get_lyrics(self, url: str):

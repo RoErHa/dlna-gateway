@@ -120,7 +120,7 @@ These are shared state across all request handler threads:
 SQLite at `library.db`, WAL mode, accessed via `db_pool.Pool`:
 
 ```
-tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate)
+tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate, year)
   UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
   UNIQUE(udn, url) via idx_tracks_udn_url  -- created by _migrate_unique_url
   bit_depth + sample_rate are parsed from the URL at index time
@@ -129,9 +129,15 @@ tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, f
   The separate UNIQUE(udn, url) index dedups same-URL inserts (AssetUPnP
   serves each file via multiple browse-container paths).
   Browse-side queries hide lower-quality dupes via _dedup_clause.
+  year is the FILE-TAG year (DIDL-Lite dc:date / upnp:originalTrackDate),
+  parsed by dlna_content._parse_didl. Frontend prefers
+  metadata_overrides.year (the MusicBrainz original year) over this
+  edition year — see "Year display" subsection.
 tracks_fts — FTS5 virtual table over (title, artist, album)
-metadata_overrides(url, artist, album, title, genre, updated_at, source)
+metadata_overrides(url, artist, album, title, genre, year, updated_at, source)
   source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
+  year is the MUSICBRAINZ original release year (release-group's
+  first-release-date), captured by AcoustIDFetcher.
 index_meta(udn, indexed_at)
 playlists(id, name, created_at, sort_order)
 playlist_tracks(id, pl_id, url, title, artist, album, duration, art, added_at)
@@ -1007,6 +1013,45 @@ ACOUSTID_API_KEY=… python3 -c "from dlna_library import ACOUSTID_FETCHER; ACOU
 |---|---|
 | `tests/test_acoustid.py` | 64 tests — `_parse_fpcalc_output` (JSON shape, float-rounding, garbled-input → None), `_reconstruct_artist` (joinphrase, ' & ' fallback, blank skip), `_extract_best_match` (threshold gating at boundary, album-over-single preference, multi-result top-score selection, malformed-response → None); `_is_video_url` (every video ext flagged, case-insensitive, audio not flagged, no-extension and substring-in-path not flagged); `_lookup` HTTP transient-vs-permanent split (HTTP 500/503/504 + OSError + socket.timeout + HTTPException → `AcoustIDTransientError`; HTTP 4xx + garbled JSON → None; happy path); `bare_metadata_tracks` excludes `'manual'` / `'acoustid'` / `'notfound'` / `'video_skip'` rows; `clear(udn)` survival; `run_once` writes `'acoustid'` on hit, `'notfound'` on miss, treats fingerprint failure as notfound, transient → leaves URL bare (no row written) + tracked in per-run set so no infinite loop, video URLs skipped before fpcalc + sticky `video_skip` row; `ACOUSTID_API_KEY` unset → no-op; `fpcalc`-missing-at-start and `fpcalc`-disappears-mid-run guardrails don't poison cache; `trigger()` idempotent; `start_initial_scan` skipped when disabled; `status()` shape; partial-match only overwrites supplied fields; LibraryDB method tests: `metadata_override_set` merges with existing row + updates tracks, `mark_notfound` is sticky + never overwrites manual edits |
 | `tools/test_retry_notfound_metadata.py` | 8 tests — default mode reports stats only (no deletions); `--all` deletes only `source='notfound'` rows and leaves `manual` / `acoustid` / `video_skip` untouched; `--since TIMESTAMP` deletes only newer notfound rows; `--dry-run` doesn't mutate; `--all` + `--since` rejected as mutually exclusive; missing DB fails cleanly; `_scan_log_for_5xx` counts only HTTP 5xx lines in a synthetic log, returns empty when log absent |
+| `tests/test_year.py` | 22 tests — DIDL-Lite year parsing (`<dc:date>` full ISO, year-only, year+month, `<upnp:originalTrackDate>` fallback, garbage → None, out-of-range rejected); schema columns present after migration; upsert stores year; `metadata_override_set` keeps year SEPARATE from tracks.year (override = MB original, tracks = file-tag edition); `track_meta_by_url` returns both; `_renderNpYear` display logic — original preferred, "(remastered)" annotation at 3+ year gap, file-only fallback, no annotation for negative gaps |
+
+### Year (file-tag + MusicBrainz original)
+
+Two-field model in the schema:
+
+- **`tracks.year`** — the **file-tag year** from DIDL-Lite (`<dc:date>` or `<upnp:originalTrackDate>`, first 4 digits, range-clamped 1900–2100). Populated by the indexer at crawl time via `dlna_content._parse_didl`. Reflects the edition of the file the user has on disk (e.g. 2001 for a remastered CD of a 1987 album).
+- **`metadata_overrides.year`** — the **MusicBrainz original release year** (release-group `first-release-date`). Populated by `AcoustIDFetcher`:
+  - In `run_once`: `_extract_best_match` now also returns `rg_id`; the worker calls `_mb_release_group_year(rg_id)` to fetch the date and writes it through `metadata_override_set(year=...)`.
+  - In `run_year_backfill`: walks existing acoustid overrides where `year IS NULL`, searches MB by `(artist, album)` via `_mb_search_year`, writes year to all overrides with that pair. Per-run cache keyed by lowercase `(artist, album)` so a 12-track album costs 1 MB query.
+  - Rate-limited to `_MB_RATE_LIMIT_SEC = 1.1` per MB's ToS.
+
+The fields are deliberately stored separately — they mean different things and the frontend renders both:
+
+- **`GET /api/track_meta?url=…`** returns `{title, artist, album, duration, year, year_original}`. `year` is `tracks.year` (edition); `year_original` is `metadata_overrides.year` (MB).
+- Frontend (`_renderNpYear` in `static/app.js`):
+  - Prefer `year_original` if set.
+  - If both set and `year - year_original >= 3`, render as `"YYYY (remastered)"` (e.g. `1987 (remastered)` for a 2001 remaster of a 1987 album).
+  - Otherwise show whichever is available; empty string if neither.
+  - Race-guarded by `_npYearReqUrl` — successive setNpTrack() calls only let the most recent URL write the field.
+
+### Backfilling year for an existing library
+
+After this feature is deployed onto a DB that pre-dates it, both year columns are `NULL` for every row. Two backfill steps:
+
+1. **`tracks.year`** (file-tag) — triggered by re-running the indexer. Either:
+   - PWA → settings → "Rebuild Index" (preferred), or
+   - `POST /api/index/rebuild` directly.
+
+   Crawls AssetUPnP, re-parses DIDL-Lite, populates every row's year. ~25 min for 24k tracks. Safe to run alongside playback / other workers.
+
+2. **`metadata_overrides.year`** (MB original) — call `ACOUSTID_FETCHER.run_year_backfill()`:
+   ```bash
+   ACOUSTID_API_KEY=… GATEWAY_CONTACT_EMAIL=… \
+     python3 -c "from dlna_library import ACOUSTID_FETCHER; ACOUSTID_FETCHER.run_year_backfill()"
+   ```
+   Queries MB once per unique `(artist, album)` pair. ~3 hours for ~9k pairs at MB's 1.1s rate limit.
+
+Both can run concurrently with normal gateway operation. The indexer rebuild repopulates `tracks`; the MB backfill writes only to `metadata_overrides` — no conflict.
 
 ## Bit-perfect notes
 

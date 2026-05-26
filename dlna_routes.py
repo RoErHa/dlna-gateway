@@ -41,6 +41,7 @@ GET_ROUTES = {
     "/api/index/rebuild":   api_playback.index_rebuild,
     "/api/loudness/status": api_playback.loudness_status,
     "/api/lyrics":         api_playback.lyrics,
+    "/api/track_meta":     api_playback.track_meta,
     "/stream":             api_playback.stream,
     "/art":                api_playback.art,
     "/api/playlists":      api_playlists.playlists,
