@@ -125,12 +125,14 @@ class TestFindGroups(unittest.TestCase):
 class TestRanking(unittest.TestCase):
 
     def test_higher_bit_depth_wins(self):
+        # Members must have `path` set — rank_groups dedupes by path
+        # now (URL aliases collapse to one file).
         g = {"artist": "A", "album": "B", "title": "C",
              "members": [
                  {"url": "u/16", "bit_depth": 16, "sample_rate": 44100,
-                  "file_size": 10_000_000},
+                  "file_size": 10_000_000, "path": Path("/m/16.flac")},
                  {"url": "u/24", "bit_depth": 24, "sample_rate": 44100,
-                  "file_size": 5_000_000},  # smaller but higher quality
+                  "file_size": 5_000_000, "path": Path("/m/24.flac")},
              ]}
         F.rank_groups([g])
         self.assertEqual(g["winner"]["url"], "u/24",
@@ -141,9 +143,9 @@ class TestRanking(unittest.TestCase):
         g = {"artist": "A", "album": "B", "title": "C",
              "members": [
                  {"url": "u/44", "bit_depth": 24, "sample_rate": 44100,
-                  "file_size": 5_000_000},
+                  "file_size": 5_000_000, "path": Path("/m/44.flac")},
                  {"url": "u/96", "bit_depth": 24, "sample_rate": 96000,
-                  "file_size": 4_000_000},
+                  "file_size": 4_000_000, "path": Path("/m/96.flac")},
              ]}
         F.rank_groups([g])
         self.assertEqual(g["winner"]["url"], "u/96")
@@ -152,9 +154,9 @@ class TestRanking(unittest.TestCase):
         g = {"artist": "A", "album": "B", "title": "C",
              "members": [
                  {"url": "u/sm", "bit_depth": 16, "sample_rate": 44100,
-                  "file_size": 5_000_000},
+                  "file_size": 5_000_000, "path": Path("/m/sm.mp3")},
                  {"url": "u/lg", "bit_depth": 16, "sample_rate": 44100,
-                  "file_size": 9_000_000},
+                  "file_size": 9_000_000, "path": Path("/m/lg.flac")},
              ]}
         F.rank_groups([g])
         self.assertEqual(g["winner"]["url"], "u/lg")
@@ -163,25 +165,90 @@ class TestRanking(unittest.TestCase):
         g = {"artist": "A", "album": "B", "title": "C",
              "members": [
                  {"url": "u/zzz", "bit_depth": 16, "sample_rate": 44100,
-                  "file_size": 1000},
+                  "file_size": 1000, "path": Path("/m/zzz.flac")},
                  {"url": "u/aaa", "bit_depth": 16, "sample_rate": 44100,
-                  "file_size": 1000},
+                  "file_size": 1000, "path": Path("/m/aaa.flac")},
              ]}
         F.rank_groups([g])
         self.assertEqual(g["winner"]["url"], "u/aaa")
 
     def test_null_quality_counts_as_zero(self):
-        # NULL bit_depth/sample_rate count as 0 (lowest).
         g = {"artist": "A", "album": "B", "title": "C",
              "members": [
                  {"url": "u/null",  "bit_depth": None, "sample_rate": None,
-                  "file_size": 9_000_000},
+                  "file_size": 9_000_000, "path": Path("/m/null.flac")},
                  {"url": "u/16",    "bit_depth": 16, "sample_rate": 44100,
-                  "file_size": 1_000_000},
+                  "file_size": 1_000_000, "path": Path("/m/16.flac")},
              ]}
         F.rank_groups([g])
         self.assertEqual(g["winner"]["url"], "u/16",
                          "any non-NULL quality beats NULL")
+
+    def test_url_aliases_collapse_to_one(self):
+        """Critical safety test: AssetUPnP serves the same file via
+        multiple URLs (Artist / Album / Genre browse paths). All those
+        URLs end up in the same duplicate group, but they're the SAME
+        physical file. Without path-dedup, we'd incorrectly mark the
+        winner's file as both KEEP and TRASH — the trash step would
+        kill the only copy.
+
+        rank_groups must collapse URL aliases pointing to the same path
+        into ONE representative."""
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 # Three URLs all served from the same file on disk.
+                 {"url": "u/via-artist",  "bit_depth": 16,
+                  "sample_rate": 44100, "file_size": 5_000_000,
+                  "path": Path("/m/the-one-file.mp3")},
+                 {"url": "u/via-album",   "bit_depth": 16,
+                  "sample_rate": 44100, "file_size": 5_000_000,
+                  "path": Path("/m/the-one-file.mp3")},
+                 {"url": "u/via-genre",   "bit_depth": 16,
+                  "sample_rate": 44100, "file_size": 5_000_000,
+                  "path": Path("/m/the-one-file.mp3")},
+             ]}
+        F.rank_groups([g])
+        # All three URLs collapse to ONE entry — no losers, no trash.
+        self.assertIsNotNone(g["winner"])
+        self.assertEqual(g["losers"], [],
+                         "URL-aliased members must NOT become losers")
+        self.assertEqual(sorted(g["winner"]["_aliased_urls"]),
+                         ["u/via-album", "u/via-artist", "u/via-genre"])
+
+    def test_aliased_winner_plus_real_loser(self):
+        # Winner served via 2 URL aliases (same file). Plus one REAL
+        # duplicate file at lower quality.
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 {"url": "u/24-a", "bit_depth": 24, "sample_rate": 96000,
+                  "file_size": 9_000_000, "path": Path("/m/24.flac")},
+                 {"url": "u/24-b", "bit_depth": 24, "sample_rate": 96000,
+                  "file_size": 9_000_000, "path": Path("/m/24.flac")},
+                 {"url": "u/16",   "bit_depth": 16, "sample_rate": 44100,
+                  "file_size": 5_000_000, "path": Path("/m/16.mp3")},
+             ]}
+        F.rank_groups([g])
+        self.assertEqual(str(g["winner"]["path"]), "/m/24.flac")
+        self.assertEqual(len(g["losers"]), 1,
+                         "only ONE physical loser despite 3 member URLs")
+        self.assertEqual(str(g["losers"][0]["path"]), "/m/16.mp3")
+        self.assertEqual(sorted(g["winner"]["_aliased_urls"]),
+                         ["u/24-a", "u/24-b"])
+
+    def test_unresolved_members_segregated(self):
+        # Members without path go into `unresolved`, not losers.
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 {"url": "u/24", "bit_depth": 24, "sample_rate": 96000,
+                  "file_size": 9_000_000, "path": Path("/m/24.flac")},
+                 {"url": "u/?",  "bit_depth": 16, "sample_rate": 44100,
+                  "file_size": None, "path": None},
+             ]}
+        F.rank_groups([g])
+        self.assertEqual(g["winner"]["url"], "u/24")
+        self.assertEqual(g["losers"], [])
+        self.assertEqual(len(g["unresolved"]), 1)
+        self.assertEqual(g["unresolved"][0]["url"], "u/?")
 
 
 # ── build_disk_size_index ─────────────────────────────────────────
@@ -241,6 +308,7 @@ class TestResolvePaths(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_unique_size_match(self):
+        # Order: resolve_paths first, then rank_groups (rank consumes path).
         _touch(self.root / "winner.flac", 9_000_000)
         _touch(self.root / "loser.flac",  5_000_000)
         idx = F.build_disk_size_index(self.root)
@@ -253,14 +321,13 @@ class TestResolvePaths(unittest.TestCase):
                  "file_size": 5_000_000},
             ],
         }]
-        F.rank_groups(groups)
         stats = F.resolve_paths(groups, idx)
+        F.rank_groups(groups)
         self.assertEqual(stats["resolved"], 2)
         self.assertEqual(groups[0]["winner"]["path"].name, "winner.flac")
         self.assertEqual(groups[0]["losers"][0]["path"].name, "loser.flac")
 
     def test_ambiguous_size_skipped(self):
-        # Two disk files with identical size → can't pick one safely.
         _touch(self.root / "a.flac", 1000)
         _touch(self.root / "b.flac", 1000)
         idx = F.build_disk_size_index(self.root)
@@ -273,13 +340,16 @@ class TestResolvePaths(unittest.TestCase):
                  "file_size": 1000},
             ],
         }]
-        F.rank_groups(groups)
         stats = F.resolve_paths(groups, idx)
+        F.rank_groups(groups)
         self.assertEqual(stats["ambiguous"], 2)
-        self.assertIsNone(groups[0]["winner"]["path"])
+        # Both members unresolved → no winner, no losers, everything in
+        # unresolved. (No action possible.)
+        self.assertIsNone(groups[0]["winner"])
+        self.assertEqual(groups[0]["losers"], [])
+        self.assertEqual(len(groups[0]["unresolved"]), 2)
 
     def test_missing_size_reported(self):
-        # URL has no Content-Length (HEAD failed).
         groups = [{
             "artist": "A", "album": "B", "title": "C",
             "members": [
@@ -289,11 +359,11 @@ class TestResolvePaths(unittest.TestCase):
                  "file_size": None},
             ],
         }]
-        F.rank_groups(groups)
         stats = F.resolve_paths(groups, {})
+        F.rank_groups(groups)
         self.assertEqual(stats["missing"], 2)
-        for m in groups[0]["members"]:
-            self.assertIsNone(m["path"])
+        self.assertIsNone(groups[0]["winner"])
+        self.assertEqual(len(groups[0]["unresolved"]), 2)
 
 
 # ── Report shape ──────────────────────────────────────────────────
