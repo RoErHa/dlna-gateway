@@ -1570,6 +1570,87 @@ relinks, one ambiguous.
 python3 -m unittest tools.test_relink_orphan_overrides -v
 ```
 
+### `tools/correct_year_drift.py`
+
+Fixes the case where AcoustID resolves a fingerprint to a later
+re-release recording on MusicBrainz (e.g. a 2001 compilation's
+recording entry instead of the 1979 studio original), and BOTH
+`tracks.year` and `metadata_overrides.year` agree on the reissue date
+so the in-display MIN logic can't recover. The tool walks
+`(artist, title)` groups and rewrites `metadata_overrides.year` on
+the later instances to the earliest plausible year evidenced by
+another instance of the same song in the user's library.
+
+#### Identification (v3)
+
+- **Effective year** per row: `MIN(file_year, mb_year)` when both
+  present, else whichever is set.
+- **earliest_plausible** per `(lower(artist), lower(title))` group:
+  `MIN(eff)` among non-live rows with `eff >= 1950`. The floor
+  excludes file-tag errors like the Bowie `1905` / Trammps `1927`
+  cases observed 2026-05-28.
+- **Live filter**: row excluded from being a candidate (and from
+  being someone else's earliest_plausible) if its album OR title
+  matches any `LIVE_MARKERS` substring: `live`, `in concert`,
+  `on tour`, `at the …`, `pulse`, `earls court`, `wembley`,
+  `madison square`, `fillmore`, `royal albert`, `wall live`,
+  `unplugged`, `(live …)`, `[live …)`, `- live`, `session`,
+  `bootleg`. Conservative on the "live" side — a studio album
+  named "Live At Carnegie Hall" by mistake would be excluded;
+  worth tuning per-corpus if it bites.
+- **Candidate** when `eff - earliest_plausible >= 3` AND the row
+  is non-live.
+
+#### Persistence
+
+Writes `metadata_overrides.year = earliest_plausible,
+source='manual'`. Same column the PWA's edit modal writes to.
+Survives re-index and AcoustID re-runs (`manual` beats `acoustid`
+in `metadata_override_set`). Idempotent — a second run finds zero
+candidates because the freshly-applied year now IS the earliest.
+
+#### Library-only correction limit
+
+The tool can only correct to the earliest year *available in the
+library*. If a song only exists in your library on a 1997
+compilation (no 1972 original copy), the tool will surface a
+candidate but its target year is 1997 — better than 2001, but not
+the MB-true 1972. There's no MusicBrainz fallback in this tool by
+design; it's the AcoustID worker's job to ask MB.
+
+#### Usage
+
+```bash
+# Dry-run preview (default top=30):
+python3 tools/correct_year_drift.py
+
+# Full preview, all candidates:
+python3 tools/correct_year_drift.py --top 0
+
+# Apply with confirmation prompt:
+python3 tools/correct_year_drift.py --apply
+
+# Non-interactive (cron / scripts):
+python3 tools/correct_year_drift.py --apply -y
+
+# Custom DB:
+python3 tools/correct_year_drift.py --db /path/to/library.db
+```
+
+#### Tests
+
+`tools/test_correct_year_drift.py` — 13 tests over a throw-away
+SQLite. Covers: studio-vs-live exclusion (Pulse, MTV Unplugged),
+drift threshold boundary, pre-1950 floor excludes bogus tags,
+case-insensitive `(artist, title)` grouping, MIN logic on file +
+mb_year, no candidate when only one album, apply creates a new
+override / merges with an existing one and forces source='manual',
+apply is idempotent.
+
+```bash
+python3 -m unittest tools.test_correct_year_drift -v
+```
+
 ## Subsonic API (Phase 1, in flight)
 
 A read-only-ish Subsonic-compatible HTTP API that lets any third-party
