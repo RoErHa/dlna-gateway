@@ -84,7 +84,7 @@ class TestAllDecades(unittest.TestCase):
 
     def test_override_year_preferred_over_tracks_year(self):
         # tracks.year = 2001 (edition), override.year = 1987 (original).
-        # The decade should be 1980, not 2000.
+        # MIN(2001,1987)=1987 → decade should be 1980, not 2000.
         _add_track(self.db, self.udn, "u/a", "Bad", "MJ", "Bad",
                    year=2001, override_year=1987)
         decades = self.db.all_decades(self.udn)
@@ -95,6 +95,36 @@ class TestAllDecades(unittest.TestCase):
         _add_track(self.db, self.udn, "u/a", "T", "A", "AL", year=2015)
         decades = self.db.all_decades(self.udn)
         self.assertEqual({d["decade"] for d in decades}, {2010})
+
+    def test_tracks_year_wins_when_mb_year_is_later(self):
+        # File-tag year is 1972 (original album); AcoustID matched a
+        # later anniversary-edition recording (override=2021). Decade
+        # must be 1970, NOT 2020 — the later mb_year is the "edition",
+        # the file tag is the "original" in this direction.
+        # Regression for the Demons-and-Wizards-in-2020s bug.
+        _add_track(self.db, self.udn, "u/a", "Circle of Hands",
+                   "Uriah Heep", "Demons and Wizards",
+                   year=1972, override_year=2021)
+        decades = self.db.all_decades(self.udn)
+        self.assertEqual({d["decade"] for d in decades}, {1970})
+
+    def test_decade_albums_uses_min_of_years(self):
+        # decade_albums must also bucket by MIN — not just all_decades.
+        _add_track(self.db, self.udn, "u/a", "T", "A", "AL",
+                   year=1972, override_year=2021)
+        self.assertEqual(
+            [a["album"] for a in self.db.decade_albums(self.udn, 1970)],
+            ["AL"])
+        self.assertEqual(self.db.decade_albums(self.udn, 2020), [])
+
+    def test_decade_tracks_uses_min_of_years(self):
+        # decade_tracks must also bucket by MIN.
+        _add_track(self.db, self.udn, "u/a", "Same Title", "A", "AL",
+                   year=1972, override_year=2021)
+        titles_70s = [t["title"] for t in self.db.decade_tracks(self.udn, 1970)]
+        titles_20s = [t["title"] for t in self.db.decade_tracks(self.udn, 2020)]
+        self.assertEqual(titles_70s, ["Same Title"])
+        self.assertEqual(titles_20s, [])
 
 
 class TestDecadeAlbumsAndTracks(unittest.TestCase):

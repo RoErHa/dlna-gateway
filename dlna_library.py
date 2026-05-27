@@ -1021,11 +1021,24 @@ class LibraryDB:
         return [dict(r) for r in rows]
 
     # ── Decade browse ────────────────────────────────────────────
-    # A track's "effective year" is COALESCE(metadata_overrides.year,
-    # tracks.year) — i.e. the MusicBrainz original-release year when
-    # known, falling back to the file-tag year. Decade = effective_year
-    # // 10 * 10. Tracks with no year at all are excluded from decade
-    # listings (would show as "decade 0" otherwise).
+    # A track's "effective year" for decade bucketing is
+    # MIN(file_year, mb_year) when both are present, else whichever is
+    # set. Rationale: AcoustID often resolves a fingerprint to a LATER
+    # re-release recording on MusicBrainz (an anniversary edition's
+    # /recording/<id>'s first-release-date is when *that* recording
+    # was first released, e.g. 2002 for the 30th-anniversary remaster
+    # of a 1972 album). When mb_year > file_year, the file tag is the
+    # more reliable signal — so we take the smaller of the two.
+    # Tracks with no year at all are excluded from decade listings
+    # (would show as "decade 0" otherwise). Now-playing displays a
+    # different rule (prefer mb_year as "the original recording",
+    # annotate as "(remastered)" when file>>mb) — see _renderNpYear.
+    _EFFECTIVE_YEAR = (
+        "COALESCE("
+        "CASE WHEN t.year > 0 AND m.year > 0 THEN MIN(t.year, m.year) END, "
+        "NULLIF(t.year, 0), "
+        "NULLIF(m.year, 0))"
+    )
 
     def all_decades(self, udn: str) -> list:
         """All decades present in the library with track + album counts.
@@ -1033,15 +1046,16 @@ class LibraryDB:
         track doesn't double-count. Ordered chronologically (oldest to
         newest)."""
         dedup = _dedup_clause("t")
+        eff = self._EFFECTIVE_YEAR
         with self._pool.read() as conn:
             rows = conn.execute(
-                f"""SELECT (COALESCE(m.year, t.year) / 10) * 10 AS decade,
+                f"""SELECT ({eff} / 10) * 10 AS decade,
                           COUNT(*) AS track_count,
                           COUNT(DISTINCT t.album) AS album_count
                      FROM tracks t
                 LEFT JOIN metadata_overrides m ON m.url = t.url
                     WHERE t.udn = ?
-                      AND COALESCE(m.year, t.year) IS NOT NULL
+                      AND {eff} IS NOT NULL
                       AND {dedup}
                  GROUP BY decade
                  ORDER BY decade ASC""",
@@ -1053,6 +1067,7 @@ class LibraryDB:
         Grouping mirrors `all_albums`: compilations with multiple
         distinct artists collapse to 'Various Artists'."""
         dedup = _dedup_clause("t")
+        eff = self._EFFECTIVE_YEAR
         with self._pool.read() as conn:
             rows = conn.execute(
                 f"""SELECT t.album,
@@ -1064,7 +1079,7 @@ class LibraryDB:
                      FROM tracks t
                 LEFT JOIN metadata_overrides m ON m.url = t.url
                     WHERE t.udn = ? AND t.album != ''
-                      AND (COALESCE(m.year, t.year) / 10) * 10 = ?
+                      AND ({eff} / 10) * 10 = ?
                       AND {dedup}
                  GROUP BY t.album
                  ORDER BY t.album COLLATE NOCASE""",
@@ -1094,6 +1109,7 @@ class LibraryDB:
         """Flat list of every track whose effective year falls in
         [decade, decade+10)."""
         dedup = _dedup_clause("t")
+        eff = self._EFFECTIVE_YEAR
         with self._pool.read() as conn:
             rows = conn.execute(
                 f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
@@ -1101,7 +1117,7 @@ class LibraryDB:
                      FROM tracks t
                 LEFT JOIN metadata_overrides m ON m.url = t.url
                     WHERE t.udn = ?
-                      AND (COALESCE(m.year, t.year) / 10) * 10 = ?
+                      AND ({eff} / 10) * 10 = ?
                       AND {dedup}
                  ORDER BY t.artist COLLATE NOCASE,
                           t.album COLLATE NOCASE,
