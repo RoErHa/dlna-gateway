@@ -168,6 +168,90 @@ class TestSchemaYearColumns(unittest.TestCase):
         self.assertIsNone(meta["year_original"])
 
 
+class TestUpdateTrackMetaYear(unittest.TestCase):
+    """update_track_meta(year=…) — user-editable year via the PWA's
+    edit modal. Goes to metadata_overrides.year (the 'MB original'
+    slot); tracks.year (the file-tag year) is never touched."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+        self.db.upsert_tracks("uuid:test", [
+            {"id": "1", "url": "http://x/a.flac", "title": "Hey You",
+             "artist": "Pink Floyd", "album": "Greatest Hits 80s",
+             "year": 2017}])   # the reissue/compilation year
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def _get(self):
+        with self.db._pool.read() as conn:
+            ov = conn.execute(
+                "SELECT artist, album, title, genre, year, source "
+                "FROM metadata_overrides WHERE url='http://x/a.flac'"
+            ).fetchone()
+            tr = conn.execute(
+                "SELECT year FROM tracks WHERE url='http://x/a.flac'"
+            ).fetchone()
+        return (dict(ov) if ov else None,
+                tr["year"] if tr else None)
+
+    def test_year_only_edit_creates_manual_override(self):
+        ok = self.db.update_track_meta("http://x/a.flac", year=1979)
+        self.assertTrue(ok)
+        ov, tr = self._get()
+        self.assertEqual(ov["year"],   1979)
+        self.assertEqual(ov["source"], "manual")
+        # tracks.year (file-tag, 2017) MUST NOT be overwritten.
+        self.assertEqual(tr, 2017)
+
+    def test_year_edit_merges_with_existing_acoustid_override(self):
+        # AcoustID already wrote an override; user corrects the year.
+        self.db.metadata_override_set(
+            "http://x/a.flac", source="acoustid",
+            artist="Pink Floyd", album="Greatest Hits 80s",
+            title="Hey You", year=2017)   # AcoustID's wrong-edition year
+        ok = self.db.update_track_meta("http://x/a.flac", year=1979)
+        self.assertTrue(ok)
+        ov, _ = self._get()
+        self.assertEqual(ov["year"],   1979)
+        self.assertEqual(ov["source"], "manual",
+                         "user edit must mark the row source='manual'")
+        self.assertEqual(ov["artist"], "Pink Floyd",
+                         "non-year fields must be preserved")
+        self.assertEqual(ov["title"],  "Hey You")
+
+    def test_year_edit_with_string_fields_in_same_call(self):
+        ok = self.db.update_track_meta(
+            "http://x/a.flac", artist="Pink Floyd (Live)", year=1979)
+        self.assertTrue(ok)
+        ov, _ = self._get()
+        self.assertEqual(ov["artist"], "Pink Floyd (Live)")
+        self.assertEqual(ov["year"],   1979)
+
+    def test_year_omitted_leaves_existing_year_alone(self):
+        # First set a year, then edit something else without passing year.
+        self.db.update_track_meta("http://x/a.flac", year=1979)
+        self.db.update_track_meta("http://x/a.flac", genre="Rock")
+        ov, _ = self._get()
+        self.assertEqual(ov["year"],  1979, "omitted year must NOT clear")
+        self.assertEqual(ov["genre"], "Rock")
+
+    def test_year_explicitly_none_clears_override(self):
+        self.db.update_track_meta("http://x/a.flac", year=1979)
+        self.db.update_track_meta("http://x/a.flac", year=None)
+        ov, _ = self._get()
+        self.assertIsNone(ov["year"], "year=None must clear the override year")
+
+    def test_no_fields_at_all_is_noop(self):
+        # No string fields and year not passed → False, no row created.
+        ok = self.db.update_track_meta("http://x/a.flac")
+        self.assertFalse(ok)
+        ov, _ = self._get()
+        self.assertIsNone(ov)
+
+
 # ── Display-logic mirror (Python copy of _renderNpYear) ───────────
 
 def _np_year_display(year_file, year_original):

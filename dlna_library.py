@@ -1127,52 +1127,69 @@ class LibraryDB:
 
     # ── Metadata editing ─────────────────────────────────────────
 
+    # Sentinel distinguishing "year omitted" from "year=None (clear it)".
+    _YEAR_UNSET = object()
+
     def update_track_meta(self, url: str,
                           artist: str = None, album: str = None,
-                          title: str = None, genre: str = None) -> bool:
+                          title: str = None, genre: str = None,
+                          year=_YEAR_UNSET) -> bool:
         """
-        Update artist/album/title/genre for a track in the DB.
-        Only provided (non-None) fields are changed.
-        Also saves to metadata_overrides so edits survive re-index.
+        Update artist/album/title/genre/year for a track in the DB.
+        For string fields, only provided (non-None) values are changed.
+        For year: pass `_YEAR_UNSET` (the default) to leave untouched,
+        an int to set, or None to clear the override.
+        All edits land in metadata_overrides with source='manual' so
+        they survive re-index. Artist/album/title/genre are also
+        pushed onto the live tracks row; year is NOT — tracks.year
+        stays the file-tag year, the user's year sets the override.
         Returns True if any row was updated.
         """
-        fields = {k: v for k, v in
-                  [("artist", artist), ("album", album),
-                   ("title", title), ("genre", genre)]
-                  if v is not None}
-        if not fields:
+        str_fields = {k: v for k, v in
+                      [("artist", artist), ("album", album),
+                       ("title", title), ("genre", genre)]
+                      if v is not None}
+        year_touched = year is not self._YEAR_UNSET
+        if not str_fields and not year_touched:
             return False
-        set_clause = ", ".join(f"{k}=?" for k in fields)
-        vals = list(fields.values())
         with self._pool.write() as conn:
-            conn.execute(
-                f"UPDATE tracks SET {set_clause} WHERE url=?",
-                vals + [url])
-            # Upsert into overrides — merge with any existing overrides
+            # 1. Live tracks row: only string fields go here (year on
+            # tracks is the file-tag year, untouched by user edits).
+            if str_fields:
+                set_clause = ", ".join(f"{k}=?" for k in str_fields)
+                conn.execute(
+                    f"UPDATE tracks SET {set_clause} WHERE url=?",
+                    list(str_fields.values()) + [url])
+            # 2. metadata_overrides upsert (single source of truth).
             existing = conn.execute(
-                "SELECT artist, album, title, genre FROM metadata_overrides WHERE url=?",
-                (url,)).fetchone()
+                "SELECT artist, album, title, genre, year "
+                "FROM metadata_overrides WHERE url=?", (url,)).fetchone()
             if existing:
                 merged = dict(existing)
-                merged.update(fields)
+                merged.update(str_fields)
+                if year_touched:
+                    merged["year"] = year
                 conn.execute(
                     "UPDATE metadata_overrides "
-                    "SET artist=?, album=?, title=?, genre=?, updated_at=datetime('now') "
+                    "SET artist=?, album=?, title=?, genre=?, year=?, "
+                    "    source='manual', updated_at=datetime('now') "
                     "WHERE url=?",
-                    (merged["artist"], merged["album"],
-                     merged["title"], merged["genre"], url))
+                    (merged["artist"], merged["album"], merged["title"],
+                     merged["genre"], merged["year"], url))
             else:
                 # Fill blanks from current track record
                 row = conn.execute(
                     "SELECT artist, album, title, genre FROM tracks WHERE url=?",
                     (url,)).fetchone()
                 base = dict(row) if row else {"artist":"","album":"","title":"","genre":""}
-                base.update(fields)
+                base.update(str_fields)
+                yr = year if year_touched else None
                 conn.execute(
-                    "INSERT INTO metadata_overrides (url, artist, album, title, genre) "
-                    "VALUES (?,?,?,?,?)",
+                    "INSERT INTO metadata_overrides "
+                    "(url, artist, album, title, genre, year, source) "
+                    "VALUES (?,?,?,?,?,?, 'manual')",
                     (url, base["artist"], base["album"],
-                     base["title"], base["genre"]))
+                     base["title"], base["genre"], yr))
 
             changed = conn.execute("SELECT changes()").fetchone()[0]
         return changed > 0
