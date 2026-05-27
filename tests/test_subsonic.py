@@ -25,6 +25,13 @@ from dlna_library import LibraryDB
 import api_subsonic
 
 
+# Strip SUBSONIC_USER so api_subsonic._subsonic_user() falls back to the
+# "user" default these tests assume. Without this, a .env-supplied
+# SUBSONIC_USER leaks through dotenv on the dlna_config import above
+# and every auth check rejects the test's hard-coded u="user".
+os.environ.pop("SUBSONIC_USER", None)
+
+
 # ── Test scaffolding ─────────────────────────────────────────────
 
 class _MockH:
