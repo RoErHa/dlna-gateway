@@ -995,16 +995,67 @@ invariant as `album_art` / `play_counts` / `lyrics` / `track_loudness`.
 - Reuses `GATEWAY_CONTACT_EMAIL` (already set in `.env` for
   MusicBrainz) for the AcoustID User-Agent.
 
-### What's NOT done yet
+### Wiring (event-driven, no periodic poll)
 
-Step 4 (wiring) and Step 5 (HTTP endpoints / frontend) are not in
-this slice. The `ACOUSTID_FETCHER` singleton exists in
-`dlna_library` but no startup `start_initial_scan` call and no
-`Indexer._run()`-tail `trigger()` is wired yet. To exercise it
-manually for now:
+Matches the `ART_FETCHER` / `LOUDNESS_SCANNER` model — two hooks
+only, no background ticker:
+
+1. **Startup mop-up.** `dlna_gateway.main()` calls
+   `ACOUSTID_FETCHER.start_initial_scan()` (120s delay) — catches
+   tracks left bare by a previous interrupted run. Dormant when
+   `ACOUSTID_API_KEY` is unset (logs `initial scan disabled` and
+   returns).
+2. **Per-crawl tail.** `Indexer._run()` calls
+   `ACOUSTID_FETCHER.trigger()` at the success tail (right after
+   the `ART_FETCHER` and `LOUDNESS_SCANNER` triggers) so new bare
+   tracks from a fresh crawl get fingerprinted immediately. Lazy
+   import + `try/except Exception: pass` so a test harness that
+   imports `Indexer` without booting the full library doesn't crash.
+
+Manual one-shot (when needed):
 
 ```bash
 ACOUSTID_API_KEY=… python3 -c "from dlna_library import ACOUSTID_FETCHER; ACOUSTID_FETCHER.run_once()"
+```
+
+HTTP endpoints / frontend surface for AcoustID status are not in
+this slice.
+
+### Weekly notfound retry — `com.roha.dlna-acoustid-retry`
+
+Weekly LaunchAgent + `retry-acoustid-weekly.sh` wrapper:
+
+1. Run `tools/retry_notfound_metadata.py --all -y` to drop every
+   `source='notfound'` row from `metadata_overrides`.
+2. `launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway` so
+   the gateway restarts and its 120s-post-startup
+   `ACOUSTID_FETCHER.start_initial_scan()` re-fingerprints all the
+   now-bare tracks. MusicBrainz's database keeps growing, so a
+   miss six months ago may match today; legit ongoing misses get
+   re-cached as notfound automatically.
+
+Script no-ops when `ACOUSTID_API_KEY` is unset (no point clearing
+notfound if we can't look anything up). All output appended to
+`acoustid-retry.log` (separate from `gateway.log`, parallel to
+`cert-renewal.log`).
+
+Schedule: every Monday 05:30 local — one hour after the cert
+renewer to avoid two gateway restarts within the same minute.
+
+Install (one-time, after first clone, edit the path placeholder
+inside the plist first):
+
+```bash
+cp com.roha.dlna-acoustid-retry.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.roha.dlna-acoustid-retry.plist
+```
+
+Manual override:
+
+```bash
+./retry-acoustid-weekly.sh                                         # do it now
+./retry-acoustid-weekly.sh --dry-run                               # preview
+launchctl kickstart gui/$(id -u)/com.roha.dlna-acoustid-retry      # dry-run the weekly job
 ```
 
 ### Tests

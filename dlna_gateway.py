@@ -26,7 +26,8 @@ import time
 
 import dlna_discovery as _disc
 from dlna_config import load_config, save_config, setup_logging
-from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER, LOUDNESS_SCANNER
+from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
+                          LOUDNESS_SCANNER, ACOUSTID_FETCHER)
 from dlna_server import (GW_UDN, ThreadedHTTPServer, TLSThreadedHTTPServer,
                          GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
 
@@ -245,6 +246,11 @@ Examples:
     # Loudness analysis — one-shot startup mop-up too. Heavier per item
     # (~1 sec ffmpeg call) but CPU-bound and niced 10; happy to share.
     LOUDNESS_SCANNER.start_initial_scan()
+    # AcoustID metadata enrichment — same one-shot startup mop-up. Dormant
+    # if ACOUSTID_API_KEY is unset. Steady-state work comes from the
+    # Indexer._run() tail trigger; weekly notfound retries are handled by
+    # the com.roha.dlna-acoustid-retry LaunchAgent.
+    ACOUSTID_FETCHER.start_initial_scan()
 
     # CLI --probe or config.json probe (fresh install / manual override).
     # On subsequent runs the DB cache handles this — but honour explicit CLI.
