@@ -1381,6 +1381,88 @@ clean failure, and the `_scan_log_for_5xx` helper.
 python3 -m unittest tools.test_retry_notfound_metadata -v
 ```
 
+### `tools/find_duplicate_audio.py`
+
+Finds **duplicate audio FILES on disk** — two or more physical files
+that AcoustID identified as the same recording (same post-correction
+`(artist, album, title)` in `metadata_overrides`). Surfaced 2026-05-27
+after the full re-fingerprint pass left ~20k unsynced "phantom"
+tracks (same recording on disk multiple times — different folders /
+formats / sources, all matched by fingerprint to the same metadata).
+
+#### Winner-selection ranking
+
+Within each duplicate group the tool picks ONE winner to keep; the
+rest are loser candidates:
+
+1. Higher `bit_depth` (24 > 16)
+2. Higher `sample_rate` (96000 > 44100)
+3. Larger `file_size` (proxy for less compression / higher bitrate)
+4. Alphabetical URL (deterministic tiebreaker)
+
+NULL bit_depth / sample_rate count as 0 (lowest) so any quality-tagged
+row beats an untagged one.
+
+#### "Lose nothing" guarantee
+
+- **Single-file groups** (unique recordings) are NEVER touched.
+- A 16-bit file is kept whenever it's the only copy of its recording.
+- Default mode is REPORT ONLY — writes `duplicate-audio.txt` and exits.
+- `--trash` moves loser files to macOS Trash via `osascript` (recoverable from Finder for ~30 days).
+- `--hard-delete` is opt-in permanent `unlink()` (NOT recoverable).
+- `--trash` / `--hard-delete` both require confirmation prompt unless `-y`.
+- Ambiguous URL→path mappings (multiple disk files with the same Content-Length) and missing matches are flagged in the report and SKIPPED from any action.
+
+#### URL→path mapping
+
+AssetUPnP URLs don't expose file paths. The tool reconstructs the
+mapping by:
+1. HTTP HEAD each URL → `Content-Length`.
+2. Walk SAMDATA → `{file_size_bytes: [Path, ...]}` index.
+3. Match each URL's Content-Length to disk files. Exactly one match → confident. Multiple → ambiguous, skip with warning. None → missing.
+
+File size is essentially unique for multi-MB audio files; collisions
+on short MP3s are rare and reported rather than guessed.
+
+#### Usage
+
+```bash
+# Default — scan, build the report, no action:
+python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music
+
+# Verbose (per-URL ambiguity / not-found logs):
+python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music -v
+
+# Move losers to Trash, with confirmation:
+python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --trash
+
+# Non-interactive permanent delete (NOT recoverable):
+python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --hard-delete -y
+```
+
+#### Post-cleanup workflow
+
+After trashing duplicate files:
+1. **Rescan AssetUPnP** so it drops the now-missing URLs from its UPnP responses.
+2. **Trigger a gateway rebuild-index** (`POST /api/index/rebuild` or PWA → settings → Rebuild). The indexer's `clear(udn)` wipes the old `tracks` rows and re-crawls AssetUPnP cleanly.
+3. **`metadata_overrides` is unaffected** — keyed by URL; the rows for deleted files become orphans, harmless. (Use `tools/retry_notfound_metadata.py` or manual SQL to prune orphans later if desired.)
+
+#### Tests
+
+`tools/test_find_duplicate_audio.py` — 17 tests over a throw-away DB
++ tempdir. Cover: duplicate-group identification (only acoustid source,
+only ≥2 members, NULL/empty metadata excluded), ranking algorithm
+(bit_depth wins > sample_rate within bit-depth > file size within
+quality > alpha tiebreaker, NULL counted as 0), disk walk (size index
+correctness, non-audio skipped, zero-size skipped, symlinks not
+followed), URL→path resolution (unique-size confident, ambiguous-size
+skipped, missing-size reported), report file shape (KEEP / TRASH
+markers, metadata + path columns).
+
+```bash
+python3 -m unittest tools.test_find_duplicate_audio -v
+```
+
 ## Subsonic API (Phase 1, in flight)
 
 A read-only-ish Subsonic-compatible HTTP API that lets any third-party
