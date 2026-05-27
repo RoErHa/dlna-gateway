@@ -250,6 +250,74 @@ class TestRanking(unittest.TestCase):
         self.assertEqual(len(g["unresolved"]), 1)
         self.assertEqual(g["unresolved"][0]["url"], "u/?")
 
+    # ── Size-tolerance filter ──
+
+    def test_size_ratio_within_tolerance_stays_loser(self):
+        # winner 10 MB, loser 9 MB → ratio 0.9 ≥ 0.3 default → TRASH.
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 {"url": "u/big",   "bit_depth": 16, "sample_rate": 44100,
+                  "file_size": 10_000_000, "path": Path("/m/big.mp3")},
+                 {"url": "u/close", "bit_depth": 16, "sample_rate": 44100,
+                  "file_size":  9_000_000, "path": Path("/m/close.mp3")},
+             ]}
+        F.rank_groups([g])
+        self.assertEqual(len(g["losers"]), 1)
+        self.assertEqual(g["review"], [])
+
+    def test_size_ratio_below_tolerance_goes_to_review(self):
+        # winner 30 MB, loser 1 MB → ratio 0.033 < 0.3 → REVIEW
+        # Likely AcoustID false match.
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 {"url": "u/big",   "bit_depth": 16, "sample_rate": 44100,
+                  "file_size": 30_000_000, "path": Path("/m/big.flac")},
+                 {"url": "u/tiny",  "bit_depth": 16, "sample_rate": 44100,
+                  "file_size":  1_000_000, "path": Path("/m/tiny.mp3")},
+             ]}
+        F.rank_groups([g])
+        self.assertEqual(g["losers"], [],
+                         "tiny loser must NOT be a trash candidate")
+        self.assertEqual(len(g["review"]), 1)
+        self.assertAlmostEqual(g["review"][0]["_size_ratio"], 0.033, places=2)
+
+    def test_tolerance_zero_disables_filter(self):
+        # With tolerance=0, even a 1% loser goes to TRASH.
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 {"url": "u/big", "bit_depth": 16, "sample_rate": 44100,
+                  "file_size": 100_000_000, "path": Path("/m/big.flac")},
+                 {"url": "u/tiny","bit_depth": 16, "sample_rate": 44100,
+                  "file_size":     500_000, "path": Path("/m/tiny.mp3")},
+             ]}
+        F.rank_groups([g], size_tolerance=0)
+        self.assertEqual(len(g["losers"]), 1)
+        self.assertEqual(g["review"], [])
+
+    def test_tolerance_custom_threshold(self):
+        # Tolerance 0.5 — ratio 0.4 goes to review.
+        g = {"artist": "A", "album": "B", "title": "C",
+             "members": [
+                 {"url": "u/w", "bit_depth": 16, "sample_rate": 44100,
+                  "file_size": 10_000_000, "path": Path("/m/w.flac")},
+                 {"url": "u/l", "bit_depth": 16, "sample_rate": 44100,
+                  "file_size":  4_000_000, "path": Path("/m/l.mp3")},
+             ]}
+        F.rank_groups([g], size_tolerance=0.5)
+        self.assertEqual(g["losers"], [])
+        self.assertEqual(len(g["review"]), 1)
+        # Same data with tolerance 0.3 → loser.
+        g2 = {"artist": "A", "album": "B", "title": "C",
+              "members": [
+                  {"url": "u/w", "bit_depth": 16, "sample_rate": 44100,
+                   "file_size": 10_000_000, "path": Path("/m/w.flac")},
+                  {"url": "u/l", "bit_depth": 16, "sample_rate": 44100,
+                   "file_size":  4_000_000, "path": Path("/m/l.mp3")},
+              ]}
+        F.rank_groups([g2], size_tolerance=0.3)
+        self.assertEqual(len(g2["losers"]), 1)
+        self.assertEqual(g2["review"], [])
+
 
 # ── build_disk_size_index ─────────────────────────────────────────
 
@@ -388,8 +456,8 @@ class TestReport(unittest.TestCase):
         }]
         F.rank_groups(groups)
         out = self.tmp / "report.txt"
-        n_losers = F.write_report(groups, out)
-        self.assertEqual(n_losers, 1)
+        counts = F.write_report(groups, out)
+        self.assertEqual(counts, {"trash": 1, "review": 0})
         text = out.read_text(encoding="utf-8")
         self.assertIn("KEEP", text)
         self.assertIn("TRASH", text)

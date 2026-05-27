@@ -173,17 +173,26 @@ def _rank_key(member: dict) -> tuple:
     return (-bd, -sr, -sz, member["url"])
 
 
-def rank_groups(groups: list) -> list:
-    """Add winner/losers fields. AssetUPnP serves each physical file
-    via multiple URLs (Artist / Album / Genre browse paths), so two
-    "duplicate URLs" in metadata_overrides routinely resolve to the
-    SAME disk path. We deduplicate by path here — within a group, all
+def rank_groups(groups: list, size_tolerance: float = 0.3) -> list:
+    """Add winner/losers/review fields. AssetUPnP serves each physical
+    file via multiple URLs (Artist / Album / Genre browse paths), so
+    two "duplicate URLs" in metadata_overrides routinely resolve to
+    the SAME disk path. We deduplicate by path — within a group, all
     URLs sharing a resolved path collapse into a single representative.
-    Then we sort the unique paths by quality and pick a winner.
+    Then we sort unique paths by quality and pick a winner.
+
+    `size_tolerance` (0.0–1.0) splits the non-winner entries:
+      - loser_size / winner_size >= size_tolerance → `losers`
+        (size-confirmed duplicates, safe to trash)
+      - loser_size / winner_size <  size_tolerance → `review`
+        (size mismatch large enough to suggest an AcoustID false
+         match or cross-format encoding; held back for manual review)
+    Pass 0 to disable the filter and put everything in `losers`.
 
     This protects against the catastrophic outcome where `--trash`
     would kill the winner's path because a URL-aliased loser pointed
-    at the same file."""
+    at the same file, AND against AcoustID-mis-identified files that
+    incorrectly join an unrelated group."""
     for g in groups:
         # Bucket members by their resolved file path.
         by_path = defaultdict(list)
@@ -201,8 +210,29 @@ def rank_groups(groups: list) -> list:
             rep["_aliased_urls"] = [m["url"] for m in ms]
             unique.append(rep)
         unique.sort(key=_rank_key)
-        g["winner"]     = unique[0] if unique else None
-        g["losers"]     = unique[1:]
+        if not unique:
+            g["winner"]     = None
+            g["losers"]     = []
+            g["review"]     = []
+            g["unresolved"] = unresolved
+            continue
+        winner = unique[0]
+        winner_size = winner.get("file_size") or 0
+        losers, review = [], []
+        for m in unique[1:]:
+            m_size = m.get("file_size") or 0
+            if winner_size <= 0 or size_tolerance <= 0:
+                losers.append(m)
+            else:
+                ratio = m_size / winner_size
+                m["_size_ratio"] = ratio
+                if ratio >= size_tolerance:
+                    losers.append(m)
+                else:
+                    review.append(m)
+        g["winner"]     = winner
+        g["losers"]     = losers
+        g["review"]     = review
         g["unresolved"] = unresolved
     return groups
 
@@ -264,44 +294,49 @@ def _hard_delete(path: Path) -> None:
 
 # ── Report writer ─────────────────────────────────────────────────
 
-def write_report(groups: list, out_path: Path) -> int:
+def write_report(groups: list, out_path: Path) -> dict:
     """Write the candidates list to a tab-separated file.
 
-    Each group emits:
-      KEEP   <winner_path>  <artist>  <album>  <title>  b<bd>/f<sr>/sz<size>  aliases=<n>
-      TRASH  <loser_path>   ... (one per unique loser path)
-      (blank line)
+    Each group emits (in order):
+      KEEP    <winner_path>  <artist>  <album>  <title>  b<bd>/f<sr>/sz<size>  aliases=<n>
+      TRASH   <loser_path>   ... (size-confirmed duplicates, actionable)
+      REVIEW  <review_path>  ... (size ratio outside tolerance, hold for manual)
+      (blank line between groups)
 
-    `aliases=N` on a KEEP line means N URLs in metadata_overrides
-    point at this file via different AssetUPnP browse paths — they
-    collapse into one disk entry and the action only Trashes the
-    SINGLE file, breaking those N URLs simultaneously (the gateway
-    rebuild-index then cleans them up).
+    `aliases=N` means N URLs in metadata_overrides point at this file
+    via different AssetUPnP browse paths. REVIEW entries also show
+    `ratio=X.XX` of (loser_size / winner_size) so you can see why.
 
-    Returns the number of unique-loser-file TRASH rows."""
-    n_losers = 0
+    Returns {trash: int, review: int} counts."""
+    counts = {"trash": 0, "review": 0}
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             for g in groups:
                 if g["winner"] is None:
                     continue
-                for m in [g["winner"]] + g["losers"]:
-                    role = "KEEP " if m is g["winner"] else "TRASH"
+                rows = [(g["winner"], "KEEP  ")]
+                rows.extend((m, "TRASH ") for m in g["losers"])
+                rows.extend((m, "REVIEW") for m in g["review"])
+                for m, role in rows:
                     p = str(m.get("path") or "<unresolved>")
                     bd = m.get("bit_depth") or "?"
                     sr = m.get("sample_rate") or "?"
                     sz = m.get("file_size") or "?"
                     n_alias = len(m.get("_aliased_urls", []))
+                    extras = f"aliases={n_alias}"
+                    if "_size_ratio" in m:
+                        extras += f"\tratio={m['_size_ratio']:.2f}"
                     f.write(f"{role}\t{p}\t{g['artist']}\t{g['album']}\t"
-                            f"{g['title']}\tb{bd}/f{sr}/sz{sz}"
-                            f"\taliases={n_alias}\n")
-                    if role == "TRASH":
-                        n_losers += 1
+                            f"{g['title']}\tb{bd}/f{sr}/sz{sz}\t{extras}\n")
+                    if role == "TRASH ":
+                        counts["trash"] += 1
+                    elif role == "REVIEW":
+                        counts["review"] += 1
                 f.write("\n")
     except OSError as e:
         print(f"WARNING: could not write list file {out_path}: {e}",
               file=sys.stderr)
-    return n_losers
+    return counts
 
 
 # ── Main ──────────────────────────────────────────────────────────
@@ -327,6 +362,13 @@ def main(argv: Iterable[str] = None) -> int:
                    help="Skip the confirmation prompt before deleting")
     p.add_argument("--head-timeout", type=float, default=5.0,
                    help="HTTP HEAD timeout per URL in seconds (default 5)")
+    p.add_argument("--size-tolerance", type=float, default=0.3,
+                   help="Loser file_size must be >= (winner_size * "
+                        "tolerance) to qualify for TRASH. Smaller losers "
+                        "are held in REVIEW status — usually AcoustID "
+                        "false matches or extreme cross-format dupes. "
+                        "Default 0.3 (loser at least 30%% of winner). "
+                        "Set 0 to disable the filter.")
     args = p.parse_args(argv)
 
     if args.trash and args.hard_delete:
@@ -403,36 +445,41 @@ def main(argv: Iterable[str] = None) -> int:
     print(f"  URL→path: {resolve_stats['resolved']:,} resolved, "
           f"{resolve_stats['ambiguous']:,} ambiguous, "
           f"{resolve_stats['missing']:,} missing", flush=True)
-    rank_groups(groups)
+    rank_groups(groups, size_tolerance=args.size_tolerance)
     n_alias_collapse = sum(len(g["members"]) -
                            (1 if g["winner"] else 0) -
                            len(g["losers"]) -
+                           len(g["review"]) -
                            len(g["unresolved"])
                            for g in groups)
     print(f"  URL aliases collapsed (multiple URLs → same file): "
           f"{n_alias_collapse:,}", flush=True)
+    print(f"  size-tolerance: {args.size_tolerance}", flush=True)
 
     # Phase 4: write report
-    print(f"\nPhase 4/4: writing report…")
-    n_losers_written = write_report(groups, Path(args.out).resolve())
-    print(f"  wrote {n_losers_written:,} loser entries to "
-          f"{args.out} (winners also listed for reference)")
+    print(f"\nPhase 4/4: writing report…", flush=True)
+    counts = write_report(groups, Path(args.out).resolve())
+    print(f"  TRASH  rows: {counts['trash']:,}", flush=True)
+    print(f"  REVIEW rows: {counts['review']:,}  (size mismatch — manual)",
+          flush=True)
+    print(f"  wrote to {args.out}", flush=True)
 
-    # Decide action. Each group's `losers` is now a list of unique
-    # disk paths (URL aliases already collapsed via rank_groups). Each
-    # loser already has path set — None paths went into "unresolved".
+    # Decide action. Each group's `losers` is now a list of size-confirmed
+    # duplicate disk paths; `review` is held back.
     actionable_losers = [
         (g, m) for g in groups
         if g["winner"] is not None
         for m in g["losers"]
         if m.get("path") is not None
     ]
+    n_review = sum(len(g["review"]) for g in groups)
     n_unresolved = sum(len(g["unresolved"]) for g in groups)
     print()
     print(f"=== Summary ===", flush=True)
     print(f"  duplicate groups:                {len(groups):,}")
-    print(f"  unique loser files actionable:   {len(actionable_losers):,}")
-    print(f"  member URLs unresolved (no path): {n_unresolved:,}  (skipped)")
+    print(f"  actionable TRASH files:          {len(actionable_losers):,}")
+    print(f"  REVIEW (size mismatch):          {n_review:,}  (manual)")
+    print(f"  member URLs unresolved:          {n_unresolved:,}  (skipped)")
 
     if not (args.trash or args.hard_delete):
         print("\nReport-only mode. Use --trash or --hard-delete to act.")
