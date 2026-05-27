@@ -61,9 +61,14 @@ function setNpTrack(t){
 }
 
 // Fetch and render the year line under album in the now-playing panel.
-// Prefers MusicBrainz original year over file-tag (edition) year. If
-// both exist and the edition year is 3+ years later than the original,
-// annotate as "1987 (remastered)" — typical sign of a remaster reissue.
+// Display rule: when both years are present, use MIN(file, mb) — the
+// earlier one is most likely the "original recording" year, since
+// AcoustID sometimes fingerprints to a later anniversary-edition
+// recording on MusicBrainz (its first-release-date is then the
+// reissue date, not the original). If the file year is meaningfully
+// later than the earlier year, annotate as "1987 (remastered)" —
+// typical sign of a remaster reissue you own. Same MIN logic as the
+// decade browse (LibraryDB._EFFECTIVE_YEAR).
 let _npYearReqUrl = null;
 async function _renderNpYear(url){
   if(!url){ $("np-year").textContent = ""; return; }
@@ -79,11 +84,14 @@ async function _renderNpYear(url){
     const origYear = m.year_original;
     const fileYear = m.year;
     let display = "";
-    if(origYear){
-      display = String(origYear);
-      if(fileYear && fileYear - origYear >= 3){
+    if(origYear && fileYear){
+      const earlier = Math.min(origYear, fileYear);
+      display = String(earlier);
+      if(fileYear - earlier >= 3){
         display += " (remastered)";
       }
+    } else if(origYear){
+      display = String(origYear);
     } else if(fileYear){
       display = String(fileYear);
     }

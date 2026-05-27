@@ -171,12 +171,17 @@ class TestSchemaYearColumns(unittest.TestCase):
 # ── Display-logic mirror (Python copy of _renderNpYear) ───────────
 
 def _np_year_display(year_file, year_original):
-    """Mirrors _renderNpYear in static/app.js — testing in Python."""
-    if year_original:
-        s = str(year_original)
-        if year_file and year_file - year_original >= 3:
+    """Mirrors _renderNpYear in static/app.js — testing in Python.
+    Uses MIN(file, mb) when both present; annotates '(remastered)'
+    when file is 3+ years later than the earlier year."""
+    if year_original and year_file:
+        earlier = min(year_original, year_file)
+        s = str(earlier)
+        if year_file - earlier >= 3:
             s += " (remastered)"
         return s
+    if year_original:
+        return str(year_original)
     if year_file:
         return str(year_file)
     return ""
@@ -208,9 +213,17 @@ class TestDisplayLogic(unittest.TestCase):
     def test_both_none(self):
         self.assertEqual(_np_year_display(None, None), "")
 
-    def test_negative_gap_not_annotated(self):
-        # File year < original year shouldn't annotate (data weirdness).
-        self.assertEqual(_np_year_display(1985, 1987), "1987")
+    def test_file_earlier_than_orig_uses_file(self):
+        # File=1985, orig=1987 — under the MIN rule we trust the
+        # earlier (file) year and don't annotate.
+        self.assertEqual(_np_year_display(1985, 1987), "1985")
+
+    def test_acoustid_matched_later_edition_uses_file(self):
+        # File=1972, AcoustID matched a 2021 anniversary recording.
+        # MIN rule → display 1972, no remaster annotation (the file
+        # year IS the earlier year; nothing newer than itself).
+        # Regression for the Demons-and-Wizards case.
+        self.assertEqual(_np_year_display(1972, 2021), "1972")
 
 
 if __name__ == "__main__":
