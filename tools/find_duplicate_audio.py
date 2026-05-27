@@ -174,12 +174,36 @@ def _rank_key(member: dict) -> tuple:
 
 
 def rank_groups(groups: list) -> list:
-    """Add winner/losers fields. Members within each group are sorted
-    by quality descending; first = winner, rest = losers."""
+    """Add winner/losers fields. AssetUPnP serves each physical file
+    via multiple URLs (Artist / Album / Genre browse paths), so two
+    "duplicate URLs" in metadata_overrides routinely resolve to the
+    SAME disk path. We deduplicate by path here — within a group, all
+    URLs sharing a resolved path collapse into a single representative.
+    Then we sort the unique paths by quality and pick a winner.
+
+    This protects against the catastrophic outcome where `--trash`
+    would kill the winner's path because a URL-aliased loser pointed
+    at the same file."""
     for g in groups:
-        g["members"].sort(key=_rank_key)
-        g["winner"] = g["members"][0]
-        g["losers"] = g["members"][1:]
+        # Bucket members by their resolved file path.
+        by_path = defaultdict(list)
+        unresolved = []
+        for m in g["members"]:
+            if m.get("path") is not None:
+                by_path[str(m["path"])].append(m)
+            else:
+                unresolved.append(m)
+        # One representative per unique path. All URLs sharing a path
+        # are aliases for the same physical file.
+        unique = []
+        for path_str, ms in by_path.items():
+            rep = dict(ms[0])
+            rep["_aliased_urls"] = [m["url"] for m in ms]
+            unique.append(rep)
+        unique.sort(key=_rank_key)
+        g["winner"]     = unique[0] if unique else None
+        g["losers"]     = unique[1:]
+        g["unresolved"] = unresolved
     return groups
 
 
@@ -241,23 +265,36 @@ def _hard_delete(path: Path) -> None:
 # ── Report writer ─────────────────────────────────────────────────
 
 def write_report(groups: list, out_path: Path) -> int:
-    """Write the candidates list to a tab-separated file. Each loser
-    line: 'TRASH\\t<path>\\t<artist>\\t<album>\\t<title>\\t<bit_depth>/<sample_rate>/<size>'
-    Each winner line: 'KEEP \\t<path>\\t…'
-    Returns the number of LOSER rows written."""
+    """Write the candidates list to a tab-separated file.
+
+    Each group emits:
+      KEEP   <winner_path>  <artist>  <album>  <title>  b<bd>/f<sr>/sz<size>  aliases=<n>
+      TRASH  <loser_path>   ... (one per unique loser path)
+      (blank line)
+
+    `aliases=N` on a KEEP line means N URLs in metadata_overrides
+    point at this file via different AssetUPnP browse paths — they
+    collapse into one disk entry and the action only Trashes the
+    SINGLE file, breaking those N URLs simultaneously (the gateway
+    rebuild-index then cleans them up).
+
+    Returns the number of unique-loser-file TRASH rows."""
     n_losers = 0
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             for g in groups:
-                # Winner first, then losers
+                if g["winner"] is None:
+                    continue
                 for m in [g["winner"]] + g["losers"]:
                     role = "KEEP " if m is g["winner"] else "TRASH"
                     p = str(m.get("path") or "<unresolved>")
                     bd = m.get("bit_depth") or "?"
                     sr = m.get("sample_rate") or "?"
                     sz = m.get("file_size") or "?"
+                    n_alias = len(m.get("_aliased_urls", []))
                     f.write(f"{role}\t{p}\t{g['artist']}\t{g['album']}\t"
-                            f"{g['title']}\tb{bd}/f{sr}/sz{sz}\n")
+                            f"{g['title']}\tb{bd}/f{sr}/sz{sz}"
+                            f"\taliases={n_alias}\n")
                     if role == "TRASH":
                         n_losers += 1
                 f.write("\n")
@@ -353,16 +390,27 @@ def main(argv: Iterable[str] = None) -> int:
             print(f"  …{i+1}/{len(groups)} groups", file=sys.stderr)
     print(f"  HEAD: {n_head_ok:,} resolved, {n_head_fail:,} failed")
 
-    # Phase 3: rank, walk disk, resolve paths
-    print(f"\nPhase 3/4: ranking + walking disk…")
-    rank_groups(groups)
+    # Phase 3: walk disk, resolve paths, THEN rank.
+    # Order matters — rank_groups dedupes by resolved path (multiple
+    # URLs of the same physical file collapse into one entry), so the
+    # resolution must happen first.
+    print(f"\nPhase 3/4: walking disk + ranking…", flush=True)
     size_index = build_disk_size_index(root)
     n_disk_files = sum(len(v) for v in size_index.values())
-    print(f"  disk walk: {n_disk_files:,} audio files indexed by size")
+    print(f"  disk walk: {n_disk_files:,} audio files indexed by size",
+          flush=True)
     resolve_stats = resolve_paths(groups, size_index, verbose=args.verbose)
     print(f"  URL→path: {resolve_stats['resolved']:,} resolved, "
           f"{resolve_stats['ambiguous']:,} ambiguous, "
-          f"{resolve_stats['missing']:,} missing")
+          f"{resolve_stats['missing']:,} missing", flush=True)
+    rank_groups(groups)
+    n_alias_collapse = sum(len(g["members"]) -
+                           (1 if g["winner"] else 0) -
+                           len(g["losers"]) -
+                           len(g["unresolved"])
+                           for g in groups)
+    print(f"  URL aliases collapsed (multiple URLs → same file): "
+          f"{n_alias_collapse:,}", flush=True)
 
     # Phase 4: write report
     print(f"\nPhase 4/4: writing report…")
@@ -370,18 +418,21 @@ def main(argv: Iterable[str] = None) -> int:
     print(f"  wrote {n_losers_written:,} loser entries to "
           f"{args.out} (winners also listed for reference)")
 
-    # Decide action
+    # Decide action. Each group's `losers` is now a list of unique
+    # disk paths (URL aliases already collapsed via rank_groups). Each
+    # loser already has path set — None paths went into "unresolved".
     actionable_losers = [
-        (g, m) for g in groups for m in g["losers"]
+        (g, m) for g in groups
+        if g["winner"] is not None
+        for m in g["losers"]
         if m.get("path") is not None
     ]
+    n_unresolved = sum(len(g["unresolved"]) for g in groups)
     print()
-    print(f"=== Summary ===")
-    print(f"  duplicate groups:       {len(groups):,}")
-    print(f"  total loser files:      {n_losers:,}")
-    print(f"  with resolved path:     {len(actionable_losers):,}")
-    print(f"  ambiguous/missing:      "
-          f"{n_losers - len(actionable_losers):,} (manual review)")
+    print(f"=== Summary ===", flush=True)
+    print(f"  duplicate groups:                {len(groups):,}")
+    print(f"  unique loser files actionable:   {len(actionable_losers):,}")
+    print(f"  member URLs unresolved (no path): {n_unresolved:,}  (skipped)")
 
     if not (args.trash or args.hard_delete):
         print("\nReport-only mode. Use --trash or --hard-delete to act.")
