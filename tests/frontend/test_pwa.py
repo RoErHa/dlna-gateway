@@ -82,8 +82,9 @@ def test_sw_registers(app):
 
 def test_sw_caches_app_shell(app):
     """After SW activates, the app shell entries (/, /static/app.js, etc.)
-    should be in the dlna-gw-app-v3 cache. This is the install-time pre-cache
-    behaviour from sw.js — if it breaks, the offline mode silently fails."""
+    should be in the live APP_CACHE. Install-time pre-cache behaviour from
+    sw.js — if it breaks, the offline mode silently fails. Reads the cache
+    name from sw.js so a version bump there doesn't break this test."""
     # Wait for activation
     app.wait_for_function(
         "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
@@ -92,8 +93,12 @@ def test_sw_caches_app_shell(app):
     )
     # Give the cache.addAll() a beat to settle
     app.wait_for_timeout(500)
+    # Look up the live cache name straight from window, so this test
+    # tracks sw.js version bumps automatically.
     cached = app.evaluate("""
-      caches.open('dlna-gw-app-v3')
+      caches.keys()
+        .then(names => names.find(n => n.startsWith('dlna-gw-app-')))
+        .then(name => caches.open(name))
         .then(c => c.keys())
         .then(keys => keys.map(k => new URL(k.url).pathname))
     """)
