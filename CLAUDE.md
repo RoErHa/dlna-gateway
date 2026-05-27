@@ -1463,6 +1463,62 @@ markers, metadata + path columns).
 python3 -m unittest tools.test_find_duplicate_audio -v
 ```
 
+### `tools/relink_orphan_overrides.py`
+
+Recovers orphan `metadata_overrides` rows after an AssetUPnP rescan
+rotated co-hashes. AssetUPnP URLs look like
+`…/c2/b16/f44100/d<track-id>-co<container-hash>.ext` — the `d-id` is
+content-stable across rescans, but the `co-hash` is NOT (AssetUPnP
+rotates it any time it reorganises its container tree). After a major
+rescan, the indexer crawls in brand-new URLs and every existing
+`metadata_overrides` row points at the OLD URL the indexer no longer
+sees. The tool matches orphans → current bare tracks by d-id and
+rewrites `metadata_overrides.url` in place.
+
+Surfaced 2026-05-27 when a duplicate-cleanup-driven AssetUPnP rescan
+left 37,943 metadata_overrides rows orphaned; the d-id relink
+recovered 19,149 of them (the other 18,794 were genuinely
+trashed-file casualties, since pruned).
+
+#### Safety
+
+- **Dry-run by default.** `--apply` is opt-in.
+- Idempotent — a second run finds no orphans and does nothing.
+- d-ids that resolve to multiple bare tracks (shouldn't happen given
+  `UNIQUE(udn,url)`, but defended against) are reported as
+  `ambiguous` and skipped.
+- Two orphans claiming the same new URL: first wins, second skipped
+  as `ambiguous`.
+- URLs without a recognisable d-id (non-AssetUPnP / hand-edited) are
+  counted as `no_d` and left alone.
+
+#### Usage
+
+```bash
+# Dry-run (default) — preview what would be relinked:
+python3 tools/relink_orphan_overrides.py
+
+# Apply the relinks:
+python3 tools/relink_orphan_overrides.py --apply
+
+# Custom DB path:
+python3 tools/relink_orphan_overrides.py --db /path/to/library.db --apply
+```
+
+#### Tests
+
+`tools/test_relink_orphan_overrides.py` — 10 unit tests over a
+throw-away temp DB. Cover: `_d_id` parsing (positive + negative
+ids, non-AssetUPnP URLs); co-hash rotation relink; dry-run does
+not mutate; no-match (trashed file) reported as `no_match`; missing
+d-id reported as `no_d`; idempotent (second run is a no-op);
+ambiguous d-id skipped; two orphans for the same d-id → one
+relinks, one ambiguous.
+
+```bash
+python3 -m unittest tools.test_relink_orphan_overrides -v
+```
+
 ## Subsonic API (Phase 1, in flight)
 
 A read-only-ish Subsonic-compatible HTTP API that lets any third-party
