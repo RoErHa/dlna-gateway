@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v8';
+const APP_CACHE = 'dlna-gw-app-v9';
 const ART_CACHE = 'dlna-gw-art-v1';
 
 const SHELL = [

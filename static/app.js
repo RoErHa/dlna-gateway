@@ -1988,13 +1988,29 @@ function rebuildOutputSel(upnpData){
 // ── Edit metadata modal ───────────────────────────────────────────
 let _editTrack = null;   // track object currently being edited
 
-function openEditModal(track){
+async function openEditModal(track){
   if(!track || !track.url){ toast("No track to edit"); return; }
   _editTrack = track;
   $("edit-title").value  = track.title  || "";
   $("edit-artist").value = track.artist || "";
   $("edit-album").value  = track.album  || "";
   $("edit-genre").value  = track.genre  || "";
+  // Year isn't carried on the track object — fetch the current
+  // override from /api/track_meta. Prefill with the MB-original
+  // year if present, else file-tag year, else blank. Cache the
+  // prefill on the track so the save handler can tell whether the
+  // user actually changed it.
+  $("edit-year").value = "";
+  track._editPrefillYear = null;
+  try{
+    const r = await fetch(`/api/track_meta?url=${enc(track.url)}`);
+    if(r.ok){
+      const m = await r.json();
+      const y = m.year_original || m.year || null;
+      $("edit-year").value = y ? String(y) : "";
+      track._editPrefillYear = y;
+    }
+  }catch(e){ /* best effort prefill */ }
   $("edit-modal-sub").textContent =
     "Changes saved to library immediately. File tags written if path is known.";
   $("edit-modal").classList.add("open");
@@ -2007,25 +2023,43 @@ $("edit-modal").addEventListener("click", e=>{
   if(e.target===$("edit-modal")) $("edit-modal").classList.remove("open");
 });
 // Save on Enter in any field
-["edit-title","edit-artist","edit-album","edit-genre"].forEach(id=>{
+["edit-title","edit-artist","edit-album","edit-genre","edit-year"].forEach(id=>{
   $(id).addEventListener("keydown", e=>{ if(e.key==="Enter") $("edit-save").click(); });
 });
 
 $("edit-save").addEventListener("click", async ()=>{
   if(!_editTrack) return;
+  // Parse year — must be a 4-digit int in [1900, 2100] if present.
+  const yearRaw = $("edit-year").value.trim();
+  let yearVal = null;
+  if(yearRaw){
+    const n = parseInt(yearRaw, 10);
+    if(!Number.isFinite(n) || n < 1900 || n > 2100){
+      toast("Year must be between 1900 and 2100");
+      return;
+    }
+    yearVal = n;
+  }
   const body = {
     url:    _editTrack.url,
     title:  $("edit-title").value.trim()  || null,
     artist: $("edit-artist").value.trim() || null,
     album:  $("edit-album").value.trim()  || null,
     genre:  $("edit-genre").value.trim()  || null,
+    year:   yearVal,
   };
-  // Only send changed fields
+  // Only send changed fields (only year is compared against the
+  // form's prefilled value; everything else compares against the
+  // in-memory track object).
   const changed = {};
   if(body.title  !== (_editTrack.title  ||null)) changed.title  = body.title;
   if(body.artist !== (_editTrack.artist ||null)) changed.artist = body.artist;
   if(body.album  !== (_editTrack.album  ||null)) changed.album  = body.album;
   if(body.genre  !== (_editTrack.genre  ||null)) changed.genre  = body.genre;
+  // Year: send when the user typed a value different from the
+  // prefilled one (or cleared a previously-set value).
+  const prefilledYear = _editTrack._editPrefillYear ?? null;
+  if(body.year !== prefilledYear) changed.year = body.year;
   if(!Object.keys(changed).length){ $("edit-modal").classList.remove("open"); return; }
   changed.url = _editTrack.url;
   const r = await api("/api/edit_track", {method:"POST",
@@ -2044,6 +2078,7 @@ $("edit-save").addEventListener("click", async ()=>{
     if(changed.title)  $("np-title").textContent  = changed.title;
     if(changed.artist) $("np-artist").textContent = changed.artist;
     if(changed.album)  $("np-album").textContent  = changed.album;
+    if("year" in changed) _renderNpYear(npTrack.url);   // refetch + redraw
   }
 });
 

@@ -399,6 +399,9 @@ def control(h, body):
         h._json(400, {"error": str(e)})
 
 
+_SENTINEL = object()   # distinguishes "field omitted" from "field=None"
+
+
 def edit_track(h, body):
     try:
         data = _parse_json_or_400(h, body)
@@ -412,10 +415,32 @@ def edit_track(h, body):
         if not url:
             h._json(400, {"error": "Missing url"})
             return
+        # year may be: omitted (don't touch), an int (set), or null
+        # (clear the override). _SENTINEL distinguishes "not in body"
+        # from "explicitly null".
+        year_raw = data.get("year", _SENTINEL)
+        year_arg = _SENTINEL
+        if year_raw is not _SENTINEL:
+            if year_raw is None:
+                year_arg = None
+            else:
+                try:
+                    y = int(year_raw)
+                except (TypeError, ValueError):
+                    h._json(400, {"error": "year must be an integer or null"})
+                    return
+                if y < 1900 or y > 2100:
+                    h._json(400, {"error": "year must be between 1900 and 2100"})
+                    return
+                year_arg = y
         ok = DB.update_track_meta(url, artist=artist, album=album,
-                                  title=title, genre=genre)
-        log.info(f"edit_track: {url[:60]}  "
-                 f"fields={[k for k, v in [('artist', artist), ('album', album), ('title', title), ('genre', genre)] if v is not None]}")
+                                  title=title, genre=genre, year=year_arg)
+        fields = [k for k, v in [('artist', artist), ('album', album),
+                                 ('title', title), ('genre', genre)]
+                  if v is not None]
+        if year_arg is not _SENTINEL:
+            fields.append(f"year={year_arg}")
+        log.info(f"edit_track: {url[:60]}  fields={fields}")
         h._json(200, {"ok": ok})
     except Exception as e:
         log.exception(f"edit_track error: {e}")
