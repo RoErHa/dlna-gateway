@@ -647,6 +647,81 @@ class TestUpsertVirtualAlbumDedup(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row["album"], "Real")
 
+    def test_curly_apostrophe_normalised(self):
+        # The Marillion / 10cc / Uriah Heep case from the post-rebuild
+        # audit 2026-05-28: same song, same d-id, but one row had the
+        # raw DIDL-Lite ASCII apostrophe and the other had the
+        # AcoustID-corrected curly U+2019. Dedup must treat them as
+        # equal.
+        self.db.upsert_tracks(self.udn, [
+            {"id": "a", "url": self._alias("d12345", "AAA"),
+             "title": "Art for Art's Sake",   # ASCII apostrophe
+             "artist": "10cc", "album": "The Definitive Collection"},
+            {"id": "b", "url": self._alias("d12345", "BBB"),
+             "title": "Art for Art’s Sake",   # curly apostrophe
+             "artist": "10cc", "album": "The Very Best Of 10cc"},
+        ])
+        self.assertEqual(self._count(), 1)
+
+    def test_curly_existing_row_against_ascii_new_row(self):
+        # Real-world race that motivated the apostrophe normalisation:
+        # First upsert lands the row, COALESCE-applies its override
+        # which rewrites tracks.title with a curly apostrophe. Second
+        # upsert comes in with a raw ASCII apostrophe title — the
+        # dedup MUST still match against the curly post-COALESCE
+        # title in the existing row.
+        url_a = self._alias("d12345", "AAA")
+        url_b = self._alias("d12345", "BBB")
+        # Pre-seed an override that will rewrite url_a's title to
+        # curly during the COALESCE pass.
+        with self.db._pool.write() as conn:
+            conn.execute(
+                "INSERT INTO metadata_overrides "
+                "(url, artist, album, title, source) "
+                "VALUES (?,?,?,?, 'acoustid')",
+                (url_a, "10cc", "The Definitive Collection",
+                 "Art for Art’s Sake"))   # curly
+        # First upsert lands url_a — gets its title rewritten by
+        # COALESCE to the curly variant.
+        self.db.upsert_tracks(self.udn, [
+            {"id": "a", "url": url_a, "title": "Art for Art's Sake",
+             "artist": "10cc", "album": "The Definitive Collection"}])
+        # Second upsert: same song, ASCII apostrophe in the raw title.
+        # Existing row's title is now curly — _norm_title catches it.
+        self.db.upsert_tracks(self.udn, [
+            {"id": "b", "url": url_b, "title": "Art for Art's Sake",
+             "artist": "10cc", "album": "The Very Best Of 10cc"}])
+        self.assertEqual(self._count(), 1)
+
+    def test_diacritic_difference_normalised(self):
+        # 'Une Nuit a Paris' vs 'Une Nuit à Paris' — NFKD strips the
+        # combining mark, so these are equal under the new norm.
+        self.db.upsert_tracks(self.udn, [
+            {"id": "a", "url": self._alias("d12345", "AAA"),
+             "title": "Une Nuit a Paris", "artist": "10cc",
+             "album": "Original Soundtrack"},
+            {"id": "b", "url": self._alias("d12345", "BBB"),
+             "title": "Une Nuit à Paris", "artist": "10cc",
+             "album": "Special Edition"},
+        ])
+        self.assertEqual(self._count(), 1)
+
+    def test_bracketed_annotation_kept_distinct(self):
+        # Important counter-test: 'Wiggle It' and 'Wiggle It (club mix)'
+        # are different recordings even when AssetUPnP collides their
+        # d-ids. Dedup must NOT collapse them.
+        self.db.upsert_tracks(self.udn, [
+            {"id": "a", "url": self._alias("d12345", "AAA"),
+             "title": "Wiggle It", "artist": "2 in a Room",
+             "album": "Greatest Hits"},
+            {"id": "b", "url": self._alias("d12345", "BBB"),
+             "title": "Wiggle It (The club mix)", "artist": "2 in a Room",
+             "album": "Max Mix"},
+        ])
+        self.assertEqual(self._count(), 2,
+                         "Bracketed-mix annotation = different recording, "
+                         "must stay as 2 rows")
+
 
 # ── _dedup_clause smoke: SQL syntax is valid ──────────────────────
 
