@@ -151,6 +151,47 @@ play_counts(url, count, last_played)
   Incremented by LibraryDB.radio_tracks(); persists across rebuild-index.
 ```
 
+### Indexer-side dedup (AssetUPnP virtual-album aliases)
+
+Diagnosed 2026-05-28: AssetUPnP exposes the SAME physical file under
+multiple browse paths — the real album AND any "virtual compilation"
+albums (Greatest Hits, Best Of, Music From the OC: Mix 5, case-only
+album variants like `Live in Armenia` vs `Live In Armenia`, etc.).
+HTTP HEAD of paired URLs returns byte-identical Content-Length on
+~99% of pairs. Pre-dedup row counts were ~1.82× the actual file
+count (40,662 rows for ~22k files).
+
+`upsert_tracks` dedups by `(d_id, _norm_title(title))` keyed against
+both existing rows and the in-flight batch:
+
+- `d_id` = the `d-<n>-co` segment of the AssetUPnP URL. d-id is NOT
+  a per-file identifier — it collides across distinct files. Pure
+  d-id matching would over-collapse; combining with title catches
+  the virtual-album case while preserving genuine d-id collisions
+  (Kryptonite + Down Poison sharing `d-4591903772373150829` stay
+  as 2 rows because their titles differ).
+- `_norm_title` = NFKD diacritic stripping + smart-apostrophe/quote
+  → ASCII + lower + whitespace collapse. Catches the AcoustID-
+  corrected-vs-raw race where the existing tracks.title has a curly
+  apostrophe (rewritten by COALESCE) and the incoming raw title has
+  ASCII apostrophe. Keeps bracketed annotations IN the key so
+  legit-distinct recordings ("Be Like That" / "Be Like That
+  (acoustic)" sharing d-id within the same album) survive as 2 rows.
+
+**Known limitation:** when two genuinely distinct files coincidentally
+share a d-id AND the same title (Pink Floyd "Comfortably Numb" on
+The Wall vs on Shine On compilation — 47 MB vs 42 MB, definitely
+different bytes), the dedup currently collapses them. The track is
+still playable via every other album, so the cost is one "original
+album" browse-row missing per such collision. Accepted as
+right-enough; HTTP-HEAD-based dedup with Content-Length in the key
+remains an option if this bites more often.
+
+Two rebuilds collapsed 40,662 → 30,292 → 28,868. Remaining ~6,000
+"extras" above the ~22k distinct-file count are largely correct
+distinctions (live recordings, acoustic versions, extended mixes,
+etc.).
+
 ### Frontend
 
 `static/index.html` + `static/app.js` (PWA, ~71K lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
