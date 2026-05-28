@@ -1518,18 +1518,37 @@ python3 -m unittest tools.test_find_duplicate_audio -v
 
 Recovers orphan `metadata_overrides` rows after an AssetUPnP rescan
 rotated co-hashes. AssetUPnP URLs look like
-`…/c2/b16/f44100/d<track-id>-co<container-hash>.ext` — the `d-id` is
-content-stable across rescans, but the `co-hash` is NOT (AssetUPnP
-rotates it any time it reorganises its container tree). After a major
+`…/c2/b16/f44100/d<track-id>-co<container-hash>.ext`. After a major
 rescan, the indexer crawls in brand-new URLs and every existing
 `metadata_overrides` row points at the OLD URL the indexer no longer
-sees. The tool matches orphans → current bare tracks by d-id and
-rewrites `metadata_overrides.url` in place.
+sees. The tool matches orphans → current bare tracks by **d-id +
+fuzzy (artist, title)** and rewrites `metadata_overrides.url` in place.
 
 Surfaced 2026-05-27 when a duplicate-cleanup-driven AssetUPnP rescan
 left 37,943 metadata_overrides rows orphaned; the d-id relink
 recovered 19,149 of them (the other 18,794 were genuinely
 trashed-file casualties, since pruned).
+
+#### d-id is NOT a per-file identifier
+
+Surfaced 2026-05-28: d-id collides systematically. Of 22,394 distinct
+d-ids in the live library, ~9,200 (~41%) appear in tracks with
+multiple `(artist, title)` pairs. Categories: same song on two
+albums (compilations), same album's adjacent tracks (e.g. 3 Doors
+Down's Kryptonite + Down Poison sharing `d-4591903772373150829`),
+and same file indexed via two browse-tree paths with different
+tags. AssetUPnP's d-id is closer to "(album-bucket, track-position)
+hash" than to "physical-file hash". 
+
+Therefore relinking by d-id alone WOULD silently re-attach overrides
+to wrong tracks. The tool now requires BOTH d-id match AND a fuzzy
+similarity ≥ `_FUZZY_FLOOR` (0.55) on normalised `(artist, title)`.
+Punctuation/diacritics/bracketed annotations are stripped before
+comparison; collaboration-credit variation (`"A; B"` vs `"A feat. B"`)
+passes; truly-different songs fail.
+
+For damage from earlier d-id-only relinks, see
+`tools/audit_override_mismatches.py`.
 
 #### Safety
 
@@ -1542,6 +1561,8 @@ trashed-file casualties, since pruned).
   as `ambiguous`.
 - URLs without a recognisable d-id (non-AssetUPnP / hand-edited) are
   counted as `no_d` and left alone.
+- **mismatch** (NEW): d-id matched but fuzzy (artist, title) check
+  failed — skipped, reported as `mismatch`.
 
 #### Usage
 
@@ -1558,16 +1579,65 @@ python3 tools/relink_orphan_overrides.py --db /path/to/library.db --apply
 
 #### Tests
 
-`tools/test_relink_orphan_overrides.py` — 10 unit tests over a
+`tools/test_relink_orphan_overrides.py` — 16 unit tests over a
 throw-away temp DB. Cover: `_d_id` parsing (positive + negative
 ids, non-AssetUPnP URLs); co-hash rotation relink; dry-run does
 not mutate; no-match (trashed file) reported as `no_match`; missing
 d-id reported as `no_d`; idempotent (second run is a no-op);
 ambiguous d-id skipped; two orphans for the same d-id → one
-relinks, one ambiguous.
+relinks, one ambiguous; **fuzzy-match guard** — genuine collision
+blocked, punctuation difference accepted, collaboration-credit
+variation accepted, bracketed annotation ignored, completely-
+different song blocked, empty metadata treated as mismatch.
 
 ```bash
 python3 -m unittest tools.test_relink_orphan_overrides -v
+```
+
+### `tools/audit_override_mismatches.py`
+
+Repairs damage from past d-id-collision-driven mis-relinks (see the
+**d-id is NOT a per-file identifier** note in
+`tools/relink_orphan_overrides.py`). For each `acoustid` override
+row, computes a fuzzy similarity (artist + title) against the joined
+`tracks` row. Rows where **both** scores fall below the floor (0.55)
+are deleted, freeing the URL so the AcoustID worker re-fingerprints
+it on the next pass.
+
+#### Conservative-by-design
+
+- Source `manual` is **never** touched (the user knows best).
+- BOTH artist AND title must score < 0.55 — a same-artist-but-wrong-
+  title mismatch (e.g. 3 Doors Down's Kryptonite override on a
+  Down Poison track) is NOT flagged. That asymmetry is intentional:
+  these cases overlap with AcoustID's natural fingerprint mismatches,
+  and the worker will resolve them on its own next pass.
+- Dry-run by default; `--clean` deletes the suspect rows.
+- The fuzzy floor is shared verbatim with
+  `tools/relink_orphan_overrides.py` so a row that this tool flags
+  as suspect is *also* one that the relink tool would now refuse
+  to create. The two stay in sync.
+
+#### Usage
+
+```bash
+python3 tools/audit_override_mismatches.py             # dry-run, top 30
+python3 tools/audit_override_mismatches.py --top 0     # full list
+python3 tools/audit_override_mismatches.py --clean     # confirm prompt
+python3 tools/audit_override_mismatches.py --clean -y  # non-interactive
+```
+
+#### Tests
+
+`tools/test_audit_override_mismatches.py` — 9 tests covering exact
+match / punctuation difference / collaboration-credit variation /
+bracketed annotations (all NOT suspect), completely-different-song
+suspect, same-album-different-song NOT suspect (conservative),
+manual override never touched, `delete_suspects` removes only
+`source='acoustid'`.
+
+```bash
+python3 -m unittest tools.test_audit_override_mismatches -v
 ```
 
 ### `tools/correct_year_drift.py`
