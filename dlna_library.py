@@ -67,6 +67,39 @@ def _d_id(url: str):
     return m.group(1) if m else None
 
 
+# Lazy unicodedata import keeps module load cheap on the hot path.
+_unicodedata = None
+
+def _norm_title(s):
+    """Normalise a track title for dedup keying.
+
+    Strips combining marks, replaces curly typographic apostrophes /
+    quote marks with ASCII equivalents, collapses whitespace,
+    lowercases. Same song with different typographic renderings
+    (e.g. "Art for Art's Sake" with ASCII apostrophe vs the same
+    string with curly U+2019) maps to one key.
+
+    Does NOT strip bracketed annotations — "Wiggle It" and "Wiggle It
+    (club mix)" stay distinct because they're genuinely different
+    recordings."""
+    global _unicodedata
+    if not s:
+        return ""
+    if _unicodedata is None:
+        import unicodedata as _unicodedata
+    s = _unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not _unicodedata.combining(c))
+    # Curly apostrophes/quotes → ASCII. The bytes that bit us live in
+    # b"\xe2\x80\x99" (U+2019) and friends; doing this after NFKD
+    # because NFKD does NOT decompose the smart-quote characters.
+    s = (s.replace("‘", "'").replace("’", "'")
+          .replace("‚", "'").replace("‛", "'")
+          .replace("“", '"').replace("”", '"')
+          .replace("´", "'").replace("`", "'"))
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+
 def _dedup_clause(outer_alias: str = "t") -> str:
     """SQL fragment that filters out lower-quality duplicates from
     a tracks-table query.
@@ -742,24 +775,33 @@ class LibraryDB:
         rows_raw = [_make_row(t) for t in tracks if t.get("url")]
 
         with self._pool.write() as conn:
-            # Build the (d_id, lower(title)) dedup set: existing rows for
-            # this UDN + within-batch tracking. Non-AssetUPnP URLs have
-            # d_id=None and are NOT deduped this way — they fall through
-            # to the wider UNIQUE constraint.
+            # Build the (d_id, _norm_title(title)) dedup set: existing
+            # rows for this UDN + within-batch tracking. Non-AssetUPnP
+            # URLs have d_id=None and are NOT deduped this way — they
+            # fall through to the wider UNIQUE constraint.
+            #
+            # The post-COALESCE-mismatch race that motivated an earlier
+            # override-aware path is already resolved by _norm_title's
+            # apostrophe/diacritic normalisation: the new raw title and
+            # the existing post-COALESCE title both normalise to the
+            # same key. Considering the override title here would over-
+            # collapse legitimately-distinct recordings that happen to
+            # share a d-id (e.g. 3 Doors Down "Be Like That" vs
+            # "Be Like That (acoustic)"), so we don't.
             seen: set[tuple[str, str]] = set()
             for (existing_url, existing_title) in conn.execute(
                 "SELECT url, title FROM tracks WHERE udn=?", (udn,)
             ).fetchall():
                 d = _d_id(existing_url)
                 if d:
-                    seen.add((d, (existing_title or "").strip().lower()))
+                    seen.add((d, _norm_title(existing_title)))
 
             rows: list[dict] = []
             n_aliased = 0
             for r in rows_raw:
                 d = _d_id(r["url"])
                 if d:
-                    key = (d, (r["title"] or "").strip().lower())
+                    key = (d, _norm_title(r["title"]))
                     if key in seen:
                         n_aliased += 1
                         continue
