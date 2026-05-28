@@ -38,6 +38,7 @@ FAVOURITES_ID = "__favourites__"
 # higher-quality version. Other UPnP MediaServers usually don't
 # embed these in the URL; for them we leave both columns NULL.
 _AUDIO_PARAMS_RE = re.compile(r"/b(\d+)/f(\d+)/")
+_D_ID_RE         = re.compile(r"/(d-?\d+)-co")
 
 
 def _parse_audio_params(url: str):
@@ -53,6 +54,17 @@ def _parse_audio_params(url: str):
         return int(m.group(1)), int(m.group(2))
     except (ValueError, TypeError):
         return None, None
+
+
+def _d_id(url: str):
+    """Extract the d-id portion of an AssetUPnP URL, or None for
+    non-AssetUPnP URLs. Used as one half of the (d_id, lower(title))
+    dedup key in upsert_tracks — see the 'AssetUPnP virtual albums'
+    note in the docstring for upsert_tracks for the why."""
+    if not url:
+        return None
+    m = _D_ID_RE.search(url)
+    return m.group(1) if m else None
 
 
 def _dedup_clause(outer_alias: str = "t") -> str:
@@ -679,9 +691,25 @@ class LibraryDB:
 
     def upsert_tracks(self, udn: str, tracks: list) -> int:
         """
-        Insert tracks, deduplicating on (udn, artist, album, title).
-        AssetUPnP serves the same file via multiple container paths;
-        we keep the first URL seen and ignore subsequent duplicates.
+        Insert tracks, deduplicating on (udn, d_id, lower(title)) where
+        d_id is the `d-<n>` AssetUPnP URL segment.
+
+        Why d_id+title and not just url: AssetUPnP exposes the SAME
+        physical file under multiple "browse-tree paths" — both the
+        real album (e.g. "Kasabian") AND any compilation albums the
+        user has set up ("Music From the OC: Mix 5"). Each path gets
+        a different `co-<hash>` segment in the URL, but the `d-<n>`
+        part stays the same. Without this dedup, the index sees the
+        same file 2x and the row count balloons (confirmed 2026-05-28:
+        22k physical files → 40k rows). HTTP HEAD of the duplicate
+        URLs confirms byte-identical Content-Length on both sides.
+
+        Dedup is in Python (within-batch) and against any pre-existing
+        rows for this UDN. URLs without a recognisable d-id (non-
+        AssetUPnP servers) fall through to the wide UNIQUE constraint
+        and never trigger d-id dedup. The FIRST URL seen wins; later
+        aliases for the same (d_id, title) are skipped.
+
         Returns number of rows actually inserted.
         """
         if not tracks:
@@ -711,9 +739,37 @@ class LibraryDB:
                 sample_rate=sr,
                 year=t.get("year"),
             )
-        rows = [_make_row(t) for t in tracks if t.get("url")]
+        rows_raw = [_make_row(t) for t in tracks if t.get("url")]
 
         with self._pool.write() as conn:
+            # Build the (d_id, lower(title)) dedup set: existing rows for
+            # this UDN + within-batch tracking. Non-AssetUPnP URLs have
+            # d_id=None and are NOT deduped this way — they fall through
+            # to the wider UNIQUE constraint.
+            seen: set[tuple[str, str]] = set()
+            for (existing_url, existing_title) in conn.execute(
+                "SELECT url, title FROM tracks WHERE udn=?", (udn,)
+            ).fetchall():
+                d = _d_id(existing_url)
+                if d:
+                    seen.add((d, (existing_title or "").strip().lower()))
+
+            rows: list[dict] = []
+            n_aliased = 0
+            for r in rows_raw:
+                d = _d_id(r["url"])
+                if d:
+                    key = (d, (r["title"] or "").strip().lower())
+                    if key in seen:
+                        n_aliased += 1
+                        continue
+                    seen.add(key)
+                rows.append(r)
+            if n_aliased:
+                log.info(f"upsert_tracks [{udn[:12]}…]: dropped "
+                         f"{n_aliased} alias row(s) "
+                         f"(same d-id + title via different browse path)")
+
             before = conn.execute("SELECT changes()").fetchone()[0]
             # Step 1: insert new tracks (skip duplicates)
             conn.executemany(
