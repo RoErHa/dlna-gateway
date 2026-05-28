@@ -1762,6 +1762,114 @@ apply is idempotent.
 python3 -m unittest tools.test_correct_year_drift -v
 ```
 
+### `tools/improve_song_years.py`
+
+External-lookup counterpart to `correct_year_drift.py`. Where the
+drift tool can only correct songs the user owns multiple copies of
+(~2.4k songs in this library), this tool queries MusicBrainz for
+the **earliest known recording year** of every song in the library
+(~25k unique `(artist, title)` groups). Targets the case where the
+user only owns one copy of a song and that copy is a later
+compilation/remaster — e.g. "Louis Armstrong / What a Wonderful
+World" on a 2017 compilation, true original 1967.
+
+#### Algorithm
+
+Per `(artist, title)` group:
+
+1. MB `recording?query=artist:"X" AND recording:"Y"&fmt=json&limit=100`
+2. Paginate up to 5 pages (max 500 recordings) at 1.1s/req rate limit
+3. Collect every recording's `first-release-date` year
+4. Cache `MIN(years)` in `song_year_cache` with `source='mb_recording'`
+5. If no usable date → cache as `source='notfound'` (sticky)
+
+The pagination matters: the top-15 result set often surfaces
+later-edition recordings before the 1967 original. Full pagination
+on "What a Wonderful World" → 234 matches across 3 pages → MIN
+year = 1967.
+
+#### Cache table
+
+```sql
+CREATE TABLE song_year_cache (
+  artist_key TEXT,           -- _norm_title(artist)
+  title_key  TEXT,           -- _norm_title(title)
+  year       INTEGER,        -- MIN MB year, NULL on no-match
+  source     TEXT,           -- 'mb_recording' | 'notfound'
+  n_matches  INTEGER,
+  fetched_at INTEGER,
+  PRIMARY KEY (artist_key, title_key)
+)
+```
+
+Same persistence invariant as `album_art` / `play_counts` /
+`lyrics` / `track_loudness` / `metadata_overrides`: survives
+`clear(udn)` and rebuild-index. Sticky-negative cache prevents
+re-hammering MB for songs with no MB entry.
+
+#### Apply step
+
+After lookups complete, walks cached hits. For each track of the
+matching `(artist, title)` whose current effective year is later
+than the cached year, writes `metadata_overrides.year = cached_year`
+with `source='manual'`. The display rules and AcoustID worker
+already treat `manual` as the highest-trust source, so subsequent
+worker passes won't overwrite. User-edited manual rows are NEVER
+touched.
+
+#### Phantom-row skip
+
+(Unknown Artist) and track-number-prefixed titles ("01 - …") are
+skipped before MB queries — they're filename-derived metadata that
+will never match. Saves ~700 queries on this library.
+
+#### Cost
+
+~25k uncached groups × ~1.5s avg (rate limit + most songs need
+only 1 page) ≈ **10 hours** for a full library sweep. Most songs
+need 1 page; long-tail ("Yesterday", "Stairway to Heaven") may
+hit the 5-page cap. Subsequent incremental runs only hit newly-
+indexed songs.
+
+#### Usage
+
+```bash
+# Dry-run preview, no MB calls, no DB writes
+python3 tools/improve_song_years.py
+
+# Query MB for uncached groups (cap at N for testing)
+python3 tools/improve_song_years.py --lookup --limit 100 -v
+
+# Apply cached hits to tracks
+python3 tools/improve_song_years.py --apply
+
+# Combined: lookup then apply in one invocation
+python3 tools/improve_song_years.py --lookup --apply
+
+# Force re-query a single song:
+sqlite3 library.db "DELETE FROM song_year_cache WHERE artist_key='louis armstrong' AND title_key='what a wonderful world'"
+```
+
+Validated 2026-05-28 — first 10 live queries hit 9/10, recovered
+correct original years for 10cc "Donna" (1972, was 1997 in library),
+"Art for Art's Sake" (1975), "Dreadlock Holiday" (1978).
+
+#### Tests
+
+`tools/test_improve_song_years.py` — 26 tests covering: normalisation
+(curly apostrophe, diacritics, case, whitespace, empty); schema
+creation (idempotent); candidate selection (distinct groups, dedup
+via norm, cache exclusion, empty fields, **(Unknown Artist) phantom
+exclusion, track-number-prefix exclusion**); lookup (cache hit /
+notfound / transient error leaves uncached / `--limit` honored);
+apply (write when later, skip when at/before cached, skip manual
+overrides, overwrite acoustid override, skip notfound entries,
+apostrophe normalisation); MB query string escape.
+
+```bash
+python3 -m unittest tools.test_improve_song_years -v
+```
+
 ## Subsonic API (Phase 1, in flight)
 
 A read-only-ish Subsonic-compatible HTTP API that lets any third-party
