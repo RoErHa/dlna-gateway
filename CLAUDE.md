@@ -6,6 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPnP MediaServers (AssetUPnP, MinimServer, Jellyfin, Plex) on the local network, indexes their music into a local SQLite DB, and exposes a PWA web UI for browsing and playback. Playback targets: UPnP MediaRenderers (Naim Uniti, etc.) and browser audio. The gateway also announces itself as a UPnP MediaServer so UPnP renderers can browse its playlists directly.
 
+> **In flight — backend migration.** AssetUPnP is being replaced by an
+> in-process indexer + file server, and the AssetUPnP-shaped code path
+> is being generalised into a pluggable **`LibraryProvider` seam** so
+> the gateway can speak to any of: AssetUPnP, MinimServer, Plex,
+> Jellyfin, or our own in-process backend, modularly. See
+> **[Library backend migration](#library-backend-migration-in-flight)**
+> below for the working roadmap (this section supersedes the standalone
+> `docs/MIGRATION_PLAN.md`).
+
 ## Running the Gateway
 
 ```bash
@@ -300,6 +309,321 @@ Because there's no automated test coverage for on-device behavior (iOS Safari, A
 7. **Rebuild / force-refresh**: Pull-to-refresh in PWA. Service Worker updates (check DevTools Application tab → SW version).
 
 When something goes wrong, the diagnostic order is (1) `gateway.log` `dlna.client` entries for browser-side events, (2) `/tmp/dlna-gateway.err` for server-thread crashes, (3) Safari DevTools Web Inspector for pre-report JS errors.
+
+## Library backend migration (in flight)
+
+**Goal.** Replace AssetUPnP with an in-process indexer + file server,
+**while generalising the AssetUPnP-shaped code into a `LibraryProvider`
+seam** so the gateway can speak to any of: AssetUPnP, MinimServer,
+Plex, Jellyfin, or our own in-process backend, modularly.
+
+> This is the working roadmap. The standalone `docs/MIGRATION_PLAN.md`
+> is the source-of-truth historical artifact; this section is the
+> operational guidance and supersedes it. Update both when the design
+> moves.
+
+### Why we're doing this
+
+Current chain:
+
+```
+dlna-gateway  --SOAP Browse-->  AssetUPnP  -->  files  -->  Naim (renderer)
+```
+
+There are **two sources of truth** — AssetUPnP's internal index and
+the gateway's view of it — coupled over UPnP, which is a coarse,
+lossy channel. On rescan, AssetUPnP can renumber object IDs,
+mishandle `UpdateID`/`SystemUpdateID`, and serve a half-built tree.
+The gateway then has to defensively re-walk and retry SOAP. This is
+the source of the recurring "hours fixing the gateway" pain, and is
+the cause of every category in the d-id-collision / aliasing / orphan
+saga that produced `tools/relink_orphan_overrides.py`,
+`tools/audit_override_mismatches.py`, and the `upsert_tracks` dedup
+work (see those sections below).
+
+Target chain:
+
+```
+dlna-gateway (owns index + serves files for the LocalFs provider)
+                    ↓ AVTransport
+                  Naim (renderer)
+```
+
+One index, owned by us, scanned on our terms.
+
+### Non-negotiable rules
+
+1. **Bit-perfect.** Serve the **original file bytes, unmodified.
+   Never transcode.** A checksum of served bytes must equal the
+   source file. The same rule that applies to the existing browser
+   `/stream` proxy (`dlna_stream_proxy.py:45-138`) applies to the
+   new file server.
+2. **Additive & parallel.** The new backend runs *alongside*
+   AssetUPnP against the same (read-only) music folder, on its own
+   HTTP port. AssetUPnP is untouched until we choose to stop it.
+3. **Reversible.** Backend selection is a config flag. We can flip
+   back to AssetUPnP (or any other provider) at any point until
+   final decommission.
+4. **No big-bang cutover.** Real listening is not affected until
+   Phase 4, and even then AssetUPnP remains as a one-flag fallback.
+5. **Modular by default.** Adding a new provider must NOT require
+   touching the gateway core — it's a new file implementing
+   `LibraryProvider`, registered with `dlna_providers`. The
+   migration is the *first* user of the seam, not a permanent
+   exception to it.
+
+### Target architecture — the `LibraryProvider` seam
+
+A thin provider interface decouples the gateway from the backend
+choice. **Multiple implementations coexist**; each renderer/UDN
+can be browsed via whichever provider its source server is bound
+to. The gateway speaks only the seam, never the wire protocol
+directly.
+
+```python
+# dlna_providers/__init__.py — abstract seam
+from typing import Protocol, Iterator
+
+class LibraryProvider(Protocol):
+    """One library source — AssetUPnP, MinimServer, Plex, Jellyfin,
+    or our in-process LocalFs implementation. Implementations live
+    under dlna_providers/<name>.py and register themselves via
+    @register_provider('<name>')."""
+
+    name: str                  # 'upnp' | 'plex' | 'jellyfin' | 'localfs'
+    udn: str                   # stable id for this provider instance
+
+    def list_artists(self) -> Iterator[Artist]: ...
+    def list_albums(self, artist_id: str) -> Iterator[Album]: ...
+    def list_tracks(self, album_id: str) -> Iterator[Track]: ...
+    def get_track(self, track_id: str) -> Track: ...
+    # Stream URL the *renderer* will fetch. For UPnP/Plex/Jellyfin
+    # this is the source server's URL. For LocalFs it's our own
+    # HTTP file server's URL. NEVER a /api proxy.
+    def stream_url(self, track_id: str) -> str: ...
+
+    # Optional. Providers without native search can leave unimplemented
+    # and the gateway falls back to LibraryDB FTS5 on its mirror.
+    def search(self, q: str, limit: int) -> Iterator[Track]: ...
+
+    # Health/discovery hooks
+    def probe(self) -> bool: ...          # is the backend reachable?
+    def watch_changes(self, on_change) -> None: ...   # incremental updates
+```
+
+### Key facts that shape the design
+
+- **The renderer fetches bytes directly from `stream_url`** — the
+  gateway does **not** proxy audio on the renderer path. So the
+  serving endpoint must be reachable by the Naim on the LAN. The
+  existing `dlna_stream_proxy.py` proxies only browser-mode audio
+  (an iOS Safari same-origin requirement); the Naim never sees it.
+- **The Naim issues HTTP Range requests.** Correct
+  `206 Partial Content` handling is mandatory (`Accept-Ranges`,
+  `Content-Range`), or seeking and sometimes playback start will
+  break.
+- **DLNA response headers** (`contentFeatures.dlna.org`,
+  `transferMode.dlna.org`) are required and will need iteration
+  against the real Naim. Handle serving manually rather than via a
+  framework static-file helper, so these can be set.
+- **SSDP is not required** for the LocalFs file server. The gateway
+  pushes URIs to the Naim via `AVTransport`. The new server is just
+  an HTTP file server on its own port; no UPnP device advertisement
+  needed. (Running both servers is therefore safe — separate index
+  DBs, separate HTTP ports, SSDP multicast coexists by design.)
+- **The gateway's own SSDP announcer** (the "gateway-as-MediaServer
+  for Naim playlists" feature, currently in `api_upnp.py`) is
+  unaffected. It announces the *gateway's own* playlist tree, not
+  a provider's library.
+
+### Backend implementations
+
+Each provider lives at `dlna_providers/<name>.py`:
+
+| File | Backend | Wire protocol | Notes |
+|---|---|---|---|
+| `dlna_providers/upnp.py` | AssetUPnP, MinimServer | UPnP SOAP (ContentDirectory) | Wraps the existing `dlna_content.py` + `dlna_discovery.py` paths. Becomes the FIRST provider extracted, by definition (it's all current behaviour). |
+| `dlna_providers/plex.py` | Plex Media Server | Plex HTTP API | Native API exposes richer metadata (ratings, playcount, smart playlists). Requires PLEX_TOKEN. |
+| `dlna_providers/jellyfin.py` | Jellyfin | Jellyfin/Emby HTTP API | Open-source equivalent to Plex. Token-based auth. |
+| `dlna_providers/localfs.py` | The new in-process backend | Filesystem + in-process HTTP file server | The destination of the migration. Owns SQLite index AND audio serving. |
+
+**Discovery vs. configuration.** UPnP providers are still discovered
+via SSDP (today's path). Plex / Jellyfin / LocalFs are configured
+via `config.json` because they have no SSDP advertisement (or, in
+LocalFs's case, no separate device). The provider registry chooses
+which implementation handles a given UDN based on the device's
+declared `name`/`model` or the explicit config block.
+
+### Mapping today's code to the seam
+
+Phase 0 is mechanical refactoring — no behaviour change:
+
+| Today | After Phase 0 |
+|---|---|
+| `dlna_content.cd_browse / cd_search` | `dlna_providers/upnp.py` (called via the seam) |
+| `dlna_indexer.Indexer._run` | unchanged; just calls `provider.list_albums(...)` instead of `cd_browse` directly |
+| `dlna_discovery.SERVERS` | gains a `provider:` field on each entry — points to the constructed `LibraryProvider` |
+| `dlna_player.RendererQueue._send_current` | unchanged; AVTransport `SetURI` still takes a `stream_url` string. The string just comes from `provider.stream_url(track_id)`. |
+
+The non-UPnP providers (`plex.py`, `jellyfin.py`, `localfs.py`) only
+appear in later phases.
+
+### Phases
+
+#### Phase 0 — Prep & the seam (this section)
+
+- [x] CLAUDE.md updated with the seam, non-negotiable rules,
+      multi-backend table, and phase plan.
+- [ ] Create `dlna_providers/__init__.py` with the `LibraryProvider`
+      Protocol, `register_provider()` decorator, and `get_provider(udn)`
+      lookup. No implementations yet.
+- [ ] Add a minimal test scaffold: a mock provider that returns
+      canned data, used to exercise the seam without UPnP/network.
+
+**Done when:** the seam exists, is registered with the gateway, and
+the unit test suite still passes with zero functional changes.
+
+#### Phase 1 — Extract the UpnpProvider (no functional change)
+
+- [ ] Move the existing UPnP-specific calls (`dlna_content.cd_browse`,
+      `cd_search`) behind `dlna_providers/upnp.py`. The Indexer and
+      browse paths call the seam.
+- [ ] Verify all existing tests still pass — this is pure refactoring.
+- [ ] The renderer fetch URL still comes from AssetUPnP (no change).
+
+**Done when:** `git grep` finds zero direct calls to `dlna_content`
+from anywhere except `dlna_providers/upnp.py`. All existing
+behaviour preserved.
+
+#### Phase 2 — LocalFs index (no serving)
+
+- [ ] Build `dlna_providers/localfs.py` indexer: `watchdog`
+      (FSEvents on macOS) + `mutagen` (FLAC/MP3/DSF/AAC/etc.) +
+      SQLite.
+- [ ] Stable internal IDs that **never renumber across a rescan**
+      (lesson from AssetUPnP's d-id chaos). Use a content-derived
+      hash, e.g. `sha1(rel_path)`, NOT an auto-increment.
+- [ ] Per-file `mtime` + `size` cache; rescan = diff against DB,
+      touch only changed files.
+- [ ] Extract and cache embedded art via mutagen; flag (don't
+      silently drop) malformed files.
+- [ ] Commit scans transactionally so the served view is never
+      half-updated.
+- [ ] **No** stream URLs yet — `stream_url` raises NotImplemented.
+
+**Done when:** the LocalFs index matches the existing UpnpProvider's
+view — same album/track counts, art present, oddities logged. Pure
+read, zero risk, runs alongside AssetUPnP.
+
+#### Phase 3 — LocalFs file serving
+
+- [ ] `GET /localfs/stream/{id}` returns the **original** bytes
+      (no transcode).
+- [ ] Correct `206`/`Content-Range`/`Accept-Ranges`; DLNA headers
+      (`contentFeatures.dlna.org`, `transferMode.dlna.org`).
+- [ ] Own HTTP port (e.g. 8200), reachable by the Naim on the LAN.
+      Bind on all interfaces, NOT just 127.0.0.1.
+- [ ] Format coverage: FLAC 16/44, FLAC 24/96, FLAC 24/192,
+      DSF (DSD64), MP3, AAC, ALAC. Test each against the Naim
+      with the correct MIME and DLNA header combination.
+
+**Done when:** `curl -r 0-1023` returns a proper 206 with
+`Content-Range`; VLC plays the stream; **`sha256` of served bytes
+== `sha256` of source file** (bit-perfect proof);  the Naim plays
+a hi-res FLAC and a DSF file end-to-end through the LocalFs server.
+
+#### Phase 4 — Renderer + gapless via LocalFs
+
+- [ ] Add a `provider: localfs` config flag. When set, the Indexer
+      uses LocalFs's provider, and `RendererQueue._send_current`
+      gets its `stream_url` from LocalFs.
+- [ ] Implement next-track queueing via `SetNextAVTransportURI`.
+      AssetUPnP achieves gapless via the renderer queueing the
+      next URI before the current one ends; the gateway needs to
+      do the same.
+- [ ] Both providers' libraries can coexist (each UDN has its
+      provider; the Naim sees a unified browse via the existing
+      `api_browse` layer).
+
+**Done when:** a **segued album plays with no gap or click** on
+the Naim through LocalFs (test with continuous prog suites —
+Ayreon, Focus, Pink Floyd's *The Wall*); seeking works; track
+metadata in the now-playing line is correct.
+
+#### Phase 5 — Parallel run
+
+- [ ] Live on LocalFs for daily listening; AssetUPnP installed but
+      idle as a one-flag fallback.
+- [ ] Track regressions via `gateway.log` greps; treat any new
+      `RendererQueue ✗ SEND FAILED` or `proxy_stream ■ END
+      reason=error` as a Phase 4 escape.
+
+**Done when:** ~2 weeks of daily listening shows no regressions
+against AssetUPnP-mode.
+
+#### Phase 6 — Decommission
+
+- [ ] Stop AssetUPnP; remove the LaunchAgent.
+- [ ] **Keep** the UpnpProvider class — it's how MinimServer support
+      lives going forward. Just drop the AssetUPnP-specific binary.
+- [ ] Remove the migration plan section from CLAUDE.md (move to
+      a "Lessons learned" appendix in `docs/`).
+
+**Done when:** AssetUPnP isn't running; the UpnpProvider still
+handles any MinimServer / generic UPnP server the user adds later.
+
+### Open questions
+
+- **ReplayGain.** Default: pass tags through, do **not** act on
+  them (bit-perfect, simplest, the choice most critical listeners
+  make). Revisit only if loudness normalization is actually wanted.
+  The existing `LoudnessScanner` is informational only — it
+  measures, it doesn't apply.
+- **Plex/Jellyfin priority.** Build both in Phase 2-3 only if the
+  LocalFs path proves the seam works. If the seam's clean,
+  third-party providers become weekend projects, not a blocker
+  for the migration.
+- **Mixed-provider browse.** When the user has both an AssetUPnP
+  device AND a LocalFs library, does the PWA show two separate
+  trees or merge? Default: **separate trees, switchable from a
+  source picker**, mirroring today's per-UDN browse. Merge-view
+  is post-MVP.
+
+### Audiophile notes
+
+**Sound quality: no change.** The Naim fetches the file over TCP,
+buffers it, and clocks it to its own DAC with its own clock. TCP
+is error-corrected, so identical bytes arrive regardless of which
+server sent them; the buffer absorbs network timing. A server
+delivering unmodified files has no path to the analog output
+other than "which bytes." Same bytes in → same sound out. The
+Phase 3 checksum makes this certain. ("Server X sounds warmer
+than server Y" does not apply to bit-identical local serving.)
+
+**The only two ways to make it *worse* than AssetUPnP** — both
+completeness, not capability:
+
+1. **Gapless.** AssetUPnP does it well; ours will only be as good
+   as the `SetNextAVTransportURI` queueing. This is the one
+   audible regression risk, and it bites hardest on segued /
+   continuous material. Test ruthlessly in Phase 4.
+2. **Format coverage.** AssetUPnP transparently handles DSD,
+   high-res PCM, ReplayGain tags, embedded art. The scanner must
+   read those tags and the server must serve DSD/high-res with
+   correct MIME so the Naim accepts them. Verify the exact Uniti
+   model's PCM/DSD ceiling so nothing is silently rejected.
+
+### Testing quick-reference
+
+- **Range / 206**: `curl -r 0-1023 -D - http://<host>:8200/localfs/stream/<id> -o /dev/null`
+- **Bit-perfect**: compare `sha256` of served bytes vs source file.
+- **Gapless**: a known segued album, listen for gaps/clicks at
+  track boundaries.
+- **Format**: at least one each of FLAC 16/44, FLAC 24/96, FLAC
+  24/192, DSF (DSD64), MP3.
+- **Multi-provider**: configure both UpnpProvider (against
+  AssetUPnP) and LocalFsProvider; verify both browse trees render
+  and both can play to the Naim.
 
 ## Dependencies
 
