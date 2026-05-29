@@ -247,11 +247,16 @@ class LocalFsProvider:
 
     name = "localfs"
 
-    def __init__(self, library_db: Any, music_root: Path | str):
+    def __init__(self, library_db: Any, music_root: Path | str,
+                 *, base_url: str = ""):
         self._library = library_db
         self._root = Path(music_root).expanduser().resolve()
         self.udn: str = _udn_for_root(self._root)
         self._fs_watcher: Optional[Any] = None    # watchdog Observer
+        # P3: the URL prefix the file server is reachable at. Lets
+        # stream_url(track_id) emit a full Naim-fetchable URL. Empty
+        # means the server isn't running yet → stream_url raises.
+        self._base_url: str = base_url.rstrip("/")
 
     # ── Public surface ──────────────────────────────────────────
 
@@ -457,14 +462,23 @@ class LocalFsProvider:
             genre=r["genre"] or "",
         )
 
+    def set_base_url(self, base_url: str) -> None:
+        """P3: tell the provider where its file server is reachable.
+        Called by `dlna_localfs_server.start_server` (or by tests).
+        Once set, `stream_url(track_id)` returns a full URL the Naim
+        can fetch from."""
+        self._base_url = base_url.rstrip("/")
+
     def stream_url(self, track_id: str) -> str:
-        # PER MIGRATION PLAN: P2 does NOT serve audio. P3 lights up
-        # the file server + DLNA headers + Range support and replaces
-        # this with a real URL.
-        raise NotImplementedError(
-            "LocalFsProvider.stream_url is Phase 3 — the in-process "
-            "file server hasn't been wired in yet. See CLAUDE.md → "
-            "'Library backend migration (in flight)' → Phase 3.")
+        # P3: real URLs are emitted once the file server is up and
+        # its base URL has been bound via set_base_url(). Until then,
+        # signal that the streaming half isn't wired yet.
+        if not self._base_url:
+            raise NotImplementedError(
+                "LocalFsProvider.stream_url needs a base URL — the "
+                "file server (dlna_localfs_server) hasn't been started "
+                "yet. Call set_base_url() after start_server().")
+        return f"{self._base_url}/localfs/stream/{track_id}"
 
     def search(self, q: str, limit: int = 50) -> Iterator[Track]:
         # Delegate to LibraryDB FTS5 search, filtered by this UDN.
