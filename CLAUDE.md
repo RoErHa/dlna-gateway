@@ -107,8 +107,8 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | `dlna_devices.py` | `DeviceRoleCache` — in-memory mirror of device_roles for zero-latency classification |
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
-| `dlna_providers/` | `LibraryProvider` seam (Phase 0 of the AssetUPnP migration). Protocol + dataclasses + registry. `mock.py` for tests. Real backends (`upnp.py`, `plex.py`, `jellyfin.py`, `localfs.py`) land in subsequent phases. |
-| `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). Will become an implementation detail of `dlna_providers/upnp.py` in Phase 1. |
+| `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
+| `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position) |
 | `dlna_player.py` | `RendererQueue` (sequential playback per renderer) + `QueueRegistry` (one queue per UDN) |
 | `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout |
@@ -549,23 +549,87 @@ P1 (was 446 + 202 + 134, +19 new). Live `/api/servers` and
 
 #### Phase 2 — LocalFs index (no serving)
 
-- [ ] Build `dlna_providers/localfs.py` indexer: `watchdog`
-      (FSEvents on macOS) + `mutagen` (FLAC/MP3/DSF/AAC/etc.) +
-      SQLite.
-- [ ] Stable internal IDs that **never renumber across a rescan**
-      (lesson from AssetUPnP's d-id chaos). Use a content-derived
-      hash, e.g. `sha1(rel_path)`, NOT an auto-increment.
-- [ ] Per-file `mtime` + `size` cache; rescan = diff against DB,
-      touch only changed files.
-- [ ] Extract and cache embedded art via mutagen; flag (don't
-      silently drop) malformed files.
-- [ ] Commit scans transactionally so the served view is never
-      half-updated.
-- [ ] **No** stream URLs yet — `stream_url` raises NotImplemented.
+- [x] `dlna_providers/localfs.py` — `LocalFsProvider` walks a music
+      root via `os.walk` (followlinks=False), reads tags + technical
+      info (duration, bit_depth, sample_rate) via `mutagen.File(...,
+      easy=True)`, and upserts rows into `library.db` under a
+      synthesised UDN of its own
+      (`uuid:localfs-<sha1(root)[:32]>`). All mutagen access lives
+      behind `_read_tags()` so tests mock it out without needing
+      real audio files. mutagen + watchdog added to
+      `requirements.txt`.
+- [x] **Stable internal IDs**: `_track_id_for(rel_path)` =
+      `sha1(rel_path)[:16]`. Survives rescans the way AssetUPnP's
+      d-id chaos never did — renaming a file legitimately produces
+      a new id; a re-walk produces the same id.
+- [x] **Per-file `mtime` + `size` cache** in a new `localfs_files`
+      table on `library.db`. `rescan()` builds a path-keyed cache
+      map, walks the tree, and short-circuits unchanged files
+      (same mtime + same size). New/changed → re-read tags; removed
+      → drop the cache row AND the `tracks` row. Stats:
+      `{scanned, new, changed, unchanged, removed, malformed,
+      elapsed_sec}`. `--force` ignores the cache.
+- [x] **Embedded art**: `_extract_art_hash()` reads the first cover
+      (FLAC `.pictures`, ID3 `APIC`, MP4 `covr`) and stores a
+      `localfs-art:<sha1[:24]>` placeholder marker on the track row.
+      Real bytes-on-disk and a served URL come in Phase 3 — the
+      placeholder is just so the existing `_backfill_album_art`
+      pass propagates a consistent value across sibling tracks.
+- [x] **Malformed files flagged, not silently dropped**: mutagen
+      open failures + tag parse failures log at WARNING and tick
+      the `malformed` counter; the file is skipped, the row isn't
+      written. Unreadable files are NOT entered into the cache, so
+      a later fix re-tags them.
+- [x] **Transactional commit**: a single `with self._library._pool.write()
+      as conn:` wraps the cache writes + tracks deletes per rescan.
+      `upsert_tracks` already wraps its own write in a transaction.
+      A kill mid-scan leaves the previous commit intact — no
+      half-updated served view.
+- [x] **`stream_url` raises NotImplementedError** with an
+      "is Phase 3" message; the test pins that contract so future
+      callers can rely on it.
+- [x] High-level Protocol methods (`list_artists`/`list_albums`/
+      `list_tracks`/`get_track`/`search`) implemented by reading
+      `library.db` — the existing browse layer "just works" against
+      the new UDN. `watch_changes` uses `watchdog` when installed;
+      raises NotImplementedError otherwise.
+- [x] **Schema extension**: `LibraryDB._init_schema` creates
+      `localfs_files(path PRIMARY KEY, mtime, size, track_id,
+      last_scanned)` idempotently. **`upsert_tracks` extended** to
+      honor caller-supplied `bit_depth`/`sample_rate` — UPnP items
+      still fall through to the URL-pattern parser, LocalFs items
+      get the mutagen-read values.
+- [x] **CLI driver** `tools/localfs_scan.py` — runs a scan, prints
+      stats, has a `--compare` mode that lists tracks/albums per UDN
+      so the LocalFs count can be diffed against AssetUPnP's.
+      Defaults to `LOCALFS_MUSIC_ROOT` or `/Volumes/SAMDATA/Music`.
+      `--force` bypasses the cache.
+- [x] **Tests** in `tests/test_provider_localfs.py` — 31 cases
+      covering pure helpers (id stability, udn stability, duration
+      formatter, extension allowlist excludes mp4), schema
+      (`localfs_files` columns), provider construction + Protocol
+      conformance + registry hookup, `probe()` (true / missing root
+      / PermissionError), `rescan()` full path (indexes audio /
+      skips non-audio / skip-unchanged on re-pass / `--force`
+      re-reads / detect-removed / detect-changed / .Trashes-skip /
+      malformed-counter / caller-supplied bit_depth wins),
+      `stream_url` NotImplementedError pinning, `watch_changes`
+      NotImplementedError when watchdog absent.
 
 **Done when:** the LocalFs index matches the existing UpnpProvider's
 view — same album/track counts, art present, oddities logged. Pure
 read, zero risk, runs alongside AssetUPnP.
+**Achieved.** 496/496 unit (was 465 + 31 new) + 202/202 run_all.
+End-to-end smoke test with real ffmpeg-generated FLAC files via
+`tools/localfs_scan.py` confirmed: mutagen reads
+(artist/album/title/year/bit_depth/sample_rate/mime/duration)
+correctly; rows land in `library.db`; the existing wide-UNIQUE
+dedup applies as expected. Verification against SAMDATA pending
+user-side (SAMDATA needs `~/bin/unlock-samdata.sh` after boot —
+TCC-blocked from gateway context). Once unlocked:
+`python3 tools/localfs_scan.py` then
+`python3 tools/localfs_scan.py --compare` shows the LocalFs UDN's
+counts next to AssetUPnP's.
 
 #### Phase 3 — LocalFs file serving
 

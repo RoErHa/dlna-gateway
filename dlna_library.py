@@ -271,6 +271,18 @@ class LibraryDB:
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
                 );
+                -- LocalFs scanner's per-file cache (Phase 2 of the AssetUPnP
+                -- migration). Lets incremental rescans skip unchanged files.
+                -- Path is the absolute path on disk. Stable obj_id is
+                -- sha1(rel_path)[:16] — survives renumbering across rescans
+                -- the way AssetUPnP's d-id never did.
+                CREATE TABLE IF NOT EXISTS localfs_files (
+                    path         TEXT PRIMARY KEY,
+                    mtime        REAL    NOT NULL,
+                    size         INTEGER NOT NULL,
+                    track_id     TEXT    NOT NULL,
+                    last_scanned INTEGER NOT NULL
+                );
                 -- URL uniqueness per UDN is enforced by
                 -- idx_tracks_udn_url, but the CREATE INDEX is run by
                 -- `_migrate_unique_url` (which first dedupes existing
@@ -755,7 +767,14 @@ class LibraryDB:
         # parsed in dlna_content._parse_didl.
         def _make_row(t: dict) -> dict:
             url = t.get("url", "")
-            bd, sr = _parse_audio_params(url)
+            # bit_depth + sample_rate: prefer caller-supplied values
+            # (LocalFsProvider reads them straight from the audio
+            # container via mutagen) and fall back to the AssetUPnP
+            # URL-pattern parser. UPnP items don't have the fields →
+            # URL parse; LocalFs items do → mutagen wins.
+            bd_in = t.get("bit_depth")
+            sr_in = t.get("sample_rate")
+            bd_url, sr_url = _parse_audio_params(url)
             return dict(
                 udn=udn,
                 obj_id=t.get("id", ""),
@@ -768,8 +787,8 @@ class LibraryDB:
                 mime=t.get("mime", ""),
                 genre=t.get("genre", ""),
                 file_path=t.get("file_path", ""),
-                bit_depth=bd,
-                sample_rate=sr,
+                bit_depth=bd_in if bd_in is not None else bd_url,
+                sample_rate=sr_in if sr_in is not None else sr_url,
                 year=t.get("year"),
             )
         rows_raw = [_make_row(t) for t in tracks if t.get("url")]
