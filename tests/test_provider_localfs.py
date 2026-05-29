@@ -387,11 +387,31 @@ class TestNotImplementedSurface(unittest.TestCase):
         if self.root.exists():
             self.root.rmdir()
 
-    def test_stream_url_raises_not_implemented(self):
+    def test_stream_url_raises_when_base_url_unset(self):
         p = LocalFsProvider(self.db, self.root)
         with self.assertRaises(NotImplementedError) as cm:
             p.stream_url("any-id")
-        self.assertIn("Phase 3", str(cm.exception))
+        self.assertIn("base", str(cm.exception).lower())
+
+    def test_stream_url_returns_full_url_after_set_base_url(self):
+        p = LocalFsProvider(self.db, self.root)
+        p.set_base_url("http://192.168.1.100:8200")
+        self.assertEqual(
+            p.stream_url("abc123"),
+            "http://192.168.1.100:8200/localfs/stream/abc123")
+
+    def test_set_base_url_strips_trailing_slash(self):
+        p = LocalFsProvider(self.db, self.root)
+        p.set_base_url("http://192.168.1.100:8200/")
+        self.assertEqual(
+            p.stream_url("abc123"),
+            "http://192.168.1.100:8200/localfs/stream/abc123")
+
+    def test_base_url_via_constructor(self):
+        p = LocalFsProvider(self.db, self.root,
+                            base_url="http://localhost:8200")
+        self.assertEqual(p.stream_url("xyz"),
+                         "http://localhost:8200/localfs/stream/xyz")
 
     def test_watch_changes_raises_when_watchdog_missing(self):
         p = LocalFsProvider(self.db, self.root)

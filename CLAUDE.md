@@ -108,6 +108,7 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
 | `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
+| `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Auto-wiring into `dlna_gateway.main()` is P4. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position) |
 | `dlna_player.py` | `RendererQueue` (sequential playback per renderer) + `QueueRegistry` (one queue per UDN) |
@@ -633,20 +634,96 @@ counts next to AssetUPnP's.
 
 #### Phase 3 — LocalFs file serving
 
-- [ ] `GET /localfs/stream/{id}` returns the **original** bytes
-      (no transcode).
-- [ ] Correct `206`/`Content-Range`/`Accept-Ranges`; DLNA headers
-      (`contentFeatures.dlna.org`, `transferMode.dlna.org`).
-- [ ] Own HTTP port (e.g. 8200), reachable by the Naim on the LAN.
-      Bind on all interfaces, NOT just 127.0.0.1.
-- [ ] Format coverage: FLAC 16/44, FLAC 24/96, FLAC 24/192,
-      DSF (DSD64), MP3, AAC, ALAC. Test each against the Naim
-      with the correct MIME and DLNA header combination.
+- [x] `dlna_localfs_server.py` — `LocalFsHTTPHandler` +
+      `start_server(library_db_path, port=8200, host='0.0.0.0',
+      allowed_roots=(…))`. Built on stdlib `ThreadingHTTPServer` so
+      each request runs in its own daemon thread. `GET
+      /localfs/stream/<track_id>` resolves the id via
+      `library.db.tracks` (filtered to `udn LIKE 'uuid:localfs-%'`)
+      and streams the file in 64 KB chunks. **Bit-perfect**:
+      `read()` from disk, `wfile.write()` to socket — no
+      transcoding anywhere. Confirmed in the smoke test by
+      comparing `sha256(served)` against `sha256(source_file)`.
+- [x] Range support: `Accept-Ranges: bytes` always, `Range:
+      bytes=N-M` parsed by `_parse_range_header()` (handles
+      `N-M` / `N-` / `-N` plus the unsatisfiable cases). Response
+      is `206 Partial Content` + `Content-Range: bytes N-M/<size>`
+      when a range is honoured, or `416 Range Not Satisfiable` +
+      `Content-Range: bytes */<size>` when the range is past EOF
+      or malformed. Multipart ranges deliberately rejected — Naim
+      doesn't use them and supporting them complicates the chunked
+      writer for no gain.
+- [x] DLNA headers: `_dlna_headers_for_mime()` maps content family
+      → DLNA Profile Name (FLAC, MP3, AAC_ISO_320, LPCM, OGG,
+      DSD). `contentFeatures.dlna.org: DLNA.ORG_PN=…;DLNA.ORG_OP=01;
+      DLNA.ORG_FLAGS=01700000…`. `transferMode.dlna.org:
+      Streaming`. `OP=01` advertises Range support — the Naim
+      keys on this when deciding whether to issue seek requests.
+- [x] Bind on `0.0.0.0` by default (configurable via `host` kwarg
+      + the CLI's `--host`). `127.0.0.1` would work for tests but
+      silently break Naim playback over the LAN — the spec is
+      explicit about this.
+- [x] Path-traversal defence: handler subclass remembers the
+      resolved `allowed_roots`; before opening any file it checks
+      that `Path(file_path).resolve()` starts with one of them.
+      Refuses `403` otherwise. (The `file_path` column in
+      `library.db` is normally trustworthy — only `LocalFsProvider`
+      writes it — but defence-in-depth is cheap.) **macOS-specific
+      note**: `allowed_roots` MUST be canonicalised via
+      `Path.resolve()` at server-construction time because
+      `/var/folders/...` resolves to `/private/var/folders/...`
+      on macOS, and the test fixture / production paths produce
+      different forms. `make_handler_class()` does the
+      canonicalisation.
+- [x] `LocalFsProvider.stream_url(track_id)` updated for P3:
+      returns `<base_url>/localfs/stream/<id>` once `set_base_url()`
+      has been called; raises `NotImplementedError` with a
+      message pointing at `start_server` until then. Base URL can
+      also be supplied via the constructor (`base_url='http://…'`).
+- [x] Format coverage: FLAC, MP3, AAC, M4A/ALAC, OGG/Opus, WAV,
+      DSF/DFF are all mapped in `_MIME_BY_EXT` (from
+      `dlna_providers/localfs.py`) → MIME → DLNA PN. Real-renderer
+      verification (the Naim playing a hi-res FLAC + a DSF
+      end-to-end) is **user-side**, gated on SAMDATA being
+      unlocked. The tests pin the code paths; the renderer test
+      is the only thing the unit suite can't itself do.
+- [x] `tools/localfs_serve.py` — standalone CLI driver. Default
+      port 8200 (honors `LOCALFS_PORT`), default host `0.0.0.0`,
+      defaults `--root` from `LOCALFS_MUSIC_ROOT` or
+      `/Volumes/SAMDATA/Music`. Graceful SIGINT/SIGTERM shutdown.
+      Doesn't boot the rest of the gateway — pure serving so the
+      user can prove bit-perfect / Range / Naim playback without
+      restarting the running gateway. Auto-start from
+      `dlna_gateway.main()` is P4 work.
+- [x] `tests/test_localfs_server.py` — **31 tests**. Unit-level
+      coverage of `_parse_range_header` (every RFC 7233 shape we
+      care about + the unsatisfiable cases) and
+      `_dlna_headers_for_mime`. End-to-end coverage against a
+      real `ThreadingHTTPServer` on an ephemeral port + a real
+      file on disk + a real `library.db` row: full GET returns
+      200 + full bytes + **`sha256(served) == sha256(source)`**
+      (the P3 bit-perfect assertion), Range mid-file / open-ended
+      / suffix / past-EOF all behave correctly, HEAD returns same
+      headers + zero body, unknown id returns 404, response
+      advertises `Accept-Ranges: bytes` + `Content-Type` from the
+      DB + DLNA headers. Plus a separate test class verifying the
+      path-traversal defence (`file_path` outside `allowed_roots`
+      → 403). LocalFs provider's `test_stream_url_*` tests
+      updated for the new contract (`base_url` constructor +
+      `set_base_url()` mutator; raises a clear
+      `NotImplementedError` until set).
 
 **Done when:** `curl -r 0-1023` returns a proper 206 with
 `Content-Range`; VLC plays the stream; **`sha256` of served bytes
-== `sha256` of source file** (bit-perfect proof);  the Naim plays
+== `sha256` of source file** (bit-perfect proof); the Naim plays
 a hi-res FLAC and a DSF file end-to-end through the LocalFs server.
+**Achieved (gateway side).** 530/530 unit tests + 202/202 run_all
++ 134/134 frontend. End-to-end smoke (ffmpeg-generated FLAC →
+real CLI → http.client GET) confirmed: 200 status, exact byte
+count, **sha256 matches source**, Range 0-1023 → 206 +
+`Content-Range: bytes 0-1023/<size>` + 1024 bytes, HEAD → 200 +
+`Content-Type: audio/flac` + `DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01`.
+Naim-side verification is user gated on SAMDATA unlock.
 
 #### Phase 4 — Renderer + gapless via LocalFs
 
