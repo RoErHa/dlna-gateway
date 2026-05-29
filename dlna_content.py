@@ -4,10 +4,13 @@ dlna_content.py — UPnP ContentDirectory SOAP client (Browse + Search).
 
   cd_browse()   — Browse a container
   cd_search()   — FTS search (three parallel SOAP calls)
+  browse_all()  — Paginate through every page of a container
 
-AVTransport (renderer control) lives in dlna_avtransport; its public
-functions are re-exported below so existing callers keep working with
-`from dlna_content import avtransport_send` etc.
+After Phase 1 of the AssetUPnP migration, this module is reached
+ONLY via `dlna_providers/upnp.py` (the `UpnpProvider` wraps these
+functions behind the `LibraryProvider` seam). AVTransport (renderer
+control) lives in `dlna_avtransport` and is imported from there
+directly — the legacy re-export shim was removed.
 
 Standalone test:
     python dlna_content.py http://<server-ip>:<port>/<control-url-path>
@@ -328,15 +331,13 @@ def cd_search(control_url: str, query: str, count: int = 200) -> dict:
     return {"containers": containers, "items": items}
 
 
-# ── AVTransport re-exports ────────────────────────────────────────
-# The AVTransport SOAP client moved to dlna_avtransport. These imports
-# keep `from dlna_content import avtransport_send` etc. working for
-# existing callers (dlna_player, api_playback) without touching them.
-from dlna_avtransport import (  # noqa: F401
-    avtransport_send, avtransport_stop, avtransport_pause,
-    avtransport_get_state, avtransport_probe_state, avtransport_get_position,
-    set_volume, get_volume,
-)
+# The AVTransport re-export shim that used to live here (forwarding to
+# dlna_avtransport for the benefit of dlna_player / api_playback)
+# was removed during Phase 1 of the AssetUPnP migration. AVTransport
+# callers now import from dlna_avtransport directly — that module is
+# the single source of truth for renderer-control SOAP. This file
+# stays focused on ContentDirectory (Browse / Search) and is reached
+# only via dlna_providers/upnp.py.
 
 
 

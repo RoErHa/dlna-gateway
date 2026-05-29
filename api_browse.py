@@ -11,9 +11,9 @@ import logging
 import threading
 import time
 
-from dlna_content import cd_browse
 from dlna_discovery import SERVERS, RENDERERS, _STALE_SEC
 from dlna_library import DB, INDEXER
+from dlna_providers import get_provider
 
 log = logging.getLogger("dlna.api.browse")
 
@@ -45,7 +45,16 @@ def browse(h, params):
     if not srv:
         h._json(404, {"error": "Server not found — still discovering?"})
         return
-    result = cd_browse(srv.control_url, oid)
+    provider = get_provider(udn)
+    if provider is None:
+        # Discovery should have bound a provider on add — defensive
+        # fallback for stale fixtures / tests that wrote SERVERS
+        # directly without going through probe_url.
+        from dlna_providers import bind_provider
+        from dlna_providers.upnp import UpnpProvider
+        provider = UpnpProvider(srv)
+        bind_provider(udn, provider)
+    result = provider.cd_browse(oid)
     if "error" not in result:
         SERVERS.touch(udn)
         _reprobe_times.pop(udn, None)

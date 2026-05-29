@@ -168,7 +168,7 @@ class RendererQueue:
         normalization SetVolume calls). Optional — when empty, no
         per-track volume adjustment happens.
         """
-        from dlna_content import avtransport_stop
+        from dlna_avtransport import avtransport_stop
         self._log_track_end("queue_replaced")
         self._cancel()
 
@@ -211,7 +211,7 @@ class RendererQueue:
 
     def stop(self):
         """Stop playback and cancel the queue."""
-        from dlna_content import avtransport_stop
+        from dlna_avtransport import avtransport_stop
         log.info("RendererQueue: user STOP")
         self._log_track_end("user_stop")
         self._cancel()
@@ -227,7 +227,7 @@ class RendererQueue:
         and can take >1s to respond when GetTransportInfo polls are in
         flight; if we waited synchronously, the per-track call would
         delay SetURI/Play and the user would perceive it as a freeze."""
-        from dlna_content import set_volume
+        from dlna_avtransport import set_volume
         threading.Thread(
             target=lambda: set_volume(rc_url, level),
             daemon=True, name="set-volume").start()
@@ -267,7 +267,7 @@ class RendererQueue:
 
     def pause(self):
         """Toggle pause on the renderer."""
-        from dlna_content import avtransport_pause
+        from dlna_avtransport import avtransport_pause
         with self._lock:
             url = self._av_url
         log.info("RendererQueue: user PAUSE toggle")
@@ -313,7 +313,7 @@ class RendererQueue:
         _SNAP_TTL_SEC; concurrent callers that miss the TTL return the
         stale cache rather than block — only the first caller to find
         stale cache fires the SOAP round-trip."""
-        from dlna_content import avtransport_get_state, avtransport_get_position
+        from dlna_avtransport import avtransport_get_state, avtransport_get_position
 
         now = time.monotonic()
         with self._lock:
@@ -432,7 +432,7 @@ class RendererQueue:
 
         The user trim defaults to 0 dB so a fresh queue plays at the
         renderer's natural volume — never at the slider's rail."""
-        from dlna_content import set_volume, get_volume
+        from dlna_avtransport import set_volume, get_volume
         with self._lock:
             rc_url   = self._rc_url
             baseline = self._renderer_baseline
@@ -472,7 +472,7 @@ class RendererQueue:
         On failure, logs the skip, auto-advances, and aborts the queue
         after _MAX_CONSECUTIVE_FAILS failures so we don't silently chew
         through every track when a renderer is wedged."""
-        from dlna_content import avtransport_send
+        from dlna_avtransport import avtransport_send
         with self._lock:
             if not self._tracks or not self._av_url:
                 return False
@@ -547,7 +547,7 @@ class RendererQueue:
             UNKNOWN_ABORT_SEC with no duration for the watchdog to use;
             the queue stops rather than poll a dead renderer.
         """
-        from dlna_content import avtransport_probe_state
+        from dlna_avtransport import avtransport_probe_state
         POLL_SEC      = 2.0
         prev_state    = "UNKNOWN"
         unknown_since = 0.0

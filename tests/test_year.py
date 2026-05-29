@@ -26,7 +26,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 from dlna_library import LibraryDB
-from dlna_content import _parse_didl
+from dlna_providers.upnp import _parse_didl
 
 
 # Minimal DIDL-Lite response shell with one audio item.
