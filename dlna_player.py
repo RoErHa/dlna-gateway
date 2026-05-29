@@ -504,6 +504,21 @@ class RendererQueue:
         if ok:
             with self._lock:
                 self._consecutive_fails = 0
+            # Pre-queue the NEXT track so the renderer can transition
+            # gaplessly when the current one ends. The Naim auto-plays
+            # the queued URI without re-buffering / re-starting → no
+            # audible click between tracks. Failure here is non-fatal:
+            # the existing STOPPED→advance path takes over (with a
+            # small gap), which is how it worked before P4.
+            from dlna_avtransport import avtransport_set_next_uri
+            next_t: dict = {}
+            with self._lock:
+                if 0 <= self._index + 1 < len(self._tracks):
+                    next_t = dict(self._tracks[self._index + 1])
+            avtransport_set_next_uri(
+                av_url, next_t.get("url", ""),
+                next_t.get("title", ""),
+                next_t.get("mime", ""))
             return True
 
         log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "
