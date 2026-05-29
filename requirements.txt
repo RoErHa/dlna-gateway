@@ -13,3 +13,15 @@ python-json-logger>=2.0.7
 # from the process environment (launchctl setenv, systemd
 # EnvironmentFile, etc.) as before.
 python-dotenv>=1.0.0
+
+# ── LocalFs provider (Phase 2 of the AssetUPnP migration) ─────
+# Required only when running with the in-process LocalFsProvider
+# (dlna_providers/localfs.py). The UpnpProvider path doesn't need
+# either of these. See CLAUDE.md → "Library backend migration".
+
+# Audio tag + embedded-art reader (FLAC, MP3, DSF, M4A, …)
+mutagen>=1.47
+
+# Filesystem change notifications (FSEvents on macOS) — drives
+# LocalFsProvider.watch_changes() for incremental rescans.
+watchdog>=4.0
