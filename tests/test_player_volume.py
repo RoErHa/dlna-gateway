@@ -65,9 +65,9 @@ def _start_queue(tracks, gain_map=None, get_volume_returns=70):
     q = RendererQueue()
 
     patches = [
-        patch("dlna_content.set_volume", side_effect=fake_set_volume),
-        patch("dlna_content.get_volume", side_effect=fake_get_volume),
-        patch("dlna_content.avtransport_send", side_effect=fake_avtransport_send),
+        patch("dlna_avtransport.set_volume", side_effect=fake_set_volume),
+        patch("dlna_avtransport.get_volume", side_effect=fake_get_volume),
+        patch("dlna_avtransport.avtransport_send", side_effect=fake_avtransport_send),
         patch("dlna_library.DB.gain_db_for_url", side_effect=fake_gain_lookup),
     ]
     for p in patches:
@@ -230,7 +230,7 @@ class TestUserTrim(unittest.TestCase):
         def fake_set_volume(rc_url, level):
             set_calls.append(level); return True
 
-        with patch("dlna_content.set_volume", side_effect=fake_set_volume):
+        with patch("dlna_avtransport.set_volume", side_effect=fake_set_volume):
             q = RendererQueue()
             q._rc_url             = "http://r/Render"
             q._renderer_baseline  = 50
@@ -246,7 +246,7 @@ class TestUserTrim(unittest.TestCase):
 
     def test_trim_clamped_to_plus_minus_five_db(self):
         """User can flick the slider, but ±5 dB max — protects ears."""
-        with patch("dlna_content.set_volume", return_value=True):
+        with patch("dlna_avtransport.set_volume", return_value=True):
             q = RendererQueue()
             q._rc_url            = "http://r/Render"
             q._renderer_baseline = 50
@@ -270,9 +270,9 @@ class TestUserTrim(unittest.TestCase):
 
         gain_map = {"http://t/0.flac": 0.0, "http://t/1.flac": 0.0}
 
-        with patch("dlna_content.set_volume", side_effect=fake_set_volume), \
-             patch("dlna_content.get_volume", side_effect=fake_get_volume), \
-             patch("dlna_content.avtransport_send", side_effect=fake_send), \
+        with patch("dlna_avtransport.set_volume", side_effect=fake_set_volume), \
+             patch("dlna_avtransport.get_volume", side_effect=fake_get_volume), \
+             patch("dlna_avtransport.avtransport_send", side_effect=fake_send), \
              patch("dlna_library.DB.gain_db_for_url",
                    side_effect=lambda u: gain_map.get(u, 0.0)):
 
@@ -300,9 +300,9 @@ class TestUserTrim(unittest.TestCase):
     def test_trim_resets_on_new_queue(self):
         """Each new queue should start with trim = 0 — yesterday's
         trim isn't carried into today's session."""
-        with patch("dlna_content.set_volume", return_value=True), \
-             patch("dlna_content.get_volume", return_value=50), \
-             patch("dlna_content.avtransport_send", return_value=True), \
+        with patch("dlna_avtransport.set_volume", return_value=True), \
+             patch("dlna_avtransport.get_volume", return_value=50), \
+             patch("dlna_avtransport.avtransport_send", return_value=True), \
              patch("dlna_library.DB.gain_db_for_url", return_value=0.0):
 
             q = RendererQueue()
@@ -360,9 +360,9 @@ class TestSetVolumeIsAsync(unittest.TestCase):
             send_calls.append(_t.time())
             return True
 
-        with patch("dlna_content.set_volume", side_effect=slow_set_volume), \
-             patch("dlna_content.get_volume", return_value=50), \
-             patch("dlna_content.avtransport_send", side_effect=fast_send), \
+        with patch("dlna_avtransport.set_volume", side_effect=slow_set_volume), \
+             patch("dlna_avtransport.get_volume", return_value=50), \
+             patch("dlna_avtransport.avtransport_send", side_effect=fast_send), \
              patch("dlna_library.DB.gain_db_for_url", return_value=0.0):
 
             q = RendererQueue()

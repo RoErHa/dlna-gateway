@@ -134,8 +134,17 @@ class Indexer:
         """The actual crawl — separated from ``_run`` so that
         ``_run_with_fts_heal`` can retry the full body once after a
         ``repair_fts()``."""
-        from dlna_content import cd_browse, browse_all
+        from dlna_providers import bind_provider, get_provider
+        from dlna_providers.upnp import UpnpProvider
         udn = server.udn
+
+        # Resolve the provider for this UDN. Discovery should have
+        # bound a UpnpProvider on add; defensive fallback for tests
+        # or callers that constructed SERVERS by hand.
+        provider = get_provider(udn)
+        if provider is None:
+            provider = UpnpProvider(server)
+            bind_provider(udn, provider)
 
         try:
             # Find Album Artist/Album container.
@@ -146,7 +155,7 @@ class Indexer:
             MUSIC_TITLES = ("Music", "Audio", "Music Library")
 
             def _find_album_cid(parent_cid: str):
-                result = cd_browse(server.control_url, parent_cid, count=50)
+                result = provider.cd_browse(parent_cid, count=50)
                 for c in result.get("containers", []):
                     if c["title"].strip() in ALBUM_TITLES:
                         return c["id"], c["title"]
@@ -156,7 +165,7 @@ class Indexer:
 
             if not album_cid:
                 # Plex-style: descend into a "Music" container first.
-                root_result = cd_browse(server.control_url, "0", count=50)
+                root_result = provider.cd_browse("0", count=50)
                 for c in root_result.get("containers", []):
                     if c["title"].strip() in MUSIC_TITLES:
                         log.info(f"Descending into {c['title']!r} id={c['id']} "
@@ -187,8 +196,7 @@ class Indexer:
                 if cid in visited:
                     continue
                 visited.add(cid)
-                sub_containers, items = browse_all(
-                    server.control_url, cid, max_items=5000)
+                sub_containers, items = provider.browse_all(cid, max_items=5000)
                 if items:
                     leaf_albums.append(cid)
                 elif sub_containers:
@@ -206,7 +214,7 @@ class Indexer:
             for i, cid in enumerate(leaf_albums):
                 if self.state.status == "idle":
                     break   # cancelled
-                _, items = browse_all(server.control_url, cid, max_items=500)
+                _, items = provider.browse_all(cid, max_items=500)
                 if items:
                     self.library.upsert_tracks(udn, items)
                     attempted += len(items)

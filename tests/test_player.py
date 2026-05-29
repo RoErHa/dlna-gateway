@@ -131,9 +131,9 @@ class TestRendererQueueDurationSafety(unittest.TestCase):
         # Mock BOTH the initial stop and the SetURI/Play so no network
         # traffic happens. We only care that _send_current() completes
         # without raising.
-        with patch("dlna_content.avtransport_stop", return_value=True), \
-             patch("dlna_content.avtransport_send", return_value=True), \
-             patch("dlna_content.avtransport_probe_state", return_value=("STOPPED", "")):
+        with patch("dlna_avtransport.avtransport_stop", return_value=True), \
+             patch("dlna_avtransport.avtransport_send", return_value=True), \
+             patch("dlna_avtransport.avtransport_probe_state", return_value=("STOPPED", "")):
             try:
                 q.start("http://fake-av-url/ctrl",
                         [self._make_track("0:04:51.000")],
@@ -151,9 +151,9 @@ class TestRendererQueueDurationSafety(unittest.TestCase):
             self._make_track(42),
             self._make_track("malformed"),
         ]
-        with patch("dlna_content.avtransport_stop", return_value=True), \
-             patch("dlna_content.avtransport_send", return_value=True) as send, \
-             patch("dlna_content.avtransport_probe_state", return_value=("STOPPED", "")):
+        with patch("dlna_avtransport.avtransport_stop", return_value=True), \
+             patch("dlna_avtransport.avtransport_send", return_value=True) as send, \
+             patch("dlna_avtransport.avtransport_probe_state", return_value=("STOPPED", "")):
             try:
                 q.start("http://fake-av-url/ctrl", tracks, "TestRenderer")
             finally:
@@ -260,9 +260,9 @@ class TestRendererQueueSendFailure(unittest.TestCase):
              "duration": "0:03:00.000"}
             for i in range(20)
         ]
-        with patch("dlna_content.avtransport_stop", return_value=True), \
-             patch("dlna_content.avtransport_send", return_value=False) as send, \
-             patch("dlna_content.avtransport_probe_state", return_value=("STOPPED", "")):
+        with patch("dlna_avtransport.avtransport_stop", return_value=True), \
+             patch("dlna_avtransport.avtransport_send", return_value=False) as send, \
+             patch("dlna_avtransport.avtransport_probe_state", return_value=("STOPPED", "")):
             try:
                 q.start("http://fake-av-url/ctrl", tracks, "Wedged")
             finally:

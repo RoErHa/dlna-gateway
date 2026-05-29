@@ -13,7 +13,7 @@ import ssl
 import threading
 import urllib.parse
 
-from dlna_content import avtransport_send
+from dlna_avtransport import avtransport_send
 from dlna_discovery import RENDERERS, SERVERS
 from dlna_library import DB, INDEXER
 from dlna_player import QUEUES, proxy_stream

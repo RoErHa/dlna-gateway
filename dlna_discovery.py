@@ -102,9 +102,20 @@ def _fetch_device(location: str,
                 log.debug(f"Ignoring non-allowlisted MediaServer {name!r} @ {host}")
             else:
                 DEVICE_ROLES.mark(udn, name, location=location, host=host, is_server=True)
-                servers.add(MediaServer(
+                srv = MediaServer(
                     udn=udn, name=name, location=location,
-                    control_url=cd_url, base_url=base))
+                    control_url=cd_url, base_url=base)
+                servers.add(srv)
+                # Bind a LibraryProvider for this UDN — Phase 1 of the
+                # AssetUPnP migration. Every UPnP server gets a
+                # UpnpProvider; the api_browse and Indexer paths look
+                # this up via get_provider(udn). See CLAUDE.md
+                # "Library backend migration (in flight)" for the plan.
+                # Re-binding on re-probe is intentional (control_url
+                # may have changed).
+                from dlna_providers import bind_provider
+                from dlna_providers.upnp import UpnpProvider
+                bind_provider(udn, UpnpProvider(srv))
 
         if av_url:
             DEVICE_ROLES.mark(udn, name, location=location, host=host, is_renderer=True)

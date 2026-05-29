@@ -506,15 +506,46 @@ seam — Phase 1 wires `UpnpProvider` in.
 
 #### Phase 1 — Extract the UpnpProvider (no functional change)
 
-- [ ] Move the existing UPnP-specific calls (`dlna_content.cd_browse`,
-      `cd_search`) behind `dlna_providers/upnp.py`. The Indexer and
-      browse paths call the seam.
-- [ ] Verify all existing tests still pass — this is pure refactoring.
-- [ ] The renderer fetch URL still comes from AssetUPnP (no change).
+- [x] `dlna_providers/upnp.py` — `UpnpProvider` wraps
+      `dlna_content.cd_browse / cd_search / browse_all`. The class
+      satisfies `LibraryProvider` structurally; high-level methods
+      (`list_artists / list_albums / list_tracks / get_track /
+      search / watch_changes`) explicitly raise `NotImplementedError`
+      in P1 — they get real bodies in P2+ when callers move to the
+      high-level seam. `probe()` is real; `stream_url(track_id)` is
+      the identity (UPnP's track id IS the renderer-fetchable URL).
+- [x] Provider construction at discovery time:
+      `dlna_discovery.probe_url` does `bind_provider(udn,
+      UpnpProvider(srv))` immediately after `servers.add(srv)`. Every
+      UDN gets a bound provider before anything tries to browse.
+- [x] `api_browse.browse()` and `dlna_indexer._index_body()` use
+      `get_provider(udn).cd_browse(...)` / `.browse_all(...)`. No
+      direct `dlna_content` imports remain anywhere in the gateway
+      core.
+- [x] AVTransport import shim removed from `dlna_content.py` — the
+      eight `from dlna_content import avtransport_*` callsites in
+      `dlna_player.py` and `api_playback.py` now import from
+      `dlna_avtransport` directly. AVTransport is the renderer-control
+      side and is orthogonal to the LibraryProvider seam.
+- [x] `_parse_didl` (UPnP DIDL-Lite parser) re-exported from
+      `dlna_providers/upnp.py` so `tests/test_year.py` doesn't need
+      to import `dlna_content` directly.
+- [x] Existing tests updated: `tests/test_player.py` and
+      `tests/test_player_volume.py` patch targets moved from
+      `dlna_content.*` to `dlna_avtransport.*` (where the symbols
+      actually live now that the shim is gone). 19 new
+      `tests/test_provider_upnp.py` tests cover wire-level
+      delegation, Protocol conformance, `stream_url` identity,
+      `probe()` truth/false paths, and the `NotImplementedError`
+      contracts on the stubbed methods.
 
 **Done when:** `git grep` finds zero direct calls to `dlna_content`
 from anywhere except `dlna_providers/upnp.py`. All existing
 behaviour preserved.
+**Achieved.** 465/465 unit + 202/202 run_all + 134/134 frontend after
+P1 (was 446 + 202 + 134, +19 new). Live `/api/servers` and
+`/api/browse` against AssetUPnP both 200. Restart-verified
+2026-05-29.
 
 #### Phase 2 — LocalFs index (no serving)
 
