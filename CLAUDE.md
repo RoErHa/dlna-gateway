@@ -107,7 +107,8 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | `dlna_devices.py` | `DeviceRoleCache` — in-memory mirror of device_roles for zero-latency classification |
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
-| `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`) |
+| `dlna_providers/` | `LibraryProvider` seam (Phase 0 of the AssetUPnP migration). Protocol + dataclasses + registry. `mock.py` for tests. Real backends (`upnp.py`, `plex.py`, `jellyfin.py`, `localfs.py`) land in subsequent phases. |
+| `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). Will become an implementation detail of `dlna_providers/upnp.py` in Phase 1. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position) |
 | `dlna_player.py` | `RendererQueue` (sequential playback per renderer) + `QueueRegistry` (one queue per UDN) |
 | `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout |
@@ -474,14 +475,34 @@ appear in later phases.
 
 - [x] CLAUDE.md updated with the seam, non-negotiable rules,
       multi-backend table, and phase plan.
-- [ ] Create `dlna_providers/__init__.py` with the `LibraryProvider`
-      Protocol, `register_provider()` decorator, and `get_provider(udn)`
-      lookup. No implementations yet.
-- [ ] Add a minimal test scaffold: a mock provider that returns
-      canned data, used to exercise the seam without UPnP/network.
+- [x] `dlna_providers/__init__.py` — `LibraryProvider` Protocol +
+      `Artist` / `Album` / `Track` dataclasses + class registry
+      (`register_provider`, `get_provider_class`,
+      `list_provider_names`) + instance registry (`bind_provider`,
+      `get_provider`, `unbind_provider`, `list_bound_udns`) +
+      test-only utilities (`clear_bindings`, `clear_provider_classes`).
+- [x] `dlna_providers/mock.py` — `MockProvider` with `seed_artist` /
+      `seed_album` / `seed_track` / `set_reachable` / `fire_change`
+      test hooks. Satisfies the Protocol structurally
+      (`@runtime_checkable` lets `isinstance(p, LibraryProvider)`
+      verify it).
+- [x] `tests/test_providers_seam.py` — 39 tests covering dataclass
+      shape (frozen + defaults), class registry (re-registration
+      replacement, sorted listing, unknown-returns-None), instance
+      registry (round-trip, multiple-UDN independence, empty-UDN
+      rejected, `clear_bindings` keeps classes), Protocol
+      conformance (`isinstance(MockProvider(), LibraryProvider)`),
+      and MockProvider semantics (artist filter, album-filter-by-
+      artist, track-filter-by-album sorted by `track_number`,
+      get-missing returns None, `stream_url` format, search across
+      title/artist/album case-insensitive with `limit`, `probe`
+      state, `watch_changes` multi-subscriber fan-out).
 
 **Done when:** the seam exists, is registered with the gateway, and
 the unit test suite still passes with zero functional changes.
+**Achieved.** 446/446 unit tests + 133/133 tools tests pass after
+the seam landed (407 + 39 new). No production code yet imports the
+seam — Phase 1 wires `UpnpProvider` in.
 
 #### Phase 1 — Extract the UpnpProvider (no functional change)
 
