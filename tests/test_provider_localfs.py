@@ -343,6 +343,46 @@ class TestRescan(unittest.TestCase):
         self.assertEqual(stats["malformed"], 1)
         self.assertEqual(self.db.track_count(p.udn), 0)
 
+    def test_rescan_writes_localfs_placeholder_url_when_base_url_unset(self):
+        # P2 behaviour preserved: when base_url isn't configured, the
+        # url column is the `localfs://<udn>/<id>` placeholder. Callers
+        # that try to play one without setting base_url get a clean
+        # NotImplementedError from stream_url().
+        self._write_file("Artist/Album/song.flac")
+        p = LocalFsProvider(self.db, self.root)
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            p.rescan()
+        with self.db._pool.read() as conn:
+            row = conn.execute(
+                "SELECT url FROM tracks WHERE udn=?", (p.udn,)
+            ).fetchone()
+        self.assertTrue(row["url"].startswith("localfs://"))
+        self.assertIn(p.udn, row["url"])
+
+    def test_rescan_writes_naim_fetchable_url_when_base_url_set(self):
+        # P4 behaviour: with base_url configured (i.e. file server
+        # running), tracks.url is a real http://… URL the renderer
+        # can fetch directly. No translation layer needed downstream.
+        self._write_file("Artist/Album/song.flac")
+        p = LocalFsProvider(self.db, self.root,
+                            base_url="http://192.168.1.100:8200")
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            p.rescan()
+        with self.db._pool.read() as conn:
+            row = conn.execute(
+                "SELECT url FROM tracks WHERE udn=?", (p.udn,)
+            ).fetchone()
+        self.assertTrue(row["url"].startswith(
+            "http://192.168.1.100:8200/localfs/stream/"))
+
     def test_rescan_uses_supplied_bit_depth_and_sample_rate(self):
         self._write_file("Artist/Album/song.flac")
         p = LocalFsProvider(self.db, self.root)

@@ -102,6 +102,57 @@ def avtransport_send(av_url: str, media_url: str, title: str,
     return ok
 
 
+def avtransport_set_next_uri(av_url: str, media_url: str, title: str = "",
+                              mime: str = "audio/x-flac") -> bool:
+    """Send `SetNextAVTransportURI` to a UPnP renderer for gapless
+    transition. Called right after `avtransport_send` to pre-queue
+    the next track so the renderer can flow into it with no audible
+    gap when the current one ends.
+
+    Pass `media_url=""` to clear the next URI (e.g. on the last
+    track of the queue).
+
+    Returns True on a 200/204 SOAP response. A failure here is
+    non-fatal — the existing STOPPED→advance path handles the
+    transition (with a small click) the way it always has.
+    """
+    safe_url   = _xml_esc(media_url or "")
+    safe_title = _xml_esc(title)
+    safe_mime  = _xml_esc(mime or "audio/x-flac")
+
+    if media_url:
+        metadata = (
+            '&lt;DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"'
+            ' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+            ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"&gt;'
+            '&lt;item id="2" parentID="0" restricted="1"&gt;'
+            f'&lt;dc:title&gt;{safe_title}&lt;/dc:title&gt;'
+            '&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;'
+            f'&lt;res protocolInfo="http-get:*:{safe_mime}:*"&gt;{safe_url}&lt;/res&gt;'
+            '&lt;/item&gt;&lt;/DIDL-Lite&gt;'
+        )
+    else:
+        metadata = ""
+
+    body = (
+        f'<u:SetNextAVTransportURI '
+        f'xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+        f'<InstanceID>0</InstanceID>'
+        f'<NextURI>{safe_url}</NextURI>'
+        f'<NextURIMetaData>{metadata}</NextURIMetaData>'
+        f'</u:SetNextAVTransportURI>'
+    )
+    text, err = _av_soap(av_url, "SetNextAVTransportURI", body)
+    if err:
+        log.debug(f"SetNextAVTransportURI failed: {err}")
+        return False
+    if media_url:
+        log.debug(f"AVTransport queued-next: {title!r}")
+    else:
+        log.debug("AVTransport cleared next URI")
+    return True
+
+
 def avtransport_pause(av_url: str) -> bool:
     """Toggle pause on a renderer (sends Pause if playing, Play if paused)."""
     # Get current state first so we can toggle correctly

@@ -252,6 +252,14 @@ Examples:
     # the com.roha.dlna-acoustid-retry LaunchAgent.
     ACOUSTID_FETCHER.start_initial_scan()
 
+    # LocalFs provider (Phase 4 of the AssetUPnP migration) — wires
+    # in the in-process indexer + file server when LOCALFS_MUSIC_ROOT
+    # is configured. Additive: AssetUPnP / MinimServer discovery keeps
+    # running; both UDNs coexist in SERVERS and the PWA picks whichever
+    # is being browsed. See CLAUDE.md → "Library backend migration".
+    from dlna_localfs_wiring import maybe_start_localfs
+    maybe_start_localfs(get_lan_ip)
+
     # CLI --probe or config.json probe (fresh install / manual override).
     # On subsequent runs the DB cache handles this — but honour explicit CLI.
     probe_url = args.probe

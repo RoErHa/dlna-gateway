@@ -341,12 +341,20 @@ class LocalFsProvider:
                 continue
 
             art_hash = _extract_art_hash(fs_path)
+            # P4: when the LocalFs file server's base_url is configured,
+            # write a real Naim-fetchable URL into tracks.url. The
+            # renderer pulls bytes directly from `http://<lan-ip>:8200/
+            # localfs/stream/<id>`. If base_url is unset (P2 testing
+            # / pre-server scans), write the `localfs://<udn>/<id>`
+            # placeholder — `LocalFsProvider.stream_url()` will then
+            # raise NotImplementedError until set_base_url() is called.
+            if self._base_url:
+                url = f"{self._base_url}/localfs/stream/{track_id}"
+            else:
+                url = f"localfs://{self.udn}/{track_id}"
             row = {
                 "id":          track_id,
-                # P3 will replace this placeholder with a real
-                # `http://<gateway-host>:<port>/localfs/stream/<id>`
-                # URL produced by the new in-process file server.
-                "url":         f"localfs://{self.udn}/{track_id}",
+                "url":         url,
                 "art":         f"localfs-art:{art_hash}" if art_hash else "",
                 "file_path":   abs_path,
                 **tags,
