@@ -15,7 +15,10 @@ usable from any device with a browser.
 ## Features
 
 - **One library, many sources.** Indexes anything that speaks UPnP
-  ContentDirectory.
+  ContentDirectory — *and* your own filesystem via the built-in
+  **RoHaLocalFS** backend (point it at a music folder; no separate
+  media server needed). Multiple sources coexist and the PWA has a
+  source picker to switch between them.
 - **Two playback paths.**
   - **UPnP renderers** — sends `SetURI` + `Play` SOAP to the device;
     the renderer streams audio directly from the source server
@@ -58,7 +61,9 @@ Hard requirements:
 - (Optional) `ffmpeg` on `PATH` — only needed for the loudness scanner.
 - (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
   on macOS) — only needed for the AcoustID metadata-enrichment worker.
-- Network access to a UPnP MediaServer on your LAN.
+- A music source: either network access to a UPnP MediaServer on your
+  LAN, **or** a readable music folder via RoHaLocalFS (set
+  `LOCALFS_MUSIC_ROOT` — see "Serving your own files" below).
 - Inbound TCP 8765 (HTTP) and 8443 (HTTPS) to the gateway from your
   clients; UDP 1900 multicast for SSDP discovery.
 
@@ -184,6 +189,56 @@ Values set in the process environment (launchd plist, systemd
 `setup.sh` / `pip install -r requirements.txt`) — without it, the file
 is silently ignored and env vars must come from the process
 environment.
+
+## Serving your own files — RoHaLocalFS
+
+Instead of (or alongside) a UPnP MediaServer, the gateway can index a
+music folder directly and serve the original file bytes itself. This
+backend shows up in the UI as the source **RoHaLocalFS**.
+
+**What you need**
+- A readable music folder (local disk, mounted NAS, external drive, …).
+- [`mutagen`](https://mutagen.readthedocs.io/) — installed automatically
+  by `setup.sh` / `pip install -r requirements.txt`; used to read tags
+  and embedded cover art.
+- A free TCP port for the file server (default **8200**) reachable by
+  your UPnP renderers on the LAN — they fetch audio directly from it.
+
+**Enable it** — set `LOCALFS_MUSIC_ROOT` to the folder and (re)start:
+
+```bash
+# macOS / Linux shell:
+export LOCALFS_MUSIC_ROOT="/path/to/Music"
+./setup.sh --run          # or: python dlna_gateway.py
+```
+
+To persist it, put the variable wherever your autostart reads env from
+— the LaunchAgent plist `<EnvironmentVariables>` block on macOS, the
+systemd `EnvironmentFile` (`.env`) on Linux, or `.env` generally.
+
+On startup you'll see `LocalFs enabled: root=… port=8200 base_url=…` in
+the log, and **RoHaLocalFS** appears in the PWA's source picker next to
+any UPnP server. The first scan walks the tree (incremental afterwards
+— only changed files are re-read).
+
+**Optional settings**
+
+| Variable | Purpose |
+|---|---|
+| `LOCALFS_MUSIC_ROOT` | **Required to enable.** Absolute path to the music folder. Unset = UPnP-only, backend dormant. |
+| `LOCALFS_PORT` | File-server port (default `8200`). Change if 8200 is taken. |
+| `LOCALFS_BASE_URL` | Override the auto-detected `http://<lan-ip>:<port>` the renderer fetches from — set this if the gateway's LAN IP isn't what renderers should use. |
+
+**Notes**
+- **Bit-perfect.** Files are served unmodified with HTTP Range support;
+  no transcoding. Album art is the file's embedded cover, served at
+  `/localfs/art/<id>` and proxied through the PWA's `/art` endpoint.
+- **Re-scan on host/port change.** Track URLs embed the base URL; if the
+  gateway's LAN IP or `LOCALFS_PORT` changes, a scan self-heals every
+  URL on next startup.
+- **`.mp4` is intentionally excluded** from the audio scan (music-video
+  case). Supported: FLAC, MP3, AAC/M4A/ALAC, OGG/Opus, WAV, AIFF,
+  DSF/DFF, APE, WMA.
 
 ## Database
 
