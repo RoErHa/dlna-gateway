@@ -32,6 +32,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
@@ -377,6 +378,75 @@ class TestPathTraversalDefence(unittest.TestCase):
             os.rmdir(file_dir)
             os.rmdir(bogus_root)
             os.unlink(db_path)
+
+
+class TestArtRoute(unittest.TestCase):
+    """GET/HEAD /localfs/art/<id> — embedded cover serving. Byte
+    extraction is mocked (patching the module symbol the handler thread
+    calls) so the test needs no cover-embedded file on disk. The
+    `_Fixture` row's file_path is a real file under allowed_roots, so
+    the path-traversal check passes and the only variable is what
+    `_extract_art_bytes` returns."""
+
+    _PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)   # valid PNG magic + filler
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fx = _Fixture.setup()
+
+    @classmethod
+    def tearDownClass(cls):
+        _Fixture.teardown(cls.fx)
+
+    def _conn(self) -> http.client.HTTPConnection:
+        return http.client.HTTPConnection(self.fx["host"], self.fx["port"],
+                                          timeout=5)
+
+    def test_art_returns_image_bytes(self):
+        with patch("dlna_localfs_server._extract_art_bytes",
+                   return_value=(self._PNG, "image/png")):
+            c = self._conn()
+            c.request("GET", f"/localfs/art/{self.fx['track_id']}")
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.getheader("Content-Type"), "image/png")
+        self.assertEqual(body, self._PNG)
+        self.assertEqual(int(r.getheader("Content-Length")), len(self._PNG))
+
+    def test_art_head_has_headers_no_body(self):
+        with patch("dlna_localfs_server._extract_art_bytes",
+                   return_value=(self._PNG, "image/png")):
+            c = self._conn()
+            c.request("HEAD", f"/localfs/art/{self.fx['track_id']}")
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.getheader("Content-Type"), "image/png")
+        self.assertEqual(body, b"")
+
+    def test_art_unknown_id_404(self):
+        with patch("dlna_localfs_server._extract_art_bytes",
+                   return_value=(self._PNG, "image/png")):
+            c = self._conn()
+            c.request("GET", "/localfs/art/deadbeefdeadbeef")
+            r = c.getresponse()
+            r.read()
+            c.close()
+        self.assertEqual(r.status, 404)
+
+    def test_art_no_embedded_art_404(self):
+        # id resolves to a real file, but the file carries no cover.
+        with patch("dlna_localfs_server._extract_art_bytes",
+                   return_value=None):
+            c = self._conn()
+            c.request("GET", f"/localfs/art/{self.fx['track_id']}")
+            r = c.getresponse()
+            r.read()
+            c.close()
+        self.assertEqual(r.status, 404)
 
 
 if __name__ == "__main__":

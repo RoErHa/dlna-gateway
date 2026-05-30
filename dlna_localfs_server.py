@@ -48,12 +48,16 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
 
-from dlna_providers.localfs import _MIME_BY_EXT
+from dlna_providers.localfs import _MIME_BY_EXT, _extract_art_bytes
 
 log = logging.getLogger("dlna.localfs.server")
 
 _CHUNK = 64 * 1024
 _STREAM_PREFIX = "/localfs/stream/"
+_ART_PREFIX = "/localfs/art/"
+# Cap embedded-art responses — covers are KB-to-low-MB; anything past
+# this is almost certainly not a cover and we refuse rather than buffer.
+_ART_MAX_BYTES = 12 * 1024 * 1024
 
 # Default Content-Type when we can't infer one. Keeps Range responses
 # working even for unknown extensions.
@@ -152,10 +156,16 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
         log.debug("%s - %s", self.address_string(), fmt % args)
 
     def do_GET(self):
-        self._serve(send_body=True)
+        if self.path.startswith(_ART_PREFIX):
+            self._serve_art(send_body=True)
+        else:
+            self._serve(send_body=True)
 
     def do_HEAD(self):
-        self._serve(send_body=False)
+        if self.path.startswith(_ART_PREFIX):
+            self._serve_art(send_body=False)
+        else:
+            self._serve(send_body=False)
 
     # ── Core serve logic ─────────────────────────────────────────
 
@@ -242,6 +252,60 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
             log.debug(f"client closed connection mid-stream: {file_path}")
         except Exception as e:                                # noqa: BLE001
             log.exception(f"stream failed for {file_path}: {e}")
+
+    # ── Embedded cover art ───────────────────────────────────────
+
+    def _serve_art(self, *, send_body: bool):
+        """GET/HEAD /localfs/art/<track_id> → the file's first embedded
+        cover picture. 404 when the id is unknown, the file is gone, or
+        there's no embedded art (the PWA's <img> onerror just hides the
+        thumbnail, same as any missing cover)."""
+        track_id = unquote(self.path[len(_ART_PREFIX):]).split("?", 1)[0]
+        if not track_id:
+            self.send_error(404, "Missing track id")
+            return
+
+        file_path, _ = self._resolve(track_id)
+        if not file_path:
+            self.send_error(404, f"Unknown track id: {track_id}")
+            return
+
+        # Same path-traversal defence as the audio route.
+        if self.allowed_roots:
+            try:
+                resolved = Path(file_path).resolve()
+            except OSError as e:
+                log.warning(f"art resolve failed for {file_path}: {e}")
+                self.send_error(404, "File not accessible")
+                return
+            if not any(str(resolved).startswith(r)
+                       for r in self.allowed_roots):
+                log.warning(f"art path-traversal blocked: {file_path}")
+                self.send_error(403, "Path not under any allowed root")
+                return
+
+        got = _extract_art_bytes(Path(file_path))
+        if not got:
+            self.send_error(404, "No embedded art")
+            return
+        data, mime = got
+        if len(data) > _ART_MAX_BYTES:
+            self.send_error(502, "Embedded art too large")
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        # Embedded art never changes for a given file id — cache hard.
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if send_body:
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                log.debug(f"client closed during art write: {file_path}")
 
     # ── Helpers ──────────────────────────────────────────────────
 

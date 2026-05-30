@@ -343,35 +343,73 @@ function showTab(tab){
 }
 
 // ── Servers (source) ─────────────────────────────────────────────
-// Only AssetUPnP is a valid music server (memory: project_server_allowlist),
-// so the UI surfaces a single status label rather than a picker. The label is
-// the disc-dot on the left of the header.
+// Multiple music servers can now coexist (AssetUPnP + the in-process
+// LocalFs backend, plus any future Plex/Jellyfin provider). The header
+// carries a SRC dropdown (#source-sel) to switch the active source; the
+// disc-dot still shows the active source's online status.
 let renderers = {};   // udn → MediaRenderer
 async function refreshServers(){
   const r=await api("/api/servers");if(!r)return;
   const data=await r.json();
   servers={};data.forEach(s=>servers[s.udn]=s);
-  const dot=$("disc-dot"),lbl=$("disc-label");
-  const online=data.filter(s=>s.online);
-  if(online.length){
-    dot.className="disc-dot on";
-    const s=online[0];
-    lbl.textContent=`${s.name} · online${s.tracks?" · "+s.tracks.toLocaleString()+" tracks":""}`;
-  } else if(data.length){
-    dot.className="disc-dot";
-    lbl.textContent=`${data[0].name} · offline`;
-  } else {
-    dot.className="disc-dot";
-    lbl.textContent="Scanning…";
-  }
-  // Adopt the first known server. With a single-server allowlist this is
-  // either AssetUPnP or nothing — no picker to manage.
+  // Adopt the first known server on first sight; otherwise keep the
+  // user's chosen source and just refresh its online flag etc.
   if(!curServer && data.length){
     curServer=data[0];
     if(curTab==="browse") showArtists();
   } else if(curServer && servers[curServer.udn]){
     curServer=servers[curServer.udn];   // refresh online flag etc.
   }
+  rebuildSourceSel(data);
+  updateDiscStatus();
+}
+
+// Reflect the active source's status in the disc-dot + label.
+function updateDiscStatus(){
+  const dot=$("disc-dot"),lbl=$("disc-label");
+  const s=curServer && servers[curServer.udn];
+  if(!s){
+    dot.className="disc-dot";
+    lbl.textContent="Scanning…";
+    return;
+  }
+  dot.className = s.online ? "disc-dot on" : "disc-dot";
+  const status = s.online ? "online" : "offline";
+  lbl.textContent=`${s.name} · ${status}${s.tracks?" · "+s.tracks.toLocaleString()+" tracks":""}`;
+}
+
+// Populate the SRC dropdown with every known music server.
+function rebuildSourceSel(data){
+  const sel=$("source-sel");
+  if(!sel) return;
+  if(!data.length){
+    sel.innerHTML=`<option value="">Scanning…</option>`;
+    return;
+  }
+  sel.innerHTML=data.map(s=>{
+    const icon=s.udn.startsWith("uuid:localfs-")?"💾":"🗄";
+    const dim=s.online?"":" (offline)";
+    const cnt=s.tracks?` · ${s.tracks.toLocaleString()}`:"";
+    return `<option value="${esc(s.udn)}">${icon} ${esc(s.name)}${cnt}${dim}</option>`;
+  }).join("");
+  if(curServer) sel.value=curServer.udn;
+}
+
+// Switch the active library source from the SRC dropdown.
+function selectSource(udn){
+  const s=servers[udn];
+  if(!s || (curServer && curServer.udn===udn)) return;
+  curServer=s;
+  updateDiscStatus();
+  // Reset browse navigation and reload the new source's library.
+  if(typeof exitDrillDown==="function") exitDrillDown(false);
+  browseLetter="A"; browseOffset=0;
+  if(curTab==="search"){
+    const q=$("search-input").value.trim();
+    if(q){ doSearch(q); return; }
+  }
+  showTab("browse");
+  showArtists();
 }
 
 // ── Renderers (output) ────────────────────────────────────────────

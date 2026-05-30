@@ -28,7 +28,17 @@ def servers(h, params):
         if RENDERERS.get(s.udn):
             continue
         d = s.to_dict()
-        d["online"] = (now - s.last_seen) < _STALE_SEC
+        # The LocalFs server is synthetic and in-process — it never gets
+        # SSDP/SOAP heartbeat-probed, so its last_seen would go stale
+        # after _STALE_SEC and falsely show offline. Its real liveness
+        # is "is the music root reachable", which its provider.probe()
+        # answers in O(1). UPnP servers keep the last_seen staleness check
+        # (the heartbeat thread refreshes last_seen on each good probe).
+        if s.udn.startswith("uuid:localfs-"):
+            prov = get_provider(s.udn)
+            d["online"] = bool(prov and prov.probe())
+        else:
+            d["online"] = (now - s.last_seen) < _STALE_SEC
         d["tracks"] = DB.track_count(s.udn)
         result.append(d)
     h._json(200, result)
