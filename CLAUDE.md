@@ -108,7 +108,7 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
 | `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
-| `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. |
+| `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
 | `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`; gated on `$LOCALFS_MUSIC_ROOT` / `localfs.root` in `config.json`. Starts the file server, creates a `LocalFsProvider` with the LAN-IP `base_url`, binds it via `dlna_providers.bind_provider`, adds a synthetic `MediaServer` entry to `SERVERS`, kicks off the initial scan in the background. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position) |
@@ -207,6 +207,8 @@ etc.).
 ### Frontend
 
 `static/index.html` + `static/app.js` (PWA, ~71K lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
+
+**Source picker (`#source-sel`).** When more than one MediaServer is in `SERVERS` (e.g. AssetUPnP + LocalFs coexisting), the header carries a `SRC` dropdown next to the `OUT` (renderer) picker. `selectSource(udn)` swaps the active `curServer`, resets browse navigation, and reloads the library (or re-runs the active search). `refreshServers()` populates it via `rebuildSourceSel()` (💾 icon for `uuid:localfs-*`, 🗄 otherwise) and `updateDiscStatus()` keeps the header disc-dot tracking the active source. Regression-guarded by `tests/frontend/test_source_picker.py`.
 
 ### Concurrency Notes
 
@@ -797,6 +799,40 @@ entirely). Audio is correct; only the now-playing UI's "track
 2 of 8" indicator lags until the renderer state genuinely
 stops. Detect via `GetMediaInfo`-returned `CurrentURI`
 comparison in a follow-up; out of scope for the P4 done-when.
+
+**Live multi-source operation (2026-05-30).** LocalFs ran live
+alongside AssetUPnP for the first time. Three fixes landed:
+
+1. **Stream-URL self-heal.** `tracks.url` was stuck as the
+   `localfs://<udn>/<id>` placeholder (the first scan ran via the
+   base_url-less CLI `tools/localfs_scan.py`, which populated the
+   mtime/size cache; every later gateway scan then saw the files as
+   `unchanged` and skipped the per-file URL write). `LocalFsProvider.rescan()`
+   now does a cache-independent UPDATE that forces every row to
+   `<base_url>/localfs/stream/<obj_id>` whenever `base_url` is set —
+   idempotent, keyed on `obj_id`. A LAN-IP/port change is healed the
+   same way.
+2. **Embedded-art serving + heal.** `tracks.art` held unresolved
+   `localfs-art:<hash>` markers (serving was deferred in P2/P3 and
+   never built). The new `/localfs/art/<id>` route serves the bytes;
+   `rescan()` heals the markers to `<base_url>/localfs/art/<obj_id>`
+   in the same pass. The PWA's existing `/art?url=` proxy fetches them.
+3. **Online status.** `api_browse.servers()` reports LocalFs liveness
+   via `get_provider(udn).probe()` (the music root is reachable —
+   O(1)), NOT the `last_seen < _STALE_SEC` clock the heartbeat thread
+   refreshes. The synthetic LocalFs entry is never heartbeat-probed,
+   so it falsely flipped to "offline" after 300 s. UPnP servers keep
+   the staleness check.
+
+The LocalFs synthetic server is named **`RoHaLocalFS`**.
+
+**macOS TCC gotcha:** an interactive shell sees `/Volumes/SAMDATA`
+as locked (`ls` → "Operation not permitted") but the launchd-spawned
+gateway reads it fine — different TCC grants. Don't predict gateway
+behaviour from a shell `ls`; probe the `:8200` HTTP endpoints
+instead. Still never force-rescan if a scan would genuinely see zero
+files (real unmount) — `rescan()` deletes the `tracks` rows of
+unseen files, which would wipe the LocalFs library.
 
 #### Phase 5 — Parallel run
 
