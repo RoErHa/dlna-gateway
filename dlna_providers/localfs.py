@@ -193,11 +193,27 @@ def _mime_for(suffix: str) -> str:
     return _MIME_BY_EXT.get(suffix.lower(), "application/octet-stream")
 
 
-def _extract_art_hash(path: Path) -> Optional[str]:
-    """Return sha1(first-embedded-cover-bytes) or None. P3 will turn
-    this into a real cache path + served URL; for P2 we just record
-    the marker so the existing `_backfill_album_art` propagates a
-    consistent value across the album's siblings."""
+def _sniff_image_mime(data: bytes) -> str:
+    """Best-effort image MIME from magic bytes. Embedded-art metadata
+    sometimes lies about (or omits) its MIME, so sniff the bytes rather
+    than trust the container. Falls back to image/jpeg."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
+def _extract_art_bytes(path: Path) -> Optional[tuple[bytes, str]]:
+    """Return `(picture_bytes, mime)` for the first embedded cover, or
+    None if the file has no embedded art / can't be read. Single source
+    of cover bytes: used by `_extract_art_hash` (stable marker at scan
+    time) AND the file server's `/localfs/art/<id>` route (serve on
+    demand). All mutagen access is funnelled here so tests can mock it."""
     import mutagen
     try:
         audio = mutagen.File(str(path))
@@ -227,7 +243,20 @@ def _extract_art_hash(path: Path) -> Optional[str]:
             pass
     if not art_bytes:
         return None
-    return hashlib.sha1(art_bytes).hexdigest()[:24]
+    return (art_bytes, _sniff_image_mime(art_bytes))
+
+
+def _extract_art_hash(path: Path) -> Optional[str]:
+    """Return sha1(first-embedded-cover-bytes) or None. The marker lets
+    the existing `_backfill_album_art` propagate a consistent value
+    across the album's siblings; the actual bytes are served on demand
+    by the file server's `/localfs/art/<id>` route, and `rescan()` heals
+    the marker into a real `<base_url>/localfs/art/<id>` URL when
+    base_url is set."""
+    got = _extract_art_bytes(path)
+    if not got:
+        return None
+    return hashlib.sha1(got[0]).hexdigest()[:24]
 
 
 # ── The provider ───────────────────────────────────────────────
@@ -395,6 +424,46 @@ class LocalFsProvider:
                     f"DELETE FROM tracks WHERE udn=? AND file_path IN "
                     f"({ph})",
                     [self.udn] + removed_paths)
+
+            # Self-heal stream URLs. The per-file URL is only (re)written
+            # for new/changed rows above — so an "unchanged" row whose URL
+            # was written by a base_url-less scan (e.g. the CLI
+            # tools/localfs_scan.py, or any pre-server scan) keeps its
+            # `localfs://…` placeholder forever and never becomes
+            # renderer-fetchable. Likewise a LAN-IP / port change leaves
+            # every URL pointing at the old host. Both are fixed here in
+            # one cache-independent pass: when base_url is set, force every
+            # row's URL to the canonical `<base_url>/localfs/stream/<id>`.
+            # Idempotent (the WHERE skips already-correct rows) and keyed on
+            # obj_id, which the file server resolves against.
+            if self._base_url:
+                expected = self._base_url + "/localfs/stream/"
+                healed = conn.execute(
+                    "UPDATE tracks SET url = ? || obj_id "
+                    "WHERE udn = ? AND obj_id != '' "
+                    "  AND url != ? || obj_id",
+                    (expected, self.udn, expected)).rowcount
+                if healed:
+                    log.info(f"LocalFs healed {healed} stream URL(s) "
+                             f"→ {self._base_url}")
+
+                # Same heal for embedded-art markers. Scan time writes a
+                # `localfs-art:<hash>` placeholder (the bytes aren't read
+                # until serve time); turn every such marker into the
+                # real `<base_url>/localfs/art/<id>` URL the `/art` proxy
+                # can fetch. Only rows that still carry a marker are
+                # touched — http art (sibling-harvested / MusicBrainz)
+                # is left alone. Idempotent, cache-independent, keyed on
+                # obj_id (the id the art route resolves against).
+                art_expected = self._base_url + "/localfs/art/"
+                healed_art = conn.execute(
+                    "UPDATE tracks SET art = ? || obj_id "
+                    "WHERE udn = ? AND obj_id != '' "
+                    "  AND art LIKE 'localfs-art:%'",
+                    (art_expected, self.udn)).rowcount
+                if healed_art:
+                    log.info(f"LocalFs healed {healed_art} art URL(s) "
+                             f"→ {self._base_url}")
 
         stats["elapsed_sec"] = round(time.time() - t0, 2)
         log.info(f"LocalFs rescan complete: {stats}")

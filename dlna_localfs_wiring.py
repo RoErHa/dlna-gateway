@@ -98,7 +98,7 @@ def maybe_start_localfs(get_lan_ip):
     # server picker reads from here.
     _disc.SERVERS.add(MediaServer(
         udn=provider.udn,
-        name=f"Local FS ({root_path.name or 'library'})",
+        name="RoHaLocalFS",
         location=base_url,
         control_url=base_url,
         base_url=base_url))

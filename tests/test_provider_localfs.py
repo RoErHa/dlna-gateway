@@ -383,6 +383,122 @@ class TestRescan(unittest.TestCase):
         self.assertTrue(row["url"].startswith(
             "http://192.168.1.100:8200/localfs/stream/"))
 
+    def test_rescan_heals_placeholder_url_when_base_url_set(self):
+        # Regression for the 2026-05-30 "nothing plays" bug. A row first
+        # written by a base_url-less scan (the CLI tools/localfs_scan.py,
+        # or any pre-server scan) keeps its `localfs://` placeholder. On
+        # the next scan WITH a base_url the file is an mtime/size cache
+        # hit, so the per-file URL write is skipped — only the cache-
+        # independent heal pass can fix it. Without the heal, the track
+        # is never renderer-fetchable and silently fails to play.
+        self._write_file("Artist/Album/song.flac")
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            # First scan: no base_url → placeholder + cache populated.
+            LocalFsProvider(self.db, self.root, base_url="").rescan()
+            with self.db._pool.read() as conn:
+                url = conn.execute(
+                    "SELECT url FROM tracks WHERE udn LIKE 'uuid:localfs-%'"
+                ).fetchone()["url"]
+            self.assertTrue(url.startswith("localfs://"))
+
+            # Second scan: WITH base_url, same db+root. File unchanged
+            # (cache hit) so heal is the only thing that can fix the URL.
+            p = LocalFsProvider(self.db, self.root,
+                                base_url="http://10.0.0.5:8200")
+            stats = p.rescan()
+        self.assertEqual(stats["unchanged"], 1)   # proves fast path ran
+        with self.db._pool.read() as conn:
+            row = conn.execute(
+                "SELECT obj_id, url FROM tracks WHERE udn=?", (p.udn,)
+            ).fetchone()
+        self.assertEqual(
+            row["url"],
+            f"http://10.0.0.5:8200/localfs/stream/{row['obj_id']}")
+
+    def test_rescan_heals_url_on_base_url_change(self):
+        # A LAN-IP / port change must repoint every URL on the next scan,
+        # cache-independent. Same heal path; different trigger.
+        self._write_file("Artist/Album/song.flac")
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            LocalFsProvider(self.db, self.root,
+                            base_url="http://10.0.0.5:8200").rescan()
+            p = LocalFsProvider(self.db, self.root,
+                                base_url="http://192.168.1.9:8200")
+            p.rescan()
+        with self.db._pool.read() as conn:
+            row = conn.execute(
+                "SELECT obj_id, url FROM tracks WHERE udn=?", (p.udn,)
+            ).fetchone()
+        self.assertEqual(
+            row["url"],
+            f"http://192.168.1.9:8200/localfs/stream/{row['obj_id']}")
+
+    def test_rescan_heals_art_marker_to_url_when_base_url_set(self):
+        # Companion to the URL heal: a `localfs-art:<hash>` marker
+        # written at scan time must become a real
+        # `<base_url>/localfs/art/<id>` URL the /art proxy can fetch.
+        # Cache-independent (runs on an unchanged-file scan), keyed on
+        # obj_id, and leaves non-marker art (http) untouched.
+        self._write_file("Artist/Album/song.flac")
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value="deadbeefcafe0001"):
+            # First scan: no base_url → art stays a marker.
+            LocalFsProvider(self.db, self.root, base_url="").rescan()
+            with self.db._pool.read() as conn:
+                art = conn.execute(
+                    "SELECT art FROM tracks WHERE udn LIKE 'uuid:localfs-%'"
+                ).fetchone()["art"]
+            self.assertTrue(art.startswith("localfs-art:"))
+
+            # Second scan WITH base_url: unchanged file (cache hit), so
+            # only the heal pass can convert the marker.
+            p = LocalFsProvider(self.db, self.root,
+                                base_url="http://10.0.0.5:8200")
+            stats = p.rescan()
+        self.assertEqual(stats["unchanged"], 1)
+        with self.db._pool.read() as conn:
+            row = conn.execute(
+                "SELECT obj_id, art FROM tracks WHERE udn=?", (p.udn,)
+            ).fetchone()
+        self.assertEqual(
+            row["art"],
+            f"http://10.0.0.5:8200/localfs/art/{row['obj_id']}")
+
+    def test_rescan_art_heal_leaves_http_art_untouched(self):
+        # A row whose art is already an http URL (sibling-harvested /
+        # MusicBrainz) must NOT be rewritten by the art heal.
+        self._write_file("Artist/Album/song.flac")
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            p = LocalFsProvider(self.db, self.root,
+                                base_url="http://10.0.0.5:8200")
+            p.rescan()
+            # Simulate an externally-harvested cover.
+            with self.db._pool.write() as conn:
+                conn.execute(
+                    "UPDATE tracks SET art='http://cover/art.jpg' "
+                    "WHERE udn=?", (p.udn,))
+            p.rescan()
+        with self.db._pool.read() as conn:
+            art = conn.execute(
+                "SELECT art FROM tracks WHERE udn=?", (p.udn,)
+            ).fetchone()["art"]
+        self.assertEqual(art, "http://cover/art.jpg")
+
     def test_rescan_uses_supplied_bit_depth_and_sample_rate(self):
         self._write_file("Artist/Album/song.flac")
         p = LocalFsProvider(self.db, self.root)
@@ -469,3 +585,4 @@ class TestNotImplementedSurface(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
