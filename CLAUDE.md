@@ -128,7 +128,13 @@ These are shared state across all request handler threads:
 
 ### Database Schema
 
-SQLite at `library.db`, WAL mode, accessed via `db_pool.Pool`:
+SQLite at `library.db`, WAL mode, accessed via `db_pool.Pool`. The
+committed `schema.sql` is a **generated artifact** — it does NOT
+auto-update when `LibraryDB._init_schema` / migrations change, and has
+drifted before. After any schema change run **`python3
+tools/regen_schema.py`** to regenerate it; `tests/test_schema_sync.py`
+fails the suite if it's stale (`tools/regen_schema.py --check` is the
+same gate).
 
 ```
 tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate, year)
