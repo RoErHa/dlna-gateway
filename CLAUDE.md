@@ -2292,6 +2292,36 @@ different song blocked, empty metadata treated as mismatch.
 python3 -m unittest tools.test_relink_orphan_overrides -v
 ```
 
+### `tools/relink_playlists_to_localfs.py`
+
+Repoints `playlist_tracks` (and the `__favourites__` playlist) at
+RoHaLocalFS after AssetUPnP is decommissioned. When the UPnP backend is
+switched off, every playlist row still holds its dead
+`http://<host>:26125/...` URL and playback times out
+(`proxy_stream … reason=error:TimeoutError`). The tool rewrites each
+row's `url` + `art` to the matching LocalFs track by NORMALISED metadata —
+(artist, album, title) strong, then (artist, title) song-level (album
+differs: compilation vs original, AcoustID-corrected album) — and
+**removes** rows with no LocalFs match (the migration consequence: those
+files aren't in the LocalFs library, which is a subset of what AssetUPnP
+served). Rows that would collide on `UNIQUE(pl_id, url)` after a relink
+are removed as duplicates. Also prunes `album_favourites` that no longer
+match any LocalFs album.
+
+A "LocalFs row" is any url containing `/localfs/stream/`, so already-
+relinked rows are skipped — **idempotent**. DRY-RUN by default; `--apply`
+mutates and auto-backs-up `library.db` first (`--no-backup` to skip,
+`-y` to skip the prompt, `--no-prune-favs` to keep orphan album favs).
+
+First real run (2026-05-31, 2,044 dead rows): relinked 1,260 (367 strong
++ 893 song), removed 784 (744 no-match + 40 dup), pruned 95 album favs.
+
+```bash
+python3 tools/relink_playlists_to_localfs.py            # dry-run
+python3 tools/relink_playlists_to_localfs.py --apply    # backup + commit
+python3 -m unittest tools.test_relink_playlists_to_localfs -v
+```
+
 ### `tools/audit_override_mismatches.py`
 
 Repairs damage from past d-id-collision-driven mis-relinks (see the
