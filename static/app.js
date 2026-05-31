@@ -393,8 +393,9 @@ function rebuildSourceSel(data){
   sel.innerHTML=data.map(s=>{
     const icon=s.udn.startsWith("uuid:localfs-")?"💾":"🗄";
     const dim=s.online?"":" (offline)";
-    const cnt=s.tracks?` · ${s.tracks.toLocaleString()}`:"";
-    return `<option value="${esc(s.udn)}">${icon} ${esc(s.name)}${cnt}${dim}</option>`;
+    const cnt=s.tracks?` · ${s.tracks.toLocaleString()} tracks`:"";
+    const acnt=s.albums?` · ${s.albums.toLocaleString()} albums`:"";
+    return `<option value="${esc(s.udn)}">${icon} ${esc(s.name)}${cnt}${acnt}${dim}</option>`;
   }).join("");
   if(curServer) sel.value=curServer.udn;
 }
@@ -546,8 +547,9 @@ function renderBrowseItems(items){
     } else if(browseMode==="albums"){
       div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.album)}</div><div class="row-sub">${esc(item.artist)} · ${item.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
       const _artist = item.artist==="Various Artists"?"":item.artist;
-      div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, item.album);});
-      div.addEventListener("click", ()=>showAlbumTracks(_artist, item.album));
+      const _ak = item.album_key||"";
+      div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, item.album, _ak);});
+      div.addEventListener("click", ()=>showAlbumTracks(_artist, item.album, null, _ak));
     } else {
       // tracks
       const k = regItem(item);
@@ -623,8 +625,8 @@ async function _showDecadeAlbumsInner(decadeItem){
       ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
       : `<div class="row-icon">💿</div>`;
     div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album);});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}));
+    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album, a.album_key||"");});
+    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}, a.album_key||""));
     list.appendChild(div);
   });
 }
@@ -661,8 +663,8 @@ async function _showGenreAlbumsInner(genreItem){
       ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
       : `<div class="row-icon">💿</div>`;
     div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album);});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}));
+    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album, a.album_key||"");});
+    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}, a.album_key||""));
     list.appendChild(div);
   });
 }
@@ -723,14 +725,14 @@ async function _showArtistAlbumsInner(artistItem){
       ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
       : `<div class="row-icon">💿</div>`;
     div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist, a.album);});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist, a.album, artistItem));
+    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist, a.album, a.album_key||"");});
+    div.addEventListener("click", ()=>showAlbumTracks(a.artist, a.album, artistItem, a.album_key||""));
     list.appendChild(div);
   });
 }
 
 // ── Drill-down: Album → Tracks ────────────────────────────────────
-async function showAlbumTracks(artist, album, artistItem=null){
+async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   if(!curServer) return;
   // Push the artist-albums level so back returns there
   const backLabel = artistItem ? artistItem.artist : (drillArtist||album);
@@ -750,11 +752,12 @@ async function showAlbumTracks(artist, album, artistItem=null){
   $("browse-back-title").textContent = backLabel;
   $("browse-section-hdr").style.display = "";
   $("browse-section-title").textContent = esc(artist||"Various Artists");
-  $("browse-play-all").onclick = ()=>playAlbumFromDB(artist, album);
+  $("browse-play-all").onclick = ()=>playAlbumFromDB(artist, album, albumKey);
   // Hide the star until the track count is known so single-track
   // "albums" (orphan metadata-less tracks) never expose it.
   _setAlbumFavStar(false, false);
-  const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}`);
+  const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
+  const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
   const data = await r.json();
   const tracks = data.tracks||[];
@@ -1028,10 +1031,13 @@ function addSearchSection(label){
   $("item-list").appendChild(h);
 }
 
-async function playAlbumFromDB(artist,album){
+async function playAlbumFromDB(artist,album,albumKey=""){
   if(!curServer)return;
   toast("Loading album…",3000);
-  const r=await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}`);
+  // album_key (folder identity) is preferred for LocalFs so a Various-
+  // Artists compilation plays as one album; falls back to (artist,album).
+  const kq=albumKey?`&album_key=${enc(albumKey)}`:"";
+  const r=await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
   if(!r){toast("Failed to load album");return;}
   const data=await r.json();
   if(!data.tracks||!data.tracks.length){toast("No tracks found for this album");return;}

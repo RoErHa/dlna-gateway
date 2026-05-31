@@ -40,6 +40,7 @@ def servers(h, params):
         else:
             d["online"] = (now - s.last_seen) < _STALE_SEC
         d["tracks"] = DB.track_count(s.udn)
+        d["albums"] = DB.album_count(s.udn)
         result.append(d)
     h._json(200, result)
 
@@ -134,13 +135,16 @@ def search(h, params):
 
 
 def album_tracks(h, params):
-    udn    = params.get("udn", "")
-    artist = params.get("artist", "")
-    album  = params.get("album", "")
-    if not udn or not album:
-        h._json(400, {"error": "Missing udn or album"})
+    udn       = params.get("udn", "")
+    artist    = params.get("artist", "")
+    album     = params.get("album", "")
+    album_key = params.get("album_key", "")
+    # LocalFs opens an album by folder identity (album_key); UPnP and
+    # legacy callers open by (artist, album). Require at least one.
+    if not udn or not (album or album_key):
+        h._json(400, {"error": "Missing udn or album/album_key"})
         return
-    tracks = DB.album_tracks(udn, artist, album)
+    tracks = DB.album_tracks(udn, artist, album, album_key=album_key)
     SERVERS.touch(udn)
     h._json(200, {"tracks": tracks})
 

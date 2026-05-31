@@ -127,6 +127,32 @@ def _dedup_clause(outer_alias: str = "t") -> str:
     )"""
 
 
+def _is_localfs(udn: str) -> bool:
+    """LocalFs sources own a `file_path` per row and a populated
+    `album_key`, so their album browse groups by FOLDER. Everything else
+    (UPnP / Subsonic-fed) keeps the legacy (artist, album) grouping."""
+    return udn.startswith("uuid:localfs-")
+
+
+def _localfs_album_name(a: str = "t") -> str:
+    """SQL aggregate expression for a folder-grouped album's DISPLAY name:
+    the album tag when the folder is tag-consistent (normal albums), else
+    the folder's own leaf name (Various-Artists comps where every track
+    carries its original album tag). The leaf is the segment of `album_key`
+    after the last '/' — `rtrim(path, replace(path,'/',''))` strips back to
+    and including the last slash, which `replace` then removes."""
+    return (f"CASE WHEN COUNT(DISTINCT {a}.album)=1 THEN MAX({a}.album) "
+            f"ELSE replace({a}.album_key, "
+            f"rtrim({a}.album_key, replace({a}.album_key,'/','')), '') END")
+
+
+def _localfs_album_artist(a: str = "t") -> str:
+    """SQL aggregate: 'Various Artists' when a folder spans >1 performer,
+    else the single performer."""
+    return (f"CASE WHEN COUNT(DISTINCT {a}.artist)>1 THEN 'Various Artists' "
+            f"ELSE MAX({a}.artist) END")
+
+
 # ── LibraryDB ─────────────────────────────────────────────────────
 
 class LibraryDB:
@@ -735,12 +761,20 @@ class LibraryDB:
             return row[0] if row else 0
 
     def album_count(self, udn: str) -> int:
-        """Distinct (artist, album) pairs — matches AssetUPnP's display count."""
+        """Number of albums for the source's browse view. LocalFs counts
+        distinct FOLDERS (album_key) — matching the folder-grouped Albums
+        list; other sources count distinct (artist, album) pairs, matching
+        AssetUPnP's display count."""
         with self._pool.read() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM "
-                "(SELECT DISTINCT artist, album FROM tracks WHERE udn=?)",
-                (udn,)).fetchone()
+            if _is_localfs(udn):
+                row = conn.execute(
+                    "SELECT COUNT(DISTINCT album_key) FROM tracks "
+                    "WHERE udn=? AND album_key != ''", (udn,)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM "
+                    "(SELECT DISTINCT artist, album FROM tracks WHERE udn=?)",
+                    (udn,)).fetchone()
             return row[0] if row else 0
 
     def upsert_tracks(self, udn: str, tracks: list) -> int:
@@ -994,58 +1028,112 @@ class LibraryDB:
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
-    def album_tracks(self, udn: str, artist: str, album: str) -> list:
-        """Return all tracks for a given (artist, album) pair, with
-        lower-quality 16/24-bit duplicates hidden from the browse view.
-        See `_dedup_clause` for the winner-selection rule."""
+    def album_tracks(self, udn: str, artist: str, album: str,
+                     album_key: str = "") -> list:
+        """Return all tracks for an album, with lower-quality 16/24-bit
+        duplicates hidden from the browse view (see `_dedup_clause`).
+
+        Two addressing modes:
+          * `album_key` set → folder-based identity (LocalFs). Returns
+            every track in that folder regardless of per-track artist/album
+            tags, ordered by `file_path` so disc/track order is preserved.
+            This is what makes a Various-Artists compilation open as one
+            album.
+          * otherwise → the legacy `(artist, album)` pair (UPnP and any
+            caller that hasn't moved to album_key — favourites, UPnP,
+            Subsonic). Unchanged behaviour."""
         dedup = _dedup_clause("t")
+        cols = ("t.obj_id as id, t.url, t.title, t.artist, t.album, "
+                "t.duration, t.art, t.mime, t.genre, 'audio' as type")
         with self._pool.read() as conn:
-            rows = conn.execute(
-                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
-                          t.duration, t.art, t.mime, t.genre, 'audio' as type
-                   FROM tracks t
-                   WHERE t.udn=? AND t.album=?
-                     AND (? = '' OR t.artist=?)
-                     AND {dedup}
-                   ORDER BY t.title""",
-                (udn, album, artist, artist)).fetchall()
+            if album_key:
+                rows = conn.execute(
+                    f"""SELECT {cols} FROM tracks t
+                       WHERE t.udn=? AND t.album_key=?
+                         AND {dedup}
+                       ORDER BY t.file_path COLLATE NOCASE, t.title""",
+                    (udn, album_key)).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""SELECT {cols} FROM tracks t
+                       WHERE t.udn=? AND t.album=?
+                         AND (? = '' OR t.artist=?)
+                         AND {dedup}
+                       ORDER BY t.title""",
+                    (udn, album, artist, artist)).fetchall()
         return [dict(r) for r in rows]
 
     def all_albums(self, udn: str) -> list:
         """All distinct albums, grouping compilations under 'Various Artists'.
-        Track count reflects browse-visible (deduped) tracks only."""
+        Track count reflects browse-visible (deduped) tracks only.
+        LocalFs sources group by FOLDER (album_key) and carry it as the
+        album identity; other sources keep (artist, album) grouping."""
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
-            rows = conn.execute(
-                f"""SELECT t.album,
-                          CASE WHEN COUNT(DISTINCT t.artist) > 1
-                               THEN 'Various Artists'
-                               ELSE MAX(t.artist) END as artist,
-                          COUNT(*) as track_count,
-                          MAX(t.art) as art
-                   FROM tracks t
-                   WHERE t.udn=? AND t.album != ''
-                     AND {dedup}
-                   GROUP BY t.album
-                   ORDER BY t.album COLLATE NOCASE""",
-                (udn,)).fetchall()
+            if _is_localfs(udn):
+                rows = conn.execute(
+                    f"""SELECT t.album_key,
+                              {_localfs_album_name("t")} as album,
+                              {_localfs_album_artist("t")} as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn=? AND t.album_key != ''
+                         AND {dedup}
+                       GROUP BY t.album_key
+                       ORDER BY album COLLATE NOCASE""",
+                    (udn,)).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""SELECT t.album,
+                              CASE WHEN COUNT(DISTINCT t.artist) > 1
+                                   THEN 'Various Artists'
+                                   ELSE MAX(t.artist) END as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn=? AND t.album != ''
+                         AND {dedup}
+                       GROUP BY t.album
+                       ORDER BY t.album COLLATE NOCASE""",
+                    (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def artist_albums(self, udn: str, artist: str) -> list:
         """All albums for a given artist, A-Z. Track count is the
-        browse-visible (deduped) count."""
+        browse-visible (deduped) count. LocalFs groups by FOLDER: the
+        albums are the folders that contain a track by this artist
+        (so opening a performer on a compilation lands on the whole
+        comp folder); other sources keep (artist, album) grouping."""
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
-            rows = conn.execute(
-                f"""SELECT t.album, t.artist,
-                          COUNT(*) as track_count,
-                          MAX(t.art) as art
-                   FROM tracks t
-                   WHERE t.udn=? AND t.artist=?
-                     AND {dedup}
-                   GROUP BY t.album
-                   ORDER BY album COLLATE NOCASE""",
-                (udn, artist)).fetchall()
+            if _is_localfs(udn):
+                rows = conn.execute(
+                    f"""SELECT t.album_key,
+                              {_localfs_album_name("t")} as album,
+                              {_localfs_album_artist("t")} as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn=? AND t.album_key != ''
+                         AND t.album_key IN (
+                             SELECT album_key FROM tracks
+                              WHERE udn=? AND artist=? AND album_key != '')
+                         AND {dedup}
+                       GROUP BY t.album_key
+                       ORDER BY album COLLATE NOCASE""",
+                    (udn, udn, artist)).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""SELECT t.album, t.artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn=? AND t.artist=?
+                         AND {dedup}
+                       GROUP BY t.album
+                       ORDER BY album COLLATE NOCASE""",
+                    (udn, artist)).fetchall()
         return [dict(r) for r in rows]
 
     def browse_letter(self, udn: str, mode: str, letter: str,
@@ -1086,6 +1174,30 @@ class LibraryDB:
                     "artist",
                     "artist, COUNT(DISTINCT album) as album_count, COUNT(*) as track_count, MAX(art) as art",
                     "GROUP BY artist")
+                items = [dict(r) for r in rows]
+            elif mode == "albums" and _is_localfs(udn):
+                # Folder-based grouping: one album = one folder. The
+                # letter filter applies to the DISPLAY name, which is an
+                # aggregate, so it moves from WHERE to HAVING.
+                name        = _localfs_album_name("t")
+                artist_expr = _localfs_album_artist("t")
+                dedup       = _dedup_clause("t")
+                having      = where_extra.format(col=name)
+                params      = [udn] + ([like] if like else [])
+                base = (f"FROM tracks t WHERE t.udn=? AND t.album_key!='' "
+                        f"AND {dedup} GROUP BY t.album_key HAVING 1=1 {having}")
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM (SELECT t.album_key {base})",
+                    params).fetchone()[0]
+                rows = conn.execute(
+                    f"""SELECT t.album_key,
+                              {name} as album,
+                              {artist_expr} as artist,
+                              COUNT(*) as track_count, MAX(t.art) as art
+                       {base}
+                       ORDER BY album COLLATE NOCASE
+                       LIMIT ? OFFSET ?""",
+                    params + [limit, offset]).fetchall()
                 items = [dict(r) for r in rows]
             elif mode == "albums":
                 total, rows = _q(

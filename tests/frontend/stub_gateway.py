@@ -43,6 +43,8 @@ class StubGateway:
         self.artist_albums: dict[str, list[dict]] = {}
         # album_tracks keyed by (artist, album)
         self.album_tracks: dict[tuple, list[dict]] = {}
+        # album_tracks keyed by album_key (LocalFs folder identity)
+        self.album_tracks_by_key: dict[str, list[dict]] = {}
         # search responses keyed by query string (lowercased)
         self.search_results: dict[str, dict] = {}
         # playlists
@@ -309,7 +311,13 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/album_tracks":
             artist = q.get("artist", "")
             album = q.get("album", "")
-            tracks = gw.album_tracks.get((artist, album), [])
+            album_key = q.get("album_key", "")
+            # LocalFs opens an album by folder identity (album_key);
+            # legacy callers by (artist, album).
+            if album_key:
+                tracks = gw.album_tracks_by_key.get(album_key, [])
+            else:
+                tracks = gw.album_tracks.get((artist, album), [])
             self._send_json({"tracks": tracks})
             return
         if path == "/api/search":
