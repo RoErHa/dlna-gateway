@@ -15,6 +15,8 @@ def test_settings_modal_removed(app):
 
 
 def test_header_status_label_visible(app):
-    # Disc label remains the source of truth for server status
-    assert app.locator("#disc-label").is_visible()
+    # The disc-label was removed in the redesign; server status now lives in
+    # the SRC dropdown. The header must still show the source picker and the
+    # OUT picker.
+    assert app.locator("#source-sel").is_visible()
     assert app.locator("#out-sel, #output-sel").first.is_visible()

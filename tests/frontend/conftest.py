@@ -36,9 +36,13 @@ def _boot(page, stub):
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     page.goto(stub.base_url + "/")
+    # Readiness: the redesigned header dropped the standalone disc-label;
+    # server status now lives in the #source-sel options. The app is booted
+    # once refreshServers() has replaced the "Scanning…" placeholder with a
+    # real server option (equivalent to the old disc-label != 'Scanning…').
     page.wait_for_function(
-        "document.getElementById('disc-label') && "
-        "document.getElementById('disc-label').textContent !== 'Scanning…'",
+        "document.getElementById('source-sel') && "
+        "!document.getElementById('source-sel').textContent.includes('Scanning')",
         timeout=5000,
     )
     return errors

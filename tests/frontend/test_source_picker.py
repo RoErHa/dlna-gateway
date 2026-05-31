@@ -17,8 +17,8 @@ LOCALFS = {"udn": "uuid:localfs-abc", "name": "LocalFs",
 def _boot(page, stub):
     page.goto(stub.base_url + "/")
     page.wait_for_function(
-        "document.getElementById('disc-label') && "
-        "document.getElementById('disc-label').textContent !== 'Scanning…'",
+        "document.getElementById('source-sel') && "
+        "!document.getElementById('source-sel').textContent.includes('Scanning')",
         timeout=5000,
     )
 
@@ -53,18 +53,26 @@ def test_selecting_source_browses_new_udn(page, stub, gateway):
 
 
 def test_disc_status_follows_active_source(page, stub, gateway):
+    # The disc-label was removed; the active source and its online/offline
+    # state now live in the SRC dropdown (value = active UDN; an "(offline)"
+    # suffix on the option when that server is offline).
     gateway.servers = [
         ASSET,
         {"udn": "uuid:localfs-abc", "name": "LocalFs",
          "online": False, "tracks": 0},
     ]
     _boot(page, stub)
-    # Active source starts as the first server.
-    assert "AssetUPnP" in page.locator("#disc-label").text_content()
-    assert "online" in page.locator("#disc-label").text_content()
+    # Active source starts as the first server (AssetUPnP, online → no marker).
+    assert page.eval_on_selector("#source-sel", "el => el.value") == "uuid:asset-1"
+    asset_opt = page.locator(
+        "#source-sel option", has_text="AssetUPnP").text_content()
+    assert "(offline)" not in asset_opt
 
     page.select_option("#source-sel", "uuid:localfs-abc")
     page.wait_for_function(
-        "document.getElementById('disc-label').textContent.includes('LocalFs')",
+        "document.getElementById('source-sel').value === 'uuid:localfs-abc'",
         timeout=3000)
-    assert "offline" in page.locator("#disc-label").text_content()
+    # The LocalFs server is offline → its option carries the offline marker.
+    localfs_opt = page.locator(
+        "#source-sel option", has_text="LocalFs").text_content()
+    assert "(offline)" in localfs_opt

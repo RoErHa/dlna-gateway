@@ -84,7 +84,7 @@ def test_playlist_play_starts_first_track(page, stub, gateway):
     tracks = _seed_playlist(gateway, "Mix", 3)
     page.goto(stub.base_url + "/")
     page.wait_for_function(
-        "document.getElementById('disc-label').textContent !== 'Scanning…'",
+        "document.getElementById('source-sel') && !document.getElementById('source-sel').textContent.includes('Scanning')",
         timeout=5000)
     # Wait for the playlist row to render in the right-hand panel
     page.wait_for_function(
@@ -119,7 +119,7 @@ def test_next_advances_browser_queue(page, stub, gateway):
     tracks = _seed_playlist(gateway, "Mix", 3)
     page.goto(stub.base_url + "/")
     page.wait_for_function(
-        "document.getElementById('disc-label').textContent !== 'Scanning…'", timeout=5000)
+        "document.getElementById('source-sel') && !document.getElementById('source-sel').textContent.includes('Scanning')", timeout=5000)
     # Build the queue directly to remove dependency on first-track auto-start
     page.evaluate(f"""
       browserQueue = {tracks!r};
@@ -139,7 +139,7 @@ def test_prev_returns_browser_queue(page, stub, gateway):
     tracks = _seed_playlist(gateway, "Mix", 3)
     page.goto(stub.base_url + "/")
     page.wait_for_function(
-        "document.getElementById('disc-label').textContent !== 'Scanning…'", timeout=5000)
+        "document.getElementById('source-sel') && !document.getElementById('source-sel').textContent.includes('Scanning')", timeout=5000)
     page.evaluate(f"""
       browserQueue = {tracks!r};
       browserIdx = 1;

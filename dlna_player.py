@@ -39,10 +39,19 @@ def _dur_to_sec(dur) -> int:
         return 0
 
 
-# Per-track loudness gain → renderer-volume-unit conversion.
-# A value of 2 means "one Naim volume unit ≈ 0.5 dB". Approximation —
-# the renderer's volume curve is logarithmic and renderer-specific.
-# Tune by ear after the first listen on the actual hardware.
+# Absolute renderer volume set ONCE at queue start. The Naim's scale is
+# 0–100; 22 is a comfortable living-room level. We deliberately do NOT
+# read the renderer's current volume first — a STOPPED Naim reports 0
+# via GetVolume, and adopting that as the baseline was the cause of the
+# "every track plays silent" bug (2026-05-30). After this one-shot set
+# we never re-assert per-track, so a manual change on the Naim's own
+# remote sticks; only the PWA slider re-sets it.
+STARTUP_VOLUME: int = 22
+
+# User-trim slider → renderer-volume-unit conversion.
+# A value of 2 means "one slider dB ≈ 2 Naim volume units" (≈ 0.5 dB
+# per unit). Approximation — the renderer's curve is logarithmic and
+# renderer-specific. Tune by ear.
 GAIN_TO_VOLUME_RATIO: int = 2
 
 # User-trim slider clamp. The slider is a relative offset around the
@@ -252,16 +261,9 @@ class RendererQueue:
         # Otherwise the trim is stored and applied on first play.
         if baseline is None:
             return
-        # Add the currently-playing track's loudness gain so the trim
-        # composes correctly mid-song.
-        cur_gain_db = 0.0
-        if 0 <= idx < len(tracks):
-            try:
-                from dlna_library import DB
-                cur_gain_db = DB.gain_db_for_url(tracks[idx].get("url", ""))
-            except Exception:
-                cur_gain_db = 0.0
-        offset = round((cur_gain_db + trim_db) * GAIN_TO_VOLUME_RATIO)
+        # Loudness gain is no longer applied (always 0), so the slider is
+        # a straight trim around the startup baseline.
+        offset = round(trim_db * GAIN_TO_VOLUME_RATIO)
         level  = max(0, min(100, baseline + offset))
         self._set_volume_async(rc_url, level)
 
@@ -418,54 +420,38 @@ class RendererQueue:
         with self._lock:
             self._started_at = 0.0
 
-    def _apply_loudness_gain(self, t: dict):
-        """Compute and send per-track SetVolume just before SetURI/Play.
-        No-op if rc_url is empty (renderer has no RenderingControl URL).
+    def _apply_startup_volume(self):
+        """Set the renderer to STARTUP_VOLUME once per queue, on the FIRST
+        track only. No-op if rc_url is empty (renderer has no
+        RenderingControl URL) or the baseline is already set (i.e. this
+        isn't the first track — volume is set once per queue, never
+        re-asserted per-track, so a manual change on the Naim's own remote
+        sticks for the rest of the session; only the PWA slider re-sets it).
 
-        On the very first track, GetVolume is called once to adopt the
-        renderer's current volume (whatever the user has on the Naim
-        remote) as the BASELINE. Subsequent tracks reuse the cached
-        baseline; the per-track effective volume is:
-
-            level = clamp(0, 100, baseline +
-                          round((loudness_gain_db + user_trim_db) * RATIO))
-
-        The user trim defaults to 0 dB so a fresh queue plays at the
-        renderer's natural volume — never at the slider's rail."""
-        from dlna_avtransport import set_volume, get_volume
+        We deliberately do NOT read the renderer's current volume first: a
+        STOPPED Naim reports 0 via GetVolume, and adopting that as the
+        baseline silenced every track (the 2026-05-30 bug this replaces).
+        Loudness gain is no longer applied — the only offset is the user
+        trim, which defaults to 0 on a fresh queue, so the first track plays
+        at exactly STARTUP_VOLUME."""
         with self._lock:
             rc_url   = self._rc_url
             baseline = self._renderer_baseline
             trim_db  = self._user_trim_db
         if not rc_url:
             return
-        # First-play baseline adoption
-        if baseline is None:
-            cur = get_volume(rc_url)
-            if cur is None:
-                log.debug(f"RendererQueue: GetVolume failed on {rc_url} — "
-                          f"skipping loudness gain")
-                return
-            baseline = cur
-            with self._lock:
-                self._renderer_baseline = cur
-        # Per-track gain
-        from dlna_library import DB
-        try:
-            gain_db = DB.gain_db_for_url(t.get("url", ""))
-        except Exception:
-            gain_db = 0.0
-        offset = round((gain_db + trim_db) * GAIN_TO_VOLUME_RATIO)
+        if baseline is not None:
+            return          # already set this queue — don't re-assert
+        baseline = STARTUP_VOLUME
+        with self._lock:
+            self._renderer_baseline = baseline
+        offset = round(trim_db * GAIN_TO_VOLUME_RATIO)
         level  = max(0, min(100, baseline + offset))
         # Fire-and-forget so a slow Naim SOAP (busy serving the snapshot
-        # poller) doesn't delay SetURI/Play. Worst case: a few hundred
-        # ms of audio at the wrong level — inaudible compared to the
-        # alternative of the track stalling.
+        # poller) doesn't delay SetURI/Play.
         self._set_volume_async(rc_url, level)
-        if abs(offset) >= 1:
-            log.debug(f"RendererQueue: loudness {gain_db:+.1f} dB + "
-                      f"trim {trim_db:+.1f} dB → SetVolume({level}) "
-                      f"(baseline={baseline}, offset={offset:+d})")
+        log.debug(f"RendererQueue: startup SetVolume({level}) "
+                  f"(baseline={baseline}, trim={trim_db:+.1f} dB)")
 
     def _send_current(self) -> bool:
         """Send SetURI + Play for tracks[_index]. Returns True on success.
@@ -494,10 +480,9 @@ class RendererQueue:
         with self._lock:
             self._started_at = time.monotonic()
 
-        # Apply per-track loudness normalization BEFORE the Play —
-        # changing volume after the audio is already streaming would be
-        # audible as a step.
-        self._apply_loudness_gain(t)
+        # Set the startup volume BEFORE the Play (once per queue; a no-op
+        # on tracks 2+). Doing it before avoids an audible step.
+        self._apply_startup_volume()
 
         ok = avtransport_send(av_url, t.get("url",""),
                               t.get("title",""), t.get("mime",""))
