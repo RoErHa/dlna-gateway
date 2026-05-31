@@ -1,15 +1,30 @@
 # Migration Plan — Replace AssetUPnP with an in-process library backend
 
-> **Status (2026-05-29):** the operational roadmap for this work now
-> lives in the top-level `CLAUDE.md` under
-> [**Library backend migration (in flight)**](../CLAUDE.md#library-backend-migration-in-flight),
-> which **supersedes this document** and adds the multi-backend
-> `LibraryProvider` seam expansion (UpnpProvider, PlexProvider,
-> JellyfinProvider, LocalFsProvider).
+> **✅ MIGRATION COMPLETE (2026-05-31).** All phases P0–P6 shipped and
+> Naim-verified. AssetUPnP is decommissioned (switched off, `tracks`
+> rows deleted, playlists relinked to LocalFs via
+> `tools/relink_playlists_to_localfs.py`). **RoHaLocalFS** — the
+> in-process indexer + bit-perfect file server (`:8200`) — is the live
+> backend: folder-based album grouping, embedded-art serving, gapless
+> auto-advance (C6, TrackURI tracking). The `UpnpProvider` class is
+> **kept** for MinimServer / any generic UPnP server added later; only
+> the AssetUPnP binary is retired.
 >
-> This file is preserved as the historical artifact — the original
-> 6-phase plan as captured before the modular-provider design was
-> added.
+> **What shipped:** P0–P1 `LibraryProvider` seam + `UpnpProvider`;
+> P2–P3 `LocalFsProvider` (mutagen index, content-hashed ids, mtime/size
+> cache) + `dlna_localfs_server.py` (Range-aware, DLNA-headered,
+> bit-perfect); P4 boot wiring + Naim-fetchable URLs + gapless; P5–P6
+> parallel run then decommission + playlist relink.
+>
+> **Known post-migration follow-ups:** LocalFs is a SUBSET of what
+> AssetUPnP served (~23.8k vs ~28.8k tracks — the playlist relink lost
+> ~38%); split-folder tidiness is optional/not-planned; Plex/Jellyfin
+> providers remain weekend projects on the proven seam.
+>
+> The original operational roadmap lived in `CLAUDE.md`; that section is
+> now condensed to architecture-reference + a status summary. This file
+> remains the historical artifact — the original 6-phase plan captured
+> before the modular-provider design was added.
 
 **Purpose:** Remove the dependency on AssetUPnP by folding its two remaining
 responsibilities — *indexing the music library* and *serving audio bytes* — into

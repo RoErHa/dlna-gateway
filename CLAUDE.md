@@ -6,14 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPnP MediaServers (AssetUPnP, MinimServer, Jellyfin, Plex) on the local network, indexes their music into a local SQLite DB, and exposes a PWA web UI for browsing and playback. Playback targets: UPnP MediaRenderers (Naim Uniti, etc.) and browser audio. The gateway also announces itself as a UPnP MediaServer so UPnP renderers can browse its playlists directly.
 
-> **In flight — backend migration.** AssetUPnP is being replaced by an
-> in-process indexer + file server, and the AssetUPnP-shaped code path
-> is being generalised into a pluggable **`LibraryProvider` seam** so
-> the gateway can speak to any of: AssetUPnP, MinimServer, Plex,
-> Jellyfin, or our own in-process backend, modularly. See
-> **[Library backend migration](#library-backend-migration-in-flight)**
-> below for the working roadmap (this section supersedes the standalone
-> `docs/MIGRATION_PLAN.md`).
+> **Backend migration COMPLETE (2026-05-31).** AssetUPnP has been
+> replaced by an in-process indexer + bit-perfect file server
+> (**RoHaLocalFS**), and the AssetUPnP-shaped code path was generalised
+> into a pluggable **`LibraryProvider` seam** so the gateway can speak to
+> any of: AssetUPnP/MinimServer (UpnpProvider, kept), Plex, Jellyfin, or
+> the in-process LocalFs backend. See **[Library backend — LocalFs](#library-backend--localfs-migration-complete)**
+> below for the architecture; phase history is in `docs/MIGRATION_PLAN.md`.
 
 ## Running the Gateway
 
@@ -315,17 +314,19 @@ Because there's no automated test coverage for on-device behavior (iOS Safari, A
 
 When something goes wrong, the diagnostic order is (1) `gateway.log` `dlna.client` entries for browser-side events, (2) `/tmp/dlna-gateway.err` for server-thread crashes, (3) Safari DevTools Web Inspector for pre-report JS errors.
 
-## Library backend migration (in flight)
+## Library backend — LocalFs (migration complete)
 
-**Goal.** Replace AssetUPnP with an in-process indexer + file server,
+> **Status: migration complete (2026-05-31).** AssetUPnP is
+> decommissioned; **RoHaLocalFS** (in-process indexer + bit-perfect file
+> server) is the live backend. This section is now architecture
+> reference — the seam, the providers, the non-negotiable rules — plus a
+> condensed **Status — migration COMPLETE** summary below. The
+> blow-by-blow phase history (P0–P6) lives in `docs/MIGRATION_PLAN.md`.
+
+**Original goal.** Replace AssetUPnP with an in-process indexer + file server,
 **while generalising the AssetUPnP-shaped code into a `LibraryProvider`
 seam** so the gateway can speak to any of: AssetUPnP, MinimServer,
 Plex, Jellyfin, or our own in-process backend, modularly.
-
-> This is the working roadmap. The standalone `docs/MIGRATION_PLAN.md`
-> is the source-of-truth historical artifact; this section is the
-> operational guidance and supersedes it. Update both when the design
-> moves.
 
 ### Why we're doing this
 
@@ -473,428 +474,36 @@ Phase 0 is mechanical refactoring — no behaviour change:
 The non-UPnP providers (`plex.py`, `jellyfin.py`, `localfs.py`) only
 appear in later phases.
 
-### Phases
+### Status — migration COMPLETE (2026-05-31)
 
-#### Phase 0 — Prep & the seam (this section)
+All phases P0–P6 are done and verified. AssetUPnP is decommissioned
+(switched off, its `tracks` rows deleted, playlists relinked to LocalFs
+via `tools/relink_playlists_to_localfs.py`). **RoHaLocalFS is the live
+backend**: in-process indexer + bit-perfect file server (`:8200`),
+folder-based album grouping, gapless auto-advance (Naim-verified). The
+`UpnpProvider` class is **kept** — it's how MinimServer / any generic
+UPnP server is supported going forward; only the AssetUPnP binary is
+retired.
 
-- [x] CLAUDE.md updated with the seam, non-negotiable rules,
-      multi-backend table, and phase plan.
-- [x] `dlna_providers/__init__.py` — `LibraryProvider` Protocol +
-      `Artist` / `Album` / `Track` dataclasses + class registry
-      (`register_provider`, `get_provider_class`,
-      `list_provider_names`) + instance registry (`bind_provider`,
-      `get_provider`, `unbind_provider`, `list_bound_udns`) +
-      test-only utilities (`clear_bindings`, `clear_provider_classes`).
-- [x] `dlna_providers/mock.py` — `MockProvider` with `seed_artist` /
-      `seed_album` / `seed_track` / `set_reachable` / `fire_change`
-      test hooks. Satisfies the Protocol structurally
-      (`@runtime_checkable` lets `isinstance(p, LibraryProvider)`
-      verify it).
-- [x] `tests/test_providers_seam.py` — 39 tests covering dataclass
-      shape (frozen + defaults), class registry (re-registration
-      replacement, sorted listing, unknown-returns-None), instance
-      registry (round-trip, multiple-UDN independence, empty-UDN
-      rejected, `clear_bindings` keeps classes), Protocol
-      conformance (`isinstance(MockProvider(), LibraryProvider)`),
-      and MockProvider semantics (artist filter, album-filter-by-
-      artist, track-filter-by-album sorted by `track_number`,
-      get-missing returns None, `stream_url` format, search across
-      title/artist/album case-insensitive with `limit`, `probe`
-      state, `watch_changes` multi-subscriber fan-out).
+The detailed phase-by-phase record lives in `docs/MIGRATION_PLAN.md`.
+What shipped:
 
-**Done when:** the seam exists, is registered with the gateway, and
-the unit test suite still passes with zero functional changes.
-**Achieved.** 446/446 unit tests + 133/133 tools tests pass after
-the seam landed (407 + 39 new). No production code yet imports the
-seam — Phase 1 wires `UpnpProvider` in.
+- **P0–P1** — `LibraryProvider` seam + registry; `UpnpProvider` wraps the
+  existing UPnP SOAP path (no functional change).
+- **P2–P3** — `LocalFsProvider` (mutagen index, content-hashed track ids,
+  mtime/size cache) + `dlna_localfs_server.py` (Range-aware, DLNA-headered,
+  bit-perfect file server on `:8200`, embedded-art route).
+- **P4** — boot wiring (`dlna_localfs_wiring.maybe_start_localfs`), real
+  Naim-fetchable URLs, gapless via `SetNextAVTransportURI` + C6 TrackURI
+  auto-advance tracking.
+- **P5–P6** — ran live alongside AssetUPnP, then decommissioned it;
+  playlists/favourites relinked to LocalFs.
 
-#### Phase 1 — Extract the UpnpProvider (no functional change)
-
-- [x] `dlna_providers/upnp.py` — `UpnpProvider` wraps
-      `dlna_content.cd_browse / cd_search / browse_all`. The class
-      satisfies `LibraryProvider` structurally; high-level methods
-      (`list_artists / list_albums / list_tracks / get_track /
-      search / watch_changes`) explicitly raise `NotImplementedError`
-      in P1 — they get real bodies in P2+ when callers move to the
-      high-level seam. `probe()` is real; `stream_url(track_id)` is
-      the identity (UPnP's track id IS the renderer-fetchable URL).
-- [x] Provider construction at discovery time:
-      `dlna_discovery.probe_url` does `bind_provider(udn,
-      UpnpProvider(srv))` immediately after `servers.add(srv)`. Every
-      UDN gets a bound provider before anything tries to browse.
-- [x] `api_browse.browse()` and `dlna_indexer._index_body()` use
-      `get_provider(udn).cd_browse(...)` / `.browse_all(...)`. No
-      direct `dlna_content` imports remain anywhere in the gateway
-      core.
-- [x] AVTransport import shim removed from `dlna_content.py` — the
-      eight `from dlna_content import avtransport_*` callsites in
-      `dlna_player.py` and `api_playback.py` now import from
-      `dlna_avtransport` directly. AVTransport is the renderer-control
-      side and is orthogonal to the LibraryProvider seam.
-- [x] `_parse_didl` (UPnP DIDL-Lite parser) re-exported from
-      `dlna_providers/upnp.py` so `tests/test_year.py` doesn't need
-      to import `dlna_content` directly.
-- [x] Existing tests updated: `tests/test_player.py` and
-      `tests/test_player_volume.py` patch targets moved from
-      `dlna_content.*` to `dlna_avtransport.*` (where the symbols
-      actually live now that the shim is gone). 19 new
-      `tests/test_provider_upnp.py` tests cover wire-level
-      delegation, Protocol conformance, `stream_url` identity,
-      `probe()` truth/false paths, and the `NotImplementedError`
-      contracts on the stubbed methods.
-
-**Done when:** `git grep` finds zero direct calls to `dlna_content`
-from anywhere except `dlna_providers/upnp.py`. All existing
-behaviour preserved.
-**Achieved.** 465/465 unit + 202/202 run_all + 134/134 frontend after
-P1 (was 446 + 202 + 134, +19 new). Live `/api/servers` and
-`/api/browse` against AssetUPnP both 200. Restart-verified
-2026-05-29.
-
-#### Phase 2 — LocalFs index (no serving)
-
-- [x] `dlna_providers/localfs.py` — `LocalFsProvider` walks a music
-      root via `os.walk` (followlinks=False), reads tags + technical
-      info (duration, bit_depth, sample_rate) via `mutagen.File(...,
-      easy=True)`, and upserts rows into `library.db` under a
-      synthesised UDN of its own
-      (`uuid:localfs-<sha1(root)[:32]>`). All mutagen access lives
-      behind `_read_tags()` so tests mock it out without needing
-      real audio files. mutagen + watchdog added to
-      `requirements.txt`.
-- [x] **Stable internal IDs**: `_track_id_for(rel_path)` =
-      `sha1(rel_path)[:16]`. Survives rescans the way AssetUPnP's
-      d-id chaos never did — renaming a file legitimately produces
-      a new id; a re-walk produces the same id.
-- [x] **Per-file `mtime` + `size` cache** in a new `localfs_files`
-      table on `library.db`. `rescan()` builds a path-keyed cache
-      map, walks the tree, and short-circuits unchanged files
-      (same mtime + same size). New/changed → re-read tags; removed
-      → drop the cache row AND the `tracks` row. Stats:
-      `{scanned, new, changed, unchanged, removed, malformed,
-      elapsed_sec}`. `--force` ignores the cache.
-- [x] **Embedded art**: `_extract_art_hash()` reads the first cover
-      (FLAC `.pictures`, ID3 `APIC`, MP4 `covr`) and stores a
-      `localfs-art:<sha1[:24]>` placeholder marker on the track row.
-      Real bytes-on-disk and a served URL come in Phase 3 — the
-      placeholder is just so the existing `_backfill_album_art`
-      pass propagates a consistent value across sibling tracks.
-- [x] **Malformed files flagged, not silently dropped**: mutagen
-      open failures + tag parse failures log at WARNING and tick
-      the `malformed` counter; the file is skipped, the row isn't
-      written. Unreadable files are NOT entered into the cache, so
-      a later fix re-tags them.
-- [x] **Transactional commit**: a single `with self._library._pool.write()
-      as conn:` wraps the cache writes + tracks deletes per rescan.
-      `upsert_tracks` already wraps its own write in a transaction.
-      A kill mid-scan leaves the previous commit intact — no
-      half-updated served view.
-- [x] **`stream_url` raises NotImplementedError** with an
-      "is Phase 3" message; the test pins that contract so future
-      callers can rely on it.
-- [x] High-level Protocol methods (`list_artists`/`list_albums`/
-      `list_tracks`/`get_track`/`search`) implemented by reading
-      `library.db` — the existing browse layer "just works" against
-      the new UDN. `watch_changes` uses `watchdog` when installed;
-      raises NotImplementedError otherwise.
-- [x] **Schema extension**: `LibraryDB._init_schema` creates
-      `localfs_files(path PRIMARY KEY, mtime, size, track_id,
-      last_scanned)` idempotently. **`upsert_tracks` extended** to
-      honor caller-supplied `bit_depth`/`sample_rate` — UPnP items
-      still fall through to the URL-pattern parser, LocalFs items
-      get the mutagen-read values.
-- [x] **CLI driver** `tools/localfs_scan.py` — runs a scan, prints
-      stats, has a `--compare` mode that lists tracks/albums per UDN
-      so the LocalFs count can be diffed against AssetUPnP's.
-      Defaults to `LOCALFS_MUSIC_ROOT` or `/Volumes/SAMDATA/Music`.
-      `--force` bypasses the cache.
-- [x] **Tests** in `tests/test_provider_localfs.py` — 31 cases
-      covering pure helpers (id stability, udn stability, duration
-      formatter, extension allowlist excludes mp4), schema
-      (`localfs_files` columns), provider construction + Protocol
-      conformance + registry hookup, `probe()` (true / missing root
-      / PermissionError), `rescan()` full path (indexes audio /
-      skips non-audio / skip-unchanged on re-pass / `--force`
-      re-reads / detect-removed / detect-changed / .Trashes-skip /
-      malformed-counter / caller-supplied bit_depth wins),
-      `stream_url` NotImplementedError pinning, `watch_changes`
-      NotImplementedError when watchdog absent.
-
-**Done when:** the LocalFs index matches the existing UpnpProvider's
-view — same album/track counts, art present, oddities logged. Pure
-read, zero risk, runs alongside AssetUPnP.
-**Achieved.** 496/496 unit (was 465 + 31 new) + 202/202 run_all.
-End-to-end smoke test with real ffmpeg-generated FLAC files via
-`tools/localfs_scan.py` confirmed: mutagen reads
-(artist/album/title/year/bit_depth/sample_rate/mime/duration)
-correctly; rows land in `library.db`; the existing wide-UNIQUE
-dedup applies as expected. Verification against SAMDATA pending
-user-side (SAMDATA needs `~/bin/unlock-samdata.sh` after boot —
-TCC-blocked from gateway context). Once unlocked:
-`python3 tools/localfs_scan.py` then
-`python3 tools/localfs_scan.py --compare` shows the LocalFs UDN's
-counts next to AssetUPnP's.
-
-#### Phase 3 — LocalFs file serving
-
-- [x] `dlna_localfs_server.py` — `LocalFsHTTPHandler` +
-      `start_server(library_db_path, port=8200, host='0.0.0.0',
-      allowed_roots=(…))`. Built on stdlib `ThreadingHTTPServer` so
-      each request runs in its own daemon thread. `GET
-      /localfs/stream/<track_id>` resolves the id via
-      `library.db.tracks` (filtered to `udn LIKE 'uuid:localfs-%'`)
-      and streams the file in 64 KB chunks. **Bit-perfect**:
-      `read()` from disk, `wfile.write()` to socket — no
-      transcoding anywhere. Confirmed in the smoke test by
-      comparing `sha256(served)` against `sha256(source_file)`.
-- [x] Range support: `Accept-Ranges: bytes` always, `Range:
-      bytes=N-M` parsed by `_parse_range_header()` (handles
-      `N-M` / `N-` / `-N` plus the unsatisfiable cases). Response
-      is `206 Partial Content` + `Content-Range: bytes N-M/<size>`
-      when a range is honoured, or `416 Range Not Satisfiable` +
-      `Content-Range: bytes */<size>` when the range is past EOF
-      or malformed. Multipart ranges deliberately rejected — Naim
-      doesn't use them and supporting them complicates the chunked
-      writer for no gain.
-- [x] DLNA headers: `_dlna_headers_for_mime()` maps content family
-      → DLNA Profile Name (FLAC, MP3, AAC_ISO_320, LPCM, OGG,
-      DSD). `contentFeatures.dlna.org: DLNA.ORG_PN=…;DLNA.ORG_OP=01;
-      DLNA.ORG_FLAGS=01700000…`. `transferMode.dlna.org:
-      Streaming`. `OP=01` advertises Range support — the Naim
-      keys on this when deciding whether to issue seek requests.
-- [x] Bind on `0.0.0.0` by default (configurable via `host` kwarg
-      + the CLI's `--host`). `127.0.0.1` would work for tests but
-      silently break Naim playback over the LAN — the spec is
-      explicit about this.
-- [x] Path-traversal defence: handler subclass remembers the
-      resolved `allowed_roots`; before opening any file it checks
-      that `Path(file_path).resolve()` starts with one of them.
-      Refuses `403` otherwise. (The `file_path` column in
-      `library.db` is normally trustworthy — only `LocalFsProvider`
-      writes it — but defence-in-depth is cheap.) **macOS-specific
-      note**: `allowed_roots` MUST be canonicalised via
-      `Path.resolve()` at server-construction time because
-      `/var/folders/...` resolves to `/private/var/folders/...`
-      on macOS, and the test fixture / production paths produce
-      different forms. `make_handler_class()` does the
-      canonicalisation.
-- [x] `LocalFsProvider.stream_url(track_id)` updated for P3:
-      returns `<base_url>/localfs/stream/<id>` once `set_base_url()`
-      has been called; raises `NotImplementedError` with a
-      message pointing at `start_server` until then. Base URL can
-      also be supplied via the constructor (`base_url='http://…'`).
-- [x] Format coverage: FLAC, MP3, AAC, M4A/ALAC, OGG/Opus, WAV,
-      DSF/DFF are all mapped in `_MIME_BY_EXT` (from
-      `dlna_providers/localfs.py`) → MIME → DLNA PN. Real-renderer
-      verification (the Naim playing a hi-res FLAC + a DSF
-      end-to-end) is **user-side**, gated on SAMDATA being
-      unlocked. The tests pin the code paths; the renderer test
-      is the only thing the unit suite can't itself do.
-- [x] `tools/localfs_serve.py` — standalone CLI driver. Default
-      port 8200 (honors `LOCALFS_PORT`), default host `0.0.0.0`,
-      defaults `--root` from `LOCALFS_MUSIC_ROOT` or
-      `/Volumes/SAMDATA/Music`. Graceful SIGINT/SIGTERM shutdown.
-      Doesn't boot the rest of the gateway — pure serving so the
-      user can prove bit-perfect / Range / Naim playback without
-      restarting the running gateway. Auto-start from
-      `dlna_gateway.main()` is P4 work.
-- [x] `tests/test_localfs_server.py` — **31 tests**. Unit-level
-      coverage of `_parse_range_header` (every RFC 7233 shape we
-      care about + the unsatisfiable cases) and
-      `_dlna_headers_for_mime`. End-to-end coverage against a
-      real `ThreadingHTTPServer` on an ephemeral port + a real
-      file on disk + a real `library.db` row: full GET returns
-      200 + full bytes + **`sha256(served) == sha256(source)`**
-      (the P3 bit-perfect assertion), Range mid-file / open-ended
-      / suffix / past-EOF all behave correctly, HEAD returns same
-      headers + zero body, unknown id returns 404, response
-      advertises `Accept-Ranges: bytes` + `Content-Type` from the
-      DB + DLNA headers. Plus a separate test class verifying the
-      path-traversal defence (`file_path` outside `allowed_roots`
-      → 403). LocalFs provider's `test_stream_url_*` tests
-      updated for the new contract (`base_url` constructor +
-      `set_base_url()` mutator; raises a clear
-      `NotImplementedError` until set).
-
-**Done when:** `curl -r 0-1023` returns a proper 206 with
-`Content-Range`; VLC plays the stream; **`sha256` of served bytes
-== `sha256` of source file** (bit-perfect proof); the Naim plays
-a hi-res FLAC and a DSF file end-to-end through the LocalFs server.
-**Achieved (gateway side).** 530/530 unit tests + 202/202 run_all
-+ 134/134 frontend. End-to-end smoke (ffmpeg-generated FLAC →
-real CLI → http.client GET) confirmed: 200 status, exact byte
-count, **sha256 matches source**, Range 0-1023 → 206 +
-`Content-Range: bytes 0-1023/<size>` + 1024 bytes, HEAD → 200 +
-`Content-Type: audio/flac` + `DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01`.
-Naim-side verification is user gated on SAMDATA unlock.
-
-#### Phase 4 — Renderer + gapless via LocalFs
-
-- [x] Gating via env var `LOCALFS_MUSIC_ROOT` (or `localfs.root` in
-      `config.json`). Unset = unchanged UPnP-only gateway. Set =
-      LocalFs comes online additively, AssetUPnP / MinimServer
-      discovery keeps running, both UDNs coexist in `SERVERS`.
-      `LOCALFS_PORT` defaults to 8200; `LOCALFS_BASE_URL` overrides
-      the auto-detected LAN-IP base.
-- [x] `dlna_localfs_wiring.maybe_start_localfs(get_lan_ip)` —
-      called from `dlna_gateway.main()`. Starts the P3 file server,
-      constructs a `LocalFsProvider(DB, root, base_url=…)`, binds
-      it to its synthesised UDN, adds a synthetic `MediaServer` to
-      `SERVERS`, and kicks off the initial scan in a background
-      thread (same lazy posture as ART_FETCHER / LOUDNESS_SCANNER /
-      ACOUSTID_FETCHER). Kept in its own module so the run_all.py
-      "Gateway is slim (<350 lines)" lint stays green.
-- [x] `LocalFsProvider.rescan` writes a **real Naim-fetchable
-      URL** into `tracks.url` whenever `base_url` is set — `http://
-      <lan-ip>:8200/localfs/stream/<id>`. The renderer pulls bytes
-      directly; no translation layer needed in `api_browse` /
-      `api_playlists` / `RendererQueue`. Re-scan with `--force`
-      when the gateway's host or port changes. When `base_url` is
-      unset (P2-era tests / pre-server scans), the URL stays as
-      the `localfs://<udn>/<id>` placeholder and
-      `stream_url(track_id)` raises `NotImplementedError` until
-      `set_base_url()` is called.
-- [x] `avtransport_set_next_uri(av_url, media_url, title, mime)` —
-      new SOAP helper in `dlna_avtransport.py`. Sends
-      `SetNextAVTransportURI` with a DIDL-Lite metadata block; an
-      empty `media_url` clears the next URI (used after the last
-      track of a queue). Mirrors `avtransport_send` in error
-      handling: returns `False` on SOAP failure, doesn't raise.
-- [x] `RendererQueue._send_current` queues the next track via
-      `avtransport_set_next_uri` immediately after a successful
-      `avtransport_send`. The Naim transitions to the queued URI
-      seamlessly when the current track ends — **no audible gap
-      or click**. Failure in the SetNext call is non-fatal: the
-      existing PLAYING → STOPPED advance path still works, just
-      with the legacy click at track boundaries. On the LAST
-      track of the queue, `set_next_uri("")` clears any
-      previously-queued URI so the renderer doesn't try to flow
-      into stale state.
-- [x] Tests: `tests/test_avtransport_setnext.py` (4) pins the
-      SOAP body shape (`SetNextAVTransportURI` action,
-      `<NextURI>` element, DIDL-Lite metadata, XML escapes), empty
-      URL clear path, SOAP-error returns False.
-      `tests/test_player_gapless.py` (4) pins that after a
-      successful Play the renderer queues the *next* track's URL
-      and title, that the last track clears the queued URI, and
-      that a SetNext failure is non-fatal.
-      `tests/test_provider_localfs.py` gained 2 cases pinning the
-      P2-era placeholder URL (when `base_url` is unset) and the
-      P4 Naim-fetchable URL (when `base_url` is set).
-
-**Done when:** a **segued album plays with no gap or click** on
-the Naim through LocalFs (test with continuous prog suites —
-Ayreon, Focus, Pink Floyd's *The Wall*); seeking works; track
-metadata in the now-playing line is correct.
-**Achieved (gateway side).** 540/540 unit tests + 202/202 run_all.
-Naim-side gapless / segued-album test is user-gated on SAMDATA
-unlock + setting `LOCALFS_MUSIC_ROOT` in the gateway's environment
-(see the LaunchAgent plist if running under launchd).
-
-**Gapless auto-advance tracking (C6, FIXED 2026-05-31).** A renderer
-auto-transitions to a queued `SetNextAVTransportURI` without ever
-reporting STOPPED, so the `PLAYING → STOPPED` advance never fired:
-`_index` lagged (now-playing showed the wrong track) AND the eventual
-STOPPED — after the queued track finished with nothing else queued —
-made the monitor advance and **re-send the already-played track
-(double-play)**. Fix: `_monitor` now reads the renderer's current
-`TrackURI` (added to `avtransport_get_position`) each PLAYING poll while
-a next track is queued; the pure helper `_gapless_advanced(cur_state,
-track_uri, cur_url, next_url)` returns True when the renderer's TrackURI
-is the queued NEXT track's URL. On a hit the monitor syncs `_index += 1`
-+ resets `_started_at` + queues the new next via the extracted
-`_queue_next_uri()` — WITHOUT re-sending (no double-play). Safe-degrades:
-a renderer that doesn't report TrackURI falls back to the STOPPED→advance
-path (pre-C6 behaviour). The STOPPED→advance path still handles the last
-track / non-gapless renderers. Tests: `tests/test_player_gapless.py`
-(`TestGaplessAdvancedDecision` 7 + `TestGetPositionTrackUri` 2). Naim-side
-gapless/segued-album verification is user-gated.
-
-**Live multi-source operation (2026-05-30).** LocalFs ran live
-alongside AssetUPnP for the first time. Three fixes landed:
-
-1. **Stream-URL self-heal.** `tracks.url` was stuck as the
-   `localfs://<udn>/<id>` placeholder (the first scan ran via the
-   base_url-less CLI `tools/localfs_scan.py`, which populated the
-   mtime/size cache; every later gateway scan then saw the files as
-   `unchanged` and skipped the per-file URL write). `LocalFsProvider.rescan()`
-   now does a cache-independent UPDATE that forces every row to
-   `<base_url>/localfs/stream/<obj_id>` whenever `base_url` is set —
-   idempotent, keyed on `obj_id`. A LAN-IP/port change is healed the
-   same way.
-2. **Embedded-art serving + heal.** `tracks.art` held unresolved
-   `localfs-art:<hash>` markers (serving was deferred in P2/P3 and
-   never built). The new `/localfs/art/<id>` route serves the bytes;
-   `rescan()` heals the markers to `<base_url>/localfs/art/<obj_id>`
-   in the same pass. The PWA's existing `/art?url=` proxy fetches them.
-3. **Online status.** `api_browse.servers()` reports LocalFs liveness
-   via `get_provider(udn).probe()` (the music root is reachable —
-   O(1)), NOT the `last_seen < _STALE_SEC` clock the heartbeat thread
-   refreshes. The synthetic LocalFs entry is never heartbeat-probed,
-   so it falsely flipped to "offline" after 300 s. UPnP servers keep
-   the staleness check.
-
-The LocalFs synthetic server is named **`RoHaLocalFS`**.
-
-**Folder-based album identity (`tracks.album_key`, 2026-05-31).**
-RoHaLocalFS groups albums by **folder**, not by tags. The per-track
-`artist` tag is the *performer*, so an artist-keyed browse fragments a
-compilation into one album per performer (the user's ~2k albums had
-ballooned to ~8k distinct album names). The reliable album boundary is
-the containing folder, so the design is **one album = one folder**:
-
-- `dlna_providers.localfs._album_key_for(rel_path)` → the track's
-  containing folder relative to the music root, with a trailing **disc
-  subfolder** (`CD1` / `Disc 2` / `Disk_3` / `Side N`, matched by
-  `_DISC_SUBDIR_RE`) **folded into its parent** — so a multi-disc release
-  stays ONE album.
-- Stored in the `tracks.album_key TEXT` column (idempotent migration in
-  `LibraryDB._init_schema`). Written per row by the scanner, persisted by
-  `upsert_tracks`, and **backfilled** in `LocalFsProvider.rescan()` for
-  pre-column / cache-unchanged rows (pure function of `file_path`, so
-  only rows missing it are touched — idempotent, base_url-independent;
-  computed in Python because the disc-fold can't be expressed in SQL).
-- A *Various Artists* compilation in one folder → one album; two distinct
-  albums that merely share a name (e.g. two *Greatest Hits*) live in
-  different folders → stay separate. UPnP rows have no `file_path`, so
-  their `album_key` is `''` (empty) and they keep the legacy
-  (artist, album) browse grouping.
-- **Status (in flight):** Layer 1 (the data layer above) is done +
-  tested. The browse-layer regroup on `album_key`
-  (`all_albums`/`artist_albums`/`all_artists`/`album_tracks`/
-  `browse_letter`/`search`), the frontend passing `album_key` on
-  drill-in, and the live re-scan/verify are the remaining layers.
-  Validated target: ~8,364 album names → ~2,110 disc-folded folders.
-
-**macOS TCC gotcha:** an interactive shell sees `/Volumes/SAMDATA`
-as locked (`ls` → "Operation not permitted") but the launchd-spawned
-gateway reads it fine — different TCC grants. Don't predict gateway
-behaviour from a shell `ls`; probe the `:8200` HTTP endpoints
-instead. Still never force-rescan if a scan would genuinely see zero
-files (real unmount) — `rescan()` deletes the `tracks` rows of
-unseen files, which would wipe the LocalFs library.
-
-#### Phase 5 — Parallel run
-
-- [ ] Live on LocalFs for daily listening; AssetUPnP installed but
-      idle as a one-flag fallback.
-- [ ] Track regressions via `gateway.log` greps; treat any new
-      `RendererQueue ✗ SEND FAILED` or `proxy_stream ■ END
-      reason=error` as a Phase 4 escape.
-
-**Done when:** ~2 weeks of daily listening shows no regressions
-against AssetUPnP-mode.
-
-#### Phase 6 — Decommission
-
-- [ ] Stop AssetUPnP; remove the LaunchAgent.
-- [ ] **Keep** the UpnpProvider class — it's how MinimServer support
-      lives going forward. Just drop the AssetUPnP-specific binary.
-- [ ] Remove the migration plan section from CLAUDE.md (move to
-      a "Lessons learned" appendix in `docs/`).
-
-**Done when:** AssetUPnP isn't running; the UpnpProvider still
-handles any MinimServer / generic UPnP server the user adds later.
+Post-migration follow-ups (tracked in project memory, not here): library
+completeness (LocalFs is a SUBSET of what AssetUPnP served — the playlist
+relink lost ~38%), split-folder tidiness (optional), and the non-AssetUPnP
+providers (Plex/Jellyfin) as weekend projects on the proven seam — see
+Open questions below.
 
 ### Open questions
 
