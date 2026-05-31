@@ -762,7 +762,7 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   const data = await r.json();
   const tracks = data.tracks||[];
   renderListAppend({containers:[], items: tracks});
-  if(tracks.length > 1){ _wireAlbumFavStar(artist, album); }
+  if(tracks.length > 1){ _wireAlbumFavStar(artist, album, albumKey); }
 }
 
 // ── Album favourite star (album header) ──────────────────────────
@@ -775,14 +775,17 @@ function _setAlbumFavStar(visible, isFav){
   btn.title = isFav ? "Remove from Favourite Albums" : "Add to Favourite Albums";
 }
 
-async function _wireAlbumFavStar(artist, album){
+async function _wireAlbumFavStar(artist, album, albumKey=""){
   const btn = $("browse-fav-album");
   if(!btn) return;
+  // album_key (LocalFs folder identity) is preferred so a compilation is
+  // favourited as one album; falls back to (artist, album).
+  const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
   // Show empty by default, then upgrade to filled after the check
   // round-trip — UI is responsive even if the call is slow.
   _setAlbumFavStar(true, false);
   try {
-    const r = await api(`/api/album_favourites/check?artist=${enc(artist)}&album=${enc(album)}`);
+    const r = await api(`/api/album_favourites/check?artist=${enc(artist)}&album=${enc(album)}${kq}`);
     if(!r) return;
     const j = await r.json();
     _setAlbumFavStar(true, !!j.is_favourite);
@@ -793,7 +796,7 @@ async function _wireAlbumFavStar(artist, album){
     _setAlbumFavStar(true, !wasFav);
     const path = wasFav ? "/api/album_favourites/remove" : "/api/album_favourites/add";
     try {
-      const r = await api(`${path}?artist=${enc(artist)}&album=${enc(album)}`);
+      const r = await api(`${path}?artist=${enc(artist)}&album=${enc(album)}${kq}`);
       if(!r){ _setAlbumFavStar(true, wasFav); return; }
       // Invalidate the cached list so the right-column view refetches.
       albumFavouritesCache = null;
@@ -1225,6 +1228,7 @@ async function showAlbumFavourites(){
     div.className="pl-track album-fav-row";
     div.dataset.artist=fa.artist||"";
     div.dataset.album=fa.album||"";
+    div.dataset.albumKey=fa.album_key||"";
     const artHTML=fa.art
       ? `<img src="/art?url=${encodeURIComponent(fa.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
       : "";
@@ -1239,7 +1243,7 @@ async function showAlbumFavourites(){
         const srv=servers[fa.udn];
         if(srv) curServer=srv;
       }
-      _showFavAlbumTracks(fa.artist, fa.album);
+      _showFavAlbumTracks(fa.artist, fa.album, fa.album_key||"");
     });
     tracks.appendChild(div);
   });
@@ -1250,7 +1254,7 @@ async function showAlbumFavourites(){
 // chain): we reset the nav stack to a single sentinel so drillBack
 // returns the user to the favourites list, NOT to a bogus
 // "Pink Floyd albums" view that they never visited.
-async function _showFavAlbumTracks(artist, album){
+async function _showFavAlbumTracks(artist, album, albumKey=""){
   if(!curServer) return;
   // Reset Browse drill state — we're not coming from a drill chain.
   browseNavStack = [{type: "album_favourites", label: "⭐ Favourite Albums"}];
@@ -1273,14 +1277,15 @@ async function _showFavAlbumTracks(artist, album){
   $("browse-back-title").textContent = "⭐ Favourite Albums";
   $("browse-section-hdr").style.display = "";
   $("browse-section-title").textContent = esc(artist || "Various Artists");
-  $("browse-play-all").onclick = () => playAlbumFromDB(artist, album);
+  $("browse-play-all").onclick = () => playAlbumFromDB(artist, album, albumKey);
   _setAlbumFavStar(false, false);
-  const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}`);
+  const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
+  const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
   const data = await r.json();
   const tracks = data.tracks || [];
   renderListAppend({containers:[], items: tracks});
-  if(tracks.length > 1){ _wireAlbumFavStar(artist, album); }
+  if(tracks.length > 1){ _wireAlbumFavStar(artist, album, albumKey); }
 }
 
 // ── Internet radio ("📡 Stations") ───────────────────────────────

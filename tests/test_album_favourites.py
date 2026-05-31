@@ -211,5 +211,94 @@ class TestAlbumFavouritesHandlers(unittest.TestCase):
         self.assertEqual(len(h.last[1]), 2)
 
 
+# ── album_key (folder-identity favourites, A2 / 2026-05-31) ─────────
+
+import sqlite3   # noqa: E402
+
+
+class TestAlbumFavByKey(unittest.TestCase):
+    """Favouriting a LocalFs album by FOLDER (album_key)."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+
+    def test_add_and_is_by_album_key(self):
+        self.assertTrue(self.db.album_fav_add(
+            "Various Artists", "Hits", album_key="VA/Hits 1"))
+        self.assertTrue(self.db.album_fav_is(
+            "Various Artists", "Hits", album_key="VA/Hits 1"))
+        # A different folder with the SAME display is NOT favourited.
+        self.assertFalse(self.db.album_fav_is(
+            "Various Artists", "Hits", album_key="VA/Hits 2"))
+
+    def test_same_display_different_folders_coexist(self):
+        # PK includes album_key, so two comps sharing artist+album display
+        # both persist (would have collided under the old PK).
+        self.assertTrue(self.db.album_fav_add(
+            "Various Artists", "Greatest Hits", album_key="A/Greatest Hits"))
+        self.assertTrue(self.db.album_fav_add(
+            "Various Artists", "Greatest Hits", album_key="B/Greatest Hits"))
+        keys = {f["album_key"] for f in self.db.album_fav_list()}
+        self.assertEqual(keys, {"A/Greatest Hits", "B/Greatest Hits"})
+
+    def test_remove_by_album_key(self):
+        self.db.album_fav_add("VA", "X", album_key="VA/X")
+        self.assertTrue(self.db.album_fav_remove("VA", "X", album_key="VA/X"))
+        self.assertFalse(self.db.album_fav_is("VA", "X", album_key="VA/X"))
+
+    def test_list_track_count_by_folder(self):
+        udn = "uuid:localfs-t"
+        self.db.upsert_tracks(udn, [
+            {"id": "a", "url": "http://h/a", "title": "A", "artist": "P1",
+             "album": "O1", "album_key": "VA/Comp", "mime": "audio/flac"},
+            {"id": "b", "url": "http://h/b", "title": "B", "artist": "P2",
+             "album": "O2", "album_key": "VA/Comp", "mime": "audio/flac"},
+        ])
+        self.db.album_fav_add("Various Artists", "Comp", album_key="VA/Comp")
+        fav = next(f for f in self.db.album_fav_list()
+                   if f["album_key"] == "VA/Comp")
+        self.assertEqual(fav["track_count"], 2)
+
+    def test_legacy_artist_album_fav_still_works(self):
+        self.db.album_fav_add("Adele", "21")
+        self.assertTrue(self.db.album_fav_is("Adele", "21"))
+        self.assertFalse(self.db.album_fav_is("Adele", "21", album_key="x/y"))
+
+
+class TestAlbumFavMigration(unittest.TestCase):
+    """The PK-widening migration carries old rows forward with
+    album_key=''."""
+
+    def test_migration_preserves_rows_and_adds_column(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        # Build the OLD-schema table by hand, then run the migration.
+        conn = sqlite3.connect(tmp.name)
+        conn.executescript("""
+            CREATE TABLE album_favourites (
+                artist TEXT NOT NULL, album TEXT NOT NULL,
+                added_at INTEGER NOT NULL, PRIMARY KEY (artist, album));
+            INSERT INTO album_favourites VALUES ('Queen','A Night',111);
+        """)
+        conn.commit()
+        db = LibraryDB.__new__(LibraryDB)        # don't run __init__
+        db._migrate_album_fav_key(conn)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(album_favourites)")}
+        self.assertIn("album_key", cols)
+        row = conn.execute(
+            "SELECT artist, album, album_key, added_at "
+            "FROM album_favourites").fetchone()
+        self.assertEqual(row, ("Queen", "A Night", "", 111))
+        # Idempotent: a second run is a no-op.
+        db._migrate_album_fav_key(conn)
+        conn.close()
+        os.unlink(tmp.name)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -271,8 +271,9 @@ class LibraryDB:
                 CREATE TABLE IF NOT EXISTS album_favourites (
                     artist     TEXT NOT NULL,
                     album      TEXT NOT NULL,
+                    album_key  TEXT NOT NULL DEFAULT '',
                     added_at   INTEGER NOT NULL,
-                    PRIMARY KEY (artist, album)
+                    PRIMARY KEY (artist, album, album_key)
                 );
                 -- User-favourited internet-radio stations. Capped at
                 -- RADIO_FAV_MAX (25), enforced server-side in
@@ -443,6 +444,7 @@ class LibraryDB:
                 (FAVOURITES_ID, "⭐ Favourites", -1))
             self._migrate_json(conn)
             self._migrate_device_roles(conn)
+            self._migrate_album_fav_key(conn)
             # One-shot album-art backfill across all existing tracks. Cheap
             # and idempotent — harvest is INSERT OR IGNORE, backfill only
             # touches tracks whose art is empty AND whose album_art exists.
@@ -700,6 +702,37 @@ class LibraryDB:
             conn.execute("ALTER TABLE device_roles ADD COLUMN host TEXT")
             conn.commit()
             log.info("DB migration: added host column to device_roles")
+
+    def _migrate_album_fav_key(self, conn: sqlite3.Connection):
+        """Add `album_key` to album_favourites and widen the PK to
+        (artist, album, album_key) so a LocalFs compilation can be
+        favourited by FOLDER. Many comps share artist='Various Artists'
+        plus a repeatable display name, so (artist, album) alone would
+        collide. Idempotent: detects the column's absence; rebuilds the
+        table (it's tiny), carrying existing rows forward with
+        album_key=''. SQLite can't ALTER a PRIMARY KEY in place, hence the
+        rebuild."""
+        cols = {row[1] for row in
+                conn.execute("PRAGMA table_info(album_favourites)")}
+        if not cols or "album_key" in cols:
+            return  # fresh DB already has the new shape, or already migrated
+        conn.executescript("""
+            CREATE TABLE album_favourites_new (
+                artist     TEXT NOT NULL,
+                album      TEXT NOT NULL,
+                album_key  TEXT NOT NULL DEFAULT '',
+                added_at   INTEGER NOT NULL,
+                PRIMARY KEY (artist, album, album_key)
+            );
+            INSERT OR IGNORE INTO album_favourites_new
+                (artist, album, album_key, added_at)
+                SELECT artist, album, '', added_at FROM album_favourites;
+            DROP TABLE album_favourites;
+            ALTER TABLE album_favourites_new RENAME TO album_favourites;
+        """)
+        conn.commit()
+        log.info("DB migration: album_favourites gained album_key "
+                 "(PK widened to artist, album, album_key)")
 
     # ── Device role memory ────────────────────────────────────────
 
@@ -1900,53 +1933,75 @@ class LibraryDB:
     # clear(udn) and re-indexing. Same persistence pattern as
     # album_art, play_counts, lyrics, track_loudness.
 
-    def album_fav_add(self, artist: str, album: str) -> bool:
+    def album_fav_add(self, artist: str, album: str,
+                       album_key: str = "") -> bool:
         """Mark an album as favourite. Idempotent — re-adding is a no-op
-        and doesn't bump added_at. Returns True if a new row was created."""
+        and doesn't bump added_at. Returns True if a new row was created.
+        `album_key` (LocalFs folder identity) makes a compilation
+        favouritable as one album; empty for (artist, album)-keyed
+        sources."""
         if not album:
             return False
         with self._pool.write() as conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO album_favourites "
-                "(artist, album, added_at) VALUES (?,?,?)",
-                (artist, album, int(time.time())))
+                "(artist, album, album_key, added_at) VALUES (?,?,?,?)",
+                (artist, album, album_key, int(time.time())))
         return cur.rowcount > 0
 
-    def album_fav_remove(self, artist: str, album: str) -> bool:
+    def album_fav_remove(self, artist: str, album: str,
+                         album_key: str = "") -> bool:
         with self._pool.write() as conn:
-            cur = conn.execute(
-                "DELETE FROM album_favourites WHERE artist=? AND album=?",
-                (artist, album))
+            if album_key:
+                cur = conn.execute(
+                    "DELETE FROM album_favourites WHERE album_key=?",
+                    (album_key,))
+            else:
+                cur = conn.execute(
+                    "DELETE FROM album_favourites "
+                    "WHERE artist=? AND album=? AND album_key=''",
+                    (artist, album))
         return cur.rowcount > 0
 
-    def album_fav_is(self, artist: str, album: str) -> bool:
+    def album_fav_is(self, artist: str, album: str,
+                     album_key: str = "") -> bool:
         with self._pool.read() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM album_favourites "
-                "WHERE artist=? AND album=? LIMIT 1",
-                (artist, album)).fetchone()
+            if album_key:
+                row = conn.execute(
+                    "SELECT 1 FROM album_favourites WHERE album_key=? LIMIT 1",
+                    (album_key,)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT 1 FROM album_favourites "
+                    "WHERE artist=? AND album=? AND album_key='' LIMIT 1",
+                    (artist, album)).fetchone()
         return row is not None
 
     def album_fav_list(self) -> list:
         """Return all favourited albums with art, track_count, and the
         UDN of a server that holds them. Albums with zero matching tracks
         across any server (e.g. server gone away) still appear so the user
-        can prune them. Sorted most-recently-added first."""
+        can prune them. Sorted most-recently-added first. A LocalFs
+        favourite (album_key set) matches its tracks by FOLDER; others by
+        (artist, album)."""
         with self._pool.read() as conn:
             rows = conn.execute("""
                 SELECT
                     f.artist,
                     f.album,
+                    f.album_key,
                     f.added_at,
                     COALESCE(aa.art_url, MAX(t.art), '') AS art,
                     COUNT(t.id)                          AS track_count,
                     COALESCE(MAX(t.udn), '')             AS udn
                 FROM album_favourites f
                 LEFT JOIN tracks t
-                       ON t.artist = f.artist AND t.album = f.album
+                       ON (f.album_key != '' AND t.album_key = f.album_key)
+                       OR (f.album_key  = '' AND t.artist = f.artist
+                           AND t.album = f.album)
                 LEFT JOIN album_art aa
                        ON aa.artist = f.artist AND aa.album = f.album
-                GROUP BY f.artist, f.album
+                GROUP BY f.artist, f.album, f.album_key
                 ORDER BY f.added_at DESC
             """).fetchall()
         return [dict(r) for r in rows]

@@ -352,3 +352,42 @@ def test_browse_tab_chrome_recovers_after_fav_album_back(app, gateway):
         "document.getElementById('letter-bar').style.display !== 'none' && "
         "document.getElementById('browse-modes').style.display !== 'none'",
         timeout=2000)
+
+
+# ── album_key (folder-identity favourites, A2) ────────────────────
+
+def test_star_check_uses_album_key(app, gateway):
+    # A LocalFs compilation opened by album_key must check/toggle the
+    # favourite by album_key, not (artist, album).
+    gateway.album_tracks_by_key["VA/Comp"] = [
+        {"url": "http://x/1", "title": "A", "artist": "P1", "album": "O1",
+         "type": "audio", "id": "1", "mime": "audio/flac"},
+        {"url": "http://x/2", "title": "B", "artist": "P2", "album": "O2",
+         "type": "audio", "id": "2", "mime": "audio/flac"}]
+    gateway.clear_requests()
+    app.evaluate(
+        "showAlbumTracks('Various Artists','Comp',null,'VA/Comp')")
+    app.wait_for_function(
+        "document.getElementById('browse-section-hdr').style.display !== 'none'",
+        timeout=3000)
+    req = gateway.wait_for_request(
+        "/api/album_favourites/check", timeout=2.0,
+        match=lambda r: r["query"].get("album_key") == "VA/Comp")
+    assert req is not None, "fav check must carry album_key"
+
+
+def test_star_add_uses_album_key(app, gateway):
+    gateway.album_tracks_by_key["VA/Comp2"] = [
+        {"url": "http://x/3", "title": "C", "artist": "P3", "album": "O3",
+         "type": "audio", "id": "3", "mime": "audio/flac"},
+        {"url": "http://x/4", "title": "D", "artist": "P4", "album": "O4",
+         "type": "audio", "id": "4", "mime": "audio/flac"}]
+    app.evaluate(
+        "showAlbumTracks('Various Artists','Comp 2',null,'VA/Comp2')")
+    app.wait_for_selector("#browse-fav-album", timeout=3000)
+    gateway.clear_requests()
+    app.locator("#browse-fav-album").click()
+    req = gateway.wait_for_request(
+        "/api/album_favourites/add", timeout=2.0,
+        match=lambda r: r["query"].get("album_key") == "VA/Comp2")
+    assert req is not None, "fav add must carry album_key"

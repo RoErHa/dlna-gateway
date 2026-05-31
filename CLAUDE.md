@@ -1163,10 +1163,23 @@ Distinct from the track-level "⭐ Favourites" playlist (id
 CREATE TABLE IF NOT EXISTS album_favourites (
   artist     TEXT NOT NULL,
   album      TEXT NOT NULL,
+  album_key  TEXT NOT NULL DEFAULT '',   -- LocalFs folder identity
   added_at   INTEGER NOT NULL,
-  PRIMARY KEY (artist, album)
+  PRIMARY KEY (artist, album, album_key)
 );
 ```
+
+`album_key` (2026-05-31, A2): a LocalFs favourite is identified by its
+**folder** (`album_key`), so a Various-Artists compilation favourites as
+one album even though every track has a different performer — and two
+distinct comps that share `artist='Various Artists'` + a repeatable
+display name don't collide (hence `album_key` in the PK). Non-LocalFs
+favourites keep `album_key=''` and the legacy `(artist, album)` identity.
+`album_fav_add/remove/is` take an optional `album_key`; `album_fav_list`
+returns it and matches `track_count`/art by folder when set. Migrated in
+`_migrate_album_fav_key` (rebuilds the table, carrying old rows forward
+with `album_key=''`). **UPnP / Subsonic fav exposure still keys on
+(artist, album) — that's the A3 follow-up.**
 
 ### LibraryDB methods
 

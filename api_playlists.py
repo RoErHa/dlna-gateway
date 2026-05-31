@@ -70,29 +70,32 @@ def album_favourites(h, params):
 
 
 def album_favourite_check(h, params):
-    artist = params.get("artist", "")
-    album  = params.get("album", "")
-    if not album:
-        h._json(400, {"error": "Missing album"})
+    artist    = params.get("artist", "")
+    album     = params.get("album", "")
+    album_key = params.get("album_key", "")
+    if not (album or album_key):
+        h._json(400, {"error": "Missing album/album_key"})
         return
-    h._json(200, {"is_favourite": DB.album_fav_is(artist, album)})
+    h._json(200, {"is_favourite": DB.album_fav_is(artist, album, album_key)})
 
 
 def album_favourite_add(h, params):
-    artist = params.get("artist", "")
-    album  = params.get("album", "")
-    if not album:
-        h._json(400, {"error": "Missing album"})
+    artist    = params.get("artist", "")
+    album     = params.get("album", "")
+    album_key = params.get("album_key", "")
+    if not (album or album_key):
+        h._json(400, {"error": "Missing album/album_key"})
         return
-    created = DB.album_fav_add(artist, album)
+    created = DB.album_fav_add(artist, album, album_key)
     h._json(200, {"ok": True, "created": created})
 
 
 def album_favourite_remove(h, params):
-    artist = params.get("artist", "")
-    album  = params.get("album", "")
-    if not album:
-        h._json(400, {"error": "Missing album"})
+    artist    = params.get("artist", "")
+    album     = params.get("album", "")
+    album_key = params.get("album_key", "")
+    if not (album or album_key):
+        h._json(400, {"error": "Missing album/album_key"})
         return
-    ok = DB.album_fav_remove(artist, album)
+    ok = DB.album_fav_remove(artist, album, album_key)
     h._json(200, {"ok": ok})
