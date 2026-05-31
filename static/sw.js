@@ -1,5 +1,5 @@
 const APP_CACHE = 'dlna-gw-app-v9';
-const ART_CACHE = 'dlna-gw-art-v1';
+const ART_CACHE = 'dlna-gw-art-v2';   // v2: evict stale blanks cached during gateway-down / pre-heal windows
 
 const SHELL = [
   '/',
