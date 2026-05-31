@@ -507,11 +507,12 @@ Open questions below.
 
 ### Open questions
 
-- **ReplayGain.** Default: pass tags through, do **not** act on
-  them (bit-perfect, simplest, the choice most critical listeners
-  make). Revisit only if loudness normalization is actually wanted.
-  The existing `LoudnessScanner` is informational only — it
-  measures, it doesn't apply.
+- **ReplayGain / loudness.** Default: pass tags through, do **not**
+  act on them (bit-perfect, simplest, the choice most critical listeners
+  make). Loudness normalization was built then removed (2026-05-31,
+  negligible benefit in peak mode + broke browser bit-perfect — see
+  "Volume control"); revisit only if perceptual/LUFS normalization is
+  ever genuinely wanted.
 - **Plex/Jellyfin priority.** Build both in Phase 2-3 only if the
   LocalFs path proves the seam works. If the seam's clean,
   third-party providers become weekend projects, not a blocker
@@ -574,7 +575,6 @@ External CLI binaries — optional per feature:
 
 | Binary | Used by | Install |
 |---|---|---|
-| `ffmpeg` | `LoudnessScanner` (per-track true-peak analysis) | `brew install ffmpeg` |
 | `fpcalc` (Chromaprint) | `AcoustIDFetcher` (fingerprint generation) | `brew install chromaprint` |
 
 Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
@@ -731,7 +731,7 @@ CREATE TABLE IF NOT EXISTS lyrics (
 );
 ```
 
-Same persistence pattern as `album_art` / `play_counts` / `track_loudness`.
+Same persistence pattern as `album_art` / `play_counts`.
 Rebuild-index does NOT wipe lyrics.
 
 ### Endpoint
@@ -774,7 +774,7 @@ Distinct from the track-level "⭐ Favourites" playlist (id
 `__favourites__`). Album favourites bookmark whole albums by
 `(artist, album)`, independent of `tracks` so they survive
 `clear(udn)` / re-indexing — same contract as `album_art`,
-`play_counts`, `lyrics`, `track_loudness`.
+`play_counts`, `lyrics`.
 
 ### `album_favourites` table
 
@@ -893,164 +893,70 @@ Required contract:
 - **No retries** — a transient failure ends up as `notfound` and stays sticky; see the "Sticky notfound cache" subsection above for how to force a retry.
 - **AcoustID has TWO key types — use the right one.** `https://acoustid.org/api-key` gives you a **user** key, intended for *submitting* fingerprints to the AcoustID database. `https://acoustid.org/applications` (register a new application) gives you an **application** key, which is what `/v2/lookup` requires. Calling `/v2/lookup` with a user key returns `HTTP 400 {"error":{"code":4,"message":"invalid API key"}}` — distinctive failure mode worth remembering. `ACOUSTID_API_KEY` in `.env` must be the application key.
 
-## Loudness normalization (Phase 1, in flight)
+## Volume control (UPnP renderer)
 
-Every track gets analysed once with `ffmpeg -af ebur128=peak=true`, the
-true peak (dBTP) is stored, and a per-track gain is applied on playback
-so all tracks sit just below a common ceiling. **Phase 1 covers UPnP
-renderers only** (Naim Uniti is the primary device). Browser-audio Web
-Audio gain is deferred to Phase 2.
+> **Loudness normalization removed (2026-05-31).** The peak-mode per-track
+> gain gave negligible perceptual benefit (modern masters peak near 0
+> dBFS), was already disabled in the playback path, and would have broken
+> bit-perfect on the browser path. `LoudnessScanner`, the `track_loudness`
+> table, `gain_db_for_url`, `/api/loudness/status`, and the `ffmpeg`
+> dependency are all gone; the slider is now purely a volume control.
+> (Perceptual/LUFS normalization, if ever genuinely wanted, would be a
+> fresh feature.)
 
-The integrated LUFS value is captured from the same ffmpeg run as
-informational metadata only; **peak drives the gain**, not LUFS.
+The gateway is NOT in the audio path for UPnP renderers — it sets the
+renderer's **hardware volume** via `RenderingControl::SetVolume`, never
+PCM. So everything here is **bit-perfect** (the Naim attenuates in its own
+DAC/analog domain).
 
-### Mode: peak normalisation (chosen 2026-05-06)
+### Startup volume + user trim
 
-Trade-off vs. EBU R128:
-- **Pro:** very small per-track adjustments. Modern masters all peak
-  near 0 dBFS, so corrections typically land within fractions of a dB.
-  Minimal interference with the user's chosen volume; the Naim's
-  hardware volume swings barely at all between tracks.
-- **Con:** does **not** equalise *perceived* loudness. Quiet classical
-  vs. loud rock both get ~0 dB correction even though they sound very
-  different. If perceptual loudness equalising becomes the goal, switch
-  back to LUFS-driven gain (the `lufs` column is still captured, so no
-  re-scan needed for that switch).
+- **`STARTUP_VOLUME = 22`** (`dlna_player.py`): set ONCE per queue on the
+  first track via `RendererQueue._apply_startup_volume()`. We deliberately
+  do NOT read the renderer's current volume first — a STOPPED Naim reports
+  0 via GetVolume, and adopting that baseline silenced playback (the
+  2026-05-30 bug). After this one-shot set, volume is never re-asserted
+  per-track, so a change on the Naim's own remote sticks for the session.
+- **User trim** — `RendererQueue.set_user_trim_db(db)`: a relative ±dB
+  offset around the startup baseline, clamped ±`MAX_USER_TRIM_DB` (5 dB),
+  applied IMMEDIATELY via SetVolume so the change is audible mid-track.
+  `GAIN_TO_VOLUME_RATIO = 2` converts slider dB → Naim volume units
+  (≈0.5 dB/unit; the renderer curve is logarithmic — approximate, tune by
+  ear). A fresh queue resets trim to 0 → plays at exactly `STARTUP_VOLUME`.
 
-### Reference target
+### `RenderingControl` SOAP helpers (`dlna_avtransport.py`)
 
-`TARGET_PEAK_DBTP = -1.0` — typical audiophile choice; keeps 1 dB of
-safety headroom under 0 dBFS so inter-sample peaks can't clip the DAC
-or the renderer's downstream chain. Defined in `dlna_loudness.py`.
-
-`_MAX_ABS_GAIN_DB = 2.0` — hard clamp on per-track adjustment. Prevents
-an outlier (e.g. an unusually quiet vinyl rip at -10 dBFS peak) from
-producing a +9 dB jump that would be jarring between tracks.
-
-### `track_loudness` table — survives `clear(udn)`
-
-```sql
-CREATE TABLE IF NOT EXISTS track_loudness (
-  url        TEXT PRIMARY KEY,   -- matches tracks.url; orphans harmless
-  lufs       REAL,               -- integrated loudness (informational); NULL ok
-  peak_db    REAL,               -- true peak (dBTP); NULL on scan failure
-  gain_db    REAL DEFAULT 0.0,   -- = TARGET_PEAK_DBTP - peak_db (clamped ±2)
-  scanned_at INTEGER NOT NULL    -- epoch seconds
-);
-```
-
-Same persistence pattern as `album_art` and `play_counts` — independent
-of `tracks`, so a rebuild-index doesn't trigger a full re-scan.
-**`clear(udn)` deliberately leaves this table alone.**
-
-The `peak_db` column was added on 2026-05-06 when the gateway switched
-from LUFS-based to peak-based normalisation; the migration in
-`dlna_library._setup` adds the column AND wipes existing rows so the
-scanner re-analyses every track and stores both values together.
-
-### `LoudnessScanner` background worker
-
-Mirrors `AlbumArtFetcher` (see `dlna_art_fetcher.py:98-212`). Public
-surface in `dlna_loudness.py`:
-
-- `bare_tracks() → [(url,)]` — tracks with no `track_loudness` row.
-- `run_once()` — drain in batches of 50; re-queries between batches so
-  triggers arriving mid-run are absorbed into the current pass.
-- `_analyze(audio_src) → (lufs, peak_db)` — subprocess
-  `ffmpeg -nostats -i {audio_src} -af ebur128=framelog=quiet:peak=true
-  -f null -`, parses both the `Integrated loudness:` and `True peak:`
-  summary blocks. Either field may be `None` on parse failure;
-  **only `peak_db is None` marks the scan as a failed/sticky-negative.**
-- `trigger()` / `start_initial_scan(delay=120)` / `stop()` — same
-  contract as `ART_FETCHER`.
-
-CPU posture: **single thread, `os.nice(10)`.** ~1 sec per track. A
-5000-track library is ~80 min once; subsequent runs hit only new tracks.
-
-### Sticky negative cache
-
-Failed scans (unreadable file, ffmpeg crash) get a row with
-`peak_db=NULL, gain_db=0.0` so we don't retry every restart — same
-convention as `album_art.source='notfound'`. To force a retry on a
-single track:
-
-```sql
-DELETE FROM track_loudness WHERE url = '...' AND peak_db IS NULL;
-```
-
-### UPnP `RenderingControl` — new SOAP helpers
-
-Added to `dlna_avtransport.py` (the service is distinct from
-AVTransport):
-
-- `set_volume(rc_url, level: int) → bool` — clamped 0-100; sends
-  `urn:schemas-upnp-org:service:RenderingControl:1#SetVolume` with
-  `Channel=Master`.
-- `get_volume(rc_url) → int | None` — used **once per RendererQueue**
-  on first play to adopt whatever the user has set on the renderer's
-  own remote as the reference.
-
-The renderer's RenderingControl URL is sourced from the device
-description XML during discovery (`dlna_discovery.py` extends
-`_RendererInfo`).
-
-### Per-track gain via SetVolume
-
-`dlna_player.py` constant: `GAIN_TO_VOLUME_RATIO = 2` (one Naim
-volume-unit ≈ 0.5 dB; **approximation** — the renderer's curve is
-logarithmic and renderer-specific). Tune by ear after first listen.
-
-`RendererQueue._send_current()` (the per-track hook):
-
-1. If `self._user_volume is None` → `get_volume(rc_url)` once, cache.
-2. Look up `gain_db = DB.gain_db_for_url(t["url"])`.
-3. `level = clamp(0, 100, _user_volume + round(gain_db *
-   GAIN_TO_VOLUME_RATIO))`.
-4. `set_volume(rc_url, level)` → then `avtransport_send` (SetURI+Play).
+- `set_volume(rc_url, level)` — clamped 0–100; `RenderingControl:1#SetVolume`
+  with `Channel=Master`.
+- `get_volume(rc_url)` — parses `<CurrentVolume>`; kept as a helper but
+  **not used on the playback path** (see the STOPPED-reports-0 note).
+- The renderer's `rc_url` is sourced from the device description XML at
+  discovery time (`dlna_discovery.py`).
 
 ### `/api/control` UPnP volume
 
-Previously rejected with "Unknown device" (api_playback.py:273).
-Implemented:
-
 ```
 POST /api/control
-{"action": "volume", "value": 65, "device": "upnp:<udn>"}
+{"action": "volume", "value": <-5..+5 dB>, "device": "upnp:<udn>"}
 ```
-
-→ `QUEUES.get(udn).set_user_volume(65)` — pushes immediately to the
-renderer AND updates the reference for next-track gain math.
-
-### `/api/loudness/status` — visibility endpoint
-
-```json
-{ "scanned": 1234, "total": 4321, "in_progress": true,
-  "target_peak_dbtp": -1.0 }
-```
-
-Routed via `dlna_routes.GET_ROUTES`; future PWA work will surface the
-progress in the index bar.
+→ `QUEUES.get(udn).set_user_trim_db(value)` — pushes to the renderer
+immediately and is sticky for the rest of the queue.
 
 ### Caveats
 
-- **Gateway is not in the audio path for Naim** — we can only adjust
-  SetVolume; we cannot apply DSP. This is a hardware reality, not a
-  limitation of the approach.
-- **The Naim's own remote will fight us.** A nudge on the Naim's remote
-  is undone on the next track's `set_volume`. Document; not solvable
-  without a poll-then-adjust loop that itself would lag.
-- **Renderer volume curve is non-linear** — `GAIN_TO_VOLUME_RATIO = 2`
-  is a guess; tune by ear.
+- **Gateway can't apply DSP** — only SetVolume (hardware). A nudge on the
+  Naim's own remote is undone on the next trim change; not solvable
+  without a poll-then-adjust loop that would lag.
+- **Renderer volume curve is non-linear** — `GAIN_TO_VOLUME_RATIO = 2` is
+  an approximation; tune by ear.
 
 ### Tests
 
 | File | What it covers |
 |---|---|
-| `tests/test_loudness.py` | `_parse_ebur128` + `_parse_true_peak` (incl. `+`-prefixed positive peaks), `bare_tracks` query (excludes already-scanned / negative-cache), `clear(udn)` survival, `run_once` writes lufs + peak_db + gain, failed-scan negative cache (`peak_db IS NULL`), gain clamped ±2 dB, `trigger()` idempotent, `start_initial_scan`, `gain_db_for_url` helper |
-| `tests/test_avtransport_volume.py` | 9 tests — `set_volume` body shape (RenderingControl namespace, `<Channel>Master</Channel>`, `<DesiredVolume>`), clamping 0/100, SOAP-fault and connection-error paths; `get_volume` parses `<CurrentVolume>`, returns None on fault/garbled/error |
-| `tests/test_player_volume.py` | 9 tests — first play calls GetVolume once then SetVolume, subsequent tracks skip GetVolume, gain math with RATIO=2, clamp at 0/100, no-row → reference passed through, `set_user_volume` updates reference + fires SetVolume immediately and is sticky for next track |
-| `tests/frontend/test_vol_extras.py` | Extended: tighter UPnP volume body assertion (`device="upnp:<udn>"` required); new `test_loudness_status_endpoint` asserts `/api/loudness/status` shape |
-| `tests/run_all.py` | Live-gateway integration: `GET /api/loudness/status` returns the four expected fields with right types |
+| `tests/test_avtransport_volume.py` | `set_volume` body shape (RenderingControl namespace, `Channel=Master`, `<DesiredVolume>`), 0/100 clamp, SOAP-fault + connection-error paths; `get_volume` parses `<CurrentVolume>`, None on fault/garbled/error |
+| `tests/test_player_volume.py` | first track sets `STARTUP_VOLUME` once, GetVolume never called, no per-track re-assert, trim composes around the baseline, trim resets on a new queue |
+| `tests/frontend/test_vol_extras.py` | UPnP volume body asserts `action=trim_db` (relative offset, not absolute) + `device="upnp:<udn>"` |
 
 ## Metadata enrichment via AcoustID (Phase 1, in flight)
 
@@ -1068,8 +974,8 @@ deferred to a possible Phase 2.
 
 ### `dlna_acoustid.AcoustIDFetcher` — background worker
 
-Mirrors `LoudnessScanner` (`dlna_loudness.py`) and `AlbumArtFetcher`
-(`dlna_art_fetcher.py`) line-for-line in lifecycle surface: `trigger()`,
+Mirrors `AlbumArtFetcher` (`dlna_art_fetcher.py`) line-for-line in
+lifecycle surface: `trigger()`,
 `stop()`, `start_initial_scan(delay=120)`, `status()`. Daemon thread,
 batched drain (`_BATCH_SIZE=50`) with `bare_tracks` re-queried between
 batches so triggers arriving mid-run get absorbed into the current
@@ -1298,13 +1204,13 @@ Those URLs become bare again on the next `ACOUSTID_FETCHER.trigger()`.
 
 `metadata_overrides` is independent of `tracks` (keyed by URL, no FK),
 so a rebuild-index doesn't trigger a full re-fingerprint. Same
-invariant as `album_art` / `play_counts` / `lyrics` / `track_loudness`.
+invariant as `album_art` / `play_counts` / `lyrics`.
 
 ### Dependencies
 
 - **Chromaprint `fpcalc`** — required CLI binary. Install via
   `brew install chromaprint`. Worker bails (no rows written) if
-  missing; mirror of the `ffmpeg`-missing guard in `LoudnessScanner`.
+  missing (same defensive bail the gateway uses for any optional CLI binary).
 - **`ACOUSTID_API_KEY`** — free key from acoustid.org, stored in
   `.env`. If unset, the singleton constructs but every `run_once()`
   is a no-op with a one-time WARN — `start_initial_scan` is a no-op
@@ -1429,8 +1335,8 @@ code. Confirmed by audit on 2026-05-11.
 
 **Naim / UPnP path.** The gateway is not in the audio path. AssetUPnP
 serves bytes directly to the renderer; the gateway only sends
-`AVTransport::SetURI` + `Play` SOAP. Loudness gain and the user trim
-slider are applied via `RenderingControl::SetVolume` SOAP, which
+`AVTransport::SetURI` + `Play` SOAP. The startup volume and the user
+trim slider are applied via `RenderingControl::SetVolume` SOAP, which
 adjusts the renderer's **hardware volume** — never PCM modification.
 See `RendererQueue` in `dlna_player.py:57-591` and
 `dlna_avtransport.py:29-94`/`278-287`.
@@ -1450,11 +1356,6 @@ HTML5 `<audio>` behaviour, not the gateway. Default = 0 dB
 output is unaffected — the same slider then routes through
 `/api/control` and the gateway calls `SetVolume` on the renderer
 hardware.
-
-**Loudness scanner.** ffmpeg is invoked only for measurement
-(`ebur128=peak=true -f null -`) in `dlna_loudness.py:258-295`;
-output bytes are discarded, only stderr is parsed. Never on the
-playback path.
 
 ## Bit-perfect on macOS
 
@@ -2109,7 +2010,7 @@ CREATE TABLE song_year_cache (
 ```
 
 Same persistence invariant as `album_art` / `play_counts` /
-`lyrics` / `track_loudness` / `metadata_overrides`: survives
+`lyrics` / `metadata_overrides`: survives
 `clear(udn)` and rebuild-index. Sticky-negative cache prevents
 re-hammering MB for songs with no MB entry.
 

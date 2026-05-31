@@ -8,7 +8,7 @@ track-level "⭐ Favourites" playlist):
 - album_fav_is reflects current state
 - album_fav_list joins art + track_count + udn correctly
 - album_favourites table survives clear(udn) (same invariant as
-  album_art / play_counts / lyrics / track_loudness)
+  album_art / play_counts / lyrics)
 - HTTP handlers route through DB and reject missing params
 
 Run standalone:

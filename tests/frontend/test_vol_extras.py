@@ -136,21 +136,6 @@ def test_volume_input_posts_trim_db_for_upnp(page, stub, gateway):
     assert body.get("device") == "upnp:uuid:naim"
 
 
-def test_loudness_status_endpoint(app, gateway):
-    """The /api/loudness/status endpoint is the contract the PWA reads to
-    show scanner progress. Stub gateway returns a sensible default; the
-    test just asserts the endpoint exists and shape is right."""
-    import json
-    txt = app.evaluate("fetch('/api/loudness/status').then(r => r.text())")
-    data = json.loads(txt)
-    for key in ("scanned", "total", "in_progress", "target_peak_dbtp"):
-        assert key in data, f"loudness status missing {key}: {data}"
-    assert isinstance(data["in_progress"], bool)
-    assert isinstance(data["scanned"], int)
-    assert isinstance(data["total"], int)
-    assert isinstance(data["target_peak_dbtp"], (int, float))
-
-
 def test_shuffle_toggle_persists(page, stub, gateway):
     page.goto(stub.base_url + "/")
     page.wait_for_function(

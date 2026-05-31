@@ -25,10 +25,11 @@ usable from any device with a browser.
     (gateway is **not** in the audio path; bit-perfect).
   - **Browser audio** — `<audio>` element + a per-tab `/stream`
     Range-proxy. Works on any device with a browser.
-- **PWA web UI.** Letter-indexed browse, FTS5 search, playlists,
-  album-level favourites, lyrics (via lrclib), album art (sibling
-  → MusicBrainz / Cover Art Archive fallback), per-track loudness
-  normalisation (peak-based, ±2 dB clamp).
+- **PWA web UI.** Letter-indexed browse (artists / albums / tracks /
+  genres / decades), FTS5 search, playlists, album-level favourites,
+  lyrics (via lrclib), album art (sibling → MusicBrainz / Cover Art
+  Archive fallback). For RoHaLocalFS, albums group by folder (one
+  folder = one album).
 - **Metadata enrichment (in flight).** Background worker fingerprints
   tracks via Chromaprint and resolves them to MusicBrainz metadata
   through AcoustID, fixing mistagged / untagged tracks. SQLite-only
@@ -58,7 +59,6 @@ use WSL2 (easy) or run native with a service wrapper like NSSM.
 Hard requirements:
 
 - Python 3.9+
-- (Optional) `ffmpeg` on `PATH` — only needed for the loudness scanner.
 - (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
   on macOS) — only needed for the AcoustID metadata-enrichment worker.
 - A music source: either network access to a UPnP MediaServer on your
@@ -257,8 +257,8 @@ performer — rather than fragmenting into one album per artist.
 The library index is a local SQLite file (`library.db`, gitignored).
 It's created automatically on first run — there's nothing to import.
 Persistent user data (playlists, favourites, play counts, lyrics,
-loudness scans, radio favourites) survives a `clear()` /
-rebuild-index. See `schema.sql` (committed) for the full schema.
+radio favourites) survives a `clear()` / rebuild-index. See `schema.sql`
+(committed) for the full schema.
 
 ## Architecture
 

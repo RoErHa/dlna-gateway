@@ -352,7 +352,7 @@ class TestAcoustIDFetcher(unittest.TestCase):
         self.assertEqual(stats, {"total": 0, "hits": 0, "notfound": 0, "errors": 0})
 
     def test_run_once_fpcalc_missing_does_not_poison_cache(self):
-        # Regression guard mirrored from LoudnessScanner: when fpcalc is
+        # Regression guard: when fpcalc is
         # missing, run_once must bail BEFORE iterating — otherwise every
         # track gets sticky-cached as notfound and the scan permanently
         # can't recover after Chromaprint is installed.
@@ -368,7 +368,7 @@ class TestAcoustIDFetcher(unittest.TestCase):
                          "no rows should be written when fpcalc is missing")
 
     def test_run_once_fpcalc_disappears_midrun_does_not_poison(self):
-        # Mirror the LoudnessScanner regression: if fpcalc vanishes mid-run
+        # Regression guard: if fpcalc vanishes mid-run
         # (Homebrew updating the symlink), the worker must bail WITHOUT
         # caching the in-flight track as a sticky negative.
         call_count = {"n": 0}

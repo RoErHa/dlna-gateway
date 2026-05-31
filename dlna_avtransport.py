@@ -339,7 +339,7 @@ def avtransport_get_position(av_url: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
-# RenderingControl — volume helpers (used by loudness normalization).
+# RenderingControl — volume helpers (the startup volume + user trim).
 # This is a *separate* UPnP service from AVTransport; the SOAP endpoint
 # URL on the renderer is different (sourced from the device description
 # during discovery and stashed as `_RendererInfo.rc_url`).

@@ -85,7 +85,7 @@ def _fetch_device(location: str,
         # Check for ContentDirectory → MediaServer
         cd_url = None
         av_url = None
-        rc_url = None    # RenderingControl — used by loudness normalization SetVolume
+        rc_url = None    # RenderingControl — used by the volume trim SetVolume
         for svc in device.findall(".//u:service", ns):
             stype = svc.findtext("u:serviceType", "", ns)
             ctrl  = svc.findtext("u:controlURL", "", ns) or ""

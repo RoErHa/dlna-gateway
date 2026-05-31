@@ -67,31 +67,6 @@ def index_status(h, params):
     h._json(200, {**INDEXER.state.get(), "db_tracks": count})
 
 
-def loudness_status(h, params):
-    """Per-track loudness scanner progress. Frontend reads this for the
-    progress UI (out of scope for Phase 1) and the suite asserts the
-    contract shape. `total` includes both analysed AND sticky-negative
-    rows, since both count as "the scanner has done its job."""
-    from dlna_library import LOUDNESS_SCANNER
-    from dlna_loudness import TARGET_PEAK_DBTP
-    with DB._pool.read() as conn:
-        scanned = conn.execute(
-            "SELECT COUNT(*) AS n FROM track_loudness").fetchone()["n"]
-        bare = conn.execute(
-            "SELECT COUNT(*) AS n FROM tracks t "
-            "WHERE t.url != '' "
-            "  AND NOT EXISTS (SELECT 1 FROM track_loudness l "
-            "                   WHERE l.url = t.url)").fetchone()["n"]
-    in_progress = bool(LOUDNESS_SCANNER._thread
-                       and LOUDNESS_SCANNER._thread.is_alive())
-    h._json(200, {
-        "scanned":          int(scanned),
-        "total":            int(scanned + bare),
-        "in_progress":      in_progress,
-        "target_peak_dbtp": float(TARGET_PEAK_DBTP),
-    })
-
-
 def index_rebuild(h, params):
     udn = params.get("udn", "")
     srv = SERVERS.get(udn)

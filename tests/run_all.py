@@ -385,17 +385,6 @@ else:
         tracks = data[0].get("tracks", 0)
         check(f"Server has tracks indexed ({tracks})", tracks > 0, f"got {tracks}")
 
-    # Loudness scanner status — contract shape the PWA / future UI reads.
-    section("T_LOUDNESS — Loudness scanner endpoint contract")
-    status, data = fetch("/api/loudness/status", expect_json=True)
-    check("GET /api/loudness/status returns 200", status == 200, f"got {status}")
-    if status == 200 and data:
-        for key, kind in (("scanned", int), ("total", int),
-                          ("in_progress", bool), ("target_peak_dbtp", (int, float))):
-            check(f"  field {key!r} is {kind.__name__ if isinstance(kind, type) else 'numeric'}",
-                  isinstance(data.get(key), kind),
-                  f"got {data.get(key)!r}")
-
 
 # ══════════════════════════════════════════════════════════════════
 # T2 — SERVER SPLIT CHECKS (file-level)

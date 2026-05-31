@@ -237,21 +237,6 @@ class LibraryDB:
                     count       INTEGER NOT NULL DEFAULT 0,
                     last_played INTEGER
                 );
-                -- Per-track loudness analysis (Phase 1 normalization).
-                -- Independent of `tracks` (keyed by URL, no FK) so it
-                -- survives clear(udn) — same invariant as album_art and
-                -- play_counts. lufs IS NULL marks a sticky negative
-                -- cache (scan failed, don't retry forever).
-                -- peak_db is the measured true-peak (dBTP) and drives
-                -- gain_db = TARGET_PEAK_DBTP - peak_db (clamped ±2 dB);
-                -- lufs is kept as an informational side measurement.
-                CREATE TABLE IF NOT EXISTS track_loudness (
-                    url        TEXT PRIMARY KEY,
-                    lufs       REAL,
-                    peak_db    REAL,
-                    gain_db    REAL DEFAULT 0.0,
-                    scanned_at INTEGER NOT NULL
-                );
                 -- On-demand lyrics cache. Same survival contract as the
                 -- other auxiliary tables: keyed by URL, no FK, untouched
                 -- by clear(udn). source='notfound' is a sticky negative
@@ -406,18 +391,17 @@ class LibraryDB:
                 log.info(f"DB migration: {col_sql[:60]}")
             except Exception:
                 pass  # column already exists
-        # Loudness mode switch: LUFS-based → true-peak normalisation.
-        # When peak_db is added to an existing DB, the old gain_db values
-        # were computed from LUFS — wipe them so the scanner re-analyses
-        # every track and stores the true peak.
+        # Loudness normalization removed (2026-05-31): peak-mode gain gave
+        # negligible perceptual benefit, was already disabled in the
+        # playback path, and broke bit-perfect on the browser path. Drop
+        # the now-unused measurements table. Idempotent.
         try:
             with self._pool.write() as conn:
-                conn.execute("ALTER TABLE track_loudness ADD COLUMN peak_db REAL")
-                conn.execute("DELETE FROM track_loudness")
-            log.info("DB migration: track_loudness.peak_db added — "
-                     "existing rows wiped, re-scan will run on next trigger")
+                conn.execute("DROP TABLE IF EXISTS track_loudness")
+            log.info("DB migration: dropped track_loudness "
+                     "(loudness normalization removed)")
         except Exception:
-            pass  # column already exists; nothing to migrate
+            pass
         # 2026-05-25: widen tracks UNIQUE to include bit_depth + sample_rate
         # so 16-bit and 24-bit copies of the same album coexist without
         # collision. Detect old schema by absence of the bit_depth column;
@@ -1543,9 +1527,9 @@ class LibraryDB:
     def bare_metadata_tracks(self, winners_only: bool = False) -> list:
         """Tracks that have no `metadata_overrides` row of any source
         (including 'notfound' sticky negatives). Mirrors the contract
-        of LoudnessScanner.bare_tracks / AlbumArtFetcher.bare_albums:
-        anything cached in any form is excluded so the worker doesn't
-        re-hit the AcoustID API for tracks it already processed.
+        of AlbumArtFetcher.bare_albums: anything cached in any form is
+        excluded so the worker doesn't re-hit the AcoustID API for tracks
+        it already processed.
 
         With `winners_only=True`, also filters by `_dedup_clause` so a
         16-bit duplicate of a 24-bit track doesn't get its own fpcalc +
@@ -1743,16 +1727,6 @@ class LibraryDB:
                 "VALUES (?, NULL, NULL, NULL, NULL, 'notfound')", (url,))
         return (cur.rowcount or 0) > 0
 
-    def gain_db_for_url(self, url: str) -> float:
-        """Per-track loudness gain in dB. Returns 0.0 for unknown tracks
-        (don't fail-fast — missing analysis just means no normalization
-        applied yet)."""
-        with self._pool.read() as conn:
-            row = conn.execute(
-                "SELECT gain_db FROM track_loudness WHERE url=?",
-                (url,)).fetchone()
-        return float(row["gain_db"]) if row and row["gain_db"] is not None else 0.0
-
     def track_meta_by_url(self, url: str):
         """Metadata for a single track, used by /api/track_meta and the
         Subsonic /rest/* methods. Returns both year fields separately:
@@ -1936,7 +1910,7 @@ class LibraryDB:
     # Distinct from the track-level Favourites playlist: these are
     # whole-album entries keyed by (artist, album) so they survive
     # clear(udn) and re-indexing. Same persistence pattern as
-    # album_art, play_counts, lyrics, track_loudness.
+    # album_art, play_counts, lyrics.
 
     def album_fav_add(self, artist: str, album: str,
                        album_key: str = "") -> bool:
@@ -2179,13 +2153,11 @@ DB = LibraryDB()
 from dlna_devices      import DeviceRoleCache
 from dlna_indexer      import Indexer, IndexState  # noqa: F401 re-exported
 from dlna_art_fetcher  import AlbumArtFetcher
-from dlna_loudness     import LoudnessScanner
 from dlna_acoustid     import AcoustIDFetcher
 
 DEVICE_ROLES     = DeviceRoleCache(DB)
 INDEXER          = Indexer(DB)
 ART_FETCHER      = AlbumArtFetcher(DB)
-LOUDNESS_SCANNER = LoudnessScanner(DB)
 ACOUSTID_FETCHER = AcoustIDFetcher(DB, api_key=os.environ.get("ACOUSTID_API_KEY"))
 
 

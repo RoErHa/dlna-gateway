@@ -82,7 +82,7 @@ class TestLyricsDB(unittest.TestCase):
         self.assertEqual(self.db.get_lyrics("u1")["plain"],  "now found")
 
     def test_lyrics_survive_clear_udn(self):
-        # Same invariant as album_art / play_counts / track_loudness
+        # Same invariant as album_art / play_counts
         url = _seed_track(self.db, url="http://srv/a.flac")
         self.db.set_lyrics(url, "lyrics body", None, "lrclib")
         self.db.clear("uuid:test")

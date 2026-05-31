@@ -33,7 +33,7 @@ If the key is unset the worker is dormant — every `run_once()` is a
 no-op with a one-time WARN. Get a free key at acoustid.org and put
 it in `.env`.
 
-Lifecycle hooks (mirror `AlbumArtFetcher` / `LoudnessScanner`):
+Lifecycle hooks (mirror `AlbumArtFetcher`):
   - `start_initial_scan(delay=120)` — one-shot startup mop-up.
   - `trigger()` from `Indexer._run()` tail when new tracks are indexed.
 """
@@ -52,7 +52,7 @@ log = logging.getLogger("dlna.library")
 
 
 # launchd-spawned processes have a minimal PATH that excludes Homebrew.
-# Mirror `dlna_loudness._find_ffmpeg`'s fallback so the gateway works
+# Walk Homebrew install locations explicitly so the gateway works
 # under launchctl without editing the LaunchAgent .plist.
 def _find_fpcalc() -> Optional[str]:
     found = shutil.which("fpcalc")
@@ -281,7 +281,7 @@ def _extract_best_match(response: dict,
 class AcoustIDFetcher:
     """Background worker that fingerprints tracks and enriches their
     metadata via AcoustID + MusicBrainz. Mirrors
-    `LoudnessScanner` (dlna_loudness.py) line-for-line in lifecycle
+    `AlbumArtFetcher` (dlna_art_fetcher.py) in lifecycle
     surface: trigger / stop / start_initial_scan / status.
 
     `api_key` may be None or empty — every run is then a no-op with a
@@ -338,7 +338,7 @@ class AcoustIDFetcher:
                         "skipping. Get a free key at acoustid.org and add "
                         "it to .env.")
             return stats
-        # Same defensive bail as LoudnessScanner: if fpcalc is missing,
+        # Defensive bail: if fpcalc is missing,
         # don't iterate — otherwise every track would either error or
         # get sticky-cached as notfound and never recover when fpcalc
         # is later installed.
@@ -561,7 +561,7 @@ class AcoustIDFetcher:
                 [_FPCALC_PATH, "-length", str(_FPCALC_ANALYSE_SEC),
                  "-json", url],
                 capture_output=True, text=True,
-                # Mirror dlna_loudness's lenient decoding: fpcalc echoes
+                # Lenient decoding: fpcalc echoes
                 # ffmpeg banner lines that can contain Latin-1 metadata.
                 errors="replace",
                 timeout=_FPCALC_TIMEOUT_SEC,

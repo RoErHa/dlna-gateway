@@ -43,7 +43,6 @@ GET_ROUTES = {
     "/api/renderer_state": api_playback.renderer_state,
     "/api/index/status":    api_playback.index_status,
     "/api/index/rebuild":   api_playback.index_rebuild,
-    "/api/loudness/status": api_playback.loudness_status,
     "/api/lyrics":         api_playback.lyrics,
     "/api/track_meta":     api_playback.track_meta,
     "/stream":             api_playback.stream,

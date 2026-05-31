@@ -248,11 +248,6 @@ class Indexer:
             except Exception:
                 pass   # module not yet fully initialised (test harness)
             try:
-                from dlna_library import LOUDNESS_SCANNER
-                LOUDNESS_SCANNER.trigger()
-            except Exception:
-                pass   # module not yet fully initialised (test harness)
-            try:
                 from dlna_library import ACOUSTID_FETCHER
                 ACOUSTID_FETCHER.trigger()
             except Exception:

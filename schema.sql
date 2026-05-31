@@ -1,17 +1,20 @@
 CREATE TABLE tracks (
-                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                    udn      TEXT NOT NULL,
-                    obj_id   TEXT,
-                    url      TEXT NOT NULL,
-                    title    TEXT,
-                    artist   TEXT,
-                    album    TEXT,
-                    duration TEXT,
-                    art      TEXT,
-                    mime     TEXT,
-                    genre    TEXT DEFAULT '',
-                    file_path TEXT DEFAULT '',
-                    UNIQUE(udn, artist, album, title)
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    udn         TEXT NOT NULL,
+                    obj_id      TEXT,
+                    url         TEXT NOT NULL,
+                    title       TEXT,
+                    artist      TEXT,
+                    album       TEXT,
+                    duration    TEXT,
+                    art         TEXT,
+                    mime        TEXT,
+                    genre       TEXT DEFAULT '',
+                    file_path   TEXT DEFAULT '',
+                    bit_depth   INTEGER,
+                    sample_rate INTEGER,
+                    year        INTEGER, album_key TEXT DEFAULT '',    -- file-tag year (DIDL-Lite dc:date)
+                    UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
                 );
 CREATE TABLE sqlite_sequence(name,seq);
 CREATE TABLE metadata_overrides (
@@ -20,12 +23,70 @@ CREATE TABLE metadata_overrides (
                     album     TEXT,
                     title     TEXT,
                     genre     TEXT,
+                    year      INTEGER,   -- original release year (MusicBrainz)
                     updated_at TEXT DEFAULT (datetime('now'))
+                , source TEXT NOT NULL DEFAULT 'manual');
+CREATE TABLE album_art (
+                    artist     TEXT NOT NULL,
+                    album      TEXT NOT NULL,
+                    art_url    TEXT NOT NULL,
+                    source     TEXT DEFAULT 'sibling',
+                    updated_at TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (artist, album)
+                );
+CREATE TABLE play_counts (
+                    url         TEXT PRIMARY KEY,
+                    count       INTEGER NOT NULL DEFAULT 0,
+                    last_played INTEGER
+                );
+CREATE TABLE lyrics (
+                    url        TEXT PRIMARY KEY,
+                    plain      TEXT,
+                    synced     TEXT,
+                    source     TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
+CREATE TABLE album_favourites (
+                    artist     TEXT NOT NULL,
+                    album      TEXT NOT NULL,
+                    album_key  TEXT NOT NULL DEFAULT '',
+                    added_at   INTEGER NOT NULL,
+                    PRIMARY KEY (artist, album, album_key)
+                );
+CREATE TABLE radio_favourites (
+                    station_uuid TEXT PRIMARY KEY,
+                    name         TEXT NOT NULL,
+                    stream_url   TEXT NOT NULL,
+                    homepage     TEXT,
+                    favicon      TEXT,
+                    codec        TEXT,
+                    bitrate      INTEGER,
+                    country      TEXT,
+                    tags         TEXT,
+                    added_at     INTEGER NOT NULL,
+                    sort_order   INTEGER NOT NULL DEFAULT 0
                 );
 CREATE TABLE index_meta (
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
                 );
+CREATE TABLE localfs_files (
+                    path         TEXT PRIMARY KEY,
+                    mtime        REAL    NOT NULL,
+                    size         INTEGER NOT NULL,
+                    track_id     TEXT    NOT NULL,
+                    last_scanned INTEGER NOT NULL
+                );
+CREATE VIRTUAL TABLE tracks_fts USING fts5(
+                    title, artist, album,
+                    content=tracks, content_rowid=id,
+                    tokenize='unicode61 remove_diacritics 1'
+                )
+/* tracks_fts(title,artist,album) */;
+CREATE TABLE IF NOT EXISTS 'tracks_fts_data'(id INTEGER PRIMARY KEY, block BLOB);
+CREATE TABLE IF NOT EXISTS 'tracks_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS 'tracks_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB);
+CREATE TABLE IF NOT EXISTS 'tracks_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID;
 CREATE TRIGGER tracks_ai
                     AFTER INSERT ON tracks BEGIN
                         INSERT INTO tracks_fts(rowid, title, artist, album)
@@ -65,54 +126,4 @@ CREATE TABLE device_roles (
                     first_seen  TEXT DEFAULT (datetime('now')),
                     last_seen   TEXT DEFAULT (datetime('now'))
                 );
-CREATE TABLE album_art (
-                    artist     TEXT NOT NULL,
-                    album      TEXT NOT NULL,
-                    art_url    TEXT NOT NULL,
-                    source     TEXT DEFAULT 'sibling',
-                    updated_at TEXT DEFAULT (datetime('now')),
-                    PRIMARY KEY (artist, album)
-                );
-CREATE TABLE play_counts (
-                    url         TEXT PRIMARY KEY,
-                    count       INTEGER NOT NULL DEFAULT 0,
-                    last_played INTEGER
-                );
-CREATE TABLE track_loudness (
-                    url        TEXT PRIMARY KEY,
-                    lufs       REAL,
-                    gain_db    REAL DEFAULT 0.0,
-                    scanned_at INTEGER NOT NULL
-                , peak_db REAL);
-CREATE TABLE lyrics (
-                    url        TEXT PRIMARY KEY,
-                    plain      TEXT,
-                    synced     TEXT,
-                    source     TEXT NOT NULL,
-                    fetched_at INTEGER NOT NULL
-                );
-CREATE TABLE album_favourites (
-                    artist     TEXT NOT NULL,
-                    album      TEXT NOT NULL,
-                    added_at   INTEGER NOT NULL,
-                    PRIMARY KEY (artist, album)
-                );
-CREATE TABLE radio_favourites (
-                    station_uuid TEXT PRIMARY KEY,
-                    name         TEXT NOT NULL,
-                    stream_url   TEXT NOT NULL,
-                    homepage     TEXT,
-                    favicon      TEXT,
-                    codec        TEXT,
-                    bitrate      INTEGER,
-                    country      TEXT,
-                    tags         TEXT,
-                    added_at     INTEGER NOT NULL,
-                    sort_order   INTEGER NOT NULL DEFAULT 0
-                );
-CREATE VIRTUAL TABLE tracks_fts USING fts5(title, artist, album, content=tracks, content_rowid=id, tokenize='unicode61 remove_diacritics 1')
-/* tracks_fts(title,artist,album) */;
-CREATE TABLE IF NOT EXISTS 'tracks_fts_data'(id INTEGER PRIMARY KEY, block BLOB);
-CREATE TABLE IF NOT EXISTS 'tracks_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS 'tracks_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB);
-CREATE TABLE IF NOT EXISTS 'tracks_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID;
+CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url);
