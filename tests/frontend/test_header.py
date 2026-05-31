@@ -2,26 +2,23 @@
 import pytest
 
 
-def test_disc_label_online(app, gateway):
-    label = app.locator("#disc-label").text_content()
-    assert "online" in label.lower()
-
-
-def test_disc_label_offline(page, stub, gateway):
+def test_source_dropdown_shows_server_name(page, stub, gateway):
+    # The standalone disc-dot/label was removed; server name + online
+    # state now live in the SRC dropdown options.
     gateway.servers = [{"udn": "uuid:asset-1", "name": "AssetUPnP",
-                        "online": False, "tracks": 0}]
+                        "online": True, "tracks": 1234}]
     page.goto(stub.base_url + "/")
     page.wait_for_function(
-        "document.getElementById('disc-label').textContent.toLowerCase().includes('offline')",
+        "document.querySelectorAll('#source-sel option').length >= 1 && "
+        "document.querySelector('#source-sel option').textContent"
+        ".includes('AssetUPnP')",
         timeout=5000,
     )
 
 
-def test_disc_label_scanning(page, stub, gateway):
-    gateway.servers = []
-    page.goto(stub.base_url + "/")
-    label = page.locator("#disc-label").text_content()
-    assert "scanning" in label.lower()
+def test_no_disc_label_element(app):
+    # The redundant live-server status label was removed from the header.
+    assert app.locator("#disc-label").count() == 0
 
 
 def test_out_dropdown_default_browser(app):

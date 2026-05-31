@@ -154,7 +154,7 @@ def test_loudness_status_endpoint(app, gateway):
 def test_shuffle_toggle_persists(page, stub, gateway):
     page.goto(stub.base_url + "/")
     page.wait_for_function(
-        "document.getElementById('disc-label').textContent !== 'Scanning…'", timeout=5000)
+        "document.getElementById('source-sel') && !document.getElementById('source-sel').textContent.includes('Scanning')", timeout=5000)
     initial = page.evaluate("shuffleEnabled")
     page.locator("#btn-shuffle").click()
     page.wait_for_timeout(200)

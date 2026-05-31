@@ -364,9 +364,13 @@ async function refreshServers(){
   updateDiscStatus();
 }
 
-// Reflect the active source's status in the disc-dot + label.
+// Server status now lives entirely in the SRC dropdown (name + online
+// state per option), so the standalone disc-dot/label was removed from
+// the header. Kept as a guarded no-op so callers don't need to change
+// and a future status indicator can slot back in here.
 function updateDiscStatus(){
   const dot=$("disc-dot"),lbl=$("disc-label");
+  if(!dot||!lbl) return;
   const s=curServer && servers[curServer.udn];
   if(!s){
     dot.className="disc-dot";

@@ -2,9 +2,13 @@
 
 
 def test_page_loads_and_shows_server_status(app, gateway):
-    # Disc label should reflect the one online server from the default state
-    label = app.locator("#disc-label").text_content()
-    assert "online" in label.lower(), f"got: {label!r}"
+    # The standalone disc-label was removed; server status now lives in the
+    # SRC dropdown options (name + tracks; a "(offline)" suffix only when
+    # offline). The default stub server is online, so its name shows with no
+    # offline marker.
+    opts = app.locator("#source-sel").text_content()
+    assert "AssetUPnP" in opts, f"got: {opts!r}"
+    assert "(offline)" not in opts, f"got: {opts!r}"
 
 
 def test_default_layout_present(app):
