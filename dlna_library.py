@@ -975,19 +975,36 @@ class LibraryDB:
                    LIMIT ?""",
                 (fts_q, udn, limit)).fetchall()
 
-            albums = conn.execute(
-                f"""SELECT t.artist, t.album,
-                          COUNT(*) as track_count,
-                          MAX(t.art) as art
-                   FROM tracks_fts f
-                   JOIN tracks t ON t.id = f.rowid
-                   WHERE tracks_fts MATCH ? AND t.udn = ?
-                     AND t.album != ''
-                     AND {dedup}
-                   GROUP BY t.artist, t.album
-                   ORDER BY t.artist, t.album
-                   LIMIT 100""",
-                (fts_q, udn)).fetchall()
+            if _is_localfs(udn):
+                albums = conn.execute(
+                    f"""SELECT t.album_key,
+                              {_localfs_album_name("t")} as album,
+                              {_localfs_album_artist("t")} as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks_fts f
+                       JOIN tracks t ON t.id = f.rowid
+                       WHERE tracks_fts MATCH ? AND t.udn = ?
+                         AND t.album_key != ''
+                         AND {dedup}
+                       GROUP BY t.album_key
+                       ORDER BY album
+                       LIMIT 100""",
+                    (fts_q, udn)).fetchall()
+            else:
+                albums = conn.execute(
+                    f"""SELECT t.artist, t.album,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks_fts f
+                       JOIN tracks t ON t.id = f.rowid
+                       WHERE tracks_fts MATCH ? AND t.udn = ?
+                         AND t.album != ''
+                         AND {dedup}
+                       GROUP BY t.artist, t.album
+                       ORDER BY t.artist, t.album
+                       LIMIT 100""",
+                    (fts_q, udn)).fetchall()
 
             artists = conn.execute(
                 f"""SELECT t.artist,
@@ -1243,21 +1260,39 @@ class LibraryDB:
 
     def genre_albums(self, udn: str, genre: str) -> list:
         """All albums in a genre, grouping compilations under 'Various Artists'.
-        Track count is browse-visible (deduped)."""
+        Track count is browse-visible (deduped). LocalFs groups by FOLDER:
+        the albums are the folders that contain a track of this genre."""
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
-            rows = conn.execute(
-                f"""SELECT t.album,
-                          CASE WHEN COUNT(DISTINCT t.artist)>1 THEN 'Various Artists'
-                               ELSE MAX(t.artist) END as artist,
-                          COUNT(*) as track_count,
-                          MAX(t.art) as art
-                   FROM tracks t
-                   WHERE t.udn=? AND t.genre=?
-                     AND {dedup}
-                   GROUP BY t.album
-                   ORDER BY t.album COLLATE NOCASE""",
-                (udn, genre)).fetchall()
+            if _is_localfs(udn):
+                rows = conn.execute(
+                    f"""SELECT t.album_key,
+                              {_localfs_album_name("t")} as album,
+                              {_localfs_album_artist("t")} as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn=? AND t.album_key != ''
+                         AND t.album_key IN (
+                             SELECT album_key FROM tracks
+                              WHERE udn=? AND genre=? AND album_key != '')
+                         AND {dedup}
+                       GROUP BY t.album_key
+                       ORDER BY album COLLATE NOCASE""",
+                    (udn, udn, genre)).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""SELECT t.album,
+                              CASE WHEN COUNT(DISTINCT t.artist)>1 THEN 'Various Artists'
+                                   ELSE MAX(t.artist) END as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn=? AND t.genre=?
+                         AND {dedup}
+                       GROUP BY t.album
+                       ORDER BY t.album COLLATE NOCASE""",
+                    (udn, genre)).fetchall()
         return [dict(r) for r in rows]
 
     # ── Decade browse ────────────────────────────────────────────
@@ -1305,25 +1340,49 @@ class LibraryDB:
     def decade_albums(self, udn: str, decade: int) -> list:
         """All albums whose effective year falls in [decade, decade+10).
         Grouping mirrors `all_albums`: compilations with multiple
-        distinct artists collapse to 'Various Artists'."""
+        distinct artists collapse to 'Various Artists'. LocalFs groups by
+        FOLDER: the albums are the folders that contain a track in the
+        decade."""
         dedup = _dedup_clause("t")
         eff = self._EFFECTIVE_YEAR
         with self._pool.read() as conn:
-            rows = conn.execute(
-                f"""SELECT t.album,
-                          CASE WHEN COUNT(DISTINCT t.artist) > 1
-                               THEN 'Various Artists'
-                               ELSE MAX(t.artist) END as artist,
-                          COUNT(*) as track_count,
-                          MAX(t.art) as art
-                     FROM tracks t
-                LEFT JOIN metadata_overrides m ON m.url = t.url
-                    WHERE t.udn = ? AND t.album != ''
-                      AND ({eff} / 10) * 10 = ?
-                      AND {dedup}
-                 GROUP BY t.album
-                 ORDER BY t.album COLLATE NOCASE""",
-                (udn, decade)).fetchall()
+            if _is_localfs(udn):
+                # Effective-year expression for the inner per-track filter
+                # (tracks aliased t2 there; metadata_overrides stays m).
+                eff2 = eff.replace("t.year", "t2.year")
+                rows = conn.execute(
+                    f"""SELECT t.album_key,
+                              {_localfs_album_name("t")} as album,
+                              {_localfs_album_artist("t")} as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                       FROM tracks t
+                       WHERE t.udn = ? AND t.album_key != ''
+                         AND t.album_key IN (
+                             SELECT t2.album_key FROM tracks t2
+                        LEFT JOIN metadata_overrides m ON m.url = t2.url
+                             WHERE t2.udn = ? AND t2.album_key != ''
+                               AND ({eff2} / 10) * 10 = ?)
+                         AND {dedup}
+                       GROUP BY t.album_key
+                       ORDER BY album COLLATE NOCASE""",
+                    (udn, udn, decade)).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""SELECT t.album,
+                              CASE WHEN COUNT(DISTINCT t.artist) > 1
+                                   THEN 'Various Artists'
+                                   ELSE MAX(t.artist) END as artist,
+                              COUNT(*) as track_count,
+                              MAX(t.art) as art
+                         FROM tracks t
+                    LEFT JOIN metadata_overrides m ON m.url = t.url
+                        WHERE t.udn = ? AND t.album != ''
+                          AND ({eff} / 10) * 10 = ?
+                          AND {dedup}
+                     GROUP BY t.album
+                     ORDER BY t.album COLLATE NOCASE""",
+                    (udn, decade)).fetchall()
         return [dict(r) for r in rows]
 
     def artist_tracks(self, udn: str, artist: str) -> list:

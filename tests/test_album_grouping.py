@@ -170,5 +170,87 @@ class TestUpnpUnaffected(unittest.TestCase):
         self.assertEqual(len(tracks), 2)
 
 
+class TestGenreDecadeSearchGrouping(unittest.TestCase):
+    """A1 — genre / decade / search album views group LocalFs by folder."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        # A compilation folder: 2 performers, same genre + decade.
+        self.db.upsert_tracks(LF, [
+            {"id": "j1", "url": "http://h/j1", "title": "Blue Note A",
+             "artist": "Miles", "album": "Orig A", "album_key": "VA/Jazz Comp",
+             "genre": "Jazz", "year": 1975, "file_path": "/m/VA/Jazz Comp/01.flac",
+             "mime": "audio/flac"},
+            {"id": "j2", "url": "http://h/j2", "title": "Blue Note B",
+             "artist": "Trane", "album": "Orig B", "album_key": "VA/Jazz Comp",
+             "genre": "Jazz", "year": 1975, "file_path": "/m/VA/Jazz Comp/02.flac",
+             "mime": "audio/flac"},
+        ])
+        # A different-genre, different-decade single-artist album.
+        self.db.upsert_tracks(LF, [
+            {"id": "r1", "url": "http://h/r1", "title": "Breed",
+             "artist": "Nirvana", "album": "Nevermind",
+             "album_key": "Nirvana/Nevermind", "genre": "Rock", "year": 1991,
+             "file_path": "/m/Nirvana/Nevermind/02.flac", "mime": "audio/flac"},
+        ])
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def test_genre_albums_groups_by_folder(self):
+        rows = self.db.genre_albums(LF, "Jazz")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["album_key"], "VA/Jazz Comp")
+        self.assertEqual(rows[0]["artist"], "Various Artists")
+        self.assertEqual(rows[0]["track_count"], 2)
+
+    def test_decade_albums_groups_by_folder(self):
+        rows = self.db.decade_albums(LF, 1970)
+        keys = {r["album_key"] for r in rows}
+        self.assertEqual(keys, {"VA/Jazz Comp"})
+        self.assertEqual(rows[0]["track_count"], 2)
+        # The 1991 album is in the 1990 bucket, not 1970.
+        self.assertNotIn("Nirvana/Nevermind", keys)
+
+    def test_search_albums_group_by_folder(self):
+        res = self.db.search(LF, "Blue Note")
+        albums = res["albums"]
+        comp = [a for a in albums if a.get("album_key") == "VA/Jazz Comp"]
+        self.assertEqual(len(comp), 1, "compilation must appear once")
+        self.assertEqual(comp[0]["track_count"], 2)
+        self.assertEqual(comp[0]["artist"], "Various Artists")
+
+
+class TestGenreDecadeSearchUpnp(unittest.TestCase):
+    """UPnP keeps (artist, album) grouping for genre/decade/search."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        self.db.upsert_tracks(UPNP, [
+            {"id": "u1", "url": "http://a/1", "title": "X", "artist": "Artist",
+             "album": "Album", "genre": "Rock", "year": 1985, "mime": "audio/flac"},
+            {"id": "u2", "url": "http://a/2", "title": "Y", "artist": "Artist",
+             "album": "Album", "genre": "Rock", "year": 1985, "mime": "audio/flac"},
+        ])
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def test_genre_albums_by_artist_album(self):
+        rows = self.db.genre_albums(UPNP, "Rock")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["album"], "Album")
+        self.assertNotIn("album_key", rows[0])
+
+    def test_decade_albums_by_artist_album(self):
+        rows = self.db.decade_albums(UPNP, 1980)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["album"], "Album")
+
+
 if __name__ == "__main__":
     unittest.main()

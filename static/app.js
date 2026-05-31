@@ -1000,7 +1000,7 @@ async function doSearch(q){
       div.addEventListener("click",e=>{
         const btn=e.target.closest("[data-action]");
         if(btn){e.stopPropagation();const it=itemRegistry.get(Number(btn.dataset.k));if(!it)return;
-          if(btn.dataset.action==="play") playAlbumFromDB(a.artist,a.album);
+          if(btn.dataset.action==="play") playAlbumFromDB(a.artist,a.album,a.album_key||"");
           else if(btn.dataset.action==="fav") addAlbumToPlaylist("__favourites__",a.artist,a.album);
           return;}
         // Row click → drill into tracks (same pattern as the artist's
@@ -1011,7 +1011,7 @@ async function doSearch(q){
         // an earlier browse session.
         showTab('browse');
         showAlbumTracks(a.artist, a.album,
-                        {artist: a.artist, album_count: null});
+                        {artist: a.artist, album_count: null}, a.album_key||"");
       });
       $("item-list").appendChild(div);
     });
