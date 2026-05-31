@@ -37,24 +37,38 @@ class TestAlbumIdCodec(unittest.TestCase):
         a, b = "Pink Floyd", "Animals"
         oid = api_upnp._encode_album_id(a, b)
         self.assertTrue(oid.startswith("favalbum:"))
-        self.assertEqual(api_upnp._decode_album_id(oid), (a, b))
+        self.assertEqual(api_upnp._decode_album_id(oid), (a, b, ""))
 
     def test_round_trip_unicode_and_special_chars(self):
         a, b = "Sigur Rós", "( ) — 'parens & quotes' / slashes \\ nulls"
         oid = api_upnp._encode_album_id(a, b)
-        self.assertEqual(api_upnp._decode_album_id(oid), (a, b))
+        self.assertEqual(api_upnp._decode_album_id(oid), (a, b, ""))
 
     def test_round_trip_compilation_blank_artist(self):
         # Compilations use empty artist; codec must still round-trip.
         oid = api_upnp._encode_album_id("", "Now That's What I Call Music!")
         self.assertEqual(api_upnp._decode_album_id(oid),
-                         ("", "Now That's What I Call Music!"))
+                         ("", "Now That's What I Call Music!", ""))
+
+    def test_round_trip_album_key(self):
+        # LocalFs folder identity round-trips as the third field.
+        a, b, k = "Various Artists", "Hits", "VA/Hits (2024)/CD1"
+        oid = api_upnp._encode_album_id(a, b, k)
+        self.assertEqual(api_upnp._decode_album_id(oid), (a, b, k))
+
+    def test_decode_legacy_two_field_id(self):
+        # An id minted before album_key existed decodes with key=''.
+        import base64
+        raw = "Queen\x00A Night".encode("utf-8")
+        legacy = "favalbum:" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        self.assertEqual(api_upnp._decode_album_id(legacy),
+                         ("Queen", "A Night", ""))
 
     def test_decode_garbled_returns_empty(self):
         self.assertEqual(api_upnp._decode_album_id("favalbum:!!!not-base64!!!"),
-                         ("", ""))
+                         ("", "", ""))
         self.assertEqual(api_upnp._decode_album_id("not-an-id"),
-                         ("", ""))
+                         ("", "", ""))
 
 
 class TestBrowse(unittest.TestCase):
@@ -133,6 +147,49 @@ class TestBrowse(unittest.TestCase):
         self.assertEqual((n_ret, total), (1, 1))
         self.assertIn('id="favalbums"', xml)
         self.assertIn('parentID="0"', xml)
+
+
+class TestBrowseByAlbumKey(unittest.TestCase):
+    """A LocalFs compilation favourited by FOLDER exposes via UPnP as one
+    album and resolves the whole folder's tracks (A3)."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+        udn = "uuid:localfs-x"
+        self.db.upsert_tracks(udn, [
+            {"id": "c1", "url": "http://h/c1", "title": "Song A",
+             "artist": "Alice", "album": "Orig A", "album_key": "VA/Comp",
+             "file_path": "/m/VA/Comp/01.flac", "mime": "audio/flac"},
+            {"id": "c2", "url": "http://h/c2", "title": "Song B",
+             "artist": "Bob", "album": "Orig B", "album_key": "VA/Comp",
+             "file_path": "/m/VA/Comp/02.flac", "mime": "audio/flac"},
+        ])
+        self.db.album_fav_add("Various Artists", "Comp", album_key="VA/Comp")
+        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self.db._pool.close()
+        os.unlink(self.tmp.name)
+
+    def test_favalbums_container_encodes_album_key(self):
+        xml, n_ret, total = api_upnp._gw_browse(
+            "favalbums", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (1, 1))
+        oid = api_upnp._encode_album_id("Various Artists", "Comp", "VA/Comp")
+        self.assertIn(f'id="{oid}"', xml)
+
+    def test_browse_favalbum_resolves_whole_folder(self):
+        oid = api_upnp._encode_album_id("Various Artists", "Comp", "VA/Comp")
+        xml, n_ret, total = api_upnp._gw_browse(
+            oid, "BrowseDirectChildren", 0, 0)
+        # Both tracks resolve via album_key, regardless of per-track artist.
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn("Song A", xml)
+        self.assertIn("Song B", xml)
 
 
 if __name__ == "__main__":

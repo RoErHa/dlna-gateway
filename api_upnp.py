@@ -196,7 +196,8 @@ def _gw_browse(obj_id: str, browse_flag: str,
                     + container("favalbums", "0", "⭐ Favourite Albums", total)
                     + CLOSE, 1, 1)
         page  = favs[start:start + count] if count else favs[start:]
-        items = [container(_encode_album_id(f["artist"], f["album"]),
+        items = [container(_encode_album_id(f["artist"], f["album"],
+                                            f.get("album_key", "")),
                            "favalbums",
                            f"{f['album']} — {f['artist']}" if f["artist"]
                                                           else f["album"],
@@ -205,16 +206,22 @@ def _gw_browse(obj_id: str, browse_flag: str,
         return OPEN + "".join(items) + CLOSE, len(items), total
 
     if obj_id.startswith("favalbum:"):
-        artist, album = _decode_album_id(obj_id)
-        # Resolve the udn lazily — the favourite is keyed by (artist, album),
-        # not by server. If the album isn't in any indexed library we
-        # silently return an empty container rather than 500 — a Naim
-        # control point handles "0 results" gracefully.
-        fav = next((f for f in DB.album_fav_list()
-                    if f["artist"] == artist and f["album"] == album), None)
+        artist, album, album_key = _decode_album_id(obj_id)
+        # Resolve the udn lazily — the favourite is keyed by album_key
+        # (LocalFs folder) when present, else (artist, album), not by
+        # server. If the album isn't in any indexed library we silently
+        # return an empty container rather than 500 — a Naim control point
+        # handles "0 results" gracefully.
+        if album_key:
+            fav = next((f for f in DB.album_fav_list()
+                        if f.get("album_key") == album_key), None)
+        else:
+            fav = next((f for f in DB.album_fav_list()
+                        if f["artist"] == artist and f["album"] == album
+                        and not f.get("album_key")), None)
         if not fav or not fav["udn"]:
             return OPEN + CLOSE, 0, 0
-        tracks = DB.album_tracks(fav["udn"], artist, album)
+        tracks = DB.album_tracks(fav["udn"], artist, album, album_key=album_key)
         total  = len(tracks)
         if browse_flag == "BrowseMetadata":
             return (OPEN
@@ -234,22 +241,30 @@ def _gw_browse(obj_id: str, browse_flag: str,
 # Base64-urlsafe of "artist\x00album" is unambiguous and round-trips
 # cleanly through XML escaping.
 
-def _encode_album_id(artist: str, album: str) -> str:
-    raw = f"{artist}\x00{album}".encode("utf-8")
+def _encode_album_id(artist: str, album: str, album_key: str = "") -> str:
+    # NUL-delimited (artist, album, album_key). album_key (LocalFs folder
+    # identity) lets a Various-Artists compilation round-trip as one album;
+    # empty for (artist, album)-keyed favourites.
+    raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
     return "favalbum:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def _decode_album_id(obj_id: str) -> tuple:
+    """Return (artist, album, album_key). Tolerates legacy 2-field ids
+    (no album_key) by defaulting album_key to ''."""
     if not obj_id.startswith("favalbum:"):
-        return ("", "")
+        return ("", "", "")
     payload = obj_id[len("favalbum:"):]
     payload += "=" * (-len(payload) % 4)
     try:
         raw = base64.urlsafe_b64decode(payload).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
-        return ("", "")
-    artist, _, album = raw.partition("\x00")
-    return (artist, album)
+        return ("", "", "")
+    parts = raw.split("\x00")
+    artist    = parts[0] if len(parts) > 0 else ""
+    album     = parts[1] if len(parts) > 1 else ""
+    album_key = parts[2] if len(parts) > 2 else ""
+    return (artist, album, album_key)
 
 
 def _gw_browse_response(result_xml: str, n_returned: int,

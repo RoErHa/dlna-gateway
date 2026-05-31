@@ -1178,8 +1178,9 @@ favourites keep `album_key=''` and the legacy `(artist, album)` identity.
 `album_fav_add/remove/is` take an optional `album_key`; `album_fav_list`
 returns it and matches `track_count`/art by folder when set. Migrated in
 `_migrate_album_fav_key` (rebuilds the table, carrying old rows forward
-with `album_key=''`). **UPnP / Subsonic fav exposure still keys on
-(artist, album) — that's the A3 follow-up.**
+with `album_key=''`). **UPnP fav exposure is album_key-aware (A3a, done).
+Subsonic fav/album ids still key on (artist, album) — that's the A3b
+follow-up.**
 
 ### LibraryDB methods
 
@@ -1234,11 +1235,16 @@ level deeper: a container per favourited album titled
 resolved against `album_fav_list()[i]['udn']` via `DB.album_tracks`.
 
 ObjectID encoding for individual albums:
-`favalbum:{base64-urlsafe(artist + "\x00" + album)}` — round-trips
-arbitrary unicode (non-ASCII names, ampersands, slashes, NUL bytes
-fine) through SOAP/XML. See `_encode_album_id` / `_decode_album_id`
-in `api_upnp.py`. Garbled / non-base64 IDs decode to `("", "")` and
-return an empty container rather than 500.
+`favalbum:{base64-urlsafe(artist + "\x00" + album + "\x00" + album_key)}`
+— round-trips arbitrary unicode (non-ASCII names, ampersands, slashes,
+NUL bytes fine) through SOAP/XML. `album_key` (A3a) is the LocalFs folder
+identity so a Various-Artists compilation resolves as one album; it's
+empty for (artist, album)-keyed favourites, and legacy 2-field ids decode
+with `album_key=''`. The favalbum container resolves tracks via
+`DB.album_tracks(udn, artist, album, album_key=…)`. See `_encode_album_id`
+/ `_decode_album_id` in `api_upnp.py` (both now 3-field). Garbled /
+non-base64 IDs decode to `("", "", "")` and return an empty container
+rather than 500.
 
 ### Tests
 
