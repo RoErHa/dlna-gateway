@@ -229,6 +229,18 @@ any UPnP server. The first scan walks the tree (incremental afterwards
 | `LOCALFS_PORT` | File-server port (default `8200`). Change if 8200 is taken. |
 | `LOCALFS_BASE_URL` | Override the auto-detected `http://<lan-ip>:<port>` the renderer fetches from — set this if the gateway's LAN IP isn't what renderers should use. |
 
+**Folder layout — one album per folder.** RoHaLocalFS groups albums by
+**folder**, not by tags. For the cleanest browse, keep **one album per
+folder** (e.g. `Music/Artist - Album/…`). This is what makes
+compilations work: a *Various Artists* collection lives in one folder,
+so it shows as a single album even though every track has a different
+performer — rather than fragmenting into one album per artist.
+- **Subfolders are fine.** A multi-disc release split into `CD1` / `CD2`
+  (or `Disc 1` / `Disc 2`, `Side A`, …) under the album folder still
+  groups as **one** album — the disc subfolder is folded into its parent.
+- Two different albums that merely share a name (e.g. two *Greatest Hits*)
+  stay separate as long as they're in different folders.
+
 **Notes**
 - **Bit-perfect.** Files are served unmodified with HTTP Range support;
   no transcoding. Album art is the file's embedded cover, served at

@@ -71,6 +71,29 @@ def _is_audio_file(path: Path) -> bool:
     return path.suffix.lower() in _AUDIO_EXTENSIONS
 
 
+# A trailing disc subfolder (CD1 / "Disc 2" / Disk_3 / "Side A") is
+# folded into its parent so a multi-disc release groups as ONE album.
+_DISC_SUBDIR_RE = re.compile(r"^(cd|disc|disk|side)[\s._-]*\d+[a-z]?$", re.I)
+
+
+def _album_key_for(rel_path: str) -> str:
+    """Folder-based album identity for a track, relative to the music
+    root. An album == its containing folder; a trailing disc subfolder
+    is folded into the parent (multi-disc releases group as one album).
+
+    This is the grouping key the browse layer uses instead of the
+    per-track (artist, album): a compilation lives in ONE folder so it
+    groups as a single album even though every track's `artist` is a
+    different performer, while two distinct albums that merely share a
+    name ("Greatest Hits") live in different folders and stay separate.
+
+    Returns "" for a root-level loose file (no containing folder)."""
+    parent = os.path.dirname(rel_path)
+    if _DISC_SUBDIR_RE.match(os.path.basename(parent)):
+        parent = os.path.dirname(parent)
+    return parent
+
+
 def _track_id_for(rel_path: str) -> str:
     """Stable per-file identifier — survives rescans. The lesson
     from AssetUPnP's `d-<id>` was: NEVER auto-increment. Use a
@@ -386,6 +409,7 @@ class LocalFsProvider:
                 "url":         url,
                 "art":         f"localfs-art:{art_hash}" if art_hash else "",
                 "file_path":   abs_path,
+                "album_key":   _album_key_for(rel),
                 **tags,
             }
             new_rows.append(row)
@@ -464,6 +488,32 @@ class LocalFsProvider:
                 if healed_art:
                     log.info(f"LocalFs healed {healed_art} art URL(s) "
                              f"→ {self._base_url}")
+
+            # Backfill folder-based album_key for rows that predate the
+            # column or were written by an older scan (the "unchanged"
+            # fast-path never rebuilds a row, so its album_key would stay
+            # empty). Pure function of file_path → only rows missing it
+            # are touched; idempotent and base_url-independent. Computed
+            # in Python because the disc-subfolder fold can't be done in
+            # SQL.
+            missing = conn.execute(
+                "SELECT id, file_path FROM tracks "
+                "WHERE udn=? AND (album_key IS NULL OR album_key='') "
+                "  AND file_path != ''",
+                (self.udn,)).fetchall()
+            ak_writes = []
+            for row_id, fp in missing:
+                try:
+                    rel = str(Path(fp).relative_to(self._root))
+                except ValueError:
+                    continue        # file outside root (defensive)
+                ak = _album_key_for(rel)
+                if ak:
+                    ak_writes.append((ak, row_id))
+            if ak_writes:
+                conn.executemany(
+                    "UPDATE tracks SET album_key=? WHERE id=?", ak_writes)
+                log.info(f"LocalFs backfilled {len(ak_writes)} album_key(s)")
 
         stats["elapsed_sec"] = round(time.time() - t0, 2)
         log.info(f"LocalFs rescan complete: {stats}")

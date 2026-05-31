@@ -363,6 +363,15 @@ class LibraryDB:
             # tag year - override year >= 3.
             "ALTER TABLE tracks ADD COLUMN year INTEGER",
             "ALTER TABLE metadata_overrides ADD COLUMN year INTEGER",
+            # 2026-05-31: folder-based album identity for LocalFs. The
+            # per-track `artist` is the performer, so an artist-keyed
+            # browse fragments a compilation into one album per performer.
+            # album_key = the track's containing folder (disc subfolders
+            # folded), relative to the music root — written by
+            # LocalFsProvider so the browse layer can group an album by
+            # its folder rather than by (artist, album). Empty for UPnP
+            # rows (no file_path) and root-level loose files.
+            "ALTER TABLE tracks ADD COLUMN album_key TEXT DEFAULT ''",
         ]:
             try:
                 with self._pool.write() as conn:
@@ -790,6 +799,7 @@ class LibraryDB:
                 bit_depth=bd_in if bd_in is not None else bd_url,
                 sample_rate=sr_in if sr_in is not None else sr_url,
                 year=t.get("year"),
+                album_key=t.get("album_key", ""),
             )
         rows_raw = [_make_row(t) for t in tracks if t.get("url")]
 
@@ -836,10 +846,11 @@ class LibraryDB:
             conn.executemany(
                 "INSERT OR IGNORE INTO tracks "
                 "(udn, obj_id, url, title, artist, album, duration, art, "
-                " mime, genre, file_path, bit_depth, sample_rate, year) "
+                " mime, genre, file_path, bit_depth, sample_rate, year, "
+                " album_key) "
                 "VALUES (:udn,:obj_id,:url,:title,:artist,:album,:duration,"
                 "        :art,:mime,:genre,:file_path,:bit_depth,:sample_rate,"
-                "        :year)",
+                "        :year,:album_key)",
                 rows)
             inserted = conn.execute("SELECT changes()").fetchone()[0]
             # Step 2: update genre + art on already-indexed tracks

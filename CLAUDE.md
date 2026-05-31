@@ -826,6 +826,36 @@ alongside AssetUPnP for the first time. Three fixes landed:
 
 The LocalFs synthetic server is named **`RoHaLocalFS`**.
 
+**Folder-based album identity (`tracks.album_key`, 2026-05-31).**
+RoHaLocalFS groups albums by **folder**, not by tags. The per-track
+`artist` tag is the *performer*, so an artist-keyed browse fragments a
+compilation into one album per performer (the user's ~2k albums had
+ballooned to ~8k distinct album names). The reliable album boundary is
+the containing folder, so the design is **one album = one folder**:
+
+- `dlna_providers.localfs._album_key_for(rel_path)` → the track's
+  containing folder relative to the music root, with a trailing **disc
+  subfolder** (`CD1` / `Disc 2` / `Disk_3` / `Side N`, matched by
+  `_DISC_SUBDIR_RE`) **folded into its parent** — so a multi-disc release
+  stays ONE album.
+- Stored in the `tracks.album_key TEXT` column (idempotent migration in
+  `LibraryDB._init_schema`). Written per row by the scanner, persisted by
+  `upsert_tracks`, and **backfilled** in `LocalFsProvider.rescan()` for
+  pre-column / cache-unchanged rows (pure function of `file_path`, so
+  only rows missing it are touched — idempotent, base_url-independent;
+  computed in Python because the disc-fold can't be expressed in SQL).
+- A *Various Artists* compilation in one folder → one album; two distinct
+  albums that merely share a name (e.g. two *Greatest Hits*) live in
+  different folders → stay separate. UPnP rows have no `file_path`, so
+  their `album_key` is `''` (empty) and they keep the legacy
+  (artist, album) browse grouping.
+- **Status (in flight):** Layer 1 (the data layer above) is done +
+  tested. The browse-layer regroup on `album_key`
+  (`all_albums`/`artist_albums`/`all_artists`/`album_tracks`/
+  `browse_letter`/`search`), the frontend passing `album_key` on
+  drill-in, and the live re-scan/verify are the remaining layers.
+  Validated target: ~8,364 album names → ~2,110 disc-folded folders.
+
 **macOS TCC gotcha:** an interactive shell sees `/Volumes/SAMDATA`
 as locked (`ls` → "Operation not permitted") but the launchd-spawned
 gateway reads it fine — different TCC grants. Don't predict gateway

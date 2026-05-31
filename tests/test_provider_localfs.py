@@ -35,6 +35,7 @@ from dlna_library import LibraryDB
 from dlna_providers import LibraryProvider, get_provider_class
 from dlna_providers.localfs import (
     LocalFsProvider,
+    _album_key_for,
     _audio_extensions,
     _format_duration,
     _is_audio_file,
@@ -74,6 +75,40 @@ class TestPureHelpers(unittest.TestCase):
         a = _udn_for_root(Path("/Music"))
         b = _udn_for_root(Path("/Volumes/SAMDATA/Music"))
         self.assertNotEqual(a, b)
+
+    def test_album_key_is_containing_folder(self):
+        self.assertEqual(
+            _album_key_for("Pink Floyd/The Wall/05 Another Brick.flac"),
+            "Pink Floyd/The Wall")
+
+    def test_album_key_same_folder_groups_tracks(self):
+        # A compilation: different performers, ONE folder → one key.
+        a = _album_key_for("Various Artists - 80s Radio Hits/01 X.flac")
+        b = _album_key_for("Various Artists - 80s Radio Hits/41 Y.flac")
+        self.assertEqual(a, b)
+
+    def test_album_key_different_folders_stay_distinct(self):
+        # Same album NAME, different real albums → different keys.
+        a = _album_key_for("Brian Hyland/Greatest Hits/01 X.flac")
+        b = _album_key_for("Bee Gees/Greatest Hits/01 Y.flac")
+        self.assertNotEqual(a, b)
+
+    def test_album_key_folds_disc_subfolders(self):
+        # Multi-disc release: CD1 / CD2 fold up to the album folder.
+        base = "John Denver - The Essential"
+        for disc in ("CD1", "CD 2", "Disc 3", "Disk_4", "cd1", "Side 1"):
+            with self.subTest(disc=disc):
+                self.assertEqual(
+                    _album_key_for(f"{base}/{disc}/08 Goodbye.flac"), base)
+
+    def test_album_key_no_disc_subfolder_unchanged(self):
+        # A folder that merely contains "cd"/"disc" as a word is NOT a
+        # disc subfolder (no trailing number) → not folded.
+        self.assertEqual(
+            _album_key_for("Various/Discovery/01 X.flac"), "Various/Discovery")
+
+    def test_album_key_root_level_file_is_empty(self):
+        self.assertEqual(_album_key_for("loose.flac"), "")
 
     def test_format_duration_zero_is_empty(self):
         self.assertEqual(_format_duration(0), "")
@@ -581,6 +616,113 @@ class TestNotImplementedSurface(unittest.TestCase):
         with patch("builtins.__import__", side_effect=fake_import), \
              self.assertRaises(NotImplementedError):
             p.watch_changes(lambda: None)
+
+
+# ── album_key (folder-based album grouping, 2026-05-31) ─────────
+
+class TestAlbumKey(unittest.TestCase):
+    """Folder-based album identity written by the scanner + backfilled
+    in rescan. Mirrors TestRescan's tempdir / fake-tags fixtures (kept
+    standalone so TestRescan's suite isn't re-run under this name)."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        self.root = Path(tempfile.mkdtemp(prefix="localfs-test-")).resolve()
+
+    def tearDown(self):
+        os.unlink(self._p)
+        for p in sorted(self.root.rglob("*"), reverse=True):
+            if p.is_file():
+                p.unlink()
+            elif p.is_dir():
+                p.rmdir()
+        if self.root.exists():
+            self.root.rmdir()
+
+    def _write_file(self, rel: str, body: bytes = b"\0" * 16) -> Path:
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(body)
+        return p
+
+    def _fake_tags(self, path: Path) -> dict:
+        parts = path.relative_to(self.root).parts
+        return {
+            "title": path.stem,
+            "artist": parts[0] if parts else "Unknown",
+            "album": parts[1] if len(parts) > 1 else "Unknown",
+            "genre": "Rock", "duration": "0:03:33.456",
+            "bit_depth": 16, "sample_rate": 44100,
+            "year": 1979, "track_number": 1, "mime": "audio/flac",
+        }
+
+    def _album_keys(self, udn: str) -> list:
+        with self.db._pool.read() as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT album_key FROM tracks WHERE udn=? ORDER BY url",
+                (udn,)).fetchall()]
+
+    def _scan(self, p):
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._read_tags",
+                   side_effect=self._fake_tags), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            return p.rescan()
+
+    def test_schema_has_album_key_column(self):
+        with self.db._pool.read() as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+        self.assertIn("album_key", cols)
+
+    def test_scanner_populates_album_key(self):
+        self._write_file("Pink Floyd/The Wall/01 In the Flesh.flac")
+        p = LocalFsProvider(self.db, self.root)
+        self._scan(p)
+        self.assertEqual(self._album_keys(p.udn), ["Pink Floyd/The Wall"])
+
+    def test_compilation_shares_one_album_key(self):
+        self._write_file("VA - 80s Radio Hits/01 A.flac")
+        self._write_file("VA - 80s Radio Hits/02 B.flac")
+        p = LocalFsProvider(self.db, self.root)
+        self._scan(p)
+        keys = set(self._album_keys(p.udn))
+        self.assertEqual(keys, {"VA - 80s Radio Hits"})
+
+    def test_multidisc_folds_to_one_album_key(self):
+        self._write_file("Artist/Big Album/CD1/01 X.flac")
+        self._write_file("Artist/Big Album/CD2/01 Y.flac")
+        p = LocalFsProvider(self.db, self.root)
+        self._scan(p)
+        keys = set(self._album_keys(p.udn))
+        self.assertEqual(keys, {"Artist/Big Album"})
+
+    def test_rescan_backfills_missing_album_key(self):
+        self._write_file("Artist/Album/song.flac")
+        p = LocalFsProvider(self.db, self.root)
+        self._scan(p)
+        # Simulate a pre-column / old-scan row: wipe album_key, leaving
+        # the file unchanged so the next rescan takes the cache fast-path.
+        with self.db._pool.write() as conn:
+            conn.execute("UPDATE tracks SET album_key='' WHERE udn=?",
+                         (p.udn,))
+        self.assertEqual(self._album_keys(p.udn), [""])
+        stats = self._scan(p)
+        self.assertEqual(stats["unchanged"], 1)   # cache fast-path
+        self.assertEqual(self._album_keys(p.udn), ["Artist/Album"])
+
+    def test_upsert_persists_album_key(self):
+        self.db.upsert_tracks("uuid:localfs-x", [{
+            "id": "abc", "url": "localfs://uuid:localfs-x/abc",
+            "title": "T", "artist": "A", "album": "Alb",
+            "album_key": "A/Alb", "file_path": "/m/A/Alb/t.flac",
+        }])
+        with self.db._pool.read() as conn:
+            ak = conn.execute(
+                "SELECT album_key FROM tracks WHERE obj_id='abc'").fetchone()[0]
+        self.assertEqual(ak, "A/Alb")
 
 
 if __name__ == "__main__":
