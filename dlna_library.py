@@ -561,21 +561,25 @@ class LibraryDB:
                 file_path   TEXT DEFAULT '',
                 bit_depth   INTEGER,
                 sample_rate INTEGER,
+                album_key   TEXT DEFAULT '',
                 UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
             )
         """)
         inserts = []
         for r in old_rows:
             bd, sr = _parse_audio_params(r["url"])
+            # album_key may predate this row if the column-add migration
+            # ran first (it normally does); carry it, default '' otherwise.
+            ak = r["album_key"] if "album_key" in r.keys() else ""
             inserts.append((r["id"], r["udn"], r["obj_id"], r["url"],
                             r["title"], r["artist"], r["album"],
                             r["duration"], r["art"], r["mime"],
-                            r["genre"], r["file_path"], bd, sr))
+                            r["genre"], r["file_path"], bd, sr, ak))
         conn.executemany(
             "INSERT OR IGNORE INTO tracks "
             "(id, udn, obj_id, url, title, artist, album, duration, art, "
-            " mime, genre, file_path, bit_depth, sample_rate) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", inserts)
+            " mime, genre, file_path, bit_depth, sample_rate, album_key) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", inserts)
         n_new = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
 
         conn.execute("DROP TABLE _tracks_pre_widen")
@@ -999,7 +1003,7 @@ class LibraryDB:
 
             tracks = conn.execute(
                 f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
-                          t.duration, t.art, t.mime, 'audio' as type
+                          t.album_key, t.duration, t.art, t.mime, 'audio' as type
                    FROM tracks_fts f
                    JOIN tracks t ON t.id = f.rowid
                    WHERE tracks_fts MATCH ? AND t.udn = ?
@@ -1094,7 +1098,8 @@ class LibraryDB:
             Subsonic). Unchanged behaviour."""
         dedup = _dedup_clause("t")
         cols = ("t.obj_id as id, t.url, t.title, t.artist, t.album, "
-                "t.duration, t.art, t.mime, t.genre, 'audio' as type")
+                "t.album_key, t.duration, t.art, t.mime, t.genre, "
+                "'audio' as type")
         with self._pool.read() as conn:
             if album_key:
                 rows = conn.execute(

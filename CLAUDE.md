@@ -1178,9 +1178,9 @@ favourites keep `album_key=''` and the legacy `(artist, album)` identity.
 `album_fav_add/remove/is` take an optional `album_key`; `album_fav_list`
 returns it and matches `track_count`/art by folder when set. Migrated in
 `_migrate_album_fav_key` (rebuilds the table, carrying old rows forward
-with `album_key=''`). **UPnP fav exposure is album_key-aware (A3a, done).
-Subsonic fav/album ids still key on (artist, album) — that's the A3b
-follow-up.**
+with `album_key=''`). **UPnP fav exposure (A3a) and Subsonic fav/album
+ids (A3b) are both album_key-aware — favouriting/browsing a compilation
+by folder works across the PWA, the Naim, and CarPlay.**
 
 ### LibraryDB methods
 
@@ -2606,11 +2606,22 @@ base64-urlsafe-encoded payloads (same pattern as
 `api_upnp._encode_album_id`):
 
 - Track:    `tr:<base64(track.url)>`
-- Album:    `al:<base64(artist + \x00 + album)>`
+- Album:    `al:<base64(artist + \x00 + album [+ \x00 + album_key])>`
 - Artist:   `ar:<base64(artist)>`
 - Playlist: `pl:<plid>` (already opaque in the DB)
 
 Round-trips arbitrary unicode through XML/JSON/URL transports.
+
+**`album_key` in album ids (A3b):** for a LocalFs source the album id
+carries the FOLDER (`album_key`) as a third NUL-delimited field, so a
+Various-Artists compilation round-trips as one album (getAlbum / star /
+getStarred2 / coverArt resolve by folder). The third field is appended
+**only when `album_key` is set**, so non-LocalFs album ids stay
+byte-identical to the pre-A3b 2-field form (no client/cache churn);
+`_album_id_decode` returns `(artist, album, album_key)` and tolerates
+legacy 2-field ids with `album_key=''`. `_so_song` carries the track's
+`album_key` (added to `album_tracks` / `search` output) so track→album
+navigation lands on the folder album.
 
 ### Authentication
 

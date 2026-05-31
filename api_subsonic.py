@@ -242,14 +242,26 @@ def _dec(prefix: str, encoded: str) -> Optional[str]:
 def _track_id(url: str) -> str:           return _enc("tr:", url)
 def _track_id_decode(s: str) -> Optional[str]: return _dec("tr:", s)
 
-def _album_id(artist: str, album: str) -> str:
-    return _enc("al:", f"{artist}\x00{album}")
+def _album_id(artist: str, album: str, album_key: str = "") -> str:
+    # album_key (LocalFs folder identity) is appended ONLY when set, so a
+    # non-LocalFs album's id stays byte-identical to the pre-A3b 2-field
+    # form (no client/cache churn). A LocalFs compilation gets the folder
+    # in the id so it round-trips as one album.
+    payload = f"{artist}\x00{album}"
+    if album_key:
+        payload += f"\x00{album_key}"
+    return _enc("al:", payload)
 
 def _album_id_decode(s: str) -> Optional[tuple]:
+    """Return (artist, album, album_key). Legacy 2-field ids decode with
+    album_key=''."""
     raw = _dec("al:", s)
     if raw is None: return None
-    artist, _, album = raw.partition("\x00")
-    return (artist, album)
+    parts = raw.split("\x00")
+    artist    = parts[0] if len(parts) > 0 else ""
+    album     = parts[1] if len(parts) > 1 else ""
+    album_key = parts[2] if len(parts) > 2 else ""
+    return (artist, album, album_key)
 
 def _artist_id(artist: str) -> str:        return _enc("ar:", artist)
 def _artist_id_decode(s: str) -> Optional[str]: return _dec("ar:", s)
@@ -300,13 +312,15 @@ def _so_artist(row: dict) -> dict:
 
 
 def _so_album(row: dict, *, with_artist_id: bool = True) -> dict:
+    ak  = row.get("album_key") or ""
+    aid = _album_id(row.get("artist") or "", row["album"], ak)
     out = {
-        "id":         _album_id(row.get("artist") or "", row["album"]),
+        "id":         aid,
         "name":       row["album"],
         "title":      row["album"],
         "artist":     row.get("artist") or "",
         "songCount":  int(row.get("track_count", 0) or 0),
-        "coverArt":   _album_id(row.get("artist") or "", row["album"]),
+        "coverArt":   aid,
         "duration":   0,
         "created":    "",
     }
@@ -330,9 +344,11 @@ def _so_song(t: dict) -> dict:
     except (ValueError, TypeError):
         secs = 0
 
+    t_ak  = t.get("album_key") or ""
+    t_aid = _album_id(t.get("artist", ""), t.get("album", ""), t_ak)
     return {
         "id":       _track_id(t["url"]),
-        "parent":   _album_id(t.get("artist", ""), t.get("album", "")),
+        "parent":   t_aid,
         "title":    t.get("title", "") or "",
         "artist":   t.get("artist", "") or "",
         "album":    t.get("album", "") or "",
@@ -340,8 +356,8 @@ def _so_song(t: dict) -> dict:
         "isDir":    False,
         "isVideo":  False,
         "type":     "music",
-        "coverArt": _album_id(t.get("artist", ""), t.get("album", "")),
-        "albumId":  _album_id(t.get("artist", ""), t.get("album", "")),
+        "coverArt": t_aid,
+        "albumId":  t_aid,
         "artistId": _artist_id(t.get("artist", "")) if t.get("artist") else "",
         "suffix":   (t.get("url", "").rsplit(".", 1)[-1] or "").lower(),
         "contentType": t.get("mime") or "audio/flac",
@@ -417,9 +433,7 @@ def _get_starred(h, params):
     isn't recognised."""
     favs = DB.album_fav_list()
     _ok(h, {"starred": {
-        "album":  [_so_album({"artist": f["artist"],
-                              "album":  f["album"],
-                              "track_count": f.get("track_count", 0)})
+        "album":  [_so_album(f)
                    for f in favs],
         "song":   [],
         "artist": [],
@@ -483,9 +497,10 @@ def _get_album(h, params):
     decoded = _album_id_decode(aid)
     if decoded is None:
         return _fail(h, ERR_NOT_FOUND, f"Unknown album id: {aid}")
-    artist, album = decoded
+    artist, album, album_key = decoded
     udn = _default_udn()
-    tracks = DB.album_tracks(udn, artist, album) if udn else []
+    tracks = (DB.album_tracks(udn, artist, album, album_key=album_key)
+              if udn else [])
     _ok(h, {"album": {
         "id":         aid,
         "name":       album,
@@ -515,9 +530,7 @@ def _get_album_list2(h, params):
         favs = DB.album_fav_list()
         page = favs[offset:offset + size]
         _ok(h, {"albumList2": {"album": [
-            _so_album({"artist": f["artist"],
-                       "album":  f["album"],
-                       "track_count": f.get("track_count", 0)})
+            _so_album(f)
             for f in page
         ]}})
         return
@@ -726,9 +739,7 @@ def _unstar(h, params):
 def _get_starred2(h, params):
     favs = DB.album_fav_list()
     _ok(h, {"starred2": {
-        "album": [_so_album({"artist": f["artist"],
-                             "album":  f["album"],
-                             "track_count": f.get("track_count", 0)})
+        "album": [_so_album(f)
                   for f in favs],
         "song":   [],
         "artist": [],
@@ -755,19 +766,28 @@ def _get_cover_art(h, params):
     if sid.startswith("al:"):
         decoded = _album_id_decode(sid)
         if decoded:
-            artist, album = decoded
+            artist, album, album_key = decoded
             with DB._pool.read() as c:
-                row = c.execute(
-                    "SELECT art_url FROM album_art "
-                    "WHERE artist=? AND album=?", (artist, album)).fetchone()
-                if row and row["art_url"]:
-                    art_url = row["art_url"]
-                else:
+                if album_key:
+                    # LocalFs folder identity: art lives on the folder's
+                    # tracks, not under (artist, album) in album_art.
                     row = c.execute(
-                        "SELECT art FROM tracks WHERE artist=? AND album=? "
-                        "AND art != '' LIMIT 1", (artist, album)).fetchone()
+                        "SELECT art FROM tracks WHERE album_key=? "
+                        "AND art != '' LIMIT 1", (album_key,)).fetchone()
                     if row:
                         art_url = row["art"]
+                else:
+                    row = c.execute(
+                        "SELECT art_url FROM album_art "
+                        "WHERE artist=? AND album=?", (artist, album)).fetchone()
+                    if row and row["art_url"]:
+                        art_url = row["art_url"]
+                    else:
+                        row = c.execute(
+                            "SELECT art FROM tracks WHERE artist=? AND album=? "
+                            "AND art != '' LIMIT 1", (artist, album)).fetchone()
+                        if row:
+                            art_url = row["art"]
     elif sid.startswith("tr:"):
         u = _track_id_decode(sid)
         if u:

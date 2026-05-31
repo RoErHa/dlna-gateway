@@ -196,9 +196,22 @@ class TestIdCodec(unittest.TestCase):
         self.assertEqual(api_subsonic._track_id_decode(tid), url)
 
     def test_album_id_round_trip(self):
+        # Legacy 2-field album (no album_key) decodes with album_key=''.
         aid = api_subsonic._album_id("Sigur Rós", "( )")
         self.assertEqual(api_subsonic._album_id_decode(aid),
-                         ("Sigur Rós", "( )"))
+                         ("Sigur Rós", "( )", ""))
+
+    def test_album_id_round_trip_with_album_key(self):
+        # LocalFs folder identity round-trips as the third field.
+        aid = api_subsonic._album_id("Various Artists", "Hits", "VA/Hits/CD1")
+        self.assertEqual(api_subsonic._album_id_decode(aid),
+                         ("Various Artists", "Hits", "VA/Hits/CD1"))
+
+    def test_album_id_without_key_is_byte_identical_to_legacy(self):
+        # An empty album_key must NOT change the encoded id (no client/
+        # cache churn for non-LocalFs albums).
+        self.assertEqual(api_subsonic._album_id("A", "B"),
+                         api_subsonic._album_id("A", "B", ""))
 
     def test_artist_id_round_trip(self):
         aid = api_subsonic._artist_id("AC/DC")
@@ -601,6 +614,55 @@ class TestInternetRadio(_BaseDB):
         h, body = _call("deleteInternetRadioStation", {"id": "garbage"},
                         db=self.db)
         self.assertEqual(body["status"], "failed")
+
+
+class TestAlbumKey(unittest.TestCase):
+    """A3b — LocalFs albums expose by FOLDER (album_key) through Subsonic:
+    album ids carry the folder, getAlbum/star resolve by it."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+        # A compilation folder (different performers; SERVERS is mocked
+        # empty in _call, so _default_udn falls back to this udn).
+        self.db.upsert_tracks("uuid:localfs-x", [
+            {"id": "c1", "url": "http://h/c1", "title": "Song A",
+             "artist": "Alice", "album": "Orig A", "album_key": "VA/Comp",
+             "file_path": "/m/VA/Comp/01.flac", "mime": "audio/flac"},
+            {"id": "c2", "url": "http://h/c2", "title": "Song B",
+             "artist": "Bob", "album": "Orig B", "album_key": "VA/Comp",
+             "file_path": "/m/VA/Comp/02.flac", "mime": "audio/flac"},
+        ])
+
+    def tearDown(self):
+        self.db._pool.close()
+        os.unlink(self.tmp.name)
+
+    def test_album_list_id_carries_album_key(self):
+        _, body = _call("getAlbumList2",
+                        {"type": "alphabeticalByName", "size": "50"},
+                        db=self.db)
+        albums = body["albumList2"]["album"]
+        comp = next(a for a in albums if a["name"] == "Comp")
+        self.assertEqual(api_subsonic._album_id_decode(comp["id"]),
+                         ("Various Artists", "Comp", "VA/Comp"))
+
+    def test_get_album_by_key_returns_whole_folder(self):
+        aid = api_subsonic._album_id("Various Artists", "Comp", "VA/Comp")
+        _, body = _call("getAlbum", {"id": aid}, db=self.db)
+        songs = body["album"]["song"]
+        self.assertEqual(len(songs), 2)
+        self.assertEqual({s["title"] for s in songs}, {"Song A", "Song B"})
+
+    def test_star_and_starred2_round_trip_by_key(self):
+        aid = api_subsonic._album_id("Various Artists", "Comp", "VA/Comp")
+        _call("star", {"id": aid}, db=self.db)
+        self.assertTrue(self.db.album_fav_is(
+            "Various Artists", "Comp", album_key="VA/Comp"))
+        _, body = _call("getStarred2", {}, db=self.db)
+        ids = [a["id"] for a in body["starred2"]["album"]]
+        self.assertIn(aid, ids)
 
 
 if __name__ == "__main__":
