@@ -286,8 +286,10 @@ def avtransport_get_position(av_url: str) -> dict:
     """
     Returns position info dict:
       {"position": seconds_float, "duration": seconds_float,
-       "title": str, "state": str}
-    All fields may be None on failure.
+       "title": str, "state": str, "track_uri": str}
+    All fields may be None on failure. `track_uri` is the renderer's
+    currently-playing URI (GetPositionInfo's <TrackURI>) — used to detect
+    a gapless auto-advance to a queued SetNextAVTransportURI.
     """
     raw, _err = _av_soap(av_url, "GetPositionInfo",
         '<u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
@@ -308,7 +310,7 @@ def avtransport_get_position(av_url: str) -> dict:
         return None
 
     result: dict = {"position": None, "duration": None,
-                    "title": None, "state": None}
+                    "title": None, "state": None, "track_uri": None}
     if not raw:
         return result
     try:
@@ -319,6 +321,8 @@ def avtransport_get_position(av_url: str) -> dict:
                 result["position"] = _parse_time(el.text or "")
             elif tag == "TrackDuration":
                 result["duration"] = _parse_time(el.text or "")
+            elif tag == "TrackURI":
+                result["track_uri"] = (el.text or "").strip() or None
             elif tag == "TrackMetaData" and el.text:
                 # Extract title from embedded DIDL-Lite if present
                 try:

@@ -120,5 +120,71 @@ class TestGaplessQueueing(unittest.TestCase):
                 q._cancel()
 
 
+# ── C6: gapless auto-advance detection via TrackURI ──────────────
+
+from dlna_player import _gapless_advanced   # noqa: E402
+
+
+class TestGaplessAdvancedDecision(unittest.TestCase):
+    """Pure helper: detect the renderer auto-transitioning to the queued
+    NextURI so the monitor syncs its index without re-sending."""
+
+    CUR = "http://fake/track1.flac"
+    NXT = "http://fake/track2.flac"
+
+    def test_advances_when_playing_next_uri(self):
+        self.assertTrue(_gapless_advanced("PLAYING", self.NXT, self.CUR, self.NXT))
+
+    def test_advances_when_transitioning_to_next(self):
+        self.assertTrue(
+            _gapless_advanced("TRANSITIONING", self.NXT, self.CUR, self.NXT))
+
+    def test_no_advance_still_on_current(self):
+        self.assertFalse(_gapless_advanced("PLAYING", self.CUR, self.CUR, self.NXT))
+
+    def test_no_advance_when_stopped(self):
+        # STOPPED is the existing finished-path's job, not gapless.
+        self.assertFalse(_gapless_advanced("STOPPED", self.NXT, self.CUR, self.NXT))
+
+    def test_no_advance_when_track_uri_missing(self):
+        # Renderer doesn't report TrackURI → safe-degrade to False.
+        self.assertFalse(_gapless_advanced("PLAYING", None, self.CUR, self.NXT))
+        self.assertFalse(_gapless_advanced("PLAYING", "", self.CUR, self.NXT))
+
+    def test_no_advance_when_no_next_queued(self):
+        self.assertFalse(_gapless_advanced("PLAYING", self.NXT, self.CUR, ""))
+
+    def test_no_advance_on_unrelated_uri(self):
+        self.assertFalse(
+            _gapless_advanced("PLAYING", "http://fake/other.flac",
+                              self.CUR, self.NXT))
+
+
+class TestGetPositionTrackUri(unittest.TestCase):
+    """avtransport_get_position parses <TrackURI> (the auto-advance signal)."""
+
+    def test_track_uri_parsed(self):
+        import dlna_avtransport
+        body = (
+            '<?xml version="1.0"?><Envelope><Body>'
+            '<GetPositionInfoResponse>'
+            '<Track>1</Track><TrackDuration>0:03:00</TrackDuration>'
+            '<TrackURI>http://fake/track2.flac</TrackURI>'
+            '<RelTime>0:00:10</RelTime>'
+            '</GetPositionInfoResponse></Body></Envelope>')
+        with patch("dlna_avtransport._av_soap", return_value=(body, None)):
+            pos = dlna_avtransport.avtransport_get_position("http://r/AV")
+        self.assertEqual(pos["track_uri"], "http://fake/track2.flac")
+
+    def test_track_uri_none_when_absent(self):
+        import dlna_avtransport
+        body = ('<?xml version="1.0"?><Envelope><Body>'
+                '<GetPositionInfoResponse><RelTime>0:00:05</RelTime>'
+                '</GetPositionInfoResponse></Body></Envelope>')
+        with patch("dlna_avtransport._av_soap", return_value=(body, None)):
+            pos = dlna_avtransport.avtransport_get_position("http://r/AV")
+        self.assertIsNone(pos["track_uri"])
+
+
 if __name__ == "__main__":
     unittest.main()

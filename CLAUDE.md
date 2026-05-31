@@ -791,14 +791,24 @@ Naim-side gapless / segued-album test is user-gated on SAMDATA
 unlock + setting `LOCALFS_MUSIC_ROOT` in the gateway's environment
 (see the LaunchAgent plist if running under launchd).
 
-**Known follow-up — not blocking P5:** the gateway's internal
-`queue_pos` index does NOT yet update when the renderer auto-
-transitions to a queued URI (the existing `_monitor_decision`
-advances on PLAYING → STOPPED, but gapless avoids STOPPED
-entirely). Audio is correct; only the now-playing UI's "track
-2 of 8" indicator lags until the renderer state genuinely
-stops. Detect via `GetMediaInfo`-returned `CurrentURI`
-comparison in a follow-up; out of scope for the P4 done-when.
+**Gapless auto-advance tracking (C6, FIXED 2026-05-31).** A renderer
+auto-transitions to a queued `SetNextAVTransportURI` without ever
+reporting STOPPED, so the `PLAYING → STOPPED` advance never fired:
+`_index` lagged (now-playing showed the wrong track) AND the eventual
+STOPPED — after the queued track finished with nothing else queued —
+made the monitor advance and **re-send the already-played track
+(double-play)**. Fix: `_monitor` now reads the renderer's current
+`TrackURI` (added to `avtransport_get_position`) each PLAYING poll while
+a next track is queued; the pure helper `_gapless_advanced(cur_state,
+track_uri, cur_url, next_url)` returns True when the renderer's TrackURI
+is the queued NEXT track's URL. On a hit the monitor syncs `_index += 1`
++ resets `_started_at` + queues the new next via the extracted
+`_queue_next_uri()` — WITHOUT re-sending (no double-play). Safe-degrades:
+a renderer that doesn't report TrackURI falls back to the STOPPED→advance
+path (pre-C6 behaviour). The STOPPED→advance path still handles the last
+track / non-gapless renderers. Tests: `tests/test_player_gapless.py`
+(`TestGaplessAdvancedDecision` 7 + `TestGetPositionTrackUri` 2). Naim-side
+gapless/segued-album verification is user-gated.
 
 **Live multi-source operation (2026-05-30).** LocalFs ran live
 alongside AssetUPnP for the first time. Three fixes landed:

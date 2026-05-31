@@ -113,6 +113,27 @@ def _monitor_decision(prev_state: str, cur_state: str,
     return False, ""
 
 
+def _gapless_advanced(cur_state: str, track_uri, cur_url: str,
+                      next_url: str) -> bool:
+    """True when the renderer has auto-transitioned to the queued NEXT
+    track (gapless) — it's actively playing and its current TrackURI is
+    the next track's URL rather than the current one.
+
+    The renderer auto-plays a SetNextAVTransportURI without ever passing
+    through STOPPED, so the PLAYING→STOPPED advance never fires; the
+    monitor uses this to sync its index WITHOUT re-sending (a re-send
+    would double-play the track the renderer is already playing).
+
+    Safe-degrades to False when the renderer doesn't report a usable
+    TrackURI (None / NOT_IMPLEMENTED) — the queue then falls back to the
+    STOPPED→advance path, i.e. pre-C6 behaviour."""
+    if cur_state not in ("PLAYING", "TRANSITIONING"):
+        return False
+    if not track_uri or not next_url:
+        return False
+    return track_uri == next_url and track_uri != cur_url
+
+
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
 class RendererQueue:
@@ -489,21 +510,7 @@ class RendererQueue:
         if ok:
             with self._lock:
                 self._consecutive_fails = 0
-            # Pre-queue the NEXT track so the renderer can transition
-            # gaplessly when the current one ends. The Naim auto-plays
-            # the queued URI without re-buffering / re-starting → no
-            # audible click between tracks. Failure here is non-fatal:
-            # the existing STOPPED→advance path takes over (with a
-            # small gap), which is how it worked before P4.
-            from dlna_avtransport import avtransport_set_next_uri
-            next_t: dict = {}
-            with self._lock:
-                if 0 <= self._index + 1 < len(self._tracks):
-                    next_t = dict(self._tracks[self._index + 1])
-            avtransport_set_next_uri(
-                av_url, next_t.get("url", ""),
-                next_t.get("title", ""),
-                next_t.get("mime", ""))
+            self._queue_next_uri()
             return True
 
         log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "
@@ -532,6 +539,25 @@ class RendererQueue:
         self._stop_event.set()
         return False
 
+    def _queue_next_uri(self):
+        """Pre-queue the track after the current _index via
+        SetNextAVTransportURI so the renderer transitions to it gaplessly
+        (no re-buffer / click). On the last track, send an empty NextURI
+        to clear any previously-queued URI. Failure is non-fatal — the
+        STOPPED→advance path still works (with a small gap), as it did
+        before P4. Called after a Play, and again after a detected
+        gapless auto-advance (to queue the NEW next track)."""
+        from dlna_avtransport import avtransport_set_next_uri
+        with self._lock:
+            av_url = self._av_url
+            next_t = (dict(self._tracks[self._index + 1])
+                      if 0 <= self._index + 1 < len(self._tracks) else {})
+        if not av_url:
+            return
+        avtransport_set_next_uri(
+            av_url, next_t.get("url", ""),
+            next_t.get("title", ""), next_t.get("mime", ""))
+
     def _monitor(self):
         """
         Poll GetTransportInfo every 2 s and advance the queue.
@@ -547,7 +573,8 @@ class RendererQueue:
             UNKNOWN_ABORT_SEC with no duration for the watchdog to use;
             the queue stops rather than poll a dead renderer.
         """
-        from dlna_avtransport import avtransport_probe_state
+        from dlna_avtransport import (avtransport_probe_state,
+                                      avtransport_get_position)
         POLL_SEC      = 2.0
         prev_state    = "UNKNOWN"
         unknown_since = 0.0
@@ -590,6 +617,35 @@ class RendererQueue:
                     unknown_since = time.monotonic()
             else:
                 unknown_since = 0.0
+
+            # Gapless auto-advance (C6): the renderer may move to the
+            # queued NextURI without ever reporting STOPPED, so the
+            # PLAYING→STOPPED advance never fires — _index would lag and
+            # the eventual STOPPED would re-send the already-played track
+            # (double-play). Detect via the renderer's current TrackURI
+            # and sync _index WITHOUT re-sending, then queue the new next.
+            if (cur_state in ("PLAYING", "TRANSITIONING") and cur_t is not None
+                    and not bool(cur_t.get("is_stream"))):
+                with self._lock:
+                    nxt = (self._tracks[self._index + 1]
+                           if 0 <= self._index + 1 < len(self._tracks)
+                           else None)
+                if nxt is not None:
+                    track_uri = avtransport_get_position(av_url).get("track_uri")
+                    if _gapless_advanced(cur_state, track_uri,
+                                         cur_t.get("url", ""),
+                                         nxt.get("url", "")):
+                        log.info(f"RendererQueue ⏭ GAPLESS advance "
+                                 f"[{idx+1}→{idx+2}/{total}] — renderer moved "
+                                 f"to queued URI")
+                        self._log_track_end("finished")
+                        with self._lock:
+                            self._index += 1
+                            self._started_at = time.monotonic()
+                        self._queue_next_uri()
+                        prev_state = cur_state
+                        self._stop_event.wait(POLL_SEC)
+                        continue
 
             elapsed   = (time.monotonic() - start) if start > 0 else 0.0
             dur       = _dur_to_sec(cur_t.get("duration")) if cur_t else 0
