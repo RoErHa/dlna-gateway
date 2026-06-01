@@ -839,17 +839,15 @@ GET /api/album_favourites/remove?artist=X&album=Y
   orphans and shouldn't be favouritable. `data-fav="0"` shows ☆,
   `data-fav="1"` shows ★. Click toggles via /add or /remove with
   optimistic UI flip.
-- **Right column**: a synthetic first row (`#album-fav-pl-item`,
-  "⭐ Favourite Albums") at the top of the Playlists list — above the
-  existing track-level "⭐ Favourites" and any user playlists.
-  Clicking it swaps the `pl-list` / `pl-tracks` panels (same UX as
-  opening any playlist) and renders the favourites as
-  `.album-fav-row` rows with thumbnail + artist/album. Click a row
-  → drills into `showAlbumTracks(artist, album)` (same destination as
-  Browse → Artist → Album).
-- **Module state**: `albumFavouritesCache` in app.js is set to `null`
-  on add/remove so the next view-open refetches; this avoids
-  add-then-immediately-view showing stale state.
+- **Right-column browse view — REMOVED (2026-06-01).** There used to be
+  a synthetic "⭐ Favourite Albums" row + list view in the Playlists
+  panel, but its `(artist, album)` entries didn't survive the LocalFs
+  folder-album migration (stale entries, slow joins, spinner-on-open),
+  so it was removed and the `album_favourites` table cleared for a clean
+  slate. **The album-header star is the only PWA surface now** — it still
+  adds/removes (folder-keyed via `album_key`). Favourites remain exposed
+  via UPnP (Naim) and Subsonic (CarPlay). A working PWA browse view could
+  be rebuilt later on the folder model if wanted.
 
 ### UPnP exposure (Naim)
 
@@ -877,7 +875,7 @@ rather than 500.
 |---|---|
 | `tests/test_album_favourites.py` | DB round-trip + idempotent add, dedupe, ordering newest-first, orphan-album survival, `clear(udn)` invariant, handler 400/200 paths. 14 tests. |
 | `tests/test_upnp_album_favourites.py` | Album-id codec round-trip (incl. unicode/specials), root browse lists fav-albums first, "favalbums" lists each favourite, "favalbum:{...}" lists tracks, unknown album → empty container. 9 tests. |
-| `tests/frontend/test_album_favourites.py` | Star button gated by `track_count>1`, initial state from `/check`, click → /add or /remove with optimistic flip, "⭐ Favourite Albums" rendered first in `pl-list`, clicking it opens album-list view, clicking a row drills into `showAlbumTracks()`. 9 Playwright tests. |
+| `tests/frontend/test_album_favourites.py` | Album-header star only (the right-column browse view was removed 2026-06-01): star gated by `track_count>1`, initial state from `/check`, click → /add or /remove with optimistic flip, album_key-aware check/add. 8 Playwright tests. |
 
 ## External services (outbound HTTP)
 

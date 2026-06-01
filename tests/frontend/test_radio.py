@@ -58,8 +58,9 @@ def _open_radio_view(page):
 # ── Right-column entry ────────────────────────────────────────────
 
 def test_radio_stations_row_present(app, gateway):
-    """The synthetic "📡 Radio Stations" row must sit directly below
-    "⭐ Favourite Albums" in #pl-list."""
+    """The synthetic "📡 Radio Stations" row sits at the top of #pl-list.
+    (The "⭐ Favourite Albums" row that used to precede it was removed
+    2026-06-01 — see test_album_favourites.py.)"""
     app.evaluate("showPlaylists()")
     app.wait_for_function("document.getElementById('radio-pl-item') !== null",
                           timeout=2000)
@@ -67,9 +68,8 @@ def test_radio_stations_row_present(app, gateway):
         "Array.from(document.querySelectorAll('#pl-list .pl-item'))"
         ".map(e => e.id)")
     assert "radio-pl-item" in ids, f"radio-pl-item missing from {ids}"
-    assert "album-fav-pl-item" in ids
-    assert ids.index("radio-pl-item") == ids.index("album-fav-pl-item") + 1, \
-        f"Radio row must be right after Favourite Albums; got {ids}"
+    assert "album-fav-pl-item" not in ids, \
+        f"Favourite Albums row should be gone; got {ids}"
 
 
 def test_clicking_radio_row_opens_view(app, gateway):

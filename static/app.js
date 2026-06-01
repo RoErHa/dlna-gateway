@@ -34,8 +34,6 @@ let seeking=false,seekTarget=0;
 let curTab="browse";
 let playlists=[],curPlId=null;
 // Album favourites: cached list (null = stale, refetch on next view).
-// Distinct from playlists / curPlId — these are whole-album bookmarks.
-let albumFavouritesCache=null;
 
 // Internet radio ("📡 Stations"): favourites cache (null = stale), the
 // cap, and the station currently playing — when non-null the
@@ -798,8 +796,6 @@ async function _wireAlbumFavStar(artist, album, albumKey=""){
     try {
       const r = await api(`${path}?artist=${enc(artist)}&album=${enc(album)}${kq}`);
       if(!r){ _setAlbumFavStar(true, wasFav); return; }
-      // Invalidate the cached list so the right-column view refetches.
-      albumFavouritesCache = null;
     } catch(e){ _setAlbumFavStar(true, wasFav); }
   };
 }
@@ -846,15 +842,6 @@ function drillBack(){
     _showArtistAlbumsInner(prev);
   } else if(prev.type==="genre"){
     _showGenreAlbumsInner(prev);
-  } else if(prev.type==="album_favourites"){
-    // Back from an album opened via the right-column favourites view —
-    // bounce back to that list, NOT into the Browse drill chain.
-    drillArtist=null;
-    drillAlbum=null;
-    _drillShowChrome(false);
-    $("browse-section-hdr").style.display="none";
-    mobileTab("playlists");
-    showAlbumFavourites();
   }
 }
 
@@ -1171,16 +1158,11 @@ async function showPlaylists(){
   $("pl-actions").innerHTML=`<button class="btn" style="font-size:11px;padding:5px 10px" onclick="newPlaylist()">+ New playlist</button>`;
   const list=$("pl-list");
   list.innerHTML="";
-  // Synthetic top row: whole-album bookmarks. Always present; the album
-  // count is fetched lazily so we don't pay a round-trip on every tab
-  // switch.
-  const favAlbums=document.createElement("div");
-  favAlbums.id="album-fav-pl-item";
-  favAlbums.className="pl-item";
-  favAlbums.innerHTML=`<div class="pl-item-name">⭐ Favourite Albums</div><div class="pl-item-count">albums</div>`;
-  favAlbums.addEventListener("click",showAlbumFavourites);
-  list.appendChild(favAlbums);
-  // Synthetic second row: internet-radio stations ("📡 Stations").
+  // NOTE: the "⭐ Favourite Albums" browse view was removed (2026-06-01) —
+  // its (artist, album) entries didn't survive the LocalFs folder-album
+  // migration. The ⭐ star on the album header still adds/removes
+  // favourites (folder-keyed); they're exposed via UPnP/Subsonic.
+  // Synthetic row: internet-radio stations ("📡 Stations").
   const favRadio=document.createElement("div");
   favRadio.id="radio-pl-item";
   favRadio.className="pl-item";
@@ -1203,90 +1185,10 @@ async function showPlaylists(){
   });
 }
 
-// ── Favourite Albums view ────────────────────────────────────────
-async function showAlbumFavourites(){
-  curPlId="__album_favourites__";
-  $("pl-panel-title").textContent="⭐ Favourite Albums";
-  $("pl-back-btn").style.display="";
-  $("pl-list").style.display="none";
-  $("pl-tracks").classList.add("visible");
-  $("pl-actions").innerHTML="";
-  const tracks=$("pl-tracks");
-  tracks.innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
-  if(albumFavouritesCache===null){
-    const r=await api("/api/album_favourites");
-    if(!r){tracks.innerHTML='<div class="msg" style="padding:20px">Could not load.</div>';return;}
-    albumFavouritesCache=await r.json();
-  }
-  tracks.innerHTML="";
-  if(!albumFavouritesCache.length){
-    tracks.innerHTML='<div class="msg" style="padding:20px">No favourite albums yet — open an album and tap the ☆ in the header.</div>';
-    return;
-  }
-  albumFavouritesCache.forEach(fa=>{
-    const div=document.createElement("div");
-    div.className="pl-track album-fav-row";
-    div.dataset.artist=fa.artist||"";
-    div.dataset.album=fa.album||"";
-    div.dataset.albumKey=fa.album_key||"";
-    const artHTML=fa.art
-      ? `<img src="/art?url=${encodeURIComponent(fa.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
-      : "";
-    const sub=[fa.artist, fa.track_count?`${fa.track_count} tracks`:""]
-      .filter(Boolean).join(" · ");
-    div.innerHTML=`${artHTML}<div class="pl-track-body"><div class="pl-track-title">${esc(fa.album||"")}</div><div class="pl-track-sub">${esc(sub)}</div></div>`;
-    div.addEventListener("click",()=>{
-      // Drill into the album. If the favourite has a known UDN,
-      // switch curServer to it; otherwise keep the current server
-      // (defensive — list() always returns the udn it has).
-      if(fa.udn && (!curServer || curServer.udn!==fa.udn)){
-        const srv=servers[fa.udn];
-        if(srv) curServer=srv;
-      }
-      _showFavAlbumTracks(fa.artist, fa.album, fa.album_key||"");
-    });
-    tracks.appendChild(div);
-  });
-}
-
-// Drill into an album from the right-column favourites view. Distinct
-// from showAlbumTracks (which assumes a Browse → Artist → Album drill
-// chain): we reset the nav stack to a single sentinel so drillBack
-// returns the user to the favourites list, NOT to a bogus
-// "Pink Floyd albums" view that they never visited.
-async function _showFavAlbumTracks(artist, album, albumKey=""){
-  if(!curServer) return;
-  // Reset Browse drill state — we're not coming from a drill chain.
-  browseNavStack = [{type: "album_favourites", label: "⭐ Favourite Albums"}];
-  drillArtist = null;
-  drillAlbum  = album;
-  // On mobile the click was in the playlists tab; swap the body class
-  // so the Browse panel comes to the front. We deliberately do NOT
-  // call mobileTab/showTab here — those would fire loadBrowsePage()
-  // which races against our /api/album_tracks fetch and ends up
-  // appending the album tracks below a freshly-loaded letter-bar
-  // listing of artists/albums/tracks. No-op on desktop (the body
-  // class only matters under mobile media queries).
-  document.body.classList.remove(..._mobileClasses);
-  document.body.classList.add("m-browse");
-  ["browse","search","playlists","favourites","nowplaying"].forEach(t=>
-    $("bnav-"+t)?.classList.toggle("active", t==="browse"));
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-  _drillShowChrome(true);
-  $("browse-pager").classList.add("hidden");
-  $("browse-back-title").textContent = "⭐ Favourite Albums";
-  $("browse-section-hdr").style.display = "";
-  $("browse-section-title").textContent = esc(artist || "Various Artists");
-  $("browse-play-all").onclick = () => playAlbumFromDB(artist, album, albumKey);
-  _setAlbumFavStar(false, false);
-  const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
-  const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
-  if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
-  const data = await r.json();
-  const tracks = data.tracks || [];
-  renderListAppend({containers:[], items: tracks});
-  if(tracks.length > 1){ _wireAlbumFavStar(artist, album, albumKey); }
-}
+// (The "⭐ Favourite Albums" right-column browse view + its drill-in
+// were removed 2026-06-01 — their (artist, album) entries didn't survive
+// the LocalFs folder-album migration. The ⭐ star on the album header
+// still toggles favourites; UPnP/Subsonic still expose them.)
 
 // ── Internet radio ("📡 Stations") ───────────────────────────────
 const RADIO_GENRES=["Prog","Prog-rock","Jazz","Pop","Rock","Classical"];
@@ -1952,9 +1854,11 @@ async function pollIndex(){
     pb.style.background="var(--amber)";pb.style.width=pct+"%";
     return;
   }
-  // Otherwise, surface the AcoustID enrichment worker if it's running.
+  // Otherwise, surface the AcoustID enrichment worker.
   const ar=await api("/api/acoustid/status");
   const a=ar?await ar.json():null;
+  // The 🔎 Enrich button only makes sense when AcoustID is configured.
+  const eb=$("btn-enrich"); if(eb) eb.style.display=(a&&a.enabled)?"":"none";
   if(a && a.in_progress){
     bar.style.display="";
     const tot=(a.processed||0)+(a.remaining||0);
@@ -1964,14 +1868,20 @@ async function pollIndex(){
     pb.style.background="var(--amber)";pb.style.width=pct+"%";
     return;
   }
-  if(s.status==="done"){
-    bar.style.display="";
-    lbl.textContent=`Library: ${s.db_tracks.toLocaleString()} tracks indexed ✓`;
-    pb.style.background="var(--amber)";pb.style.width="100%";
-  } else if(s.status==="error"){
+  if(s.status==="error"){
     bar.style.display="";
     lbl.textContent=`Index error: ${s.error}`;
     pb.style.background="var(--red)";pb.style.width="100%";
+    return;
+  }
+  // Done, OR idle but a library exists (the LocalFs case: the UPnP-only
+  // INDEXER never runs, so status stays 'idle' even though db_tracks>0).
+  // Show the library line so the index bar — and its 🔎 Enrich button —
+  // is reachable.
+  if(s.status==="done" || (s.db_tracks||0)>0){
+    bar.style.display="";
+    lbl.textContent=`Library: ${(s.db_tracks||0).toLocaleString()} tracks indexed ✓`;
+    pb.style.background="var(--amber)";pb.style.width="100%";
   }
 }
 
