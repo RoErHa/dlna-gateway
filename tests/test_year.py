@@ -310,5 +310,62 @@ class TestDisplayLogic(unittest.TestCase):
         self.assertEqual(_np_year_display(1972, 2021), "1972")
 
 
+class TestEditTrackHandlerYearSentinel(unittest.TestCase):
+    """Regression (2026-06-01): editing fields WITHOUT changing the year
+    must NOT pass api_playback's `_SENTINEL` through as a real year — it's
+    a different object from update_track_meta's `_YEAR_UNSET`, so it was
+    mistaken for a value and failed to bind ("type 'object' is not
+    supported") → 500 → the edit modal appeared to hang on save."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+        self.db.upsert_tracks("uuid:test", [
+            {"id": "1", "url": "http://x/a.flac", "title": "Old Title",
+             "artist": "Old Artist", "album": "Old Album"}])
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def _edit(self, body_dict):
+        import json
+        from unittest.mock import patch
+        import api_playback
+
+        class _H:
+            def __init__(s): s.last = None
+            def _json(s, code, payload): s.last = (code, payload)
+        h = _H()
+        with patch.object(api_playback, "DB", self.db):
+            api_playback.edit_track(h, json.dumps(body_dict))
+        return h.last
+
+    def test_edit_without_year_succeeds(self):
+        code, payload = self._edit(
+            {"url": "http://x/a.flac", "title": "New Title"})
+        self.assertEqual(code, 200, payload)
+        self.assertTrue(payload.get("ok"))
+        with self.db._pool.read() as c:
+            t = c.execute("SELECT title FROM tracks "
+                          "WHERE url='http://x/a.flac'").fetchone()
+        self.assertEqual(t["title"], "New Title")
+
+    def test_edit_all_string_fields_no_year_succeeds(self):
+        code, payload = self._edit(
+            {"url": "http://x/a.flac", "title": "T", "artist": "A",
+             "album": "Al", "genre": "G"})
+        self.assertEqual(code, 200, payload)
+
+    def test_edit_with_year_still_sets_override(self):
+        code, payload = self._edit(
+            {"url": "http://x/a.flac", "title": "T", "year": 1979})
+        self.assertEqual(code, 200, payload)
+        with self.db._pool.read() as c:
+            ov = c.execute("SELECT year FROM metadata_overrides "
+                           "WHERE url='http://x/a.flac'").fetchone()
+        self.assertEqual(ov["year"], 1979)
+
+
 if __name__ == "__main__":
     unittest.main()

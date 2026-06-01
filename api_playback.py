@@ -432,8 +432,16 @@ def edit_track(h, body):
                     h._json(400, {"error": "year must be between 1900 and 2100"})
                     return
                 year_arg = y
-        ok = DB.update_track_meta(url, artist=artist, album=album,
-                                  title=title, genre=genre, year=year_arg)
+        # Only pass `year` when it was actually in the body. Passing this
+        # handler's `_SENTINEL` would NOT match update_track_meta's own
+        # `_YEAR_UNSET` sentinel, so it'd be mistaken for a real value and
+        # fail to bind ("type 'object' is not supported") — breaking every
+        # edit that doesn't change the year. (Fixed 2026-06-01.)
+        meta_kwargs = dict(artist=artist, album=album, title=title,
+                           genre=genre)
+        if year_raw is not _SENTINEL:
+            meta_kwargs["year"] = year_arg   # None (clear) or validated int
+        ok = DB.update_track_meta(url, **meta_kwargs)
         fields = [k for k, v in [('artist', artist), ('album', album),
                                  ('title', title), ('genre', genre)]
                   if v is not None]
