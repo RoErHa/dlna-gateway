@@ -1944,20 +1944,43 @@ async function pollIndex(){
   if(!r)return;
   const s=await r.json();
   const bar=$("index-bar"),lbl=$("index-label"),pb=$("index-progress-bar");
+  // Indexing takes priority — it's a foreground rebuild.
   if(s.status==="running"){
     bar.style.display="";
     const pct=s.total>0?Math.round((s.progress/s.total)*100):0;
     lbl.textContent=`Indexing… ${s.progress}/${s.total} albums · ${s.tracks} tracks`;
-    pb.style.width=pct+"%";
-  } else if(s.status==="done"){
+    pb.style.background="var(--amber)";pb.style.width=pct+"%";
+    return;
+  }
+  // Otherwise, surface the AcoustID enrichment worker if it's running.
+  const ar=await api("/api/acoustid/status");
+  const a=ar?await ar.json():null;
+  if(a && a.in_progress){
+    bar.style.display="";
+    const tot=(a.processed||0)+(a.remaining||0);
+    const pct=tot>0?Math.round((a.processed/tot)*100):0;
+    const match=a.last_match?` · ${a.last_match}`:"";
+    lbl.textContent=`🔎 Enriching metadata… ${a.processed} done · ${a.remaining} left${match}`;
+    pb.style.background="var(--amber)";pb.style.width=pct+"%";
+    return;
+  }
+  if(s.status==="done"){
     bar.style.display="";
     lbl.textContent=`Library: ${s.db_tracks.toLocaleString()} tracks indexed ✓`;
-    pb.style.width="100%";
+    pb.style.background="var(--amber)";pb.style.width="100%";
   } else if(s.status==="error"){
     bar.style.display="";
     lbl.textContent=`Index error: ${s.error}`;
     pb.style.background="var(--red)";pb.style.width="100%";
   }
+}
+
+async function acoustidEnrich(){
+  const r=await api("/api/acoustid/enrich",{method:"POST"});
+  if(!r){toast("Couldn't reach the gateway");return;}
+  if(r.status===503){toast("AcoustID not configured (set ACOUSTID_API_KEY)");return;}
+  toast("🔎 Enriching metadata — progress shows in the index bar",3000);
+  pollIndex();   // refresh the bar promptly
 }
 
 async function reindex(){

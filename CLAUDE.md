@@ -1247,8 +1247,22 @@ Manual one-shot (when needed):
 ACOUSTID_API_KEY=… python3 -c "from dlna_library import ACOUSTID_FETCHER; ACOUSTID_FETCHER.run_once()"
 ```
 
-HTTP endpoints / frontend surface for AcoustID status are not in
-this slice.
+### Status endpoint + PWA surface (C7, 2026-06-01)
+
+- **`GET /api/acoustid/status`** (`api_playback.acoustid_status`) returns
+  `ACOUSTID_FETCHER.status()` — `enabled` (api key set), `fpcalc`
+  (binary present), `in_progress`, `processed` (this run), `threshold`,
+  `last_match`, `last_url` — plus **`remaining`** = `DB.bare_metadata_count()`
+  (distinct-URL tracks with no `metadata_overrides` row yet).
+- **`POST /api/acoustid/enrich`** (`acoustid_enrich`) manually kicks
+  `ACOUSTID_FETCHER.trigger()`; **503** when `ACOUSTID_API_KEY` is unset.
+- **PWA:** `pollIndex()` surfaces enrichment in the existing index bar —
+  when `in_progress` and indexing isn't running, the label shows
+  `🔎 Enriching metadata… N done · M left · <last match>`. A **🔎 Enrich**
+  button (`#btn-enrich`, `acoustidEnrich()`) next to ↺ Rebuild triggers a
+  pass (toasts "not configured" on 503). Tests:
+  `tests/test_acoustid.py::TestAcoustIDHandlers` / `TestBareMetadataCount`
+  + `tests/frontend/test_acoustid_status.py`.
 
 ### Weekly notfound retry — `com.roha.dlna-acoustid-retry`
 

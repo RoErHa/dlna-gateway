@@ -30,11 +30,12 @@ usable from any device with a browser.
   lyrics (via lrclib), album art (sibling → MusicBrainz / Cover Art
   Archive fallback). For RoHaLocalFS, albums group by folder (one
   folder = one album).
-- **Metadata enrichment (in flight).** Background worker fingerprints
-  tracks via Chromaprint and resolves them to MusicBrainz metadata
-  through AcoustID, fixing mistagged / untagged tracks. SQLite-only
-  by design — the worker fills `metadata_overrides`, never rewrites
-  on-disk file tags.
+- **Metadata enrichment.** Background worker fingerprints tracks via
+  Chromaprint and resolves them to MusicBrainz metadata through AcoustID,
+  fixing mistagged / untagged tracks. SQLite-only by design — the worker
+  fills `metadata_overrides`, never rewrites on-disk file tags. Progress
+  shows in the PWA index bar; a **🔎 Enrich** button kicks a pass on
+  demand. Needs `ACOUSTID_API_KEY` (else the worker stays dormant).
 - **Internet radio ("📡 Stations").** Search the radio-browser.info
   catalogue, favourite up to 25 stations, play with ICY now-playing
   metadata in a dedicated radio screen.

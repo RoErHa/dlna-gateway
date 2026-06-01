@@ -67,6 +67,30 @@ def index_status(h, params):
     h._json(200, {**INDEXER.state.get(), "db_tracks": count})
 
 
+def acoustid_status(h, params):
+    """AcoustID metadata-enrichment worker progress, for the PWA index
+    bar. `ACOUSTID_FETCHER.status()` (enabled / fpcalc / in_progress /
+    processed / threshold / last_match / last_url) plus `remaining` —
+    distinct-URL tracks still lacking any metadata_overrides row."""
+    from dlna_library import ACOUSTID_FETCHER
+    st = ACOUSTID_FETCHER.status()
+    st["remaining"] = DB.bare_metadata_count()
+    h._json(200, st)
+
+
+def acoustid_enrich(h, params):
+    """Manually kick an enrichment pass (the "🔎 Enrich" button). 503 when
+    ACOUSTID_API_KEY is unset (worker dormant). trigger() is a no-op if a
+    pass is already running."""
+    from dlna_library import ACOUSTID_FETCHER
+    if not ACOUSTID_FETCHER.status().get("enabled"):
+        h._json(503, {"error": "acoustid_disabled",
+                      "message": "ACOUSTID_API_KEY not set"})
+        return
+    ACOUSTID_FETCHER.trigger()
+    h._json(200, {"ok": True})
+
+
 def index_rebuild(h, params):
     udn = params.get("udn", "")
     srv = SERVERS.get(udn)

@@ -48,7 +48,10 @@
     <div id="index-bar" style="display:none;padding:7px 14px;border-bottom:1px solid var(--border);background:var(--raised);flex-shrink:0">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <span style="font-size:11px;color:var(--ink-dim)" id="index-label">Indexing library…</span>
-        <button class="icon-btn" style="font-size:10px" onclick="reindex()">↺ Rebuild</button>
+        <span style="display:flex;gap:6px;flex-shrink:0">
+          <button class="icon-btn" id="btn-enrich" style="font-size:10px" onclick="acoustidEnrich()" title="Fingerprint untagged tracks and fetch metadata (AcoustID)">🔎 Enrich</button>
+          <button class="icon-btn" style="font-size:10px" onclick="reindex()">↺ Rebuild</button>
+        </span>
       </div>
       <div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden">
         <div id="index-progress-bar" style="height:100%;background:var(--amber);border-radius:2px;width:0%;transition:width .3s"></div>

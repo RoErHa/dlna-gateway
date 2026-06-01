@@ -1555,6 +1555,22 @@ class LibraryDB:
             """).fetchall()
         return [(r["url"],) for r in rows]
 
+    def bare_metadata_count(self) -> int:
+        """COUNT of distinct-URL tracks with no `metadata_overrides` row of
+        any source — how many the AcoustID worker still has to look at.
+        Cheap (no row materialisation); for /api/acoustid/status's
+        `remaining` field."""
+        with self._pool.read() as conn:
+            row = conn.execute("""
+                SELECT COUNT(*) AS n FROM (
+                    SELECT t.url FROM tracks t
+                     WHERE t.url != ''
+                       AND NOT EXISTS (
+                           SELECT 1 FROM metadata_overrides m WHERE m.url = t.url)
+                     GROUP BY t.url)
+            """).fetchone()
+        return row["n"] if row else 0
+
     def propagate_overrides_to_siblings(self) -> int:
         """For each track WITHOUT a metadata_overrides row, find a
         higher-quality sibling (same udn+artist+album+title, higher
