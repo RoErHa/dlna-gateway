@@ -839,15 +839,17 @@ GET /api/album_favourites/remove?artist=X&album=Y
   orphans and shouldn't be favouritable. `data-fav="0"` shows ☆,
   `data-fav="1"` shows ★. Click toggles via /add or /remove with
   optimistic UI flip.
-- **Right-column browse view — REMOVED (2026-06-01).** There used to be
-  a synthetic "⭐ Favourite Albums" row + list view in the Playlists
-  panel, but its `(artist, album)` entries didn't survive the LocalFs
-  folder-album migration (stale entries, slow joins, spinner-on-open),
-  so it was removed and the `album_favourites` table cleared for a clean
-  slate. **The album-header star is the only PWA surface now** — it still
-  adds/removes (folder-keyed via `album_key`). Favourites remain exposed
-  via UPnP (Naim) and Subsonic (CarPlay). A working PWA browse view could
-  be rebuilt later on the folder model if wanted.
+- **Add:** the album-header ⭐ star (folder-keyed via `album_key`).
+- **Browse:** a **⭐ entry at the front of the browse letter bar**
+  (`LETTERS[0]` in app.js, before `#`). Selecting it loads
+  `/api/album_favourites` and renders the favourites as album rows
+  (`renderFavouriteAlbums`); clicking one opens it via `album_key`
+  (`showAlbumTracks(..., album_key)`). This replaced the old right-column
+  "⭐ Favourite Albums" list view, which was **removed 2026-06-01** — its
+  `(artist, album)` entries didn't survive the folder-album migration
+  (stale rows, slow joins, spinner-on-open), and the `album_favourites`
+  table was cleared for a clean slate. Favourites are also exposed via
+  UPnP (Naim) and Subsonic (CarPlay).
 
 ### UPnP exposure (Naim)
 

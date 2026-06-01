@@ -431,7 +431,8 @@ let browseMode   = "artists";   // artists | albums | tracks
 let browseLetter = "A";
 let browseOffset = 0;
 const BROWSE_LIMIT = 100;
-const LETTERS = ["#","0","A","B","C","D","E","F","G","H","I","J","K","L","M",
+// "⭐" (first) shows favourited albums; the rest are the A–Z initials.
+const LETTERS = ["⭐","#","0","A","B","C","D","E","F","G","H","I","J","K","L","M",
                  "N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
 
 // drill-down navigation stack
@@ -517,6 +518,15 @@ async function loadBrowsePage(){
     return;
   }
 
+  // ⭐ — favourited albums (the star at the front of the letter bar).
+  // Replaces the removed right-column Favourite Albums view; folder-keyed.
+  if(browseLetter==="⭐"){
+    const r = await api("/api/album_favourites");
+    if(!r){ $("item-list").innerHTML='<div class="msg">Could not load favourites.</div>'; return; }
+    renderFavouriteAlbums(await r.json());
+    return;
+  }
+
   const url = `/api/browse_letter?udn=${enc(curServer.udn)}&mode=${browseMode}&letter=${enc(browseLetter)}&offset=${browseOffset}&limit=${BROWSE_LIMIT}`;
   const r = await api(url);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load library.</div>'; return; }
@@ -527,6 +537,28 @@ async function loadBrowsePage(){
   }
   renderBrowseItems(data.items);
   updatePager(data.total, data.offset, data.limit);
+}
+
+function renderFavouriteAlbums(favs){
+  const list = $("item-list");
+  list.innerHTML = "";
+  if(!favs.length){
+    list.innerHTML='<div class="msg">No favourite albums yet — open an album and tap the ☆ in its header.</div>';
+    return;
+  }
+  favs.forEach(a=>{
+    const div = document.createElement("div");
+    div.className = "row";
+    const artEl = a.art
+      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      : `<div class="row-icon">💿</div>`;
+    const _artist = a.artist==="Various Artists"?"":a.artist;
+    const _ak = a.album_key||"";
+    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist||"")}${a.track_count?` · ${a.track_count} tracks`:""}</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
+    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, a.album, _ak);});
+    div.addEventListener("click", ()=>showAlbumTracks(_artist, a.album, null, _ak));
+    list.appendChild(div);
+  });
 }
 
 function renderBrowseItems(items){

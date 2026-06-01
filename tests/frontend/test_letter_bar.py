@@ -2,9 +2,9 @@
 
 
 def test_letter_count(app):
-    # 27 expected: # + 0 + A-Z (25 letters? no 26 letters) = 28? Check actual.
-    # LETTERS in app.js = ["#","0","A"..."Z"] = 1 + 1 + 26 = 28
-    assert app.locator(".letter-btn").count() == 28
+    # LETTERS in app.js = ["⭐","#","0","A".."Z"] = 1 + 1 + 1 + 26 = 29
+    # (the leading ⭐ shows favourited albums; see test_fav_albums_letterbar.py)
+    assert app.locator(".letter-btn").count() == 29
 
 
 def test_letter_a_active_by_default(app):
