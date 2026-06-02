@@ -23,7 +23,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
 from reportlab.platypus import (SimpleDocTemplate, PageBreak, Paragraph,
-                                Spacer, Table, TableStyle)
+                                Spacer, Table, TableStyle, KeepTogether)
 
 # ── stream colours (the legend) ──────────────────────────────────────
 BLUE  = HexColor(0x1f6feb)   # FROM     — inbound client → gateway
@@ -583,6 +583,185 @@ def list_pages():
                    "server · 26125 (legacy AssetUPnP, decommissioned). "
                    "See CLAUDE.md and REQUIREMENTS_2.0.md for the HTTP/2 + "
                    "free-TLS roadmap.", note))
+
+    # ---- Tool options reference (per tool, every flag explained) ----
+    story.append(PageBreak())
+    story.append(P("Tool options reference — what each flag does", h2))
+    story.append(P("Every option for every maintenance tool, with its "
+                   "meaning. Codes match the diagram (T/aN) and the tools "
+                   "table. Unless noted, file-deleting tools default to "
+                   "dry-run / report-only and move to the macOS Trash "
+                   "(recoverable ~30 days) — <b>--hard-delete</b> is the "
+                   "permanent, non-recoverable variant.", note))
+    opt_hdr = ParagraphStyle('opthdr', parent=body, fontName='Helvetica-Bold',
+                             fontSize=9, spaceBefore=9, spaceAfter=2,
+                             textColor=INK)
+
+    OPTIONS = [
+     ("T/a1", "regen_schema.py", "Regenerate the committed schema.sql.", [
+        ("(no args)", "Rewrite schema.sql from the live LibraryDB schema."),
+        ("--check", "Don't write; exit non-zero if schema.sql is stale "
+         "(the test_schema_sync gate)."),
+     ]),
+     ("T/a2", "prune_empty_music_dirs.py",
+      "Trash directories whose subtree has zero music files.", [
+        ("<root>", "Music root to walk (positional)."),
+        ("--dry-run", "Print decisions; touch nothing."),
+        ("-v / --verbose", "Also log every KEPT directory (default: only "
+         "deletions print)."),
+        ("--limit N", "Stop after evaluating N dirs; when the limit is hit, "
+         "NO deletions run (a partial picture = safety belt)."),
+        ("--exts a,b,c", "Override the music-extension set (commas, dot "
+         "optional)."),
+        ("--hard-delete", "Permanent rm -rf instead of Trash. NOT "
+         "recoverable."),
+        ("-y / --yes", "Skip the confirmation prompt."),
+     ]),
+     ("T/a3", "find_corrupt_audio.py",
+      "Flag files whose magic bytes are wrong/zero for their extension.", [
+        ("<root>", "Music root to scan (positional)."),
+        ("-v / --verbose", "Also log every OK file (default: only corrupt)."),
+        ("--limit N", "Stop after scanning N files (0 = no limit); halts the "
+         "delete step when hit."),
+        ("--exts a,b,c", "Override the audio-extension list."),
+        ("--out PATH", "Where to write the corrupt-paths list (default "
+         "./corrupt-audio.txt; pass /dev/null to suppress)."),
+        ("--trash", "Move flagged files to the Trash."),
+        ("--hard-delete", "Permanent unlink instead of Trash. Mutually "
+         "exclusive with --trash."),
+        ("-y / --yes", "Skip the confirmation prompt before deleting."),
+     ]),
+     ("T/a4", "find_duplicate_audio.py",
+      "Find duplicate recordings on disk (same acoustid metadata); keeps a "
+      "ranked winner.", [
+        ("<root>", "Music root to scan (positional)."),
+        ("-v / --verbose", "Per-URL ambiguity / not-found logs."),
+        ("--trash", "Move the loser files to the Trash (winner kept)."),
+        ("--hard-delete", "Permanent delete of losers. NOT recoverable."),
+        ("-y / --yes", "Skip the confirmation prompt."),
+     ]),
+     ("T/a5", "retry_notfound_metadata.py",
+      "Drop bogus 'notfound' metadata_overrides so AcoustID retries them.", [
+        ("(no args)", "Report only: counts + HTTP 5xx lines found in the "
+         "log. No deletions."),
+        ("--all", "Delete EVERY source='notfound' row (re-runs legit misses "
+         "too)."),
+        ("--since 'TS'", "Delete only notfound rows updated after the "
+         "timestamp. Mutually exclusive with --all."),
+        ("--dry-run", "Show what would be deleted without acting."),
+        ("--log PATH", "Log file to scan for HTTP 5xx (default "
+         "acoustid-firstpass.log)."),
+        ("-y / --yes", "Skip the confirmation prompt."),
+     ]),
+     ("T/a6", "relink_orphan_overrides.py",
+      "Relink metadata_overrides orphaned by a UPnP rescan (d-id + fuzzy "
+      "artist/title).", [
+        ("(default)", "Dry-run preview — no mutation."),
+        ("--apply", "Perform the relinks."),
+        ("--db PATH", "library.db path."),
+     ]),
+     ("T/a7", "relink_playlists_to_localfs.py",
+      "Repoint playlists/favourites at RoHaLocalFS by normalised metadata.", [
+        ("(default)", "Dry-run preview."),
+        ("--apply", "Commit the relinks (auto-backs up library.db first)."),
+        ("--no-backup", "Skip the automatic library.db backup on --apply."),
+        ("--no-prune-favs", "Keep album_favourites that no longer match any "
+         "LocalFs album."),
+        ("-y / --yes", "Skip the confirmation prompt."),
+     ]),
+     ("T/a8", "audit_override_mismatches.py",
+      "Delete acoustid overrides whose artist AND title both mismatch the "
+      "track.", [
+        ("(default)", "Dry-run, lists the top 30 suspects."),
+        ("--clean", "Delete the suspect acoustid override rows."),
+        ("--top N", "Show N rows (0 = full list)."),
+        ("-y / --yes", "Non-interactive (skip the confirm)."),
+     ]),
+     ("T/a9", "correct_year_drift.py",
+      "Rewrite metadata_overrides.year to the earliest plausible year from "
+      "another copy in the library.", [
+        ("(default)", "Dry-run, top 30 candidates."),
+        ("--apply", "Write the corrections (as source='manual')."),
+        ("--top N", "Preview N candidates (0 = all)."),
+        ("--db PATH", "library.db path."),
+        ("-y / --yes", "Non-interactive apply."),
+     ]),
+     ("T/a10", "improve_song_years.py",
+      "Query MusicBrainz for each song's earliest recording year → cache → "
+      "apply.", [
+        ("(default)", "Dry-run preview — no MB calls, no DB writes."),
+        ("--lookup", "Query MB for uncached (artist,title) groups; fill "
+         "song_year_cache (sticky)."),
+        ("--apply", "Write cached hits onto tracks (metadata_overrides.year, "
+         "source='manual')."),
+        ("--limit N", "Cap the number of groups queried (for testing)."),
+        ("-v / --verbose", "Per-group logging."),
+     ]),
+     ("T/a11", "localfs_scan.py",
+      "Standalone LocalFs indexer (CLI). Don't run against the live DB "
+      "without a base_url — it leaves placeholder URLs.", [
+        ("--root PATH", "Music root to scan (default $LOCALFS_MUSIC_ROOT or "
+         "/Volumes/SAMDATA/Music)."),
+        ("--force", "Ignore the (mtime, size) cache and re-tag every file. "
+         "Use after schema changes."),
+        ("--compare", "Skip scanning — just print tracks/albums per UDN "
+         "currently in library.db."),
+        ("--db PATH", "library.db path."),
+        ("-v / --verbose", "Per-file logging."),
+     ]),
+     ("T/a12", "localfs_serve.py",
+      "Standalone RoHaLocalFS file-server launcher (test the :8200 path).", [
+        ("--port N", "HTTP port (default 8200 / $LOCALFS_PORT)."),
+        ("--host ADDR", "Listen address (default 0.0.0.0 so the Naim can "
+         "reach it)."),
+        ("--db PATH", "library.db path."),
+        ("--root PATH", "Allowed music root; repeatable. Defaults to "
+         "$LOCALFS_MUSIC_ROOT."),
+        ("-v / --verbose", "Request logging."),
+     ]),
+     ("T/a13", "beets_enrich.py",
+      "Run the beets tag-in-place enrichment batch (docs/enrichment.md). "
+      "Safe wrapper around `beet import`.", [
+        ("(no --quiet/--timid)", "Interactive: beets prompts you per album "
+         "(apply / skip / …); strong matches auto-apply."),
+        ("--write-config", "Write the prog-tuned tag-in-place "
+         "~/.config/beets/config.yaml (backs up any existing) and exit. Run "
+         "this first."),
+        ("--music-root PATH", "Library root to import (default "
+         "/Volumes/SAMDATA/Music)."),
+        ("--album PATH", "Import a single album directory instead of the "
+         "whole root."),
+        ("--config PATH", "beets config path (default "
+         "~/.config/beets/config.yaml)."),
+        ("--quiet", "Unattended BULK pass: auto-accept only strong matches "
+         "(≥ strong_rec_thresh 0.90), skip the rest, no prompts "
+         "(beet import -q)."),
+        ("--timid", "Most cautious: prompt for EVERY match (per-change "
+         "review). Mutually exclusive with --quiet."),
+        ("--revisit", "Re-import a directory beets already recorded as done "
+         "(-I / noincremental). Use after re-tagging an album."),
+        ("--reindex", "After import, find the LocalFs server UDN via "
+         "/api/servers and POST /api/index/rebuild so the gateway picks up "
+         "the new tags."),
+        ("--gateway URL", "Gateway base URL for --reindex (default "
+         "http://127.0.0.1:8765)."),
+        ("--udn UDN", "Explicit server UDN to reindex (default: auto-pick "
+         "the uuid:localfs-* server)."),
+        ("-n / --dry-run", "Print the resolved beet command + safety report; "
+         "do NOT invoke beets (beets has no true dry-run of its own)."),
+        ("-y / --yes", "Skip the in-place-write backup-warning confirmation."),
+     ]),
+    ]
+    for tcode, tname, purpose, opts in OPTIONS:
+        rows = [["Option", "Meaning"]]
+        for o, m in opts:
+            rows.append([C(o), P(m)])
+        block = [Paragraph(f"<b>{tcode}&nbsp;&nbsp;{tname}</b> — {purpose}",
+                           opt_hdr),
+                 make_table(rows, [185, 945], GREY)]
+        story.append(KeepTogether(block))
+        story.append(Spacer(1, 2))
+
     return story
 
 
