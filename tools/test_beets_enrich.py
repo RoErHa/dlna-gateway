@@ -38,7 +38,12 @@ class TestDefaultConfig(unittest.TestCase):
     def test_has_chroma_and_original_year_bias(self):
         self.assertIn("chroma", self.cfg)
         self.assertRegex(self.cfg, r"original_year:\s*yes")
-        self.assertRegex(self.cfg, r"strong_rec_thresh:\s*0\.90")
+        # lowered from 0.90 → 0.80 (0.90 skipped this library wholesale)
+        self.assertRegex(self.cfg, r"strong_rec_thresh:\s*0\.80")
+
+    def test_library_path_parses_to_beets_own_db(self):
+        lib = be.parse_library_path(self.cfg)
+        self.assertTrue(lib.endswith(".config/beets/library.db"), lib)
 
     def test_generated_config_passes_its_own_safety_gate(self):
         ok, problems = be.verify_inplace(self.cfg)
@@ -161,6 +166,48 @@ class TestFindBinary(unittest.TestCase):
             be.find_binary("definitely-not-a-real-binary-xyz",
                            (sys.executable,)),
             sys.executable)
+
+
+class TestImportSummary(unittest.TestCase):
+    def test_counts_on_temp_libraries(self):
+        import sqlite3
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "library.db")
+        con = sqlite3.connect(p)
+        con.execute("CREATE TABLE items (id INTEGER)")
+        con.execute("CREATE TABLE albums (id INTEGER)")
+        con.executemany("INSERT INTO items VALUES (?)", [(1,), (2,), (3,)])
+        con.execute("INSERT INTO albums VALUES (1)")
+        con.commit()
+        con.close()
+        self.assertEqual(be.beets_lib_counts(p), (3, 1))
+
+    def test_counts_missing_db_is_zero(self):
+        self.assertEqual(be.beets_lib_counts("/no/such/library.db"), (0, 0))
+
+    def test_taghistory_count_from_pickle(self):
+        import pickle
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "state.pickle")
+        with open(p, "wb") as f:
+            pickle.dump({"taghistory": {(b"/a",), (b"/b",)},
+                         "tagprogress": {}}, f)
+        self.assertEqual(be.taghistory_count(p), 2)
+
+    def test_taghistory_missing_is_zero(self):
+        self.assertEqual(be.taghistory_count("/no/such/state.pickle"), 0)
+
+    def test_summary_reports_imported(self):
+        s = be.format_import_summary((10, 2), (40, 5), 100, 108)
+        self.assertIn("3 album(s), 30 track(s)", s)
+        self.assertIn("8", s)               # dirs processed
+
+    def test_summary_flags_did_nothing_run(self):
+        # 0 imported but dirs processed → the loud "all skipped" note
+        s = be.format_import_summary((0, 0), (0, 0), 0, 2008)
+        self.assertIn("all 2008 skipped", s)
+        self.assertIn("strong_rec_thresh", s)
+        self.assertIn("--revisit", s)
 
 
 if __name__ == "__main__":

@@ -49,8 +49,10 @@ Typical flow:
 import argparse
 import json
 import os
+import pickle
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -63,6 +65,7 @@ DEFAULT_MUSIC_ROOT = "/Volumes/SAMDATA/Music"
 DEFAULT_GATEWAY = "http://127.0.0.1:8765"
 DEFAULT_CONFIG = Path.home() / ".config" / "beets" / "config.yaml"
 BEETS_LIBRARY = Path.home() / ".config" / "beets" / "library.db"
+STATE_PICKLE = Path.home() / ".config" / "beets" / "state.pickle"
 
 # launchd-style minimal PATH safety, mirroring dlna_acoustid._find_fpcalc.
 # Path(sys.executable).parent catches a `beet` pip-installed into the same
@@ -125,7 +128,8 @@ per_disc_numbering: no
 match:
   preferred:
     media: ['CD', 'Digital Media|File', 'Vinyl']
-  strong_rec_thresh: 0.90   # auto-accept only confident matches
+  strong_rec_thresh: 0.80   # auto-accept threshold; lower = --quiet accepts
+                            # more (0.90 skipped this library's rips wholesale)
 
 chroma:
   auto: yes           # AcoustID fingerprint fallback when tags are wrong
@@ -170,6 +174,66 @@ def config_forces_timid(config_text: str) -> bool:
     `-q`/--quiet while timid is on ('can't be both quiet and timid')."""
     return bool(re.search(r"^\s*timid:\s*(yes|true)\b",
                           config_text, re.M | re.I))
+
+
+def parse_library_path(config_text: str) -> Optional[str]:
+    """The `library:` path from the beets config (~-expanded), or None."""
+    m = re.search(r"^\s*library:\s*(.+?)\s*$", config_text, re.M)
+    return os.path.expanduser(m.group(1).strip()) if m else None
+
+
+def beets_lib_counts(lib_path: str) -> Optional[Tuple[int, int]]:
+    """(items, albums) in the beets library.db. (0, 0) if it doesn't exist
+    yet; None on any read error."""
+    if not os.path.exists(lib_path):
+        return (0, 0)
+    try:
+        con = sqlite3.connect(lib_path)
+        items = con.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        albums = con.execute("SELECT COUNT(*) FROM albums").fetchone()[0]
+        con.close()
+        return (items, albums)
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+def taghistory_count(state_path: str) -> Optional[int]:
+    """How many dirs beets has marked done (incremental). None on error.
+    taghistory is a plain set, so no beets classes are needed to unpickle."""
+    if not os.path.exists(state_path):
+        return 0
+    try:
+        with open(state_path, "rb") as f:
+            st = pickle.load(f)
+        return len(st.get("taghistory") or ())
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+def format_import_summary(before, after, th_before, th_after) -> str:
+    """Build the post-run summary from before/after (items, albums) counts
+    and before/after taghistory sizes. Pure → unit-testable."""
+    lines = ["── beets import summary ─────────────────────────"]
+    imported_albums = imported_items = None
+    if before and after:
+        imported_items = after[0] - before[0]
+        imported_albums = after[1] - before[1]
+        lines.append(f"  imported this run: {imported_albums} album(s), "
+                     f"{imported_items} track(s)")
+    processed = None
+    if th_before is not None and th_after is not None:
+        processed = th_after - th_before
+        lines.append(f"  directories newly processed this run: {processed}")
+    if imported_albums == 0 and processed:
+        lines.append(f"  → all {processed} skipped (no match ≥ "
+                     "strong_rec_thresh). Lower the threshold or run "
+                     "interactively (drop --quiet);")
+        lines.append("    already-seen dirs then need --revisit to "
+                     "re-process.")
+    elif imported_albums and processed and processed > imported_albums:
+        lines.append(f"  ~{processed - imported_albums} dir(s) skipped "
+                     "(no confident match)")
+    return "\n".join(lines)
 
 
 def build_import_cmd(beet: str, target: str, quiet: bool = False,
@@ -367,10 +431,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("aborted.")
             return 1
 
+    # snapshot beets' own library + incremental state to report a summary
+    lib_path = parse_library_path(cfg_text) or str(BEETS_LIBRARY)
+    before = beets_lib_counts(lib_path)
+    th_before = taghistory_count(str(STATE_PICKLE))
+
     rc = subprocess.run(cmd).returncode
     if rc != 0:
         print(f"beets exited {rc}", file=sys.stderr)
         return rc
+
+    # ── import summary (so a "did-nothing" run is obvious, not silent) ──
+    after = beets_lib_counts(lib_path)
+    th_after = taghistory_count(str(STATE_PICKLE))
+    print("\n" + format_import_summary(before, after, th_before, th_after))
 
     if args.reindex:
         time.sleep(1)

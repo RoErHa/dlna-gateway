@@ -734,7 +734,7 @@ def list_pages():
         ("--config PATH", "beets config path (default "
          "~/.config/beets/config.yaml)."),
         ("--quiet", "Unattended BULK pass: auto-accept only strong matches "
-         "(≥ strong_rec_thresh 0.90), skip the rest, no prompts "
+         "(≥ strong_rec_thresh 0.80), skip the rest, no prompts "
          "(beet import -q)."),
         ("--timid", "Most cautious: prompt for EVERY match (per-change "
          "review). Mutually exclusive with --quiet."),
