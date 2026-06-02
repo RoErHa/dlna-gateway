@@ -1,5 +1,18 @@
 const APP_CACHE = 'dlna-gw-app-v9';
 const ART_CACHE = 'dlna-gw-art-v2';   // v2: evict stale blanks cached during gateway-down / pre-heal windows
+const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
+
+// GET endpoints that return STABLE browse data (change only on re-index /
+// metadata edits). Cached stale-while-revalidate so repeat navigation is
+// instant over a slow link. Everything NOT listed — /api/state, /servers,
+// /renderers, /index/status, /acoustid/status, /album_favourites (user-
+// mutated), /track_meta, /radio/* — stays network-only (always fresh).
+const CACHEABLE_API = [
+  '/api/browse_letter', '/api/album_tracks', '/api/artist_albums',
+  '/api/artist_tracks', '/api/albums', '/api/search', '/api/genres',
+  '/api/genre_albums', '/api/genre_tracks', '/api/decades',
+  '/api/decade_albums', '/api/decade_tracks',
+];
 
 const SHELL = [
   '/',
@@ -21,7 +34,7 @@ self.addEventListener('install', event => {
 
 // ── Activate: clean old caches ──────────────────────────────────
 self.addEventListener('activate', event => {
-  const keep = new Set([APP_CACHE, ART_CACHE]);
+  const keep = new Set([APP_CACHE, ART_CACHE, API_CACHE]);
   event.waitUntil(
     caches.keys()
       .then(keys => Promise.all(
@@ -35,7 +48,28 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Never intercept API calls, streams, or POST requests
+  // Stable browse data — stale-while-revalidate: serve the cached copy
+  // instantly (snappy over a slow tailnet) AND fetch in the background to
+  // refresh it. The background fetch always hits the network, so a stale
+  // entry self-corrects on the next view. Only the CACHEABLE_API allowlist
+  // qualifies; all other /api/* falls through to network-only below.
+  if (event.request.method === 'GET' &&
+      CACHEABLE_API.some(p => url.pathname.startsWith(p))) {
+    event.respondWith(
+      caches.open(API_CACHE).then(cache =>
+        cache.match(event.request).then(cached => {
+          const network = fetch(event.request).then(resp => {
+            if (resp.ok) cache.put(event.request, resp.clone());
+            return resp;
+          }).catch(() => cached);
+          return cached || network;
+        })
+      )
+    );
+    return;
+  }
+
+  // Never intercept (live) API calls, streams, or POST requests
   if (url.pathname.startsWith('/api/') ||
       url.pathname.startsWith('/stream') ||
       url.pathname.startsWith('/cd/') ||

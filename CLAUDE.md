@@ -213,6 +213,21 @@ etc.).
 
 `static/index.html` + `static/app.js` (PWA, ~71K lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
 
+**Service Worker cache tiers (`static/sw.js`).** Three caches: `APP_CACHE`
+(app shell, stale-while-revalidate), `ART_CACHE` (`/art`, cache-first), and
+`API_CACHE` (2026-06-02) — a **stale-while-revalidate** cache for the
+`CACHEABLE_API` allowlist of STABLE browse GETs (`/api/browse_letter`,
+`album_tracks`, `artist_albums`/`artist_tracks`, `albums`, `search`,
+`genres`/`genre_*`, `decades`/`decade_*`). Repeat navigation is instant
+over a slow tailnet; the background fetch still refreshes the entry (and
+still hits the gateway, so request-assertion tests pass). Everything NOT
+on the allowlist — `/api/state`, `/servers`, `/renderers`, `/index/status`,
+`/acoustid/status`, `/album_favourites` (user-mutated), `/track_meta`,
+`/radio/*`, `/stream`, POSTs — stays **network-only** so live/mutable data
+is never stale. Bump `API_CACHE`'s version to force-evict if its shape
+changes. Measured server cost that this hides: the folder-grouped
+`/api/browse_letter` albums query is ~150 ms; cached → ~0.
+
 **Source picker (`#source-sel`).** When more than one MediaServer is in `SERVERS` (e.g. AssetUPnP + LocalFs coexisting), the header carries a `SRC` dropdown next to the `OUT` (renderer) picker. `selectSource(udn)` swaps the active `curServer`, resets browse navigation, and reloads the library (or re-runs the active search). `refreshServers()` populates it via `rebuildSourceSel()` (💾 icon for `uuid:localfs-*`, 🗄 otherwise) and `updateDiscStatus()` keeps the header disc-dot tracking the active source. Regression-guarded by `tests/frontend/test_source_picker.py`.
 
 ### Concurrency Notes
