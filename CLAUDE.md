@@ -2184,6 +2184,85 @@ apostrophe normalisation); MB query string escape.
 python3 -m unittest tools.test_improve_song_years -v
 ```
 
+### `tools/beets_enrich.py`
+
+Runs the **beets tag-in-place enrichment batch** described in
+`docs/enrichment.md`. beets reads MusicBrainz + AcoustID and writes clean
+tags + MBIDs **into the files**, in place; the existing mutagen indexer
+then picks them up on the next re-index. beets is an *upstream batch
+stage*, never a live metadata authority (routing the serve path at a
+beets/Jellyfin DB would re-create the AssetUPnP dual-source-of-truth
+problem). This tool is a thin, safe wrapper around the external `beet`
+CLI — it does not reimplement beets.
+
+#### The one non-negotiable invariant — tag IN PLACE
+
+```
+import.write = yes    import.copy = no    import.move = no
+```
+
+`verify_inplace()` is a hard gate: any write run **aborts** unless the
+config is verified in-place safe. A *missing* key counts as unsafe (beets'
+`import.copy` default is `yes`, which would duplicate files), so the user
+is pushed to `--write-config` rather than relying on beets defaults. beets'
+own `library.db` (`~/.config/beets/library.db`) is kept deliberately
+separate from the gateway's `library.db`. The `scrub` plugin is
+intentionally NOT enabled (it strips existing tags — `docs/enrichment.md`
+§3).
+
+#### Flags
+
+| Flag | Effect |
+|---|---|
+| `--write-config` | Write the prog-tuned, tag-in-place `~/.config/beets/config.yaml` (backs up any existing) and exit |
+| `--music-root PATH` | Library root (default `/Volumes/SAMDATA/Music`) |
+| `--album PATH` | Import a single album dir instead of the whole root |
+| `--quiet` | Auto-accept strong matches, no prompts — the bulk pass (`beet import -q`) |
+| `--timid` | Prompt per match (more granular than the default per-album prompt) |
+| `--revisit` | Re-import a dir already recorded done (`-I` / noincremental) |
+| `--reindex` | After import, discover the LocalFs server UDN via `/api/servers` and POST `/api/index/rebuild` |
+| `--gateway URL` | Gateway base for `--reindex` (default `http://127.0.0.1:8765`) |
+| `--udn UDN` | Server to reindex (default: auto-pick the `uuid:localfs-*` server) |
+| `-n` / `--dry-run` | Print the resolved command + safety report; do not invoke beets |
+| `-y` / `--yes` | Skip the §7 backup-warning confirmation before in-place writes |
+
+#### Safety
+
+- Hard-fails fast if `beet` isn't installed (`brew install chromaprint` +
+  `pip3 install beets pyacoustid`) or the config is missing/not in-place.
+- Refuses to run if the music drive isn't mounted (external SAMDATA).
+- Confirms before any in-place write (with the backup warning) unless `-y`.
+- Warns when DSD (`.dsf`/`.dff`) files are under the target or when fpcalc
+  is absent — Chromaprint can't decode DSD (`docs/enrichment.md` §6); those
+  tag by existing metadata or fall to Picard.
+
+#### Usage
+
+```bash
+# one-time deps
+brew install chromaprint && pip3 install beets pyacoustid
+# write the tag-in-place config, then interactive review, then bulk
+python3 tools/beets_enrich.py --write-config
+python3 tools/beets_enrich.py                 # interactive (prompts per album)
+python3 tools/beets_enrich.py --quiet         # auto-accept strong matches
+python3 tools/beets_enrich.py --quiet --reindex   # then re-index LocalFs
+python3 tools/beets_enrich.py --dry-run       # show command + safety report
+```
+
+#### Tests
+
+`tools/test_beets_enrich.py` — 23 unit tests over the pure helpers (never
+invokes `beet` or the network): config carries the in-place invariant +
+separate beets library + no scrub + original-year bias and passes its own
+gate; `verify_inplace` flags copy/move/write violations and missing keys;
+`build_import_cmd` argv for interactive/quiet/timid/revisit; LocalFs UDN
+selection (override / prefer-localfs / sole / ambiguous / none);
+`find_binary` fallback.
+
+```bash
+python3 -m unittest tools.test_beets_enrich -v
+```
+
 ## Subsonic API (Phase 1, in flight)
 
 A read-only-ish Subsonic-compatible HTTP API that lets any third-party

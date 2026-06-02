@@ -214,6 +214,7 @@ def build_diagram():
         "T/a7  relink_playlists_to_localfs.py", "T/a8  audit_override_mismatches.py",
         "T/a9  correct_year_drift.py", "T/a10 improve_song_years.py",
         "T/a11 localfs_scan.py", "T/a12 localfs_serve.py",
+        "T/a13 beets_enrich.py",
     ]
     col_w = 232
     for i, t in enumerate(tools):
@@ -490,6 +491,11 @@ def list_pages():
         ("T/a12", "localfs_serve.py",
          "Standalone LocalFs file-server launcher for testing the :8200 "
          "serving path."),
+        ("T/a13", "beets_enrich.py",
+         "Run the beets tag-in-place enrichment batch (docs/enrichment.md). "
+         "Safe wrapper around `beet import`: enforces write:yes/copy:no/"
+         "move:no before any write. <b>--write-config --quiet --timid "
+         "--album --revisit --reindex --gateway --dry-run -y</b>."),
     ]
     for c, f, p in tools:
         tool_rows.append([C(c), P(f), P(p)])
