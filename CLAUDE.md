@@ -321,6 +321,78 @@ cp com.roha.dlna-cert-renew.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 ```
 
+### HTTP/2 · HTTP/3 · TLS — current state and the 2.0 roadmap
+
+> **TL;DR.** Today the gateway serves **HTTP/1.1 over TLS, with keep-alive
+> (2026-06-02)**. It does **not** speak HTTP/2 or HTTP/3, and *can't*
+> without a different server or a reverse proxy in front — Python's stdlib
+> `http.server` is HTTP/1.1-only. The keep-alive + Service-Worker caching
+> + the album-key index capture most of the realistic latency win for a
+> single-user Tailscale setup. HTTP/2/3 is a **dlna-gateway 2.0** candidate
+> (front the gateway with a proxy), not a quick flag.
+
+**What we run now.** `dlna_server.GatewayHandler(BaseHTTPRequestHandler)`
+on `ThreadingMixIn` + `HTTPServer`, the HTTPS variant `ssl`-wrapping the
+socket (`TLSThreadedHTTPServer`). As of 2026-06-02 `protocol_version =
+"HTTP/1.1"` + `timeout = 15` enable **keep-alive** (one TCP+TLS connection
+reused for many requests, with a 15 s idle timeout that frees the daemon
+thread). Prerequisite satisfied: every response path sets `Content-Length`
+(the `_json`/`_html`/`_xml`/`_serve_static`/`/art` helpers) **or** sends
+`Connection: close` (the `/stream` + `/radio_stream` byte relays, the
+HTTPS redirect) — so an HTTP/1.1 client always knows where a response ends.
+
+**Why TLS alone does NOT give HTTP/2.**
+- **HTTP/2** needs (a) **ALPN** in the TLS handshake (client + server
+  negotiate `h2` vs `http/1.1`) and (b) a wholly different binary
+  framing/multiplexing layer (streams, HPACK header compression).
+  `ssl`-wrapping a socket gives encrypted **HTTP/1.1**, nothing more —
+  stdlib implements none of the h2 protocol. There is no
+  `protocol_version = "HTTP/2"`.
+- **HTTP/3** is further still: it runs over **QUIC (UDP)**, not TCP, with
+  TLS 1.3 built in. Stdlib has no QUIC at all.
+
+**What HTTP/2 would actually buy us (and what it wouldn't).** Keep-alive
+already removes the per-request handshake for *sequential* traffic (the
+polling loop, drilling through browse). HTTP/2's extra benefit is
+**multiplexing** — many concurrent requests over one connection without
+opening ~6 parallel HTTP/1.1 connections. The one place that shows up here
+is the **cold first load of a thumbnail-heavy browse page** (~20 uncached
+`/art` images fetched at once). But the SW `ART_CACHE` (cache-first) means
+repeat loads don't refetch, and `API_CACHE` makes repeat browse instant —
+so the marginal h2 gain is modest for this single-user workload. h2 header
+compression (HPACK) is negligible at our request volume. **Net: real but
+secondary** to the keep-alive + SW-cache + index work already done.
+
+**Options to add HTTP/2/3 (all via a reverse proxy — the gateway stays
+HTTP/1.1 on localhost; no rewrite of the request handler):**
+
+| Option | h2 | h3 | What it changes | Notes |
+|---|---|---|---|---|
+| **`tailscale serve`** | ✅ (Go `net/http` does h2 over TLS by default) | ⚠️ verify (Go std server doesn't do h3 by default) | Tailscale terminates TLS with the tailnet cert and proxies to `http://127.0.0.1:<port>`. **Could subsume the gateway's entire HTTPS + cert-renewal machinery** (`renew-cert.sh`, the LaunchAgent, `_warn_if_cert_expiring_soon`). | **Cleanest for this deployment** — already on Tailscale; least new infrastructure. Bind the gateway to localhost; drop its own TLS. |
+| **Caddy** | ✅ | ✅ | Caddy fronts on 443, h2+h3, auto-certs; `reverse_proxy 127.0.0.1:<port>`. | One extra process; most capable; also offloads TLS. |
+| **nginx** | ✅ | ✅ (http3 module) | Same shape as Caddy, more config. | Heavier config; ubiquitous. |
+| **Rewrite to ASGI (Hypercorn/Uvicorn)** | ✅ | ✅ (Hypercorn) | Replace `http.server` with an ASGI app server. | **Big rewrite** — the app is stdlib `BaseHTTPRequestHandler`, not ASGI/WSGI. A 2.0-scale change, only if other reasons (async, websockets) justify it. |
+
+**Caveats / interactions if/when we front it.**
+- The `/stream` + `/gw/` device endpoints are **HTTP-only** (UPnP renderers
+  like the Naim can't do HTTPS) and live on the plain HTTP server with the
+  `_HTTP_ONLY` carve-out + the HTTPS-redirect skip. A front proxy must
+  **not** intercept those — the Naim talks to the gateway directly on the
+  LAN, not through the proxy. Keep the device path untouched.
+- Today the gateway *owns* TLS (auto-detects `*.crt`/`*.key`, warns on
+  expiry, auto-renews). Moving TLS to a proxy means **removing or disabling
+  that machinery** to avoid two cert owners. Decide deliberately.
+- `tailscale serve` only covers tailnet clients — fine, since the gateway
+  is LAN/tailnet-only by design (not public-internet exposed).
+
+**Recommendation (for 2.0).** If/when responsiveness is revisited, front
+the gateway with **`tailscale serve`** for HTTP/2 + free TLS — lowest
+effort, biggest simplification (kills the cert LaunchAgent), and it's the
+natural fit for an already-Tailscale deployment. Treat h3 and Caddy/nginx
+as alternatives if h3 or non-Tailscale access ever matters. **Not worth
+doing piecemeal now** — bundle it into a 2.0 transport refresh. See the
+`project_responsiveness` memory for the measured numbers behind this.
+
 ### Mobile / PWA testing checklist
 
 Because there's no automated test coverage for on-device behavior (iOS Safari, Android Chrome, PWA standalone mode), before believing a browser-mode change is shipped, manually verify on an actual mobile device over Tailscale:

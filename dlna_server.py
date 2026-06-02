@@ -139,6 +139,12 @@ def _make_icon_png(size: int) -> bytes:
 
 class GatewayHandler(BaseHTTPRequestHandler):
 
+    # HTTP/1.1 keep-alive + 15 s idle timeout (frees dropped conns). Safe:
+    # every response sets Content-Length or Connection:close. Full
+    # rationale + the HTTP/2·HTTP/3 roadmap: CLAUDE.md "HTTP/2 · HTTP/3 · TLS".
+    protocol_version = "HTTP/1.1"
+    timeout = 15
+
     # ── Logging / error suppression ───────────────────────────────
 
     def log_message(self, fmt, *args):

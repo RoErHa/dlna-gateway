@@ -127,3 +127,4 @@ CREATE TABLE device_roles (
                     last_seen   TEXT DEFAULT (datetime('now'))
                 );
 CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url);
+CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key);

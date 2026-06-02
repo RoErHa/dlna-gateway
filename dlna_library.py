@@ -429,6 +429,15 @@ class LibraryDB:
             self._migrate_json(conn)
             self._migrate_device_roles(conn)
             self._migrate_album_fav_key(conn)
+            # Covering index for the folder-grouped Albums browse query
+            # (GROUP BY album_key within a udn). Removes the TEMP B-TREE the
+            # GROUP BY otherwise builds — roughly halves the cold
+            # /api/browse_letter albums query (~150 ms → ~70 ms). Created
+            # here (after the table-rebuild migrations, so it isn't dropped)
+            # and idempotent. NB: regenerate schema.sql when this changes —
+            # tests/test_schema_sync.py enforces it.
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_udn_album_key "
+                         "ON tracks(udn, album_key)")
             # One-shot album-art backfill across all existing tracks. Cheap
             # and idempotent — harvest is INSERT OR IGNORE, backfill only
             # touches tracks whose art is empty AND whose album_art exists.
