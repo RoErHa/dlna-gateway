@@ -65,7 +65,11 @@ DEFAULT_CONFIG = Path.home() / ".config" / "beets" / "config.yaml"
 BEETS_LIBRARY = Path.home() / ".config" / "beets" / "library.db"
 
 # launchd-style minimal PATH safety, mirroring dlna_acoustid._find_fpcalc.
-BEET_FALLBACKS = ("/opt/homebrew/bin/beet", "/usr/local/bin/beet",
+# Path(sys.executable).parent catches a `beet` pip-installed into the same
+# venv as the interpreter running this tool (the common case here) even when
+# the venv isn't activated on PATH.
+BEET_FALLBACKS = (str(Path(sys.executable).parent / "beet"),
+                  "/opt/homebrew/bin/beet", "/usr/local/bin/beet",
                   str(Path.home() / "Library/Python/3.11/bin/beet"),
                   str(Path.home() / ".local/bin/beet"))
 FPCALC_FALLBACKS = ("/opt/homebrew/bin/fpcalc", "/usr/local/bin/fpcalc")
@@ -108,7 +112,9 @@ import:
   move: no            # …do not move them either   → tag-in-place
   resume: ask
   incremental: yes    # record done dirs, skip on re-run (re-runnable batch)
-  timid: yes          # prompt before applying — essential for prog
+  timid: no           # NOT baked in: beets rejects -q (--quiet) together with
+                      # timid. Use the --timid CLI flag for a per-match review
+                      # pass; --quiet for the auto-accept bulk pass.
   duplicate_action: skip
 
 # release selection — bias toward the *original* release, not a reissue
@@ -157,6 +163,13 @@ def verify_inplace(config_text: str) -> Tuple[bool, List[str]]:
     if flags["move"] is not False:
         problems.append("import.move must be 'no' (do not relocate files)")
     return (not problems, problems)
+
+
+def config_forces_timid(config_text: str) -> bool:
+    """True if the config sets import.timid yes/true. beets refuses to run
+    `-q`/--quiet while timid is on ('can't be both quiet and timid')."""
+    return bool(re.search(r"^\s*timid:\s*(yes|true)\b",
+                          config_text, re.M | re.I))
 
 
 def build_import_cmd(beet: str, target: str, quiet: bool = False,
@@ -292,13 +305,26 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
+    cfg_text = cfg_path.read_text()
+
     # the safety gate — never let a non-in-place config touch the library
-    ok, problems = verify_inplace(cfg_path.read_text())
+    ok, problems = verify_inplace(cfg_text)
     if not ok:
         print(f"error: {cfg_path} is NOT tag-in-place safe:", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         print("  fix it, or regenerate with --write-config", file=sys.stderr)
+        return 2
+
+    # beets rejects --quiet while the config forces timid; catch it here
+    # with a clear message instead of beets' cryptic "can't be both" error.
+    if args.quiet and config_forces_timid(cfg_text):
+        print(f"error: --quiet conflicts with 'timid: yes' in {cfg_path} "
+              "(beets can't be both quiet and timid).\n"
+              "    regenerate the config:  python3 tools/beets_enrich.py "
+              "--write-config\n"
+              "    (or set 'timid: no' there). Use --timid for a per-match "
+              "review pass.", file=sys.stderr)
         return 2
 
     target = Path(args.album).expanduser() if args.album \

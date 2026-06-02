@@ -2210,6 +2210,13 @@ separate from the gateway's `library.db`. The `scrub` plugin is
 intentionally NOT enabled (it strips existing tags — `docs/enrichment.md`
 §3).
 
+The generated config sets `timid: no` (not §3's `yes`): beets refuses to
+run `-q`/`--quiet` while timid is on (*"can't be both quiet and timid"*),
+so timidity is a **CLI choice** here — `--quiet` for the auto-accept bulk
+pass, `--timid` for a cautious per-match review pass. If a hand-edited
+config still has `timid: yes`, `--quiet` aborts early with a clear message
+pointing at `--write-config`.
+
 #### Flags
 
 | Flag | Effect |

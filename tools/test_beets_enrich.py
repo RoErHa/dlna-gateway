@@ -44,6 +44,21 @@ class TestDefaultConfig(unittest.TestCase):
         ok, problems = be.verify_inplace(self.cfg)
         self.assertTrue(ok, problems)
 
+    def test_config_does_not_force_timid(self):
+        # baking timid:yes in would make --quiet ('-q') fail in beets
+        self.assertRegex(self.cfg, r"timid:\s*no")
+        self.assertFalse(be.config_forces_timid(self.cfg))
+
+
+class TestConfigForcesTimid(unittest.TestCase):
+    def test_yes_detected(self):
+        self.assertTrue(be.config_forces_timid("import:\n  timid: yes\n"))
+        self.assertTrue(be.config_forces_timid("import:\n  timid: true\n"))
+
+    def test_no_or_absent(self):
+        self.assertFalse(be.config_forces_timid("import:\n  timid: no\n"))
+        self.assertFalse(be.config_forces_timid("import:\n  write: yes\n"))
+
 
 class TestVerifyInplace(unittest.TestCase):
     def test_good(self):
