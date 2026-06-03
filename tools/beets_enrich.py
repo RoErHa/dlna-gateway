@@ -330,6 +330,27 @@ def _gateway_ssl_context(gateway: str) -> Optional[ssl.SSLContext]:
     return None
 
 
+def gateway_acoustid_enabled(gateway: str,
+                             timeout: float = 5.0) -> Optional[bool]:
+    """Ask the RUNNING gateway whether its AcoustID worker is enabled, via
+    GET /api/acoustid/status → `enabled`. This is the authoritative signal
+    — it reflects the gateway's actually-loaded env regardless of source
+    (.env via python-dotenv, launchctl setenv, or the plist). A local
+    `os.environ` / `launchctl getenv` check MISSES the .env source (the
+    2026-06-03 footgun). Returns True/False, or None if the gateway can't
+    be reached or doesn't report the field."""
+    base = gateway.rstrip("/")
+    url = base + "/api/acoustid/status"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout,
+                                    context=_gateway_ssl_context(base)) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        val = data.get("enabled")
+        return bool(val) if isinstance(val, bool) else None
+    except Exception:                                # noqa: BLE001
+        return None
+
+
 def trigger_reindex(gateway: str, udn: Optional[str],
                     timeout: float = 10.0) -> Tuple[bool, str]:
     """GET /api/servers to resolve the LocalFs udn (unless given), then

@@ -111,20 +111,46 @@ class TestPostBeetsReindex(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_apply_refuses_when_acoustid_key_set(self):
-        # Guard: clearing overrides while the worker is live would be undone
-        # on the next startup scan, so apply+clean must abort (exit 2) and
-        # leave the rows intact.
-        with mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
+        # Guard fallback: gateway unreachable (probe → None), so the local
+        # env check applies. apply+clean must abort (exit 2), rows intact.
+        with mock.patch.object(pbr, "gateway_acoustid_enabled",
+                               return_value=None), \
+             mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
             rc = pbr.main(["--db", str(self.db), "--apply", "-y",
                            "--no-reindex", "--no-backup"])
         self.assertEqual(rc, 2)
         self.assertEqual(self._sources().get("acoustid"), 2)  # untouched
 
     def test_ignore_flag_overrides_key_guard(self):
-        with mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
+        with mock.patch.object(pbr, "gateway_acoustid_enabled",
+                               return_value=None), \
+             mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
             rc = pbr.main(["--db", str(self.db), "--apply", "-y",
                            "--no-reindex", "--no-backup",
                            "--ignore-acoustid-key"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("acoustid", self._sources())
+
+    def test_gateway_enabled_blocks_even_with_env_unset(self):
+        # Authoritative: gateway reports enabled=True (e.g. key in .env that
+        # the local env check can't see) → block regardless of local env.
+        with mock.patch.object(pbr, "gateway_acoustid_enabled",
+                               return_value=True), \
+             mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ACOUSTID_API_KEY", None)
+            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
+                           "--no-reindex", "--no-backup"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(self._sources().get("acoustid"), 2)  # untouched
+
+    def test_gateway_disabled_allows_even_with_env_set(self):
+        # Authoritative: gateway reports enabled=False → proceed even if a
+        # stale ACOUSTID_API_KEY lingers in the tool's own env.
+        with mock.patch.object(pbr, "gateway_acoustid_enabled",
+                               return_value=False), \
+             mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
+            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
+                           "--no-reindex", "--no-backup"])
         self.assertEqual(rc, 0)
         self.assertNotIn("acoustid", self._sources())
 
