@@ -23,7 +23,15 @@ DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPn
 ./setup.sh --run --probe http://...  # add a server manually
 ./setup.sh --run --list-devices    # show known devices table
 ./setup.sh --run --reset-devices   # clear device DB
+./setup.sh --restart               # refresh venv/deps + restart launchd gateway
 ```
+
+`--restart` refreshes the venv/dependencies, then runs
+`launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway` — the
+launchd-correct restart (a bare `kill` races launchd's respawn; see
+"Restarting the gateway" below). It aborts with install hints if the
+LaunchAgent isn't loaded. `--restart` takes precedence over `--run` if
+both are passed.
 
 ## Running Tests
 
@@ -717,6 +725,8 @@ The gateway runs under launchd (LaunchAgent `com.roha.dlna-gateway`). To restart
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
+# or, equivalently, with a venv/deps refresh first:
+./setup.sh --restart
 ```
 
 `kill <pid> && ./setup.sh --run` is wrong — launchd will respawn the old copy before the manual one starts, leading to port conflicts.
@@ -2281,6 +2291,84 @@ selection (override / prefer-localfs / sole / ambiguous / none);
 ```bash
 python3 -m unittest tools.test_beets_enrich -v
 ```
+
+### `tools/post_beets_reindex.py`
+
+The "make beets' work visible" step that runs AFTER `beets_enrich.py` has
+tagged files in place. Two things must happen for the gateway to show the
+new tags, and this tool does both in the right order:
+
+1. **Clear the AcoustID `metadata_overrides`.** LocalFs track URLs are
+   PATH-based (`sha1(rel_path)`, see `dlna_providers/localfs.py:97`), so a
+   beets-tagged file keeps the SAME url. The COALESCE pass in
+   `LibraryDB.upsert_tracks` (dlna_library.py:940-945) therefore re-lays
+   the old `source='acoustid'` override straight back on top of beets'
+   fresh tags and masks them. Deleting the acoustid rows lets the file
+   tags show through.
+2. **Reindex LocalFs** (`POST /api/index/rebuild?udn=…` →
+   `INDEXER.start(srv, force=True)` = `clear(udn)` + full re-crawl). mutagen
+   re-reads every file (beets changed mtime+size, so the scan cache doesn't
+   skip them).
+
+**Manual-override safety (the core invariant, regression-guarded):** ONLY
+`source='acoustid'` rows are deleted. `source='manual'` (user edits + the
+year-drift / `improve_song_years` corrections) is NEVER touched — those
+legitimately win over beets. `notfound` / `video_skip` rows carry NULL
+metadata so they mask nothing and are left alone.
+
+**ACOUSTID_API_KEY guard.** Refuses to clear while the AcoustID worker is
+live (checks this process's env AND `launchctl getenv` — the gateway
+inherits the launchd-domain env). Clearing then would be futile: the 120s
+startup scan re-fingerprints every now-bare track and re-creates the
+overrides, re-masking beets. Under **Option A** (beets is the sole
+metadata authority) the key stays unset, so this never trips; override
+with `--ignore-acoustid-key` if you must.
+
+DRY-RUN by default (prints the override breakdown + planned actions);
+`--apply` deletes + reindexes, auto-backing-up `library.db` first.
+
+```bash
+python3 tools/post_beets_reindex.py            # preview
+python3 tools/post_beets_reindex.py --apply    # backup + clean + reindex
+python3 tools/post_beets_reindex.py --apply --no-reindex   # clean only
+python3 tools/post_beets_reindex.py --apply --no-clean     # reindex only
+python3 -m unittest tools.test_post_beets_reindex -v
+```
+
+Flags: `--apply` / `-n`/`--dry-run` · `--no-clean` · `--no-reindex` ·
+`--no-backup` · `--ignore-acoustid-key` · `--udn` · `--gateway` · `--db` ·
+`-y`/`--yes`. Tests: `tools/test_post_beets_reindex.py` — 12 tests
+(delete-only-acoustid, manual/notfound/video_skip survival, dry-run no-op,
+backup-on-apply, the key guard + `--ignore-acoustid-key` override + skip
+under `--no-clean`).
+
+### beets vs the AcoustID worker — Option A (chosen 2026-06-03)
+
+beets and the in-process `AcoustIDFetcher` do the **same job** (fingerprint
+→ MusicBrainz → metadata) and **collide**: both are metadata authorities,
+and the AcoustID override outranks beets' file tags via the COALESCE pass.
+beets is the strictly-better tagger (writes real tags + MBIDs into the
+canonical place — the files — with album-level matching and art embedding),
+and AcoustID can't do better on the hard cases (same `fpcalc`+MusicBrainz
+path; also can't fingerprint DSD). So they are **not** complementary —
+pick one.
+
+**Option A is chosen: beets is the sole metadata authority; the AcoustID
+worker stays OFF.** Concretely:
+
+- `ACOUSTID_API_KEY` is left **unset** in launchd, so `AcoustIDFetcher`
+  no-ops (its startup scan is disabled, `run_once` returns immediately).
+- The weekly `com.roha.dlna-acoustid-retry` LaunchAgent is **unloaded**
+  (`launchctl bootout gui/$(id -u)/com.roha.dlna-acoustid-retry`).
+- Steady-state workflow for new music: drop files → `beets_enrich.py
+  --quiet` (incremental — only new folders; already-seen dirs need
+  `--revisit`) → `post_beets_reindex.py --apply`.
+
+The `dlna_acoustid.py` module and the ~52k historical `acoustid` override
+rows remain (and `post_beets_reindex.py` clears the latter), but the worker
+is dormant by design. Re-enabling it (setting the key) would re-create the
+overrides on the next restart and re-mask beets — which is exactly what the
+`post_beets_reindex.py` key-guard prevents.
 
 ## Subsonic API (Phase 1, in flight)
 

@@ -30,12 +30,25 @@ usable from any device with a browser.
   lyrics (via lrclib), album art (sibling → MusicBrainz / Cover Art
   Archive fallback). For RoHaLocalFS, albums group by folder (one
   folder = one album).
-- **Metadata enrichment.** Background worker fingerprints tracks via
-  Chromaprint and resolves them to MusicBrainz metadata through AcoustID,
-  fixing mistagged / untagged tracks. SQLite-only by design — the worker
-  fills `metadata_overrides`, never rewrites on-disk file tags. Progress
-  shows in the PWA index bar; a **🔎 Enrich** button kicks a pass on
-  demand. Needs `ACOUSTID_API_KEY` (else the worker stays dormant).
+- **Metadata enrichment — two paths.**
+  - **beets, tag-in-place (recommended).** `tools/beets_enrich.py` wraps a
+    [beets](https://beets.io/) import that writes clean tags + MBIDs
+    **into your files** (MusicBrainz + AcoustID), in place — never moving
+    or copying them. The gateway's indexer reads those enriched tags on
+    the next rebuild, so beets is a single upstream source of truth.
+    `tools/post_beets_reindex.py` does the follow-up in one shot (clear
+    stale overrides, then reindex).
+  - **In-process AcoustID worker (alternative).** A background worker
+    fingerprints tracks via Chromaprint and resolves them to MusicBrainz
+    through AcoustID, fixing mistagged / untagged tracks. SQLite-only — it
+    fills `metadata_overrides`, never rewrites on-disk file tags. Progress
+    shows in the PWA index bar; a **🔎 Enrich** button kicks a pass on
+    demand. Needs `ACOUSTID_API_KEY` (else dormant).
+  - **Pick one.** Don't run both against the same library at once: they
+    collide. beets wins by writing the files; the AcoustID worker's
+    overrides would re-mask beets' tags (LocalFs track URLs are
+    path-stable). `post_beets_reindex.py` guards this — it refuses to
+    clear overrides while `ACOUSTID_API_KEY` is set.
 - **Internet radio ("📡 Stations").** Search the radio-browser.info
   catalogue, favourite up to 25 stations, play with ICY now-playing
   metadata in a dedicated radio screen.
@@ -105,6 +118,11 @@ Open `http://localhost:8765/` in any browser.
 For auto-start at login: see the comments at the top of
 `com.roha.dlna-gateway.plist` (it's a LaunchAgent template — edit the
 path placeholders, copy to `~/Library/LaunchAgents/`, `launchctl load`).
+
+Once it's running under launchd, restart it after a code change with
+`./setup.sh --restart` — it refreshes the venv/dependencies and then
+`launchctl kickstart`s the LaunchAgent (the launchd-correct restart; a
+bare `kill` races launchd's respawn).
 
 ## Quick start (Linux)
 

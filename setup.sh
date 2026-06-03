@@ -10,6 +10,7 @@
 #   ./setup.sh --run --probe http://<ip>/desc.xml  # add server manually
 #   ./setup.sh --run --list-devices              # show known devices, exit
 #   ./setup.sh --run --reset-devices             # wipe device DB, exit
+#   ./setup.sh --restart                         # refresh deps + restart launchd gateway
 #
 # ── Mac Mini (always-on server) ───────────────────────────────────────────────
 # First-time setup on Mac Mini:
@@ -33,6 +34,7 @@ VENV_DIR="$SCRIPT_DIR/.venv"
 VENV_PY="$VENV_DIR/bin/python"
 GATEWAY="$SCRIPT_DIR/dlna_gateway.py"
 REQS="$SCRIPT_DIR/requirements.txt"
+LAUNCHD_LABEL="com.roha.dlna-gateway"
 MIN_MINOR=9
 PYTHON=""
 
@@ -117,14 +119,33 @@ print_done() {
     echo
 }
 
+# ── Restart the launchd-managed gateway ────────────────────────────────────────
+# The gateway runs under launchd (LaunchAgent $LAUNCHD_LABEL). A bare
+# `kill <pid> && ./setup.sh --run` is wrong — launchd respawns the old copy
+# before the manual one starts, causing a port conflict. kickstart -k is the
+# launchd-correct restart.
+restart_gateway() {
+    local target="gui/$(id -u)/$LAUNCHD_LABEL"
+    if ! launchctl print "$target" &>/dev/null; then
+        die "LaunchAgent $LAUNCHD_LABEL not loaded — install it first:
+       cp $LAUNCHD_LABEL.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+    fi
+    info "Restarting $LAUNCHD_LABEL …"
+    launchctl kickstart -k "$target"
+    ok "Gateway restarted (launchctl kickstart -k $target)"
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 RUN=false
+RESTART=false
 FWD=()
 
 for arg in "$@"; do
     case "$arg" in
-        --run) RUN=true ;;
-        *)     FWD+=("$arg") ;;
+        --run)     RUN=true ;;
+        --restart) RESTART=true ;;
+        *)         FWD+=("$arg") ;;
     esac
 done
 
@@ -141,7 +162,12 @@ info "Python: $PYTHON  ($("$PYTHON" --version))"
 check_files
 setup_venv
 
-if $RUN; then
+if $RESTART; then
+    echo
+    restart_gateway
+    echo
+    info "Tail the log with: tail -f $SCRIPT_DIR/gateway.log"
+elif $RUN; then
     echo
     echo -e "${B}Starting gateway…${N}"
     echo

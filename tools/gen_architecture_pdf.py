@@ -214,7 +214,7 @@ def build_diagram():
         "T/a7  relink_playlists_to_localfs.py", "T/a8  audit_override_mismatches.py",
         "T/a9  correct_year_drift.py", "T/a10 improve_song_years.py",
         "T/a11 localfs_scan.py", "T/a12 localfs_serve.py",
-        "T/a13 beets_enrich.py",
+        "T/a13 beets_enrich.py", "T/a14 post_beets_reindex.py",
     ]
     col_w = 232
     for i, t in enumerate(tools):
@@ -229,8 +229,8 @@ def build_diagram():
     jobs = [
         ("J/1  com.roha.dlna-gateway", "runs the gateway (launchd)"),
         ("J/2  cert-renew + renew-cert.sh", "weekly TLS cert (Mon 04:30)"),
-        ("J/3  acoustid-retry weekly", "clears notfound, restarts (Mon 05:30)"),
-        ("J/4  setup.sh", "venv + manual run/probe"),
+        ("J/3  acoustid-retry weekly", "DISABLED (Option A: beets is authority)"),
+        ("J/4  setup.sh", "venv + run / restart / probe"),
     ]
     jy = 124
     for code, desc in jobs:
@@ -414,7 +414,9 @@ def list_pages():
         ("P/g18", "dlna_acoustid.py",
          "AcoustIDFetcher — fpcalc fingerprint → AcoustID → MusicBrainz "
          "metadata into metadata_overrides; transient-vs-permanent split; "
-         "year backfill."),
+         "year backfill. DORMANT under Option A: beets (T/a13) is now the "
+         "metadata authority, so ACOUSTID_API_KEY is left unset and this "
+         "worker no-ops."),
         ("P/g19", "dlna_lyrics.py",
          "On-demand lrclib lyrics; cached in the lyrics table; sticky "
          "positive + negative."),
@@ -496,6 +498,13 @@ def list_pages():
          "Safe wrapper around `beet import`: enforces write:yes/copy:no/"
          "move:no before any write. <b>--write-config --quiet --timid "
          "--album --revisit --reindex --gateway --dry-run -y</b>."),
+        ("T/a14", "post_beets_reindex.py",
+         "The post-beets step: drop AcoustID metadata_overrides (LocalFs URLs "
+         "are path-stable, so old acoustid rows would re-mask beets' fresh "
+         "tags) then reindex LocalFs. Refuses to clear while "
+         "ACOUSTID_API_KEY is set. <b>--apply --dry-run --no-clean "
+         "--no-reindex --no-backup --ignore-acoustid-key --udn --gateway --db "
+         "-y</b>."),
     ]
     for c, f, p in tools:
         tool_rows.append([C(c), P(f), P(p)])
@@ -536,10 +545,12 @@ def list_pages():
          "renewal (Mon 04:30; no-op unless &lt;30 days). cert-renewal.log.",
          GREY),
         ("J/3", "com.roha.dlna-acoustid-retry + retry-acoustid-weekly.sh",
-         "Weekly: clear notfound + restart so AcoustID re-tries (Mon 05:30). "
-         "acoustid-retry.log.", GREY),
-        ("J/4", "setup.sh", "venv setup + run. --run --no-browser --debug "
-         "--probe URL --list-devices --reset-devices.", GREY),
+         "Weekly notfound-clear + gateway restart for AcoustID (Mon 05:30). "
+         "DISABLED under Option A (beets is the metadata authority) — agent "
+         "unloaded via launchctl bootout. acoustid-retry.log.", GREY),
+        ("J/4", "setup.sh", "venv setup + run / restart / probe. --run "
+         "--restart --no-browser --debug --probe URL --list-devices "
+         "--reset-devices. See the setup.sh options reference.", GREY),
     ]
     for c, n, r, col in de:
         de_rows.append([C(c), P(n), P(r)])
@@ -552,8 +563,9 @@ def list_pages():
     cmds = [
         ("Run (J/4)", "./setup.sh --run [--no-browser] [--debug] "
          "[--probe http://…] [--list-devices] [--reset-devices]"),
-        ("Restart (J/1)", "launchctl kickstart -k gui/$(id -u)/"
-         "com.roha.dlna-gateway"),
+        ("Restart (J/4)", "./setup.sh --restart   "
+         "(refresh venv/deps + launchctl kickstart -k gui/$(id -u)/"
+         "com.roha.dlna-gateway)"),
         ("Cert (J/2)", "./renew-cert.sh [--force]   ·   launchctl kickstart "
          "gui/$(id -u)/com.roha.dlna-cert-renew"),
         ("AcoustID retry (J/3)", "./retry-acoustid-weekly.sh [--dry-run]"),
@@ -753,6 +765,58 @@ def list_pages():
         ("-n / --dry-run", "Print the resolved beet command + safety report; "
          "do NOT invoke beets (beets has no true dry-run of its own)."),
         ("-y / --yes", "Skip the in-place-write backup-warning confirmation."),
+     ]),
+     ("T/a14", "post_beets_reindex.py",
+      "After beets has tagged files in place, make its work visible: clear "
+      "the AcoustID metadata_overrides (LocalFs URLs are PATH-stable, so the "
+      "COALESCE pass would otherwise re-lay old acoustid rows over beets' "
+      "fresh tags) THEN reindex LocalFs. source='manual' is never touched; "
+      "notfound/video_skip carry NULL metadata so they mask nothing.", [
+        ("(default)", "Dry-run: print the override breakdown + the planned "
+         "clear/reindex; change nothing."),
+        ("--apply", "Actually delete acoustid overrides + start the reindex "
+         "(auto-backs up library.db first)."),
+        ("-n / --dry-run", "Explicit preview alias (the default when --apply "
+         "is absent)."),
+        ("--no-clean", "Skip clearing overrides (reindex only)."),
+        ("--no-reindex", "Skip the reindex (clean only)."),
+        ("--no-backup", "Skip the library.db backup before deleting."),
+        ("--ignore-acoustid-key", "Proceed even if ACOUSTID_API_KEY is set. "
+         "By default the tool REFUSES to clear while the worker is live — "
+         "the 120s startup scan would re-fingerprint every now-bare track and "
+         "re-create the overrides, re-masking beets (Option A keeps the key "
+         "unset)."),
+        ("--udn UDN", "Server UDN to reindex (default: auto-pick "
+         "uuid:localfs-*)."),
+        ("--gateway URL", "Gateway base URL (default http://127.0.0.1:8765)."),
+        ("--db PATH", "library.db path."),
+        ("-y / --yes", "Skip the confirmation prompt."),
+     ]),
+     ("J/4", "setup.sh",
+      "Bootstrap + run the gateway. Finds Python 3.9+, creates/repairs the "
+      ".venv, installs requirements.txt, then either runs the gateway "
+      "(--run, exec in the foreground), restarts the launchd-managed copy "
+      "(--restart), or just finishes setup. Unknown flags after --run are "
+      "forwarded verbatim to dlna_gateway.py.", [
+        ("(no flags)", "Set up only: venv + dependencies, then print the "
+         "'how to run' summary. Does not start anything."),
+        ("--run", "Set up, then exec the gateway in the foreground on :8765 "
+         "(blocks; Ctrl-C to stop). All flags below it are passed through to "
+         "dlna_gateway.py."),
+        ("--restart", "Refresh the venv/deps, then restart the launchd "
+         "gateway via launchctl kickstart -k gui/$(id -u)/"
+         "com.roha.dlna-gateway (the launchd-correct restart — a bare kill "
+         "races launchd's respawn). Aborts with install hints if the "
+         "LaunchAgent isn't loaded. Mutually informative with --run; "
+         "--restart wins if both are given."),
+        ("--no-browser", "(forwarded) Don't auto-open the browser on start."),
+        ("--debug", "(forwarded) Verbose logging."),
+        ("--probe http://…", "(forwarded) Add a UPnP server manually by its "
+         "device-description URL."),
+        ("--list-devices", "(forwarded) Print the known-devices table and "
+         "exit."),
+        ("--reset-devices", "(forwarded) Wipe the device DB and exit."),
+        ("--port N", "(forwarded) HTTP port (default 8765)."),
      ]),
     ]
     for tcode, tname, purpose, opts in OPTIONS:
