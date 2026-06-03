@@ -54,6 +54,43 @@ class TestDefaultConfig(unittest.TestCase):
         self.assertRegex(self.cfg, r"timid:\s*no")
         self.assertFalse(be.config_forces_timid(self.cfg))
 
+    def test_config_enables_musicbrainz_plugin(self):
+        # beets 2.x: without it the importer has no metadata source
+        self.assertTrue(be.config_has_musicbrainz_plugin(self.cfg))
+
+
+class TestMusicbrainzGuards(unittest.TestCase):
+    def test_plugin_detected_only_on_plugins_line(self):
+        self.assertTrue(be.config_has_musicbrainz_plugin(
+            "plugins: musicbrainz chroma fetchart\n"))
+        self.assertFalse(be.config_has_musicbrainz_plugin(
+            "plugins: chroma fetchart embedart\n"))
+        # a substring elsewhere must not count
+        self.assertFalse(be.config_has_musicbrainz_plugin(
+            "plugins: chroma\n# musicbrainz is great\n"))
+
+    def test_beet_python_reads_shebang(self):
+        import os
+        import tempfile
+        d = tempfile.mkdtemp()
+        script = os.path.join(d, "beet")
+        with open(script, "w") as f:
+            f.write(f"#!{sys.executable}\nprint('hi')\n")
+        self.assertEqual(be.beet_python(script), sys.executable)
+
+    def test_beet_python_none_without_shebang(self):
+        import os
+        import tempfile
+        script = os.path.join(tempfile.mkdtemp(), "beet")
+        with open(script, "w") as f:
+            f.write("not a shebang\n")
+        self.assertIsNone(be.beet_python(script))
+
+    def test_module_importable(self):
+        self.assertTrue(be.module_importable(sys.executable, "os"))
+        self.assertFalse(be.module_importable(
+            sys.executable, "no_such_module_xyzzy"))
+
 
 class TestConfigForcesTimid(unittest.TestCase):
     def test_yes_detected(self):

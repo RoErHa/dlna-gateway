@@ -66,7 +66,11 @@ override = overrides.get(key)
 directory: /Volumes/Music          # never used while copy/move are off; harmless
 library:   ~/.config/beets/library.db
 
-plugins: chroma fetchart embedart info missing duplicates
+plugins: musicbrainz chroma fetchart embedart info missing duplicates
+# NOTE (beets 2.x): MusicBrainz is now a PLUGIN. The `musicbrainz` entry
+# above is REQUIRED — it is the metadata source. Without it beets has no
+# source to match against and reports "No matching release found" for every
+# album (0 imports). It needs the `musicbrainzngs` package installed (§4).
 
 import:
   write: yes        # write tags INTO the files  (this is the whole point)
@@ -119,7 +123,8 @@ writing and can wipe metadata your override logic or hand-tagging depends on.
 ```bash
 # one-time deps (Mac)
 brew install chromaprint           # provides fpcalc for the chroma plugin
-pip3 install beets pyacoustid
+pip3 install beets pyacoustid musicbrainzngs   # musicbrainzngs: beets 2.x
+                                               # MB plugin backend (required)
 
 # preview/interactive a single album — review each match before applying
 # (beets has no true dry-run for import; timid prompts you and you can quit

@@ -2217,6 +2217,18 @@ pass, `--timid` for a cautious per-match review pass. If a hand-edited
 config still has `timid: yes`, `--quiet` aborts early with a clear message
 pointing at `--write-config`.
 
+**beets 2.x pluginized MusicBrainz.** MB is no longer built into the
+autotagger — it is the `musicbrainz` metadata-source plugin, which the
+generated `plugins:` line now enables and which needs the `musicbrainzngs`
+package. Without **both**, beets has no metadata source and silently
+matches nothing ("No matching release found" for every album → 0 imports,
+exit 0 — the failure mode that wasted two multi-hour runs on 2026-06-03).
+The tool guards this: it aborts before running if the config's `plugins:`
+line lacks `musicbrainz`, or if `musicbrainzngs` isn't importable in
+beets' own environment (probed via the `beet` console-script shebang),
+each with the exact fix. One-time deps:
+`brew install chromaprint && pip3 install beets pyacoustid musicbrainzngs`.
+
 #### Flags
 
 | Flag | Effect |

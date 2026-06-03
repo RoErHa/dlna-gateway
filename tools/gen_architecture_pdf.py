@@ -721,12 +721,15 @@ def list_pages():
      ]),
      ("T/a13", "beets_enrich.py",
       "Run the beets tag-in-place enrichment batch (docs/enrichment.md). "
-      "Safe wrapper around `beet import`.", [
+      "Safe wrapper around `beet import`. Deps: brew install chromaprint; "
+      "pip3 install beets pyacoustid musicbrainzngs (beets 2.x pluginized "
+      "MusicBrainz — the musicbrainz plugin + musicbrainzngs are REQUIRED or "
+      "it matches nothing).", [
         ("(no --quiet/--timid)", "Interactive: beets prompts you per album "
          "(apply / skip / …); strong matches auto-apply."),
         ("--write-config", "Write the prog-tuned tag-in-place "
-         "~/.config/beets/config.yaml (backs up any existing) and exit. Run "
-         "this first."),
+         "~/.config/beets/config.yaml (enables the musicbrainz metadata "
+         "plugin; backs up any existing) and exit. Run this first."),
         ("--music-root PATH", "Library root to import (default "
          "/Volumes/SAMDATA/Music)."),
         ("--album PATH", "Import a single album directory instead of the "
