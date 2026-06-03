@@ -14,11 +14,18 @@ import threading
 import urllib.parse
 
 from dlna_avtransport import avtransport_send
+from dlna_config import VERSION
 from dlna_discovery import RENDERERS, SERVERS
 from dlna_library import DB, INDEXER
 from dlna_player import QUEUES, proxy_stream
 
 log = logging.getLogger("dlna.api.playback")
+
+
+def version(h, params):
+    """Report the running gateway version (release-line marker). Lets a
+    side-by-side 1.x / 2.0 instance be told apart from the PWA and curl."""
+    h._json(200, {"version": VERSION})
 
 
 def _parse_json_or_400(h, body):

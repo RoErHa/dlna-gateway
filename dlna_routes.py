@@ -40,6 +40,7 @@ GET_ROUTES = {
     "/api/radio/favourites":  api_radio.favourites,
     "/api/radio/nowplaying":  api_radio.nowplaying,
     "/radio_stream":          api_radio.radio_stream,
+    "/api/version":        api_playback.version,
     "/api/renderer_state": api_playback.renderer_state,
     "/api/index/status":    api_playback.index_status,
     "/api/index/rebuild":   api_playback.index_rebuild,

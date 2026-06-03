@@ -256,6 +256,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         # API endpoints
+        if path == "/api/version":
+            self._send_json({"version": "test"})
+            return
         if path == "/api/servers":
             self._send_json(gw.servers)
             return

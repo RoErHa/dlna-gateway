@@ -19,6 +19,14 @@ DB_FILE   = os.path.join(_BASE_DIR, "library.db")
 CFG_FILE  = os.path.join(_BASE_DIR, "config.json")
 LOG_FILE  = os.path.join(_BASE_DIR, "gateway.log")
 
+# ── Version ───────────────────────────────────────────────────────
+# Release-line marker. 1.x lives on `main`; this `2.0` branch carries
+# the transport/architecture refresh (see REQUIREMENTS_2.0.md and
+# docs/BUILDING_2.0_SIDE_BY_SIDE.md). Surfaced at /api/version and in the
+# PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
+# Override with $APP_VERSION for ad-hoc builds.
+VERSION = os.environ.get("APP_VERSION", "2.0.0-alpha.1")
+
 # ── .env loader (optional) ────────────────────────────────────────
 # Load <repo>/.env into os.environ BEFORE any other module reads it.
 # Imported here because dlna_config is the first module imported by

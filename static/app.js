@@ -1982,6 +1982,9 @@ browserAudio.addEventListener("play", ()=>{
 });
 
 // ── Init ──────────────────────────────────────────────────────────
+// Version badge — lets a side-by-side 1.x / 2.0 instance be told apart.
+// Defensive: any failure (older 1.x with no /api/version) just leaves it blank.
+api("/api/version").then(async r=>{try{if(r&&r.ok){const j=await r.json();const el=$("app-version");if(el&&j&&j.version)el.textContent="v"+j.version;}}catch{}});
 refreshServers();
 refreshRenderers();
 loadPlaylists().then(showPlaylists);
