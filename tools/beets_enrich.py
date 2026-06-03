@@ -53,6 +53,7 @@ import pickle
 import re
 import shutil
 import sqlite3
+import ssl
 import subprocess
 import sys
 import time
@@ -308,14 +309,36 @@ def pick_localfs_udn(servers: list,
                   "(known: %s)" % ", ".join(udns))
 
 
+# The gateway 301-redirects HTTP API calls to HTTPS, and its Tailscale cert
+# is issued for the *.ts.net hostname — so following that redirect to a
+# loopback host (127.0.0.1) fails TLS verification with an IP-mismatch
+# CERTIFICATE_VERIFY_FAILED. These are the gateway talking to ITSELF on
+# localhost, so cert verification adds nothing; use an unverified context so
+# the http→https redirect resolves. (Loopback only — not for remote hosts.)
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _gateway_ssl_context(gateway: str) -> Optional[ssl.SSLContext]:
+    """Unverified TLS context for a loopback gateway base, else None
+    (remote hosts keep normal verification)."""
+    host = urllib.parse.urlsplit(gateway).hostname or ""
+    if host in _LOOPBACK_HOSTS:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    return None
+
+
 def trigger_reindex(gateway: str, udn: Optional[str],
                     timeout: float = 10.0) -> Tuple[bool, str]:
     """GET /api/servers to resolve the LocalFs udn (unless given), then
     POST /api/index/rebuild?udn=… . Returns (ok, message)."""
     base = gateway.rstrip("/")
+    ctx = _gateway_ssl_context(base)
     try:
         with urllib.request.urlopen(base + "/api/servers",
-                                    timeout=timeout) as r:
+                                    timeout=timeout, context=ctx) as r:
             servers = json.loads(r.read().decode("utf-8"))
     except Exception as e:                       # noqa: BLE001
         return False, f"could not reach {base}/api/servers: {e}"
@@ -325,7 +348,7 @@ def trigger_reindex(gateway: str, udn: Optional[str],
     url = base + "/api/index/rebuild?udn=" + urllib.parse.quote(target_udn)
     try:
         req = urllib.request.Request(url, method="POST", data=b"")
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
             body = r.read().decode("utf-8")
         return True, f"reindex started for {target_udn}: {body}"
     except Exception as e:                       # noqa: BLE001

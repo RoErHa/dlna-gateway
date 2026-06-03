@@ -192,6 +192,26 @@ class TestPickLocalfsUdn(unittest.TestCase):
         self.assertIn("no servers", err)
 
 
+class TestGatewaySSLContext(unittest.TestCase):
+    """The gateway 301-redirects HTTP→HTTPS with a *.ts.net cert, so a
+    loopback self-call needs an unverified context to follow the redirect
+    (IP-mismatch otherwise). Remote hosts must keep verification."""
+
+    def test_loopback_hosts_get_unverified_context(self):
+        import ssl
+        for base in ("http://127.0.0.1:8765", "http://localhost:8765",
+                     "https://127.0.0.1:8443"):
+            ctx = be._gateway_ssl_context(base)
+            self.assertIsNotNone(ctx, base)
+            self.assertFalse(ctx.check_hostname, base)
+            self.assertEqual(ctx.verify_mode, ssl.CERT_NONE, base)
+
+    def test_remote_host_keeps_verification(self):
+        self.assertIsNone(
+            be._gateway_ssl_context("https://ronsmacmini.tail5be6ad.ts.net:8443"))
+        self.assertIsNone(be._gateway_ssl_context("http://192.168.1.50:8765"))
+
+
 class TestFindBinary(unittest.TestCase):
     def test_missing_returns_none(self):
         self.assertIsNone(
