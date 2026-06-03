@@ -66,25 +66,35 @@ from typing import Iterable, Optional
 # `python3 tools/post_beets_reindex.py` (tools/ on sys.path[0]) and a
 # `tools.post_beets_reindex` package import (tests / -m).
 try:
-    from beets_enrich import pick_localfs_udn, trigger_reindex  # noqa: F401
+    from beets_enrich import (gateway_acoustid_enabled,  # noqa: F401
+                              pick_localfs_udn, trigger_reindex)
 except ImportError:                                  # pragma: no cover
-    from tools.beets_enrich import pick_localfs_udn, trigger_reindex  # noqa: F401
+    from tools.beets_enrich import (gateway_acoustid_enabled,  # noqa: F401
+                                    pick_localfs_udn, trigger_reindex)
 
 _DEFAULT_DB = Path(__file__).resolve().parent.parent / "library.db"
 _DEFAULT_GATEWAY = "http://127.0.0.1:8765"
 
 
-def _acoustid_key_active() -> bool:
-    """True if ACOUSTID_API_KEY looks set anywhere the gateway would see it.
+def _acoustid_key_active(gateway: str = "") -> bool:
+    """True if the AcoustID worker is (or would be) live — clearing the
+    acoustid overrides then is pointless, because the gateway's 120s startup
+    scan re-fingerprints every now-bare track and re-creates them, re-masking
+    beets (Option A: beets is the sole authority, so AcoustID must stay off).
 
-    The footgun this guards: clearing the acoustid overrides while the
-    worker is live is pointless — the gateway's 120s startup scan re-
-    fingerprints every now-bare track and re-creates the overrides,
-    re-masking beets (we chose Option A: beets is the sole authority, so
-    the key must stay unset). The gateway runs under launchd and inherits
-    the launchd-domain env, so `launchctl getenv` is the authoritative
-    source; fall back to this process's own env where launchctl is absent
-    (non-macOS) or fails."""
+    PRIMARY signal: ask the running gateway via GET /api/acoustid/status —
+    its `enabled` reflects the actually-loaded key regardless of source
+    (.env via python-dotenv, launchctl setenv, or the plist). This is the
+    only reliable check: the 2026-06-03 incident was a key in `.env` that a
+    local `os.environ` / `launchctl getenv` check could not see.
+
+    FALLBACK (gateway unreachable / field missing): this process's own env
+    and `launchctl getenv`. These miss the .env source, so they're a weak
+    backstop, not the truth."""
+    if gateway:
+        enabled = gateway_acoustid_enabled(gateway)
+        if enabled is not None:
+            return enabled              # authoritative
     if os.environ.get("ACOUSTID_API_KEY", "").strip():
         return True
     try:
@@ -194,7 +204,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print()
 
         # The acoustid-worker footgun only matters when we're clearing.
-        key_active = (not args.no_clean) and _acoustid_key_active()
+        key_active = (not args.no_clean) and _acoustid_key_active(args.gateway)
 
         n_acoustid = _count_acoustid(conn)
         if not args.no_clean:
@@ -203,17 +213,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                   f"source='acoustid' row(s) would be deleted "
                   "(manual / notfound / video_skip kept).")
             if key_active:
-                print("\n  ⚠ ACOUSTID_API_KEY is SET — the gateway's AcoustID "
-                      "worker is live.\n"
+                print("\n  ⚠ The gateway's AcoustID worker is LIVE "
+                      "(/api/acoustid/status: enabled).\n"
                       "    Clearing overrides now is futile: the 120s startup "
                       "scan will re-fingerprint\n"
                       "    every bare track and re-create them, re-masking "
                       "beets. We chose Option A\n"
-                      "    (beets is the sole authority), so unset the key "
-                      "first:\n"
-                      "        launchctl unsetenv ACOUSTID_API_KEY\n"
-                      "    then restart the gateway. Override with "
-                      "--ignore-acoustid-key if you know better.")
+                      "    (beets is the sole authority), so turn AcoustID off "
+                      "first. The key may come\n"
+                      "    from .env (comment the ACOUSTID_API_KEY line) OR "
+                      "launchctl setenv — check\n"
+                      "    /api/acoustid/status after restarting. Override with "
+                      "--ignore-acoustid-key.")
         else:
             print("Step 1 — clear overrides: SKIPPED (--no-clean).")
 
@@ -231,11 +242,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
         # ── guard: refuse to clear while the acoustid worker is live ─────
         if key_active and not args.ignore_acoustid_key:
-            print("error: ACOUSTID_API_KEY is set — refusing to clear "
-                  "overrides (they'd be re-created on the next gateway "
-                  "startup scan).\n"
-                  "       unset it (launchctl unsetenv ACOUSTID_API_KEY) and "
-                  "restart the gateway,\n"
+            print("error: the gateway's AcoustID worker is enabled "
+                  "(/api/acoustid/status) — refusing to clear overrides "
+                  "(they'd be re-created on the next startup scan).\n"
+                  "       turn it off first — the key is usually in .env "
+                  "(comment the ACOUSTID_API_KEY line) or launchctl setenv — "
+                  "then restart the gateway,\n"
                   "       or pass --ignore-acoustid-key / --no-clean.",
                   file=sys.stderr)
             return 2

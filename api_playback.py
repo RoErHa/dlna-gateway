@@ -18,6 +18,7 @@ from dlna_config import VERSION
 from dlna_discovery import RENDERERS, SERVERS
 from dlna_library import DB, INDEXER
 from dlna_player import QUEUES, proxy_stream
+from dlna_providers import get_provider
 
 log = logging.getLogger("dlna.api.playback")
 
@@ -104,6 +105,32 @@ def index_rebuild(h, params):
     if not srv:
         h._json(404, {"error": "Server not found"})
         return
+
+    # LocalFs-style providers don't speak UPnP ContentDirectory — the
+    # generic Indexer crawls via provider.cd_browse(), which a
+    # LocalFsProvider doesn't have (it crashed the rebuild before this
+    # fix). Dispatch them to their own mutagen rescan instead. Detect by
+    # capability (has rescan, no cd_browse) so any future filesystem-style
+    # provider works without a hard import.
+    provider = get_provider(udn)
+    if provider is not None and hasattr(provider, "rescan") \
+            and not hasattr(provider, "cd_browse"):
+        def _localfs_rebuild():
+            try:
+                INDEXER.state.update(status="running", progress=0, total=0,
+                                     tracks=0, server=srv.name, error="")
+                stats = provider.rescan(force=True)
+                INDEXER.state.update(status="idle",
+                                     tracks=stats.get("scanned", 0), error="")
+                log.info(f"LocalFs rebuild complete for {srv.name}: {stats}")
+            except Exception as e:                   # noqa: BLE001
+                log.exception(f"LocalFs rebuild failed: {e}")
+                INDEXER.state.update(status="error", error=str(e))
+        threading.Thread(target=_localfs_rebuild, daemon=True,
+                         name="localfs-rebuild").start()
+        h._json(200, {"ok": True, "message": "LocalFs rescan started"})
+        return
+
     INDEXER.start(srv, force=True)
     h._json(200, {"ok": True, "message": "Reindex started"})
 

@@ -410,5 +410,67 @@ class TestClientLogHandler(unittest.TestCase):
         self.assertEqual(h.status, 400)
 
 
+class TestIndexRebuildDispatch(unittest.TestCase):
+    """LocalFs-style providers (rescan, no cd_browse) must be rebuilt via
+    provider.rescan(), NOT the UPnP Indexer (which calls cd_browse and
+    crashes on a LocalFsProvider — the 2026-06-03 reindex bug)."""
+
+    class _Srv:
+        udn = "uuid:x"
+        name = "X"
+
+    class _SyncThread:
+        """Runs the target inline so the test can observe the effect."""
+        def __init__(self, target=None, daemon=None, name=None):
+            self._t = target
+
+        def start(self):
+            self._t()
+
+    def _run(self, provider):
+        with patch.object(api_playback, "SERVERS", {"uuid:x": self._Srv()}), \
+             patch.object(api_playback, "get_provider", lambda u: provider), \
+             patch.object(api_playback, "INDEXER", MagicMock()) as idx, \
+             patch.object(api_playback, "threading", MagicMock()) as thr:
+            thr.Thread = self._SyncThread
+            h = MockHandler()
+            api_playback.index_rebuild(h, {"udn": "uuid:x"})
+            return h, idx
+
+    def test_localfs_provider_dispatches_to_rescan(self):
+        calls = {}
+
+        class FakeLocalFs:
+            def rescan(self, force=False):
+                calls["force"] = force
+                return {"scanned": 7}
+
+        h, idx = self._run(FakeLocalFs())
+        self.assertEqual(h.status, 200)
+        self.assertIn("LocalFs", h.body["message"])
+        self.assertEqual(calls.get("force"), True)
+        idx.start.assert_not_called()
+
+    def test_upnp_provider_uses_indexer(self):
+        class FakeUpnp:
+            def cd_browse(self, *a, **k):
+                return {}
+
+        h, idx = self._run(FakeUpnp())
+        self.assertEqual(h.status, 200)
+        idx.start.assert_called_once()
+
+    def test_no_provider_falls_back_to_indexer(self):
+        h, idx = self._run(None)
+        self.assertEqual(h.status, 200)
+        idx.start.assert_called_once()
+
+    def test_unknown_udn_returns_404(self):
+        with patch.object(api_playback, "SERVERS", {}):
+            h = MockHandler()
+            api_playback.index_rebuild(h, {"udn": "nope"})
+        self.assertEqual(h.status, 404)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
