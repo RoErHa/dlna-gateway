@@ -20,6 +20,8 @@ to clients comes from the front (or, later, from Hypercorn's own TLS).
 """
 from fastapi import FastAPI
 
+import dlna_routes
+from dlna_asgi_bridge import make_bridged_route
 from dlna_config import VERSION
 
 app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
@@ -30,8 +32,32 @@ app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
 async def version() -> dict:
     """Release-line marker. Same payload as the legacy stdlib handler
     (api_playback.version) so the PWA version badge behaves identically
-    under the ASGI server."""
+    under the ASGI server. This is the NATIVE pattern the bridged routes
+    below get rewritten into, one batch at a time."""
     return {"version": VERSION}
+
+
+# ── Bridged legacy read routes ────────────────────────────────────────
+# Register the JSON read API through the compatibility shim so the whole
+# read API runs under Hypercorn TODAY, while handlers are migrated to
+# native routes (like /api/version) one batch at a time. Excluded:
+#   • /api/version          — already native
+#   • /stream /art /radio_stream — stream bytes to the socket; not
+#       bridgeable, ported as StreamingResponse later
+#   • /gw/*                 — UPnP device endpoints; stay on the legacy LAN
+#       server (the Naim talks to it directly, never through this proxy)
+# POST routes are bridged in a later step (read-only first).
+_NOT_BRIDGED = {"/api/version", "/stream", "/art", "/radio_stream"}
+
+
+def _bridgeable(path: str) -> bool:
+    return path not in _NOT_BRIDGED and not path.startswith("/gw/")
+
+
+for _path, _handler in dlna_routes.GET_ROUTES.items():
+    if _bridgeable(_path):
+        app.add_api_route(_path, make_bridged_route(_handler, is_post=False),
+                          methods=["GET"], name=f"bridged_get:{_path}")
 
 
 def _run(host: str = "127.0.0.1", port: int = 8768) -> None:
