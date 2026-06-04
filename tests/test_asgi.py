@@ -225,5 +225,64 @@ class TestDecadeSearchNativePorts(unittest.TestCase):
             m.assert_called_once_with("u", "albums", "B", 5, 20)
 
 
+class TestStatusPlaylistFavNativePorts(unittest.TestCase):
+    _PATHS = ("/api/index/status", "/api/track_meta", "/api/playlists",
+              "/api/playlist", "/api/album_favourites",
+              "/api/album_favourites/check", "/api/radio/favourites")
+
+    def test_registered_exactly_once(self):
+        for path in self._PATHS:
+            n = sum(1 for r in dlna_asgi.app.routes
+                    if getattr(r, "path", None) == path)
+            self.assertEqual(n, 1, path)
+
+    def test_index_status_shape(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.DB, "track_count", return_value=42):
+            out = asyncio.run(dlna_asgi.index_status(udn="u"))
+            self.assertEqual(out["db_tracks"], 42)
+            self.assertIn("status", out)            # merged INDEXER.state.get()
+
+    def test_track_meta_errors_and_happy(self):
+        import json
+        from unittest import mock
+        r = asyncio.run(dlna_asgi.track_meta())          # no url
+        self.assertEqual((r.status_code, json.loads(bytes(r.body))),
+                         (400, {"error": "missing url"}))
+        with mock.patch.object(dlna_asgi.DB, "track_meta_by_url",
+                               return_value=None):
+            r = asyncio.run(dlna_asgi.track_meta(url="x"))
+            self.assertEqual(r.status_code, 404)
+        with mock.patch.object(dlna_asgi.DB, "track_meta_by_url",
+                               return_value={"title": "T"}):
+            self.assertEqual(asyncio.run(dlna_asgi.track_meta(url="x")),
+                             {"title": "T"})
+
+    def test_playlist_404(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.DB, "pl_get", return_value=None):
+            r = asyncio.run(dlna_asgi.playlist(id="nope"))
+            self.assertEqual(r.status_code, 404)
+
+    def test_album_fav_check_validation_and_happy(self):
+        from unittest import mock
+        r = asyncio.run(dlna_asgi.album_favourite_check())   # no album/key
+        self.assertEqual(r.status_code, 400)
+        with mock.patch.object(dlna_asgi.DB, "album_fav_is",
+                               return_value=True) as m:
+            self.assertEqual(
+                asyncio.run(dlna_asgi.album_favourite_check(
+                    artist="A", album="B")), {"is_favourite": True})
+            m.assert_called_once_with("A", "B", "")
+
+    def test_radio_favourites_shape(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.DB, "radio_fav_list",
+                               return_value=[{"name": "S"}]):
+            out = asyncio.run(dlna_asgi.radio_favourites())
+            self.assertEqual(out["stations"], [{"name": "S"}])
+            self.assertEqual(out["limit"], dlna_asgi.DB.RADIO_FAV_MAX)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

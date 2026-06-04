@@ -188,13 +188,67 @@ async def browse_letter(udn: str = "", mode: str = "artists",
         DB.browse_letter, udn, mode, letter.upper(), offset, limit)
 
 
+# ── Status / playlists / favourites reads ─────────────────────────────
+
+@app.get("/api/index/status")
+async def index_status(udn: str = ""):
+    count = await run_in_threadpool(DB.track_count, udn) if udn else 0
+    return {**INDEXER.state.get(), "db_tracks": count}
+
+
+@app.get("/api/track_meta")
+async def track_meta(url: str = ""):
+    if not url:
+        return _missing("missing url")          # lowercase — matches legacy
+    meta = await run_in_threadpool(DB.track_meta_by_url, url)
+    if not meta:
+        return JSONResponse({"error": "track not in library"}, status_code=404)
+    return meta
+
+
+@app.get("/api/playlists")
+async def playlists():
+    return await run_in_threadpool(DB.pl_list)
+
+
+@app.get("/api/playlist")
+async def playlist(id: str = ""):
+    pl = await run_in_threadpool(DB.pl_get, id)
+    if pl is None:
+        return JSONResponse({"error": "Playlist not found"}, status_code=404)
+    return pl
+
+
+@app.get("/api/album_favourites")
+async def album_favourites():
+    return await run_in_threadpool(DB.album_fav_list)
+
+
+@app.get("/api/album_favourites/check")
+async def album_favourite_check(artist: str = "", album: str = "",
+                                album_key: str = ""):
+    if not (album or album_key):
+        return _missing("Missing album/album_key")
+    is_fav = await run_in_threadpool(DB.album_fav_is, artist, album, album_key)
+    return {"is_favourite": is_fav}
+
+
+@app.get("/api/radio/favourites")
+async def radio_favourites():
+    stations = await run_in_threadpool(DB.radio_fav_list)
+    return {"stations": stations, "limit": DB.RADIO_FAV_MAX}
+
+
 # Paths served by a native route above — must NOT also be bridged.
 _NATIVE = {"/api/version", "/api/servers", "/api/renderers",
            "/api/artists", "/api/albums", "/api/genres",
            "/api/artist_albums", "/api/artist_tracks",
            "/api/genre_albums", "/api/genre_tracks", "/api/album_tracks",
            "/api/decades", "/api/decade_albums", "/api/decade_tracks",
-           "/api/search", "/api/browse_letter"}
+           "/api/search", "/api/browse_letter",
+           "/api/index/status", "/api/track_meta", "/api/playlists",
+           "/api/playlist", "/api/album_favourites",
+           "/api/album_favourites/check", "/api/radio/favourites"}
 
 
 # ── Bridged legacy read routes ────────────────────────────────────────
