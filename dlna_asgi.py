@@ -29,7 +29,7 @@ import dlna_routes
 from dlna_asgi_bridge import make_bridged_route
 from dlna_config import VERSION
 from dlna_discovery import SERVERS
-from dlna_library import DB
+from dlna_library import DB, INDEXER
 
 app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
               redoc_url=None)
@@ -132,11 +132,69 @@ async def album_tracks(udn: str = "", artist: str = "", album: str = "",
     return {"tracks": tracks}
 
 
+@app.get("/api/decades")
+async def decades(udn: str = ""):
+    if not udn:
+        return _missing("Missing udn")
+    return await run_in_threadpool(DB.all_decades, udn)
+
+
+@app.get("/api/decade_albums")
+async def decade_albums(udn: str = "", decade: str = ""):
+    if not udn or not decade:
+        return _missing("Missing udn or decade")
+    try:
+        d = int(decade)
+    except ValueError:
+        return _missing("decade must be an integer")
+    return await run_in_threadpool(DB.decade_albums, udn, d)
+
+
+@app.get("/api/decade_tracks")
+async def decade_tracks(udn: str = "", decade: str = ""):
+    if not udn or not decade:
+        return _missing("Missing udn or decade")
+    try:
+        d = int(decade)
+    except ValueError:
+        return _missing("decade must be an integer")
+    return {"tracks": await run_in_threadpool(DB.decade_tracks, udn, d)}
+
+
+@app.get("/api/search")
+async def search(udn: str = "", q: str = ""):
+    query = q.strip()
+    if not query:
+        return _missing("Missing q")
+    if not udn:
+        return _missing("Missing udn")
+    # Don't search a half-built index — same guard as the legacy handler.
+    if INDEXER.state.status == "running" and DB.track_count(udn) == 0:
+        return {"tracks": [], "albums": [], "artists": [],
+                "info": "Indexing — please wait"}
+    result = await run_in_threadpool(DB.search, udn, query)
+    SERVERS.touch(udn)
+    return result
+
+
+@app.get("/api/browse_letter")
+async def browse_letter(udn: str = "", mode: str = "artists",
+                        letter: str = "A", offset: int = 0, limit: int = 100):
+    # offset/limit are typed ints (FastAPI 422 on garbage, vs the legacy
+    # int()-raises path) — a strict-but-friendlier improvement.
+    if not udn:
+        return _missing("Missing udn")
+    return await run_in_threadpool(
+        DB.browse_letter, udn, mode, letter.upper(), offset, limit)
+
+
 # Paths served by a native route above — must NOT also be bridged.
 _NATIVE = {"/api/version", "/api/servers", "/api/renderers",
            "/api/artists", "/api/albums", "/api/genres",
            "/api/artist_albums", "/api/artist_tracks",
-           "/api/genre_albums", "/api/genre_tracks", "/api/album_tracks"}
+           "/api/genre_albums", "/api/genre_tracks", "/api/album_tracks",
+           "/api/decades", "/api/decade_albums", "/api/decade_tracks",
+           "/api/search", "/api/browse_letter"}
 
 
 # ── Bridged legacy read routes ────────────────────────────────────────

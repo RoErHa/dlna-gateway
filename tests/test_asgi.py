@@ -156,5 +156,74 @@ class TestBrowseNativePorts(unittest.TestCase):
             mtouch.assert_called_once_with("u")
 
 
+class TestDecadeSearchNativePorts(unittest.TestCase):
+    _PATHS = ("/api/decades", "/api/decade_albums", "/api/decade_tracks",
+              "/api/search", "/api/browse_letter")
+
+    def test_registered_exactly_once(self):
+        for path in self._PATHS:
+            n = sum(1 for r in dlna_asgi.app.routes
+                    if getattr(r, "path", None) == path)
+            self.assertEqual(n, 1, path)
+
+    def test_decade_validation(self):
+        import json
+        # missing decade
+        r = asyncio.run(dlna_asgi.decade_albums(udn="u"))
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(json.loads(bytes(r.body)), {"error": "Missing udn or decade"})
+        # non-integer decade
+        r = asyncio.run(dlna_asgi.decade_albums(udn="u", decade="abc"))
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(json.loads(bytes(r.body)),
+                         {"error": "decade must be an integer"})
+
+    def test_decade_happy_parses_int(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.DB, "decade_albums",
+                               return_value=[{"a": 1}]) as m:
+            self.assertEqual(asyncio.run(
+                dlna_asgi.decade_albums(udn="u", decade="1980")), [{"a": 1}])
+            m.assert_called_once_with("u", 1980)
+
+    def test_search_validation_order(self):
+        import json
+        # no q AND no udn → "Missing q" first (matches legacy order)
+        r = asyncio.run(dlna_asgi.search())
+        self.assertEqual(json.loads(bytes(r.body)), {"error": "Missing q"})
+        r = asyncio.run(dlna_asgi.search(q="x"))
+        self.assertEqual(json.loads(bytes(r.body)), {"error": "Missing udn"})
+
+    def test_search_indexing_guard(self):
+        # IndexState.status is a read-only property — drive it via update().
+        from unittest import mock
+        self.addCleanup(lambda: dlna_asgi.INDEXER.state.update(status="idle"))
+        dlna_asgi.INDEXER.state.update(status="running")
+        with mock.patch.object(dlna_asgi.DB, "track_count", return_value=0):
+            out = asyncio.run(dlna_asgi.search(udn="u", q="love"))
+            self.assertEqual(out.get("info"), "Indexing — please wait")
+            self.assertEqual(out["tracks"], [])
+
+    def test_search_happy_touches(self):
+        from unittest import mock
+        self.addCleanup(lambda: dlna_asgi.INDEXER.state.update(status="idle"))
+        dlna_asgi.INDEXER.state.update(status="idle")
+        with mock.patch.object(dlna_asgi.DB, "search",
+                               return_value={"tracks": [1], "albums": [], "artists": []}) as ms, \
+             mock.patch.object(dlna_asgi.SERVERS, "touch") as mt:
+            out = asyncio.run(dlna_asgi.search(udn="u", q=" love "))
+            ms.assert_called_once_with("u", "love")   # stripped
+            mt.assert_called_once_with("u")
+            self.assertEqual(out["tracks"], [1])
+
+    def test_browse_letter_uppercases_and_delegates(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.DB, "browse_letter",
+                               return_value={"items": []}) as m:
+            asyncio.run(dlna_asgi.browse_letter(udn="u", mode="albums",
+                                                letter="b", offset=5, limit=20))
+            m.assert_called_once_with("u", "albums", "B", 5, 20)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
