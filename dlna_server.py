@@ -11,10 +11,7 @@ Standalone test (starts server on port 8766 for 30 s):
 import json
 import logging
 import os
-import socket
-import ssl
 import struct
-import sys
 import threading
 import time
 import urllib.parse
@@ -40,47 +37,11 @@ log = logging.getLogger("dlna.server")
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-
-class TLSThreadedHTTPServer(ThreadedHTTPServer):
-    """
-    HTTPS variant hardened against accept-loop stalls.
-
-    The default `SSLSocket.accept()` performs the TLS handshake inline on
-    the accepting thread. A single client that opens a TCP connection and
-    never sends a ClientHello (port scanner, sleeping phone, dropped peer)
-    blocks the entire HTTPS server until that handshake completes — which
-    is never. Has been observed to wedge the gateway for days.
-
-    This subclass:
-      • requires the listening socket to be wrapped with
-        `do_handshake_on_connect=False`, so accept() returns immediately
-        with an unhandshaked SSLSocket; the handshake then happens lazily
-        on the per-request worker thread's first read;
-      • sets a per-connection socket timeout, so a stalled handshake or
-        slow client tears down its own thread instead of leaking forever;
-      • downgrades the noisy stderr traceback for routine handshake/timeout
-        errors to a single log.warning line.
-    """
-
-    REQUEST_TIMEOUT = 30.0  # per read/write op, not total connection
-
-    def get_request(self):
-        sock, addr = self.socket.accept()
-        try:
-            sock.settimeout(self.REQUEST_TIMEOUT)
-        except OSError:
-            pass
-        return sock, addr
-
-    def handle_error(self, request, client_address):
-        exc = sys.exc_info()[1]
-        if isinstance(exc, (ssl.SSLError, socket.timeout,
-                            ConnectionResetError, BrokenPipeError, OSError)):
-            log.warning(
-                f"HTTPS: dropped {client_address}: "
-                f"{type(exc).__name__}: {exc}")
-            return
-        super().handle_error(request, client_address)
+# NOTE (2.0): the gateway no longer terminates TLS itself. `tailscale serve`
+# fronts it on the tailnet (443 → http://127.0.0.1:<port>), providing TLS +
+# HTTP/2 + an auto-renewed cert. The old TLSThreadedHTTPServer + HTTPS-redirect
+# machinery were removed here. Device endpoints (/stream, /gw/, LocalFs :8201)
+# stay on plain LAN HTTP, reached directly by the Naim — never via the proxy.
 
 
 # ── PWA icon generator ────────────────────────────────────────────
@@ -218,31 +179,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    # ── HTTPS redirect ────────────────────────────────────────────
-
-    # Paths that must stay on HTTP — UPnP renderers can't do HTTPS
-    _HTTP_ONLY = ("/stream", "/gw/")
-
-    def _redirect_https(self) -> bool:
-        """
-        If HTTPS is running and this request arrived on the plain HTTP server,
-        send a 301 to the HTTPS equivalent — except for device-only endpoints.
-        Returns True if a redirect was sent (caller should return immediately).
-        """
-        tls_port = getattr(self.server, "tls_port", None)
-        if not tls_port:
-            return False   # HTTPS not configured
-        path = urllib.parse.urlparse(self.path).path
-        if any(path.startswith(p) for p in self._HTTP_ONLY):
-            return False   # device endpoint — keep on HTTP
-        host = self.headers.get("Host", "").split(":")[0] or "localhost"
-        self.send_response(301)
-        self.send_header("Location", f"https://{host}:{tls_port}{self.path}")
-        self.send_header("Content-Length", "0")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        return True
-
     # ── OPTIONS (CORS pre-flight) ─────────────────────────────────
 
     def do_OPTIONS(self):
@@ -257,8 +193,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     # Route tables live in dlna_routes — see that module to add endpoints.
 
     def do_GET(self):
-        if self._redirect_https():
-            return
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         params = dict(urllib.parse.parse_qsl(parsed.query))
@@ -358,8 +292,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     # ── POST ──────────────────────────────────────────────────────
 
     def do_POST(self):
-        if self._redirect_https():
-            return
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         length = int(self.headers.get("Content-Length", 0))

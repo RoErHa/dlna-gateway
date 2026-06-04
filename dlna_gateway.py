@@ -17,18 +17,15 @@ Test individual modules:
 """
 import argparse
 import logging
-import os
 import socket
-import ssl
 import subprocess
 import threading
-import time
 
 import dlna_discovery as _disc
 from dlna_config import load_config, save_config, setup_logging
 from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
                           ACOUSTID_FETCHER)
-from dlna_server import (GW_UDN, ThreadedHTTPServer, TLSThreadedHTTPServer,
+from dlna_server import (GW_UDN, ThreadedHTTPServer,
                          GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
 
 log = logging.getLogger("dlna.gateway")
@@ -80,31 +77,6 @@ def _on_server_found(server):
     INDEXER.start(server, force=False)
 
 
-def _warn_if_cert_expiring_soon(cert_path: str, threshold_days: int = 14):
-    # Backup safety net for the weekly renew-cert.sh LaunchAgent. If that
-    # silently dies we still want a loud signal in gateway.log when the cert
-    # gets close to expiry.
-    try:
-        out = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-noout", "-enddate"],
-            capture_output=True, text=True, timeout=5)
-        if out.returncode != 0:
-            log.warning(f"cert expiry check: openssl failed: {out.stderr.strip()}")
-            return
-        end_str = out.stdout.strip().split("=", 1)[1] if "=" in out.stdout else ""
-        end_t = time.strptime(end_str, "%b %d %H:%M:%S %Y %Z")
-        days_left = (time.mktime(end_t) - time.time()) / 86400
-        if days_left < threshold_days:
-            log.warning(
-                f"TLS cert {os.path.basename(cert_path)} expires in "
-                f"{days_left:.1f} days — renew-cert.sh may have failed; "
-                f"run ./renew-cert.sh --force or check cert-renewal.log")
-        else:
-            log.info(f"TLS cert valid for {days_left:.0f} more days")
-    except Exception as e:
-        log.warning(f"cert expiry check failed: {e}")
-
-
 # ── Main ──────────────────────────────────────────────────────────
 
 def main():
@@ -121,12 +93,8 @@ Examples:
         """)
     parser.add_argument("--host",          default="0.0.0.0")
     parser.add_argument("--port",          type=int, default=8765)
-    parser.add_argument("--tls-port",      type=int, default=8443,
-                        help="HTTPS port (only used when --tls-cert is set)")
-    parser.add_argument("--tls-cert",      default="",
-                        help="Path to TLS certificate (.crt) for HTTPS")
-    parser.add_argument("--tls-key",       default="",
-                        help="Path to TLS private key (.key) for HTTPS")
+    # TLS is no longer terminated by the gateway in 2.0 — `tailscale serve`
+    # fronts it (see dlna_server ThreadedHTTPServer note). No --tls-* args.
     parser.add_argument("--probe",         default="",
                         help="Direct device URL — bypasses SSDP, adds permanently to DB")
     parser.add_argument("--no-browser",    action="store_true")
@@ -183,8 +151,7 @@ Examples:
     print(f" │  Web UI   :  {url:<33}                       │")
     print(f" │  LAN IP   :  {lan_ip:<33}                    │")
     print("  ├──────────────────────────────────────────────┤")
-    print("  │  Remote   :  http://<tailscale-ip>:8765/     │")
-    print("  │  HTTPS    :  https://<tailscale-ip>:8443/    │")
+    print("  │  TLS/h2   :  via `tailscale serve` (443)     │")
     print("  │  Module tests:  python dlna_config.py        │")
     print("  │                 python dlna_discovery.py     │")
     print("  │                 python dlna_library.py       │")
@@ -275,66 +242,22 @@ Examples:
             save_config(cfg)
         threading.Thread(target=_probe, daemon=True).start()
 
-    # HTTP server
+    # HTTP server. 2.0: TLS is NOT terminated here — `tailscale serve` fronts
+    # the gateway on the tailnet (443 → http://127.0.0.1:<port>) for TLS + h2 +
+    # an auto-renewed cert. The gateway stays bound to 0.0.0.0 plain HTTP so
+    # LAN devices (the Naim) reach the un-proxied device endpoints (/stream,
+    # /gw/, LocalFs :8201) directly. See docs/BUILDING_2.0_SIDE_BY_SIDE.md.
     server = ThreadedHTTPServer((args.host, args.port), GatewayHandler)
-    server.tls_port = None   # filled in below if HTTPS starts successfully
-
-    # ── HTTPS server (Tailscale certs) ───────────────────────────
-    # Auto-detect cert files in working directory if not specified
-    tls_cert = args.tls_cert
-    tls_key  = args.tls_key
-    if not tls_cert:
-        import glob
-        certs = glob.glob(os.path.join(os.getcwd(), "*.crt"))
-        keys  = glob.glob(os.path.join(os.getcwd(), "*.key"))
-        if len(certs) == 1 and len(keys) == 1:
-            tls_cert = certs[0]
-            tls_key  = keys[0]
-            log.info(f"Auto-detected TLS cert: {os.path.basename(tls_cert)}")
-
-    tls_server = None
-    if tls_cert and tls_key:
-        if os.path.isfile(tls_cert) and os.path.isfile(tls_key):
-            try:
-                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                ctx.load_cert_chain(tls_cert, tls_key)
-                tls_server = TLSThreadedHTTPServer(
-                    (args.host, args.tls_port), GatewayHandler)
-                # do_handshake_on_connect=False is critical: it makes
-                # SSLSocket.accept() return immediately with an unhandshaked
-                # socket so a stalled client cannot block the accept loop.
-                # The handshake happens lazily on first read in the worker
-                # thread, bounded by TLSThreadedHTTPServer.REQUEST_TIMEOUT.
-                tls_server.socket = ctx.wrap_socket(
-                    tls_server.socket,
-                    server_side=True,
-                    do_handshake_on_connect=False,
-                    suppress_ragged_eofs=True,
-                )
-                threading.Thread(
-                    target=tls_server.serve_forever,
-                    daemon=True, name="https").start()
-                server.tls_port = args.tls_port   # tells HTTP handler where to redirect
-                log.info(f"HTTPS ready → https://localhost:{args.tls_port}/")
-                _warn_if_cert_expiring_soon(tls_cert)
-            except Exception as e:
-                log.warning(f"HTTPS failed to start: {e}")
-                tls_server = None
-        else:
-            log.warning(f"TLS cert/key not found: {tls_cert} / {tls_key}")
 
     if not args.no_browser:
         threading.Timer(1.0, open_browser, args=(args.port,)).start()
 
-    tls_note = f"  HTTPS  → https://localhost:{args.tls_port}/" if tls_server else ""
-    log.info(f"Gateway ready → {url}{('  |  ' + tls_note) if tls_note else ''}   (Ctrl-C to stop)")
+    log.info(f"Gateway ready → {url}   (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print()
         log.info("Shutting down…")
-        if tls_server:
-            tls_server.shutdown()
         gw_ssdp_byebye(lan_ip, args.port)
         server.shutdown()
 
