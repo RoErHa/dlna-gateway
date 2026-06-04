@@ -21,7 +21,10 @@ log = logging.getLogger("dlna.api.browse")
 _reprobe_times: dict = {}
 
 
-def servers(h, params):
+def servers_payload():
+    """Build the /api/servers list. Pure data — shared by the legacy
+    handler and the native FastAPI route (dlna_asgi) so there's a single
+    source of truth during the 2.0 migration."""
     now = time.time()
     result = []
     for s in SERVERS.all():
@@ -42,11 +45,20 @@ def servers(h, params):
         d["tracks"] = DB.track_count(s.udn)
         d["albums"] = DB.album_count(s.udn)
         result.append(d)
-    h._json(200, result)
+    return result
+
+
+def servers(h, params):
+    h._json(200, servers_payload())
+
+
+def renderers_payload():
+    """Build the /api/renderers list. Shared by legacy + native route."""
+    return [r.to_dict() for r in RENDERERS.all()]
 
 
 def renderers(h, params):
-    h._json(200, [r.to_dict() for r in RENDERERS.all()])
+    h._json(200, renderers_payload())
 
 
 def browse(h, params):

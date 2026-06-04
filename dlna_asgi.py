@@ -19,7 +19,9 @@ Behind `tailscale serve` the backend is plain HTTP/1.1 on localhost; h2/h3
 to clients comes from the front (or, later, from Hypercorn's own TLS).
 """
 from fastapi import FastAPI
+from starlette.concurrency import run_in_threadpool
 
+import api_browse
 import dlna_routes
 from dlna_asgi_bridge import make_bridged_route
 from dlna_config import VERSION
@@ -28,30 +30,51 @@ app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
               redoc_url=None)
 
 
+# ── Native routes ─────────────────────────────────────────────────────
+# Handlers ported off the legacy (h, params) shape into native FastAPI
+# routes. They call the SAME data functions the legacy handlers now use
+# (api_browse.servers_payload, etc.) — single source of truth, zero
+# divergence — and run the blocking DB/registry work in a threadpool.
+# Each native path is excluded from the bridge below (_NATIVE).
+
 @app.get("/api/version")
 async def version() -> dict:
     """Release-line marker. Same payload as the legacy stdlib handler
-    (api_playback.version) so the PWA version badge behaves identically
-    under the ASGI server. This is the NATIVE pattern the bridged routes
-    below get rewritten into, one batch at a time."""
+    (api_playback.version) so the PWA version badge behaves identically."""
     return {"version": VERSION}
 
 
+@app.get("/api/servers")
+async def servers() -> list:
+    return await run_in_threadpool(api_browse.servers_payload)
+
+
+@app.get("/api/renderers")
+async def renderers() -> list:
+    return await run_in_threadpool(api_browse.renderers_payload)
+
+
+# Paths served by a native route above — must NOT also be bridged.
+_NATIVE = {"/api/version", "/api/servers", "/api/renderers"}
+
+
 # ── Bridged legacy read routes ────────────────────────────────────────
-# Register the JSON read API through the compatibility shim so the whole
-# read API runs under Hypercorn TODAY, while handlers are migrated to
-# native routes (like /api/version) one batch at a time. Excluded:
-#   • /api/version          — already native
+# Register the remaining JSON read API through the compatibility shim so
+# the whole read API runs under Hypercorn TODAY, while handlers are
+# migrated to native routes (the _NATIVE set above) one batch at a time.
+# Excluded from the bridge:
+#   • _NATIVE                — already ported to native FastAPI routes
 #   • /stream /art /radio_stream — stream bytes to the socket; not
 #       bridgeable, ported as StreamingResponse later
 #   • /gw/*                 — UPnP device endpoints; stay on the legacy LAN
 #       server (the Naim talks to it directly, never through this proxy)
 # POST routes are bridged in a later step (read-only first).
-_NOT_BRIDGED = {"/api/version", "/stream", "/art", "/radio_stream"}
+_STREAMING = {"/stream", "/art", "/radio_stream"}
 
 
 def _bridgeable(path: str) -> bool:
-    return path not in _NOT_BRIDGED and not path.startswith("/gw/")
+    return (path not in _NATIVE and path not in _STREAMING
+            and not path.startswith("/gw/"))
 
 
 for _path, _handler in dlna_routes.GET_ROUTES.items():

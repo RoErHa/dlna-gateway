@@ -72,12 +72,15 @@ class TestLegacyBridge(unittest.TestCase):
 
 
 class TestBridgeWiring(unittest.TestCase):
+    def _route_count(self, path):
+        return sum(1 for r in dlna_asgi.app.routes
+                   if getattr(r, "path", None) == path)
+
     def _paths(self):
         return {getattr(r, "path", None) for r in dlna_asgi.app.routes}
 
-    def test_read_routes_bridged(self):
+    def test_still_bridged_routes_present(self):
         p = self._paths()
-        self.assertIn("/api/servers", p)
         self.assertIn("/api/playlists", p)
         self.assertIn("/api/album_tracks", p)
 
@@ -86,6 +89,26 @@ class TestBridgeWiring(unittest.TestCase):
         for excluded in ("/stream", "/art", "/radio_stream",
                          "/gw/device.xml"):
             self.assertNotIn(excluded, p, excluded)
+
+    def test_native_routes_registered_exactly_once(self):
+        # ported natively → present, and NOT also bridged (no duplicate route)
+        for native in ("/api/version", "/api/servers", "/api/renderers"):
+            self.assertEqual(self._route_count(native), 1, native)
+
+
+class TestNativePorts(unittest.TestCase):
+    """Native routes call the SAME payload fns the legacy handlers use, so
+    there's zero divergence between the stdlib and ASGI servers."""
+
+    def test_servers_route_matches_payload(self):
+        import api_browse
+        self.assertEqual(asyncio.run(dlna_asgi.servers()),
+                         api_browse.servers_payload())
+
+    def test_renderers_route_matches_payload(self):
+        import api_browse
+        self.assertEqual(asyncio.run(dlna_asgi.renderers()),
+                         api_browse.renderers_payload())
 
 
 if __name__ == "__main__":
