@@ -18,13 +18,18 @@ Run it (from the 2.0 worktree):
 Behind `tailscale serve` the backend is plain HTTP/1.1 on localhost; h2/h3
 to clients comes from the front (or, later, from Hypercorn's own TLS).
 """
+import functools
+
 from fastapi import FastAPI
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 import api_browse
 import dlna_routes
 from dlna_asgi_bridge import make_bridged_route
 from dlna_config import VERSION
+from dlna_discovery import SERVERS
+from dlna_library import DB
 
 app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
               redoc_url=None)
@@ -54,8 +59,84 @@ async def renderers() -> list:
     return await run_in_threadpool(api_browse.renderers_payload)
 
 
+# ── Browse-navigation reads ───────────────────────────────────────────
+# Trivial `validate params → DB call` handlers ported native: FastAPI does
+# the query-param binding, the shared DB methods are the source of truth,
+# and the blocking query runs in a threadpool. 400 bodies match the legacy
+# handlers exactly (`{"error": "..."}`).
+
+def _missing(msg: str) -> JSONResponse:
+    return JSONResponse({"error": msg}, status_code=400)
+
+
+@app.get("/api/artists")
+async def artists(udn: str = ""):
+    if not udn:
+        return _missing("Missing udn")
+    return await run_in_threadpool(DB.all_artists, udn)
+
+
+@app.get("/api/albums")
+async def albums(udn: str = ""):
+    if not udn:
+        return _missing("Missing udn")
+    return await run_in_threadpool(DB.all_albums, udn)
+
+
+@app.get("/api/genres")
+async def genres(udn: str = ""):
+    if not udn:
+        return _missing("Missing udn")
+    return await run_in_threadpool(DB.all_genres, udn)
+
+
+@app.get("/api/artist_albums")
+async def artist_albums(udn: str = "", artist: str = ""):
+    if not udn or not artist:
+        return _missing("Missing udn or artist")
+    return await run_in_threadpool(DB.artist_albums, udn, artist)
+
+
+@app.get("/api/artist_tracks")
+async def artist_tracks(udn: str = "", artist: str = ""):
+    if not udn or not artist:
+        return _missing("Missing udn or artist")
+    return {"tracks": await run_in_threadpool(DB.artist_tracks, udn, artist)}
+
+
+@app.get("/api/genre_albums")
+async def genre_albums(udn: str = "", genre: str = ""):
+    if not udn or not genre:
+        return _missing("Missing udn or genre")
+    return await run_in_threadpool(DB.genre_albums, udn, genre)
+
+
+@app.get("/api/genre_tracks")
+async def genre_tracks(udn: str = "", genre: str = ""):
+    if not udn or not genre:
+        return _missing("Missing udn or genre")
+    return {"tracks": await run_in_threadpool(DB.genre_tracks, udn, genre)}
+
+
+@app.get("/api/album_tracks")
+async def album_tracks(udn: str = "", artist: str = "", album: str = "",
+                       album_key: str = ""):
+    # LocalFs opens by folder identity (album_key); UPnP/legacy by
+    # (artist, album). Require at least one — same as the legacy handler.
+    if not udn or not (album or album_key):
+        return _missing("Missing udn or album/album_key")
+    tracks = await run_in_threadpool(
+        functools.partial(DB.album_tracks, udn, artist, album,
+                          album_key=album_key))
+    SERVERS.touch(udn)
+    return {"tracks": tracks}
+
+
 # Paths served by a native route above — must NOT also be bridged.
-_NATIVE = {"/api/version", "/api/servers", "/api/renderers"}
+_NATIVE = {"/api/version", "/api/servers", "/api/renderers",
+           "/api/artists", "/api/albums", "/api/genres",
+           "/api/artist_albums", "/api/artist_tracks",
+           "/api/genre_albums", "/api/genre_tracks", "/api/album_tracks"}
 
 
 # ── Bridged legacy read routes ────────────────────────────────────────
