@@ -2,7 +2,7 @@
 """
 dlna_asgi.py — 2.0 ASGI application (FastAPI), served by Hypercorn.
 
-Phase 2 of the 2.0 transport refresh (docs/BUILDING_2.0_SIDE_BY_SIDE.md):
+Phase 2 of the 2.0 transport refresh (docs/BUILDING_2.0.md):
 migrate the stdlib `BaseHTTPRequestHandler` gateway (dlna_server.py +
 dlna_routes.py) onto an async ASGI app served by Hypercorn — HTTP/2-capable,
 async I/O, and a path to WebSocket/SSE (R2). The migration is INCREMENTAL:
@@ -15,8 +15,9 @@ Run it (from the 2.0 worktree):
     # or, programmatically:  python dlna_asgi.py   (boots Hypercorn on :8768)
     # interactive API docs:  http://127.0.0.1:8768/api/docs
 
-Behind `tailscale serve` the backend is plain HTTP/1.1 on localhost; h2/h3
-to clients comes from the front (or, later, from Hypercorn's own TLS).
+TLS is APP-OWNED: once this app is the gateway, Hypercorn terminates TLS +
+HTTP/2/3 with a `tailscale cert`-issued cert. (`tailscale serve` was tried
+and dropped — broken on this tailnet; see docs/BUILDING_2.0.md.)
 """
 import functools
 

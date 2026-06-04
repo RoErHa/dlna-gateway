@@ -37,11 +37,13 @@ log = logging.getLogger("dlna.server")
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-# NOTE (2.0): the gateway no longer terminates TLS itself. `tailscale serve`
-# fronts it on the tailnet (443 → http://127.0.0.1:<port>), providing TLS +
-# HTTP/2 + an auto-renewed cert. The old TLSThreadedHTTPServer + HTTPS-redirect
-# machinery were removed here. Device endpoints (/stream, /gw/, LocalFs :8201)
-# stay on plain LAN HTTP, reached directly by the Naim — never via the proxy.
+# NOTE (2.0): the stdlib gateway no longer terminates TLS itself — it serves
+# plain HTTP. The old TLSThreadedHTTPServer + HTTPS-redirect machinery were
+# removed here. TLS + HTTP/2 become APP-OWNED once the Hypercorn/ASGI app
+# (dlna_asgi.py) is the server: Hypercorn terminates TLS with a `tailscale
+# cert`-issued cert. (`tailscale serve` was tried and dropped — it was broken
+# on this tailnet; see docs/BUILDING_2.0.md.) Device endpoints (/stream, /gw/,
+# LocalFs :8201) stay on plain LAN HTTP, reached directly by the Naim.
 
 
 # ── PWA icon generator ────────────────────────────────────────────

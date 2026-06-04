@@ -93,8 +93,9 @@ Examples:
         """)
     parser.add_argument("--host",          default="0.0.0.0")
     parser.add_argument("--port",          type=int, default=8765)
-    # TLS is no longer terminated by the gateway in 2.0 — `tailscale serve`
-    # fronts it (see dlna_server ThreadedHTTPServer note). No --tls-* args.
+    # The stdlib gateway no longer terminates TLS in 2.0 (no --tls-* args); it
+    # serves plain HTTP. TLS + HTTP/2 become app-owned via Hypercorn once the
+    # ASGI app (dlna_asgi.py) is the server. See dlna_server note + BUILDING_2.0.md.
     parser.add_argument("--probe",         default="",
                         help="Direct device URL — bypasses SSDP, adds permanently to DB")
     parser.add_argument("--no-browser",    action="store_true")
@@ -151,7 +152,7 @@ Examples:
     print(f" │  Web UI   :  {url:<33}                       │")
     print(f" │  LAN IP   :  {lan_ip:<33}                    │")
     print("  ├──────────────────────────────────────────────┤")
-    print("  │  TLS/h2   :  via `tailscale serve` (443)     │")
+    print("  │  TLS/h2   :  app-owned via Hypercorn (P2)    │")
     print("  │  Module tests:  python dlna_config.py        │")
     print("  │                 python dlna_discovery.py     │")
     print("  │                 python dlna_library.py       │")
@@ -246,7 +247,7 @@ Examples:
     # the gateway on the tailnet (443 → http://127.0.0.1:<port>) for TLS + h2 +
     # an auto-renewed cert. The gateway stays bound to 0.0.0.0 plain HTTP so
     # LAN devices (the Naim) reach the un-proxied device endpoints (/stream,
-    # /gw/, LocalFs :8201) directly. See docs/BUILDING_2.0_SIDE_BY_SIDE.md.
+    # /gw/, LocalFs :8201) directly. See docs/BUILDING_2.0.md.
     server = ThreadedHTTPServer((args.host, args.port), GatewayHandler)
 
     if not args.no_browser:

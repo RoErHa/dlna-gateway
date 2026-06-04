@@ -22,7 +22,7 @@ LOG_FILE  = os.path.join(_BASE_DIR, "gateway.log")
 # ── Version ───────────────────────────────────────────────────────
 # Release-line marker. 1.x lives on `main`; this `2.0` branch carries
 # the transport/architecture refresh (see REQUIREMENTS_2.0.md and
-# docs/BUILDING_2.0_SIDE_BY_SIDE.md). Surfaced at /api/version and in the
+# docs/BUILDING_2.0.md). Surfaced at /api/version and in the
 # PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
 # Override with $APP_VERSION for ad-hoc builds.
 VERSION = os.environ.get("APP_VERSION", "2.0.0-alpha.1")

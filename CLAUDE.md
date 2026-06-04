@@ -103,8 +103,10 @@ python dlna_server.py              # HTTP server (30s on :8766)
 
 | File | Responsibility |
 |---|---|
-| `dlna_gateway.py` | Main entry point, wires modules, starts all threads |
-| `dlna_server.py` | Threaded HTTP server; delegates routing to `dlna_routes` |
+| `dlna_gateway.py` | Main entry point, wires modules, starts all threads. **2.0:** serves plain HTTP (its own TLS removed — see the HTTP/2 roadmap note). |
+| `dlna_server.py` | Threaded stdlib HTTP server; delegates routing to `dlna_routes`. **2.0:** being replaced by the Hypercorn/ASGI app (`dlna_asgi.py`); retired at cutover. |
+| `dlna_asgi.py` | **2.0 (Phase 2).** FastAPI ASGI app served by Hypercorn — the migration target. Native routes for most of the read API; legacy handlers run via the bridge. Run: `hypercorn dlna_asgi:app --bind 127.0.0.1:8768`. Will own TLS + h2/h3. |
+| `dlna_asgi_bridge.py` | **2.0 (Phase 2).** Shim that runs the legacy `(h, params)` handlers unchanged inside the ASGI app (fake `h` captures `_json`/`_html`/`_xml_response`/`send_error`; runs in a threadpool). Routes are rewritten native one batch at a time, then dropped from the bridge. |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
 | `dlna_discovery.py` | SSDP listener, probe, subnet scanner, server heartbeat |
 | `dlna_registry.py` | Data classes + `ServerRegistry` / `RendererRegistry` thread-safe stores |
@@ -330,6 +332,18 @@ launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 ```
 
 ### HTTP/2 · HTTP/3 · TLS — current state and the 2.0 roadmap
+
+> **2.0 UPDATE (2026-06-04, on the `2.0` branch).** The roadmap below proposed
+> fronting the gateway with **`tailscale serve`** for h2 + free TLS. That has
+> been **TRIED AND DROPPED** — `tailscale serve` on `:443` is broken on this
+> Mac mini's Tailscale install (a phone with healthy DNS+data-path loads 1.x's
+> self-served HTTPS on `:8443` but not `serve` on `:443`). **The 2.0 plan is
+> now: migrate the stdlib `BaseHTTPRequestHandler` app onto a Hypercorn +
+> FastAPI ASGI app (`dlna_asgi.py` + `dlna_asgi_bridge.py`), and have
+> Hypercorn own TLS + HTTP/2/3 natively with a `tailscale cert`-issued cert**
+> (cert-renewal machinery stays, Hypercorn-owned). On `2.0` the stdlib gateway
+> already dropped its own TLS and serves plain HTTP (Phase 1). Full detail:
+> `docs/BUILDING_2.0.md`. The historical roadmap below is retained for context.
 
 > **TL;DR.** Today the gateway serves **HTTP/1.1 over TLS, with keep-alive
 > (2026-06-02)**. It does **not** speak HTTP/2 or HTTP/3, and *can't*

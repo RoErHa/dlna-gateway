@@ -2,7 +2,7 @@
 """
 dlna_asgi_bridge.py — run legacy `(h, params)` handlers inside the ASGI app.
 
-Phase 2 migration aid (docs/BUILDING_2.0_SIDE_BY_SIDE.md). The 1.x handlers
+Phase 2 migration aid (docs/BUILDING_2.0.md). The 1.x handlers
 (api_browse / api_playback / api_playlists / api_radio) take a
 BaseHTTPRequestHandler-like `h` plus `params` (GET: query dict, POST: body
 string) and respond via `h._json` / `h._html` / `h._xml_response` /
