@@ -19,8 +19,10 @@ TLS is APP-OWNED: once this app is the gateway, Hypercorn terminates TLS +
 HTTP/2/3 with a `tailscale cert`-issued cert. (`tailscale serve` was tried
 and dropped — broken on this tailnet; see docs/BUILDING_2.0.md.)
 """
+import contextlib
 import functools
 import json
+import logging
 import os
 from typing import Optional
 
@@ -41,8 +43,58 @@ from dlna_config import VERSION
 from dlna_discovery import SERVERS
 from dlna_library import DB, INDEXER
 
+log = logging.getLogger("dlna.asgi")
+
+
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Boot the gateway's background services so `hypercorn dlna_asgi:app` runs
+    the gateway standalone: discovery (DB pre-probe / SSDP / subnet-scan /
+    heartbeat), the gateway-as-MediaServer SSDP announcer, the album-art +
+    AcoustID startup scans, and LocalFs wiring — the SAME set
+    dlna_gateway.main() starts, via the SAME function
+    (dlna_gateway.start_background_services). Run exactly ONE of the two
+    entrypoints (stdlib OR Hypercorn), never both — they'd double-announce.
+
+    Env knobs:
+      • GATEWAY_NO_SERVICES=1 — web tier only; skip all background startup
+        (e.g. behind a separate gateway process, or in experiments).
+      • GATEWAY_PORT (default 8766) — the port advertised for the
+        gateway-as-MediaServer SSDP record.
+      • GATEWAY_DEBUG=1 — verbose logging.
+
+    Cutover caveat: under pure Hypercorn the /gw/* UPnP device routes are not
+    yet served (they're bridge-excluded; the Naim talks plain HTTP), so the
+    SSDP advert points at routes that 404 until the device server is wired.
+    Harmless on the dev rig; tracked as the next cutover item."""
+    import dlna_gateway
+    started = False
+    if not _truthy("GATEWAY_NO_SERVICES"):
+        port = int(os.environ.get("GATEWAY_PORT", "8766"))
+        dlna_gateway.setup_logging(debug=_truthy("GATEWAY_DEBUG"))
+        lan_ip = dlna_gateway.get_lan_ip()
+        dlna_gateway.start_background_services(lan_ip, port)
+        started = True
+        log.info("ASGI lifespan: gateway background services started "
+                 f"(MediaServer advert port {port})")
+    try:
+        yield
+    finally:
+        if started:
+            try:
+                dlna_gateway.gw_ssdp_byebye(
+                    dlna_gateway.get_lan_ip(),
+                    int(os.environ.get("GATEWAY_PORT", "8766")))
+            except Exception:                       # noqa: BLE001
+                pass
+
+
 app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
-              redoc_url=None)
+              redoc_url=None, lifespan=_lifespan)
 
 
 # ── Native routes ─────────────────────────────────────────────────────

@@ -14,12 +14,14 @@ import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_asgi
+import dlna_gateway
 import api_subsonic
 from dlna_asgi_bridge import run_legacy_sync, run_subsonic_sync
 from dlna_config import VERSION
@@ -624,6 +626,65 @@ class TestSubsonicAsgi(unittest.TestCase):
                                return_value=""):
             r = self._call("getCoverArt", {"u": "user", "p": "pw", "id": "al:x"})
         self.assertEqual(r.status_code, 404)
+
+
+class TestEntrypointLifespan(unittest.TestCase):
+    """The ASGI lifespan boots the gateway's background services (so
+    `hypercorn dlna_asgi:app` runs standalone) via the same
+    dlna_gateway.start_background_services() the stdlib main() uses."""
+
+    def setUp(self):
+        self._env = {k: os.environ.get(k)
+                     for k in ("GATEWAY_NO_SERVICES", "GATEWAY_PORT",
+                               "GATEWAY_DEBUG")}
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _drive_lifespan(self):
+        async def _run():
+            async with dlna_asgi.app.router.lifespan_context(dlna_asgi.app):
+                pass
+        asyncio.run(_run())
+
+    def test_extracted_function_exists(self):
+        self.assertTrue(callable(dlna_gateway.start_background_services))
+
+    def test_lifespan_registered(self):
+        self.assertIsNotNone(dlna_asgi.app.router.lifespan_context)
+
+    def test_disabled_by_env(self):
+        os.environ["GATEWAY_NO_SERVICES"] = "1"
+        with mock.patch.object(dlna_gateway, "start_background_services") as sbs, \
+             mock.patch.object(dlna_gateway, "gw_ssdp_byebye") as bye:
+            self._drive_lifespan()
+        self.assertEqual(sbs.call_count, 0)
+        self.assertEqual(bye.call_count, 0)   # nothing started → no byebye
+
+    def test_enabled_starts_services_with_env_port(self):
+        os.environ.pop("GATEWAY_NO_SERVICES", None)
+        os.environ["GATEWAY_PORT"] = "8766"
+        with mock.patch.object(dlna_gateway, "start_background_services") as sbs, \
+             mock.patch.object(dlna_gateway, "setup_logging"), \
+             mock.patch.object(dlna_gateway, "get_lan_ip",
+                               return_value="10.0.0.5"), \
+             mock.patch.object(dlna_gateway, "gw_ssdp_byebye") as bye:
+            self._drive_lifespan()
+        sbs.assert_called_once_with("10.0.0.5", 8766)
+        self.assertEqual(bye.call_count, 1)   # graceful byebye on shutdown
+
+    def test_byebye_failure_swallowed(self):
+        os.environ.pop("GATEWAY_NO_SERVICES", None)
+        with mock.patch.object(dlna_gateway, "start_background_services"), \
+             mock.patch.object(dlna_gateway, "setup_logging"), \
+             mock.patch.object(dlna_gateway, "get_lan_ip", return_value="x"), \
+             mock.patch.object(dlna_gateway, "gw_ssdp_byebye",
+                               side_effect=RuntimeError("boom")):
+            self._drive_lifespan()   # must not raise
 
 
 class TestStaticServing(unittest.TestCase):

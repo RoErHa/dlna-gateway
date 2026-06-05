@@ -77,6 +77,96 @@ def _on_server_found(server):
     INDEXER.start(server, force=False)
 
 
+# ── Background services ───────────────────────────────────────────
+
+def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> None:
+    """Start every daemon thread + background worker the gateway needs:
+    discovery (DB pre-probe / SSDP / subnet-scan fallback / heartbeat), the
+    gateway-as-MediaServer SSDP announcer, the album-art + AcoustID startup
+    mop-up scans, and the LocalFs provider wiring. Optionally kick a one-off
+    `probe` URL.
+
+    Extracted from main() so the 2.0 ASGI app starts the SAME services from
+    its Hypercorn lifespan (dlna_asgi._lifespan) — ONE definition of "boot the
+    gateway's background work", shared by the stdlib entrypoint and the ASGI
+    server. Run exactly one of the two (they'd otherwise double-announce on
+    SSDP). `port` is the gateway-as-MediaServer advert port."""
+    # Wire the indexer callback into discovery
+    _disc._on_server_found = _on_server_found
+
+    # Load persistent device role cache BEFORE any discovery thread starts, so
+    # a combined device (Uniti) is classified renderer-only with no race.
+    DEVICE_ROLES.load()
+
+    # Immediately probe all previously-known servers from the DB cache — gets
+    # them online in < 1s, before SSDP / subnet scan run.
+    known_servers = DEVICE_ROLES.known_servers()
+    if known_servers:
+        log.info(f"Pre-probing {len(known_servers)} known server(s) from DB…")
+        for s in known_servers:
+            log.info(f"  → {s['name']!r}  {s['location']}")
+            threading.Thread(
+                target=_disc.probe_url,
+                args=(s["location"], GW_UDN),
+                daemon=True,
+                name=f"probe-{s['udn'][:8]}").start()
+
+    # SSDP discovery — finds MediaServers AND MediaRenderers
+    threading.Thread(
+        target=_disc.ssdp_discovery_thread,
+        args=(lan_ip, GW_UDN),
+        daemon=True, name="ssdp").start()
+
+    # Gateway SSDP announcer — broadcasts ourselves as a MediaServer
+    threading.Thread(
+        target=gw_ssdp_announcer,
+        args=(lan_ip, port),
+        daemon=True, name="gw-ssdp").start()
+
+    # Subnet scanner fallback — only fires if nothing was found via pre-probe
+    # or SSDP (a genuinely fresh install with no DB cache).
+    threading.Thread(
+        target=_disc.subnet_scan_if_empty,
+        args=(lan_ip, GW_UDN),
+        daemon=True, name="subnet-scan").start()
+
+    # Server heartbeat — keeps last_seen fresh, eliminates offline flicker
+    threading.Thread(
+        target=_disc.heartbeat_thread,
+        args=(GW_UDN,),
+        daemon=True, name="heartbeat").start()
+
+    # Album-art fetcher — one-shot startup scan 120s after boot to mop up
+    # anything left bare by a previous interrupted run. Steady-state refills
+    # come from Indexer._run() on each successful crawl; no periodic poll.
+    ART_FETCHER.start_initial_scan()
+    # AcoustID metadata enrichment — same one-shot startup mop-up. Dormant if
+    # ACOUSTID_API_KEY is unset (Option A: beets is the metadata authority).
+    ACOUSTID_FETCHER.start_initial_scan()
+
+    # LocalFs provider — wires in the in-process indexer + file server when
+    # LOCALFS_MUSIC_ROOT is configured. Additive: UPnP discovery keeps running.
+    from dlna_localfs_wiring import maybe_start_localfs
+    maybe_start_localfs(get_lan_ip)
+
+    # CLI --probe or config.json probe (fresh install / manual override). On
+    # subsequent runs the DB cache handles this — but honour an explicit probe.
+    probe_url = probe
+    if not probe_url and not known_servers:
+        cfg = load_config()
+        probe_url = cfg.get("probe", "")
+        if probe_url:
+            log.info(f"No DB cache yet — probing saved URL: {probe_url}")
+
+    if probe_url:
+        def _probe():
+            _disc.probe_url(probe_url, GW_UDN)
+            cfg = load_config()
+            cfg["probe"] = probe_url
+            save_config(cfg)
+        threading.Thread(target=_probe, daemon=True).start()
+
+
 # ── Main ──────────────────────────────────────────────────────────
 
 def main():
@@ -159,95 +249,16 @@ Examples:
     print("  └──────────────────────────────────────────────┘")
     print()
 
-    # Wire the indexer callback into discovery
-    _disc._on_server_found = _on_server_found
+    # Start all background services (discovery, fetchers, LocalFs, probe).
+    # Shared verbatim with the 2.0 ASGI lifespan (dlna_asgi._lifespan).
+    start_background_services(lan_ip, args.port, probe=args.probe)
 
-    # Load persistent device role cache BEFORE any discovery thread starts.
-    # This means the Uniti (or any other combined device seen before) is
-    # classified as renderer-only instantly, with no race condition.
-    DEVICE_ROLES.load()
-
-    # Immediately probe all previously-known servers from the DB cache.
-    # This gets AssetUPnP (and any other servers) online in < 1 second,
-    # before SSDP or subnet scan have a chance to run.
-    known_servers = DEVICE_ROLES.known_servers()
-    if known_servers:
-        log.info(f"Pre-probing {len(known_servers)} known server(s) from DB…")
-        for s in known_servers:
-            log.info(f"  → {s['name']!r}  {s['location']}")
-            threading.Thread(
-                target=_disc.probe_url,
-                args=(s["location"], GW_UDN),
-                daemon=True,
-                name=f"probe-{s['udn'][:8]}").start()
-
-    # SSDP discovery — finds MediaServers AND MediaRenderers
-    threading.Thread(
-        target=_disc.ssdp_discovery_thread,
-        args=(lan_ip, GW_UDN),
-        daemon=True, name="ssdp").start()
-
-    # Gateway SSDP announcer — broadcasts ourselves as a MediaServer
-    threading.Thread(
-        target=gw_ssdp_announcer,
-        args=(lan_ip, args.port),
-        daemon=True, name="gw-ssdp").start()
-
-    # Subnet scanner fallback — only fires if nothing was found via
-    # pre-probe or SSDP (i.e. a genuinely fresh install with no DB cache).
-    threading.Thread(
-        target=_disc.subnet_scan_if_empty,
-        args=(lan_ip, GW_UDN),
-        daemon=True, name="subnet-scan").start()
-
-    # Server heartbeat — keeps last_seen fresh, eliminates offline flicker
-    threading.Thread(
-        target=_disc.heartbeat_thread,
-        args=(GW_UDN,),
-        daemon=True, name="heartbeat").start()
-
-    # Album-art fetcher — one-shot startup scan 120s after boot to mop
-    # up anything left bare by a previous interrupted run. Steady-state
-    # refills come from Indexer._run() triggering on each successful
-    # crawl; there is no periodic poll. Rate-limited to ≤1 MB req/sec.
-    ART_FETCHER.start_initial_scan()
-    # AcoustID metadata enrichment — same one-shot startup mop-up. Dormant
-    # if ACOUSTID_API_KEY is unset. Steady-state work comes from the
-    # Indexer._run() tail trigger; weekly notfound retries are handled by
-    # the com.roha.dlna-acoustid-retry LaunchAgent.
-    ACOUSTID_FETCHER.start_initial_scan()
-
-    # LocalFs provider (Phase 4 of the AssetUPnP migration) — wires
-    # in the in-process indexer + file server when LOCALFS_MUSIC_ROOT
-    # is configured. Additive: AssetUPnP / MinimServer discovery keeps
-    # running; both UDNs coexist in SERVERS and the PWA picks whichever
-    # is being browsed. See CLAUDE.md → "Library backend migration".
-    from dlna_localfs_wiring import maybe_start_localfs
-    maybe_start_localfs(get_lan_ip)
-
-    # CLI --probe or config.json probe (fresh install / manual override).
-    # On subsequent runs the DB cache handles this — but honour explicit CLI.
-    probe_url = args.probe
-    if not probe_url and not known_servers:
-        # Only fall back to config.json probe if DB has no known servers
-        cfg = load_config()
-        probe_url = cfg.get("probe", "")
-        if probe_url:
-            log.info(f"No DB cache yet — probing saved URL: {probe_url}")
-
-    if probe_url:
-        def _probe():
-            _disc.probe_url(probe_url, GW_UDN)
-            cfg = load_config()
-            cfg["probe"] = probe_url
-            save_config(cfg)
-        threading.Thread(target=_probe, daemon=True).start()
-
-    # HTTP server. 2.0: TLS is NOT terminated here — `tailscale serve` fronts
-    # the gateway on the tailnet (443 → http://127.0.0.1:<port>) for TLS + h2 +
-    # an auto-renewed cert. The gateway stays bound to 0.0.0.0 plain HTTP so
-    # LAN devices (the Naim) reach the un-proxied device endpoints (/stream,
-    # /gw/, LocalFs :8201) directly. See docs/BUILDING_2.0.md.
+    # HTTP server (stdlib). 2.0: TLS is NOT terminated here — it becomes
+    # app-owned via Hypercorn once the ASGI app (dlna_asgi.py) is the server;
+    # `hypercorn dlna_asgi:app` boots the same background services through the
+    # ASGI lifespan. This stdlib path serves plain HTTP on 0.0.0.0 so LAN
+    # devices (the Naim) reach the un-proxied device endpoints (/stream, /gw/,
+    # LocalFs :8201) directly. See docs/BUILDING_2.0.md.
     server = ThreadedHTTPServer((args.host, args.port), GatewayHandler)
 
     if not args.no_browser:
