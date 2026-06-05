@@ -20,13 +20,18 @@ HTTP/2/3 with a `tailscale cert`-issued cert. (`tailscale serve` was tried
 and dropped — broken on this tailnet; see docs/BUILDING_2.0.md.)
 """
 import functools
+import json
+import os
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 import api_browse
 import dlna_routes
+import dlna_server
 from dlna_asgi_bridge import make_bridged_route
 from dlna_config import VERSION
 from dlna_discovery import SERVERS
@@ -287,6 +292,76 @@ for _path, _handler in dlna_routes.POST_ROUTES.items():
     if _path not in _NATIVE_POST and not _path.startswith("/gw/"):
         app.add_api_route(_path, make_bridged_route(_handler, is_post=True),
                           methods=["POST"], name=f"bridged_post:{_path}")
+
+
+# ── Static / PWA serving ──────────────────────────────────────────────
+# Replicates the legacy stdlib server's static routes so the PWA loads from
+# the ASGI app: GET / (+ /index.html); /static/* (app.js/app.css); the
+# service worker /sw.js (root scope, no-store); the generated /manifest.json;
+# and the generated /icon-192.png / /icon-512.png. `include_in_schema=False`
+# keeps them out of the OpenAPI docs.
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+_MANIFEST = json.dumps({
+    "name": "DLNA Gateway",
+    "short_name": "DLNA GW",
+    "description": "Personal music gateway — browse, search and play your library",
+    "start_url": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#0e0d0b",
+    "theme_color": "#0e0d0b",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
+         "purpose": "any maskable"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "any maskable"},
+    ],
+    "categories": ["music", "entertainment"],
+}, indent=2)
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def _index():
+    return FileResponse(os.path.join(_STATIC_DIR, "index.html"),
+                        media_type="text/html")
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def _service_worker():
+    # Root scope + no-store so an updated worker is always picked up.
+    return FileResponse(
+        os.path.join(_STATIC_DIR, "sw.js"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate",
+                 "Service-Worker-Allowed": "/"})
+
+
+@app.get("/manifest.json", include_in_schema=False)
+async def _manifest():
+    return Response(content=_MANIFEST, media_type="application/manifest+json")
+
+
+def _icon(size: int) -> Response:
+    return Response(content=dlna_server._make_icon_png(size),
+                    media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/icon-192.png", include_in_schema=False)
+async def _icon_192():
+    return _icon(192)
+
+
+@app.get("/icon-512.png", include_in_schema=False)
+async def _icon_512():
+    return _icon(512)
+
+
+# /static/* — app.js, app.css (+ anything future). StaticFiles handles MIME
+# and path-traversal defence. Mounted last; doesn't shadow the API routes.
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 def _run(host: str = "127.0.0.1", port: int = 8768) -> None:

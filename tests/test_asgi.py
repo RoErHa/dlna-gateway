@@ -319,5 +319,40 @@ class TestPostBridge(unittest.TestCase):
         self.assertEqual((code, json.loads(body)), (200, {"ok": True}))
 
 
+class TestStaticServing(unittest.TestCase):
+    """The PWA static surface served by the ASGI app (so :8768 can load the
+    app shell): /, /sw.js, /manifest.json, the generated icons, /static/*."""
+
+    def _paths(self):
+        return {getattr(r, "path", None) for r in dlna_asgi.app.routes}
+
+    def test_routes_registered(self):
+        p = self._paths()
+        for path in ("/", "/index.html", "/sw.js", "/manifest.json",
+                     "/icon-192.png", "/icon-512.png", "/static"):
+            self.assertIn(path, p, path)
+
+    def test_static_mount_present(self):
+        self.assertTrue(any(getattr(r, "name", None) == "static"
+                            for r in dlna_asgi.app.routes))
+
+    def test_manifest_shape(self):
+        r = asyncio.run(dlna_asgi._manifest())
+        self.assertEqual(r.media_type, "application/manifest+json")
+        m = json.loads(bytes(r.body))
+        self.assertEqual(m["start_url"], "/")
+        self.assertEqual(len(m["icons"]), 2)
+
+    def test_icon_is_png(self):
+        r = dlna_asgi._icon(192)
+        self.assertEqual(r.media_type, "image/png")
+        self.assertEqual(bytes(r.body)[:4], b"\x89PNG")
+
+    def test_sw_root_scope_header(self):
+        r = asyncio.run(dlna_asgi._service_worker())
+        self.assertEqual(r.headers.get("Service-Worker-Allowed"), "/")
+        self.assertIn("no-store", r.headers.get("Cache-Control", ""))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
