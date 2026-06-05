@@ -73,6 +73,7 @@ class StubGateway:
         self.radio_search_results: list[dict] = []
         self.radio_fav_full: bool = False      # force /add to 409
         self.icy_title: str = ""               # /api/radio/nowplaying
+        self.sse_events: list[dict] = []       # frames /api/events emits on connect
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -198,6 +199,21 @@ class _Handler(BaseHTTPRequestHandler):
         path = u.path
         self._capture()
         gw = self.gateway
+
+        # SSE (R2): serve a minimal text/event-stream. A long `retry` keeps
+        # EventSource from reconnect-churning during a test; any frames in
+        # gw.sse_events are emitted once on connect, then we close.
+        if path == "/api/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self._safe_write(b"retry: 86400000\n\n")
+            for ev in list(gw.sse_events or []):
+                frame = (f"event: {ev.get('type','message')}\n"
+                         f"data: {json.dumps(ev)}\n\n")
+                self._safe_write(frame.encode("utf-8"))
+            return
 
         # Static files
         if path in ("/", "/index.html"):

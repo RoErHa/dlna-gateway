@@ -23,6 +23,7 @@ import threading
 
 import dlna_discovery as _disc
 from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
+from dlna_events import EVENTS
 from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
                           ACOUSTID_FETCHER)
 from dlna_server import (GW_UDN, ThreadedHTTPServer,
@@ -70,6 +71,7 @@ def _on_server_found(server):
     Skip indexing for combined devices (e.g. Naim Uniti) that appear as
     both a MediaServer and a MediaRenderer — they have no music library."""
     from dlna_discovery import RENDERERS
+    EVENTS.publish({"type": "devices"})     # SSE: source list changed (R2)
     if RENDERERS.get(server.udn):
         log.info(f"Skipping indexer for {server.name!r} "
                  f"— registered as renderer (combined device)")

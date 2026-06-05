@@ -1913,12 +1913,32 @@ async function reindex(){
 // ── Polling — paused when tab hidden to save iOS battery ─────────
 let _t_servers, _t_renderers, _t_state, _t_index;
 
+// ── SSE (R2) — instant pushes on top of the polls ───────────────
+// The 2.0 ASGI gateway pushes server-sent events on state/index/device
+// changes (dlna_events). We treat them as an ACCELERATOR: an event just
+// fires the same refresh the interval would, so updates feel instant.
+// Polling stays as the fallback — if SSE never connects (stdlib server,
+// older browser), nothing is lost. EventSource auto-reconnects on drop.
+let _es=null;
+function initEventSource(){
+  if(_es) return;                                   // open once
+  if(typeof EventSource==="undefined") return;      // unsupported → polling
+  try{
+    _es=new EventSource("/api/events");
+    _es.addEventListener("state",   ()=>pollState());
+    _es.addEventListener("index",   ()=>pollIndex());
+    _es.addEventListener("devices", ()=>{refreshServers();refreshRenderers();});
+    _es.onerror=()=>{};   // transient drop — EventSource retries on its own
+  }catch(e){ /* SSE is optional; polling carries on */ }
+}
+
 function startPolling(){
   stopPolling();
   _t_servers   = setInterval(refreshServers,   8000);
   _t_renderers = setInterval(refreshRenderers, 10000);
   _t_state     = setInterval(pollState,        1000);
   _t_index     = setInterval(pollIndex,        2000);
+  initEventSource();
 }
 function stopPolling(){
   clearInterval(_t_servers);

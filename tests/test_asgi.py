@@ -823,6 +823,36 @@ class TestSSE(unittest.TestCase):
             os.environ.pop("GATEWAY_NO_SERVICES", None)
 
 
+class TestSSEPublishers(unittest.TestCase):
+    """R2 slice 2: backend publishers (index status, device discovery). The
+    RendererQueue 'state' publisher is covered in test_player."""
+
+    def test_index_state_publishes_only_on_status_change(self):
+        from dlna_indexer import IndexState
+        with mock.patch.object(dlna_events.EVENTS, "publish") as pub:
+            st = IndexState()
+            st.update(progress=1)                  # idle→idle: no publish
+            st.update(status="running")            # idle→running: publish
+            st.update(progress=2, total=9)         # running→running: no publish
+            st.update(status="done", tracks=9)     # running→done: publish
+        statuses = [c.args[0]["status"] for c in pub.call_args_list]
+        self.assertEqual(statuses, ["running", "done"])
+        self.assertTrue(all(c.args[0]["type"] == "index"
+                            for c in pub.call_args_list))
+
+    def test_on_server_found_publishes_devices(self):
+        import dlna_gateway
+        fake = types.SimpleNamespace(udn="uuid:x", name="X")
+        with mock.patch.object(dlna_events.EVENTS, "publish") as pub, \
+             mock.patch("dlna_discovery.RENDERERS") as R, \
+             mock.patch.object(dlna_gateway.INDEXER, "start") as start:
+            R.get.return_value = True              # combined device → early return
+            dlna_gateway._on_server_found(fake)
+        self.assertTrue(any(c.args and c.args[0].get("type") == "devices"
+                            for c in pub.call_args_list))
+        start.assert_not_called()
+
+
 class TestFdLimit(unittest.TestCase):
     """raise_fd_limit() lifts the open-file soft limit so the gateway doesn't
     hit macOS's 256 default → EMFILE → sqlite 'unable to open database file'."""

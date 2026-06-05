@@ -18,6 +18,8 @@ import sqlite3
 import threading
 from typing import Optional
 
+from dlna_events import EVENTS
+
 log = logging.getLogger("dlna.library")
 
 
@@ -35,7 +37,19 @@ class IndexState:
 
     def update(self, **kwargs):
         with self._lock:
+            prev = self._d["status"]
             self._d.update(kwargs)
+            changed = self._d["status"] != prev
+            snap = dict(self._d) if changed else None
+        # SSE (R2): push only on a status TRANSITION (idle→running→done/error)
+        # — never on per-album progress, so subscribers aren't flooded. The
+        # PWA reacts by re-fetching /api/index/status. No-op until the ASGI
+        # event loop is bound (e.g. under the stdlib server / tests).
+        if snap is not None:
+            EVENTS.publish({"type": "index", "status": snap["status"],
+                            "server": snap.get("server", ""),
+                            "progress": snap.get("progress", 0),
+                            "total": snap.get("total", 0)})
 
     def get(self) -> dict:
         with self._lock:
