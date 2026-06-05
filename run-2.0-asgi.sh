@@ -67,20 +67,25 @@ case "${GATEWAY_TLS:-}" in
   1|true|yes)
     CERTFILE="${GATEWAY_CERTFILE:-}"
     KEYFILE="${GATEWAY_KEYFILE:-}"
+    # Auto-discover a cert (+ matching .key): this worktree first, then the
+    # sibling 1.x checkout (which owns the tailscale cert + its auto-renewal —
+    # 2.x reuses it, picking up renewals on restart). Override with
+    # GATEWAY_CERTFILE/GATEWAY_KEYFILE.
     if [ -z "${CERTFILE}" ]; then
-      for c in *.crt; do
-        [ -e "$c" ] || continue
-        k="${c%.crt}.key"
-        [ -f "$k" ] && { CERTFILE="$c"; KEYFILE="$k"; break; }
+      for d in . ../dlna-gateway; do
+        for c in "$d"/*.crt; do
+          [ -e "$c" ] || continue
+          k="${c%.crt}.key"
+          [ -f "$k" ] && { CERTFILE="$c"; KEYFILE="$k"; break 2; }
+        done
       done
     fi
     if [ ! -f "${CERTFILE:-/nonexistent}" ] || [ ! -f "${KEYFILE:-/nonexistent}" ]; then
-      echo "✗  GATEWAY_TLS=1 but no cert/key found." >&2
-      echo "   Seed one in this worktree:" >&2
-      echo "       tailscale cert \"\$TAILSCALE_CERT_HOST\"   # writes <host>.crt/.key here" >&2
-      echo "   …or point at the existing 1.x cert:" >&2
-      echo "       GATEWAY_CERTFILE=../dlna-gateway/<host>.crt \\" >&2
-      echo "       GATEWAY_KEYFILE=../dlna-gateway/<host>.key  GATEWAY_TLS=1 ./run-2.0-asgi.sh" >&2
+      echo "✗  GATEWAY_TLS=1 but no cert/key found (looked in . and ../dlna-gateway)." >&2
+      echo "   Seed one:  tailscale cert \"\$TAILSCALE_CERT_HOST\"   # writes <host>.crt/.key" >&2
+      echo "   …or point explicitly:" >&2
+      echo "       GATEWAY_CERTFILE=/path/<host>.crt GATEWAY_KEYFILE=/path/<host>.key \\" >&2
+      echo "       GATEWAY_TLS=1 ./run-2.0-asgi.sh" >&2
       exit 1
     fi
     HYP_ARGS+=(--certfile "${CERTFILE}" --keyfile "${KEYFILE}")
