@@ -23,16 +23,17 @@ import functools
 import json
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 import api_browse
 import api_playback
 import dlna_routes
 import dlna_server
+import dlna_stream_proxy
 from dlna_asgi_bridge import make_bridged_route
 from dlna_config import VERSION
 from dlna_discovery import SERVERS
@@ -260,6 +261,47 @@ async def art(url: str = ""):
     return Response(content=body, media_type=ctype,
                     headers={"Cache-Control": "public, max-age=86400",
                              "Access-Control-Allow-Origin": "*"})
+
+
+@app.get("/stream", include_in_schema=False)
+async def stream(request: Request, url: str = ""):
+    """Browser-audio Range relay. Forwards the client's Range to the upstream
+    and streams the (200 or 206) response back same-origin. Each blocking
+    upstream read runs in a threadpool; the generator closes the upstream on
+    client disconnect (Hypercorn closes it)."""
+    if not url:
+        return JSONResponse({"error": "Missing url"}, status_code=400)
+    range_hdr = request.headers.get("range", "")
+    conn, resp = await run_in_threadpool(
+        dlna_stream_proxy.open_stream_upstream, url, range_hdr)
+    if resp is None:
+        return JSONResponse({"error": "upstream unreachable"}, status_code=502)
+
+    out = {"Access-Control-Allow-Origin": "*"}
+    for hname in ("Content-Range", "Accept-Ranges", "Content-Length",
+                  "Last-Modified", "ETag"):
+        v = resp.getheader(hname)
+        if v:
+            out[hname] = v
+    ctype = dlna_stream_proxy.normalize_audio_ctype(
+        resp.getheader("Content-Type") or "")
+    status = resp.status
+
+    async def _relay():
+        try:
+            while True:
+                chunk = await run_in_threadpool(resp.read, 65_536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(_relay(), status_code=status,
+                             media_type=ctype, headers=out)
 
 
 # Paths served by a native route above — must NOT also be bridged.

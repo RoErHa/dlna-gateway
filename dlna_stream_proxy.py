@@ -44,6 +44,49 @@ _MIME_MAP = {
 }
 
 
+def normalize_audio_ctype(ctype: str) -> str:
+    """Map Safari-rejected MIME types (audio/x-flac → audio/flac, …). Pure."""
+    if not ctype:
+        return "application/octet-stream"
+    base = ctype.split(";")[0].strip().lower()
+    return _MIME_MAP.get(base, base)
+
+
+def open_stream_upstream(upstream_url: str, range_hdr: str = ""):
+    """Open an upstream GET for the /stream relay, forwarding the browser's
+    Range header, and return `(conn, resp)`. The caller streams `resp` in
+    chunks and closes `conn`. Returns `(None, None)` on connection error.
+
+    Used by the 2.0 ASGI route (dlna_asgi.stream) as a StreamingResponse
+    source; the legacy `proxy_stream` keeps its own inline open (it's the
+    chaos-tested selectors relay — left untouched)."""
+    parsed  = urllib.parse.urlparse(upstream_url)
+    host    = parsed.netloc
+    path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    use_ssl = parsed.scheme == "https"
+    conn = None
+    try:
+        if use_ssl:
+            conn = http.client.HTTPSConnection(
+                host, timeout=20, context=ssl._create_unverified_context())
+        else:
+            conn = http.client.HTTPConnection(host, timeout=20)
+        req_headers = {"User-Agent": "DLNAGateway/1.0", "Connection": "close"}
+        if range_hdr:
+            req_headers["Range"] = range_hdr
+        conn.request("GET", path, headers=req_headers)
+        return conn, conn.getresponse()
+    except Exception as e:                           # noqa: BLE001
+        log.warning(f"open_stream_upstream {host}{path}: "
+                    f"{type(e).__name__}: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return None, None
+
+
 def proxy_stream(upstream_url: str, handler):
     """
     HTTP Range-aware proxy: relay upstream bytes to the browser.

@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import sys
+import types
 import unittest
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,10 +86,10 @@ class TestBridgeWiring(unittest.TestCase):
         self.assertIn("/api/album_tracks", p)
 
     def test_unported_streams_and_device_routes_absent(self):
-        # /art is now a native route (TestArtProxy); /stream + /radio_stream
-        # are still unported, and /gw/* stays on the legacy LAN server.
+        # /art + /stream are native now; /radio_stream is still unported and
+        # /gw/* stays on the legacy LAN server.
         p = self._paths()
-        for excluded in ("/stream", "/radio_stream", "/gw/device.xml"):
+        for excluded in ("/radio_stream", "/gw/device.xml"):
             self.assertNotIn(excluded, p, excluded)
 
     def test_native_routes_registered_exactly_once(self):
@@ -346,6 +347,87 @@ class TestArtProxy(unittest.TestCase):
             self.assertEqual((r.status_code, r.media_type), (200, "image/png"))
             self.assertEqual(bytes(r.body), b"PNGDATA")
             self.assertEqual(r.headers.get("Access-Control-Allow-Origin"), "*")
+
+
+class _FakeResp:
+    def __init__(self, status, headers, chunks):
+        self.status = status
+        self._h = headers
+        self._chunks = list(chunks)
+
+    def getheader(self, name):
+        for k, v in self._h.items():
+            if k.lower() == name.lower():
+                return v
+        return None
+
+    def read(self, n=-1):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+class _FakeConn:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class TestStreamProxy(unittest.TestCase):
+    """The /stream Range relay ported native as a StreamingResponse."""
+
+    def test_registered_once(self):
+        n = sum(1 for r in dlna_asgi.app.routes
+                if getattr(r, "path", None) == "/stream")
+        self.assertEqual(n, 1)
+
+    def test_normalize_ctype(self):
+        import dlna_stream_proxy as p
+        self.assertEqual(p.normalize_audio_ctype("audio/x-flac"), "audio/flac")
+        self.assertEqual(p.normalize_audio_ctype("audio/x-m4a"), "audio/mp4")
+        self.assertEqual(p.normalize_audio_ctype("audio/mpeg"), "audio/mpeg")
+        self.assertEqual(p.normalize_audio_ctype(""), "application/octet-stream")
+
+    def test_missing_url_400(self):
+        req = types.SimpleNamespace(headers={})
+        r = asyncio.run(dlna_asgi.stream(req, url=""))
+        self.assertEqual(r.status_code, 400)
+
+    def test_upstream_unreachable_502(self):
+        from unittest import mock
+        req = types.SimpleNamespace(headers={"range": ""})
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(None, None)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+        self.assertEqual(r.status_code, 502)
+
+    def test_relays_206_headers_body_and_closes_conn(self):
+        from unittest import mock
+        conn = _FakeConn()
+        resp = _FakeResp(206, {"Content-Type": "audio/x-flac",
+                               "Content-Range": "bytes 0-9/100",
+                               "Content-Length": "10",
+                               "Accept-Ranges": "bytes"}, [b"0123456789"])
+        req = types.SimpleNamespace(headers={"range": "bytes=0-9"})
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+        self.assertEqual(r.status_code, 206)
+        self.assertEqual(r.media_type, "audio/flac")            # normalized
+        self.assertEqual(r.headers.get("content-range"), "bytes 0-9/100")
+        self.assertEqual(r.headers.get("accept-ranges"), "bytes")
+
+        body = b""
+
+        async def _consume():
+            nonlocal body
+            async for c in r.body_iterator:
+                body += c
+        asyncio.run(_consume())
+        self.assertEqual(body, b"0123456789")
+        self.assertTrue(conn.closed)            # generator closed the upstream
 
 
 class TestStaticServing(unittest.TestCase):
