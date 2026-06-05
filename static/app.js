@@ -1886,20 +1886,6 @@ async function pollIndex(){
     pb.style.background="var(--amber)";pb.style.width=pct+"%";
     return;
   }
-  // Otherwise, surface the AcoustID enrichment worker.
-  const ar=await api("/api/acoustid/status");
-  const a=ar?await ar.json():null;
-  // The 🔎 Enrich button only makes sense when AcoustID is configured.
-  const eb=$("btn-enrich"); if(eb) eb.style.display=(a&&a.enabled)?"":"none";
-  if(a && a.in_progress){
-    bar.style.display="";
-    const tot=(a.processed||0)+(a.remaining||0);
-    const pct=tot>0?Math.round((a.processed/tot)*100):0;
-    const match=a.last_match?` · ${a.last_match}`:"";
-    lbl.textContent=`🔎 Enriching metadata… ${a.processed} done · ${a.remaining} left${match}`;
-    pb.style.background="var(--amber)";pb.style.width=pct+"%";
-    return;
-  }
   if(s.status==="error"){
     bar.style.display="";
     lbl.textContent=`Index error: ${s.error}`;
@@ -1908,8 +1894,7 @@ async function pollIndex(){
   }
   // Done, OR idle but a library exists (the LocalFs case: the UPnP-only
   // INDEXER never runs, so status stays 'idle' even though db_tracks>0).
-  // Show the library line so the index bar — and its 🔎 Enrich button —
-  // is reachable.
+  // Show the library line.
   if(s.status==="done" || (s.db_tracks||0)>0){
     bar.style.display="";
     lbl.textContent=`Library: ${(s.db_tracks||0).toLocaleString()} tracks indexed ✓`;
@@ -1917,13 +1902,6 @@ async function pollIndex(){
   }
 }
 
-async function acoustidEnrich(){
-  const r=await api("/api/acoustid/enrich",{method:"POST"});
-  if(!r){toast("Couldn't reach the gateway");return;}
-  if(r.status===503){toast("AcoustID not configured (set ACOUSTID_API_KEY)");return;}
-  toast("🔎 Enriching metadata — progress shows in the index bar",3000);
-  pollIndex();   // refresh the bar promptly
-}
 
 async function reindex(){
   if(!curServer)return;

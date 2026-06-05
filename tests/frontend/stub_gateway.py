@@ -66,11 +66,6 @@ class StubGateway:
         # index status
         self.index_status: dict = {"status": "idle", "progress": 0, "total": 0,
                                    "tracks": 0, "db_tracks": 0}
-        # AcoustID metadata-enrichment worker status (/api/acoustid/status)
-        self.acoustid_status: dict = {
-            "enabled": False, "fpcalc": True, "in_progress": False,
-            "processed": 0, "remaining": 0, "threshold": 0.85,
-            "last_match": "", "last_url": ""}
         # /api/render_queue can be told to reject with 409 once
         self.render_queue_busy: dict | None = None
         # internet radio ("📡 Stations") — Phase 2 frontend
@@ -433,9 +428,6 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/index/status":
             self._send_json(gw.index_status)
             return
-        if path == "/api/acoustid/status":
-            self._send_json(gw.acoustid_status)
-            return
         if path == "/api/index/rebuild":
             gw.index_status = {"status": "running", "progress": 0, "total": 100,
                                "tracks": 0, "db_tracks": 0}
@@ -512,12 +504,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/control":
             self._send_json({"ok": True})
-            return
-        if path == "/api/acoustid/enrich":
-            if gw.acoustid_status.get("enabled"):
-                self._send_json({"ok": True})
-            else:
-                self._send_json({"error": "acoustid_disabled"}, status=503)
             return
         if path == "/api/edit_track":
             self._send_json({"ok": True})
