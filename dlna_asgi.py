@@ -262,7 +262,6 @@ _NATIVE = {"/api/version", "/api/servers", "/api/renderers",
 #       bridgeable, ported as StreamingResponse later
 #   • /gw/*                 — UPnP device endpoints; stay on the legacy LAN
 #       server (the Naim talks to it directly, never through this proxy)
-# POST routes are bridged in a later step (read-only first).
 _STREAMING = {"/stream", "/art", "/radio_stream"}
 
 
@@ -275,6 +274,19 @@ for _path, _handler in dlna_routes.GET_ROUTES.items():
     if _bridgeable(_path):
         app.add_api_route(_path, make_bridged_route(_handler, is_post=False),
                           methods=["GET"], name=f"bridged_get:{_path}")
+
+
+# ── Bridged legacy POST routes ────────────────────────────────────────
+# The whole write API now runs under Hypercorn via the same shim (the legacy
+# handler gets the raw request body as its second arg). Excluded: native POST
+# ports (none yet) and `/gw/*` device endpoints (legacy LAN server only). The
+# simple ones get rewritten native in a later batch.
+_NATIVE_POST: set = set()
+
+for _path, _handler in dlna_routes.POST_ROUTES.items():
+    if _path not in _NATIVE_POST and not _path.startswith("/gw/"):
+        app.add_api_route(_path, make_bridged_route(_handler, is_post=True),
+                          methods=["POST"], name=f"bridged_post:{_path}")
 
 
 def _run(host: str = "127.0.0.1", port: int = 8768) -> None:

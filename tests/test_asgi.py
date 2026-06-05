@@ -284,5 +284,40 @@ class TestStatusPlaylistFavNativePorts(unittest.TestCase):
             self.assertEqual(out["limit"], dlna_asgi.DB.RADIO_FAV_MAX)
 
 
+class TestPostBridge(unittest.TestCase):
+    """The write API runs under Hypercorn via the bridge (POST handlers get
+    the raw body). Device /gw/* POSTs stay on the legacy LAN server."""
+
+    def _post_paths(self):
+        out = set()
+        for r in dlna_asgi.app.routes:
+            if "POST" in (getattr(r, "methods", None) or set()):
+                out.add(getattr(r, "path", None))
+        return out
+
+    def test_post_routes_bridged(self):
+        p = self._post_paths()
+        for path in ("/api/render_queue", "/api/render", "/api/control",
+                     "/api/edit_track", "/api/client_log",
+                     "/api/radio/favourites/add",
+                     "/api/radio/favourites/remove",
+                     "/api/radio/favourites/reorder"):
+            self.assertIn(path, p, path)
+
+    def test_device_post_not_bridged(self):
+        self.assertNotIn("/gw/cd/control", self._post_paths())
+
+    def test_bridge_runs_post_handler_with_body(self):
+        # The shim passes the raw POST body to the legacy (h, body) handler.
+        seen = {}
+
+        def fake_post(h, body):
+            seen["body"] = body
+            h._json(200, {"ok": True})
+        code, body, _ = run_legacy_sync(fake_post, '{"x":1}', command="POST")
+        self.assertEqual(seen["body"], '{"x":1}')
+        self.assertEqual((code, json.loads(body)), (200, {"ok": True}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
