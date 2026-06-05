@@ -85,12 +85,13 @@ class TestBridgeWiring(unittest.TestCase):
         self.assertIn("/api/playlists", p)
         self.assertIn("/api/album_tracks", p)
 
-    def test_unported_streams_and_device_routes_absent(self):
-        # /art + /stream are native now; /radio_stream is still unported and
-        # /gw/* stays on the legacy LAN server.
+    def test_streams_native_and_device_routes_absent(self):
+        # /art + /stream + /radio_stream are all native byte relays now;
+        # only the /gw/* UPnP device routes stay on the legacy LAN server.
         p = self._paths()
-        for excluded in ("/radio_stream", "/gw/device.xml"):
-            self.assertNotIn(excluded, p, excluded)
+        for native in ("/art", "/stream", "/radio_stream"):
+            self.assertIn(native, p, native)
+        self.assertNotIn("/gw/device.xml", p)
 
     def test_native_routes_registered_exactly_once(self):
         # ported natively → present, and NOT also bridged (no duplicate route)
@@ -428,6 +429,86 @@ class TestStreamProxy(unittest.TestCase):
         asyncio.run(_consume())
         self.assertEqual(body, b"0123456789")
         self.assertTrue(conn.closed)            # generator closed the upstream
+
+
+class TestRadioStreamProxy(unittest.TestCase):
+    """The /radio_stream ICY relay ported native as a StreamingResponse."""
+
+    def test_registered_once(self):
+        n = sum(1 for r in dlna_asgi.app.routes
+                if getattr(r, "path", None) == "/radio_stream")
+        self.assertEqual(n, 1)
+
+    def test_in_streaming_set_not_bridged(self):
+        self.assertIn("/radio_stream", dlna_asgi._STREAMING)
+        self.assertFalse(dlna_asgi._bridgeable("/radio_stream"))
+
+    def test_missing_url_400(self):
+        req = types.SimpleNamespace(headers={})
+        r = asyncio.run(dlna_asgi.radio_stream(req, url=""))
+        self.assertEqual(r.status_code, 400)
+
+    def test_upstream_unreachable_502(self):
+        from unittest import mock
+        req = types.SimpleNamespace(headers={})
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_radio_upstream",
+                               return_value=(None, None, 0, "")):
+            r = asyncio.run(dlna_asgi.radio_stream(req, url="http://x/s"))
+        self.assertEqual(r.status_code, 502)
+
+    def test_plain_relay_no_metaint(self):
+        from unittest import mock
+        conn = _FakeConn()
+        resp = _FakeResp(200, {"Content-Type": "audio/mpeg"},
+                         [b"aaa", b"bbb"])
+        req = types.SimpleNamespace(headers={})
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_radio_upstream",
+                               return_value=(conn, resp, 0, "audio/mpeg")):
+            r = asyncio.run(dlna_asgi.radio_stream(req, url="http://x/s"))
+        self.assertEqual(r.media_type, "audio/mpeg")
+
+        body = b""
+
+        async def _consume():
+            nonlocal body
+            async for c in r.body_iterator:
+                body += c
+        asyncio.run(_consume())
+        self.assertEqual(body, b"aaabbb")
+        self.assertTrue(conn.closed)
+
+    def test_deinterleaves_and_parks_title(self):
+        """metaint=4: [4 audio][len byte][meta] repeating. Audio is relayed
+        clean; StreamTitle is parked via _icy_set for nowplaying."""
+        import dlna_stream_proxy as p
+        from unittest import mock
+        meta = b"StreamTitle='Foo - Bar';"
+        # pad meta to a 16-byte multiple, length byte = blocks
+        pad = (-len(meta)) % 16
+        block = meta + b"\x00" * pad
+        lenbyte = bytes([len(block) // 16])
+        stream = [b"AAAA", lenbyte, block, b"BBBB", b"\x00", b""]
+        conn = _FakeConn()
+        resp = _FakeResp(200, {"Content-Type": "audio/aac"}, stream)
+        url = "http://x/icy"
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_radio_upstream",
+                               return_value=(conn, resp, 4, "audio/aac")):
+            req = types.SimpleNamespace(headers={})
+            r = asyncio.run(dlna_asgi.radio_stream(req, url=url))
+
+        body = b""
+
+        async def _consume():
+            nonlocal body
+            async for c in r.body_iterator:
+                body += c
+        asyncio.run(_consume())
+        self.assertEqual(body, b"AAAABBBB")        # metadata stripped
+        self.assertEqual((p.icy_now(url) or {}).get("title"), "Foo - Bar")
+        self.assertTrue(conn.closed)
 
 
 class TestStaticServing(unittest.TestCase):

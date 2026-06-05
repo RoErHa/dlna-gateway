@@ -250,8 +250,8 @@ async def radio_favourites():
 # ── Binary proxies ────────────────────────────────────────────────────
 # /art is a one-shot image proxy (lock-screen artwork must be same-origin).
 # It shares api_playback.art_fetch with the legacy handler; the blocking
-# fetch runs in a threadpool. (/stream + /radio_stream — the Range/ICY byte
-# relays — are ported as StreamingResponse later; still excluded via _STREAMING.)
+# fetch runs in a threadpool. /stream (Range) and /radio_stream (ICY) are the
+# byte relays, served as StreamingResponse over a threadpool-driven upstream.
 
 @app.get("/art", include_in_schema=False)
 async def art(url: str = ""):
@@ -304,6 +304,41 @@ async def stream(request: Request, url: str = ""):
                              media_type=ctype, headers=out)
 
 
+@app.get("/radio_stream", include_in_schema=False)
+async def radio_stream(request: Request, url: str = ""):
+    """Internet-radio browser relay. De-interleaves ICY metadata (parking
+    each StreamTitle for /api/radio/nowplaying) and streams clean audio to
+    <audio>. Endless stream — the generator stops when Hypercorn reports the
+    client gone, and closes the upstream in its finally."""
+    if not url:
+        return JSONResponse({"error": "Missing url"}, status_code=400)
+    conn, resp, metaint, ctype = await run_in_threadpool(
+        dlna_stream_proxy.open_radio_upstream, url)
+    if resp is None:
+        return JSONResponse({"error": "radio upstream unreachable"},
+                            status_code=502)
+    media_type = dlna_stream_proxy.normalize_audio_ctype(ctype) or "audio/mpeg"
+
+    async def _relay():
+        gen = dlna_stream_proxy.iter_radio_audio(resp, metaint, url)
+        try:
+            while True:
+                chunk = await run_in_threadpool(next, gen, b"")
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        _relay(), media_type=media_type,
+        headers={"Access-Control-Allow-Origin": "*",
+                 "Cache-Control": "no-store"})
+
+
 # Paths served by a native route above — must NOT also be bridged.
 _NATIVE = {"/api/version", "/api/servers", "/api/renderers",
            "/api/artists", "/api/albums", "/api/genres",
@@ -322,8 +357,8 @@ _NATIVE = {"/api/version", "/api/servers", "/api/renderers",
 # migrated to native routes (the _NATIVE set above) one batch at a time.
 # Excluded from the bridge:
 #   • _NATIVE                — already ported to native FastAPI routes
-#   • /stream /art /radio_stream — stream bytes to the socket; not
-#       bridgeable, ported as StreamingResponse later
+#   • /stream /art /radio_stream — native StreamingResponse/Response byte
+#       relays (in _STREAMING); never bridged
 #   • /gw/*                 — UPnP device endpoints; stay on the legacy LAN
 #       server (the Naim talks to it directly, never through this proxy)
 _STREAMING = {"/stream", "/art", "/radio_stream"}

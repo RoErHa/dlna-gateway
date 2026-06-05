@@ -87,6 +87,83 @@ def open_stream_upstream(upstream_url: str, range_hdr: str = ""):
         return None, None
 
 
+def open_radio_upstream(upstream_url: str):
+    """Open an upstream GET for the /radio_stream relay with `Icy-MetaData: 1`
+    and return `(conn, resp, metaint, ctype)`. `metaint` is the icy-metaint
+    block size (0 when the server ignored the header — relay verbatim).
+    Returns `(None, None, 0, "")` on connection error or a non-2xx upstream.
+
+    Used by the 2.0 ASGI route (dlna_asgi.radio_stream) as a StreamingResponse
+    source; the legacy `proxy_radio_stream` keeps its own inline open (it
+    drives the stdlib handler's wfile via selectors — left untouched)."""
+    parsed  = urllib.parse.urlparse(upstream_url)
+    host    = parsed.netloc
+    path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    use_ssl = parsed.scheme == "https"
+    conn = None
+    try:
+        if use_ssl:
+            conn = http.client.HTTPSConnection(
+                host, timeout=20, context=ssl._create_unverified_context())
+        else:
+            conn = http.client.HTTPConnection(host, timeout=20)
+        conn.request("GET", path, headers={
+            "User-Agent":   "DLNAGateway/1.0",
+            "Icy-MetaData": "1",
+            "Connection":   "close",
+        })
+        resp = conn.getresponse()
+        if resp.status not in (200, 206):
+            log.warning(f"open_radio_upstream {host}{path[:60]}: "
+                        f"HTTP {resp.status}")
+            conn.close()
+            return None, None, 0, ""
+        try:
+            metaint = int(resp.getheader("icy-metaint") or 0)
+        except (TypeError, ValueError):
+            metaint = 0
+        ctype = resp.getheader("Content-Type") or "audio/mpeg"
+        return conn, resp, metaint, ctype
+    except Exception as e:                           # noqa: BLE001
+        log.warning(f"open_radio_upstream {host}{path[:60]}: "
+                    f"{type(e).__name__}: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return None, None, 0, ""
+
+
+def iter_radio_audio(resp, metaint: int, upstream_url: str):
+    """Sync generator: yield clean audio chunks from an ICY radio response,
+    parking each StreamTitle via `_icy_set(upstream_url, …)` for
+    /api/radio/nowplaying. When `metaint <= 0` the server sent no metadata —
+    relay verbatim. Mirrors the pure `_deinterleave_icy` loop, but YIELDS
+    instead of calling a write callback so it can drive an ASGI
+    StreamingResponse."""
+    if metaint <= 0:
+        while True:
+            chunk = resp.read(65_536)
+            if not chunk:
+                return
+            yield chunk
+    while True:
+        audio = _read_exact(resp, metaint)
+        if audio:
+            yield audio
+        if len(audio) < metaint:
+            return                               # upstream EOF
+        lenbyte = resp.read(1)
+        if not lenbyte:
+            return
+        mlen = lenbyte[0] * 16
+        if mlen:
+            title = _parse_icy_title(_read_exact(resp, mlen))
+            if title is not None:
+                _icy_set(upstream_url, title)
+
+
 def proxy_stream(upstream_url: str, handler):
     """
     HTTP Range-aware proxy: relay upstream bytes to the browser.
