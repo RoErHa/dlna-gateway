@@ -22,6 +22,7 @@ and dropped — broken on this tailnet; see docs/BUILDING_2.0.md.)
 import functools
 import json
 import os
+from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
@@ -31,10 +32,11 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 import api_browse
 import api_playback
+import api_subsonic
 import dlna_routes
 import dlna_server
 import dlna_stream_proxy
-from dlna_asgi_bridge import make_bridged_route
+from dlna_asgi_bridge import _LegacyH, make_bridged_route, run_subsonic_sync
 from dlna_config import VERSION
 from dlna_discovery import SERVERS
 from dlna_library import DB, INDEXER
@@ -263,15 +265,12 @@ async def art(url: str = ""):
                              "Access-Control-Allow-Origin": "*"})
 
 
-@app.get("/stream", include_in_schema=False)
-async def stream(request: Request, url: str = ""):
-    """Browser-audio Range relay. Forwards the client's Range to the upstream
-    and streams the (200 or 206) response back same-origin. Each blocking
-    upstream read runs in a threadpool; the generator closes the upstream on
-    client disconnect (Hypercorn closes it)."""
-    if not url:
-        return JSONResponse({"error": "Missing url"}, status_code=400)
-    range_hdr = request.headers.get("range", "")
+async def _audio_relay_response(url: str, range_hdr: str):
+    """Open `url` (forwarding `range_hdr`) and return a StreamingResponse that
+    relays the (200/206) body same-origin, or a 502 JSONResponse if the
+    upstream is unreachable. Shared by /stream and Subsonic /rest/stream. Each
+    blocking upstream read runs in a threadpool; the generator closes the
+    upstream when the client disconnects (Hypercorn closes it)."""
     conn, resp = await run_in_threadpool(
         dlna_stream_proxy.open_stream_upstream, url, range_hdr)
     if resp is None:
@@ -302,6 +301,15 @@ async def stream(request: Request, url: str = ""):
 
     return StreamingResponse(_relay(), status_code=status,
                              media_type=ctype, headers=out)
+
+
+@app.get("/stream", include_in_schema=False)
+async def stream(request: Request, url: str = ""):
+    """Browser-audio Range relay. Forwards the client's Range to the upstream
+    and streams the (200 or 206) response back same-origin."""
+    if not url:
+        return JSONResponse({"error": "Missing url"}, status_code=400)
+    return await _audio_relay_response(url, request.headers.get("range", ""))
 
 
 @app.get("/radio_stream", include_in_schema=False)
@@ -337,6 +345,85 @@ async def radio_stream(request: Request, url: str = ""):
         _relay(), media_type=media_type,
         headers={"Access-Control-Allow-Origin": "*",
                  "Cache-Control": "no-store"})
+
+
+# ── Subsonic API (/rest/*) ────────────────────────────────────────────
+# CarPlay/Amperfy surface. The ~25 JSON/XML methods are bridged through the
+# capture handler (run_subsonic_sync), so api_subsonic.handle() — auth, the
+# xml/json wrapper, every method — runs UNCHANGED under Hypercorn. The 3 byte
+# methods (stream / download / getCoverArt) are served natively here, reusing
+# the same upstream-open + art_fetch the /stream and /art routes use; a shared
+# auth gate enforces the same SUBSONIC_PASSWORD check as the bridged methods.
+_SUBSONIC_BYTE_METHODS = {"stream", "download", "getcoverart"}
+
+
+def _subsonic_fail_response(query, body, code: int, message: str,
+                            http_code: int = 200) -> Response:
+    """Build a format-correct Subsonic error Response via api_subsonic's own
+    `_fail`, so the xml/json choice + `<subsonic-response>` wrapper match the
+    bridged JSON methods exactly."""
+    params = api_subsonic._parse_params(query, body)
+    fmt = (params.get("f", "") or "").lower()
+    h = _LegacyH({}, "", "GET")
+    h._subsonic_format = "json" if fmt in ("json", "jsonp") else "xml"
+    api_subsonic._fail(h, code, message, http_code=http_code)
+    return Response(content=h._cap.body, status_code=h._cap.code,
+                    media_type=h._cap.ctype)
+
+
+def _subsonic_auth_gate(query, body) -> Optional[Response]:
+    """Return a refusal Response (password unset → 503; bad credentials →
+    wrong-auth) or None when the call is authorised. Mirrors handle()'s gate
+    so the native byte routes enforce the same auth as the bridged methods."""
+    params = api_subsonic._parse_params(query, body)
+    if not api_subsonic._subsonic_password():
+        return _subsonic_fail_response(
+            query, body, api_subsonic.ERR_NOT_AUTHORIZED,
+            "Server not configured (SUBSONIC_PASSWORD unset)", http_code=503)
+    if not api_subsonic._check_auth(params):
+        return _subsonic_fail_response(
+            query, body, api_subsonic.ERR_WRONG_AUTH,
+            "Wrong username or password")
+    return None
+
+
+@app.api_route("/rest/{rest_path:path}", methods=["GET", "POST"],
+               include_in_schema=False)
+async def subsonic(request: Request, rest_path: str):
+    query = request.url.query
+    body = await request.body() if request.method == "POST" else b""
+    method = api_subsonic._method_from_path("/rest/" + rest_path).lower()
+
+    if method in _SUBSONIC_BYTE_METHODS:
+        gate = _subsonic_auth_gate(query, body)
+        if gate is not None:
+            return gate
+        params = api_subsonic._parse_params(query, body)
+        sid = params.get("id", "")
+        if method == "getcoverart":
+            art_url = await run_in_threadpool(api_subsonic._cover_art_url, sid)
+            if not art_url:
+                return Response(content=b"no art", status_code=404)
+            code, ctype, art_body = await run_in_threadpool(
+                api_playback.art_fetch, art_url)
+            if code != 200:
+                return JSONResponse({"error": ctype}, status_code=code)
+            return Response(content=art_body, media_type=ctype,
+                            headers={"Cache-Control": "public, max-age=86400",
+                                     "Access-Control-Allow-Origin": "*"})
+        # stream / download
+        url = api_subsonic._track_id_decode(sid)
+        if not url:
+            return _subsonic_fail_response(
+                query, body, api_subsonic.ERR_NOT_FOUND,
+                f"Unknown track id: {sid}")
+        return await _audio_relay_response(url, request.headers.get("range", ""))
+
+    # JSON/XML method → bridge api_subsonic.handle() over the capture handler.
+    code, resp_body, ctype = await run_in_threadpool(
+        run_subsonic_sync, request.method, "/rest/" + rest_path, query, body,
+        headers=request.headers)
+    return Response(content=resp_body, status_code=code, media_type=ctype)
 
 
 # Paths served by a native route above — must NOT also be bridged.

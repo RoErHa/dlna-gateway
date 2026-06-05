@@ -79,6 +79,22 @@ def run_legacy_sync(handler: Callable, arg, *, headers=None, path: str = "",
     return c.code, c.body, c.ctype
 
 
+def run_subsonic_sync(http_method: str, path: str, query, body: bytes = b"",
+                      *, headers=None) -> Tuple[int, bytes, str]:
+    """Run `api_subsonic.handle()` against the capturing fake `h` and return
+    `(status, body-bytes, content-type)`. Subsonic's JSON/XML methods respond
+    via `h._json` / `h._xml_response` (both captured) and set
+    `h._subsonic_format` (a plain attr the fake `h` accepts). The byte methods
+    (stream / download / getCoverArt) are served natively in dlna_asgi and
+    never routed here. Lazy import keeps the bridge free of a hard
+    api_subsonic dependency at import time."""
+    import api_subsonic
+    h = _LegacyH(headers if headers is not None else {}, path, http_method)
+    api_subsonic.handle(h, http_method, path, query, body)
+    c = h._cap
+    return c.code, c.body, c.ctype
+
+
 def make_bridged_route(handler: Callable, *, is_post: bool):
     """Build an async FastAPI endpoint that runs `handler` through the shim.
     The blocking handler is dispatched to a threadpool."""

@@ -20,7 +20,8 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_asgi
-from dlna_asgi_bridge import run_legacy_sync
+import api_subsonic
+from dlna_asgi_bridge import run_legacy_sync, run_subsonic_sync
 from dlna_config import VERSION
 
 
@@ -509,6 +510,120 @@ class TestRadioStreamProxy(unittest.TestCase):
         self.assertEqual(body, b"AAAABBBB")        # metadata stripped
         self.assertEqual((p.icy_now(url) or {}).get("title"), "Foo - Bar")
         self.assertTrue(conn.closed)
+
+
+class TestSubsonicAsgi(unittest.TestCase):
+    """The Subsonic /rest/* surface under ASGI: JSON/XML methods bridged via
+    run_subsonic_sync, byte methods (stream/download/getCoverArt) native."""
+
+    def setUp(self):
+        self._prev = api_subsonic.SUBSONIC_PASSWORD_OVERRIDE
+        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "pw"
+
+    def tearDown(self):
+        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = self._prev
+
+    @staticmethod
+    def _req(query, method="GET", headers=None):
+        import urllib.parse
+        if isinstance(query, dict):
+            query = urllib.parse.urlencode(query)
+        return types.SimpleNamespace(
+            url=types.SimpleNamespace(query=query),
+            method=method, headers=headers or {})
+
+    def _call(self, rest_path, query, **kw):
+        return asyncio.run(dlna_asgi.subsonic(self._req(query, **kw),
+                                              rest_path=rest_path))
+
+    def test_route_registered_once(self):
+        n = sum(1 for r in dlna_asgi.app.routes
+                if getattr(r, "path", None) == "/rest/{rest_path:path}")
+        self.assertEqual(n, 1)
+
+    def test_ping_bridged_json(self):
+        r = self._call("ping", {"u": "user", "p": "pw", "f": "json", "c": "t"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.media_type, "application/json")
+        self.assertEqual(json.loads(r.body)["subsonic-response"]["status"], "ok")
+
+    def test_ping_bridged_xml_default(self):
+        r = self._call("ping", {"u": "user", "p": "pw"})
+        self.assertEqual(r.media_type, "text/xml")
+        self.assertIn(b"subsonic-response", r.body)
+
+    def test_ping_view_suffix_routes(self):
+        r = self._call("ping.view", {"u": "user", "p": "pw", "f": "json"})
+        self.assertEqual(json.loads(r.body)["subsonic-response"]["status"], "ok")
+
+    def test_bad_auth_failed(self):
+        r = self._call("ping", {"u": "user", "p": "WRONG", "f": "json"})
+        self.assertEqual(json.loads(r.body)["subsonic-response"]["status"],
+                         "failed")
+
+    def test_byte_method_password_unset_503(self):
+        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = ""
+        tid = api_subsonic._track_id("http://x/a.flac")
+        r = self._call("stream", {"u": "user", "p": "pw", "id": tid,
+                                  "f": "json"})
+        self.assertEqual(r.status_code, 503)
+
+    def test_stream_happy_relays(self):
+        from unittest import mock
+        tid = api_subsonic._track_id("http://x/a.flac")
+        conn = _FakeConn()
+        resp = _FakeResp(200, {"Content-Type": "audio/flac",
+                               "Content-Length": "4"}, [b"FLAC"])
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = self._call("stream", {"u": "user", "p": "pw", "id": tid})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.media_type, "audio/flac")
+        body = b""
+
+        async def _consume():
+            nonlocal body
+            async for c in r.body_iterator:
+                body += c
+        asyncio.run(_consume())
+        self.assertEqual(body, b"FLAC")
+        self.assertTrue(conn.closed)
+
+    def test_download_aliases_stream(self):
+        from unittest import mock
+        tid = api_subsonic._track_id("http://x/a.flac")
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(_FakeConn(),
+                                             _FakeResp(200, {}, [b"X"]))):
+            r = self._call("download", {"u": "user", "p": "pw", "id": tid})
+        self.assertEqual(r.status_code, 200)
+
+    def test_stream_bad_id_not_found(self):
+        r = self._call("stream", {"u": "user", "p": "pw", "id": "garbage",
+                                  "f": "json"})
+        self.assertEqual(json.loads(r.body)["subsonic-response"]["status"],
+                         "failed")
+
+    def test_cover_art_happy(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_subsonic, "_cover_art_url",
+                               return_value="http://x/art.jpg"), \
+             mock.patch.object(dlna_asgi.api_playback, "art_fetch",
+                               return_value=(200, "image/jpeg", b"JPG")):
+            r = self._call("getCoverArt", {"u": "user", "p": "pw",
+                                           "id": "al:whatever"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.media_type, "image/jpeg")
+        self.assertEqual(r.body, b"JPG")
+
+    def test_cover_art_missing_404(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_subsonic, "_cover_art_url",
+                               return_value=""):
+            r = self._call("getCoverArt", {"u": "user", "p": "pw", "id": "al:x"})
+        self.assertEqual(r.status_code, 404)
 
 
 class TestStaticServing(unittest.TestCase):
