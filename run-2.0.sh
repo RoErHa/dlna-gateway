@@ -26,6 +26,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Raise the 256-default open-file soft limit (1.x gets 8192 from launchd; a
+# shell-launched 2.x doesn't). Prevents EMFILE → sqlite 'unable to open
+# database file' under load. dlna_config.raise_fd_limit() also does this.
+ulimit -n 8192 2>/dev/null || true
+
 export APP_VERSION="${APP_VERSION:-2.0.0-alpha.1}"
 export GW_UDN="${GW_UDN:-uuid:dlna-gateway-iina-2-8766}"
 export GW_NAME="${GW_NAME:-DLNA Gateway 2.0}"

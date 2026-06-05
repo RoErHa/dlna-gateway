@@ -39,7 +39,7 @@ import dlna_routes
 import dlna_server
 import dlna_stream_proxy
 from dlna_asgi_bridge import _LegacyH, make_bridged_route, run_subsonic_sync
-from dlna_config import VERSION
+from dlna_config import VERSION, raise_fd_limit
 from dlna_discovery import SERVERS
 from dlna_library import DB, INDEXER
 
@@ -76,6 +76,11 @@ async def _lifespan(app: FastAPI):
     `--insecure-bind` plain port and retire dlna_server + the device server, so
     the whole gateway is one framework. See docs/BUILDING_2.0.md."""
     import dlna_gateway
+    # Raise the open-file limit BEFORE serving — Hypercorn's threadpool + the
+    # LocalFs scan open enough concurrent FDs to hit macOS's default 256-soft
+    # limit → EMFILE → sqlite 'unable to open database file'. Unconditional
+    # (even GATEWAY_NO_SERVICES still serves /api/* DB reads).
+    raise_fd_limit()
     started = False
     device_server = None
     if not _truthy("GATEWAY_NO_SERVICES"):

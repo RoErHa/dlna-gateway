@@ -48,6 +48,34 @@ IINA_M3U  = "/tmp/dlna-gw-iina.m3u"      # HTTP-served M3U for remote IINA
 IPC_SOCK  = "/tmp/dlna-gw-mpv.sock"       # mpv / IINA IPC socket
 
 
+# ── Open-file limit ───────────────────────────────────────────────
+def raise_fd_limit(target: int = 8192) -> None:
+    """Raise this process's open-file SOFT limit toward `target`. Best-effort
+    — never raises.
+
+    macOS's default soft RLIMIT_NOFILE is 256. The 1.x gateway gets 8192 from
+    its launchd plist (SoftResourceLimits/NumberOfFiles); a SHELL-launched
+    process (run-2.0.sh / run-2.0-asgi.sh) instead inherits the Terminal's 256.
+    Under Hypercorn's request threadpool + the boot-time LocalFs scan the
+    gateway opens enough concurrent FDs (each WAL connection = db + -wal + -shm,
+    plus sockets + scanned files) to blow past 256 → EMFILE → sqlite3
+    'unable to open database file' (see db_pool.py's FD-exhaustion note). Call
+    this at every entrypoint so all launchers match 1.x's headroom."""
+    try:
+        import resource
+    except ImportError:
+        return                      # non-unix; nothing to do
+    log = logging.getLogger("dlna.config")
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            log.info(f"Raised open-file soft limit {soft} → {want} (hard={hard})")
+    except (ValueError, OSError) as e:
+        log.warning(f"Could not raise open-file limit: {e}")
+
+
 # ── Logging ───────────────────────────────────────────────────────
 
 def setup_logging(debug: bool = False) -> logging.Logger:

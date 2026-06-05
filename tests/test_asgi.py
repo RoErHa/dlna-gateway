@@ -700,6 +700,45 @@ class TestEntrypointLifespan(unittest.TestCase):
             self._drive_lifespan()   # must not raise
 
 
+class TestFdLimit(unittest.TestCase):
+    """raise_fd_limit() lifts the open-file soft limit so the gateway doesn't
+    hit macOS's 256 default → EMFILE → sqlite 'unable to open database file'."""
+
+    def test_raises_low_soft_limit(self):
+        import resource
+        import dlna_config
+        soft0, hard0 = resource.getrlimit(resource.RLIMIT_NOFILE)
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256, hard0))
+            dlna_config.raise_fd_limit(4096)
+            soft1, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+            want = 4096 if hard0 == resource.RLIM_INFINITY else min(4096, hard0)
+            self.assertEqual(soft1, want)
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft0, hard0))
+
+    def test_never_lowers(self):
+        import resource
+        import dlna_config
+        soft0, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        dlna_config.raise_fd_limit(1)          # target below current → no-op
+        soft1, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        self.assertEqual(soft1, soft0)
+
+    def test_lifespan_raises_fd_limit(self):
+        # GATEWAY_NO_SERVICES=1 → services skipped, but the FD raise still runs
+        os.environ["GATEWAY_NO_SERVICES"] = "1"
+        try:
+            with mock.patch.object(dlna_asgi, "raise_fd_limit") as r:
+                async def _run():
+                    async with dlna_asgi.app.router.lifespan_context(dlna_asgi.app):
+                        pass
+                asyncio.run(_run())
+            r.assert_called_once()
+        finally:
+            os.environ.pop("GATEWAY_NO_SERVICES", None)
+
+
 class TestDeviceServer(unittest.TestCase):
     """The /gw/*-only device-tier server (dlna_server.DeviceHandler) that runs
     alongside Hypercorn so the Naim reaches the UPnP surface over plain HTTP."""

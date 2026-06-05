@@ -27,6 +27,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# macOS Terminal defaults to a 256 open-file soft limit; the gateway needs more
+# headroom (Hypercorn threadpool + LocalFs scan → EMFILE → sqlite 'unable to
+# open database file'). 1.x gets 8192 from its launchd plist; match it here.
+# (dlna_config.raise_fd_limit() also raises it in-process as a backstop.)
+ulimit -n 8192 2>/dev/null || true
+
 export APP_VERSION="${APP_VERSION:-2.0.0-alpha.1}"
 export GW_UDN="${GW_UDN:-uuid:dlna-gateway-iina-2-8766}"
 export GW_NAME="${GW_NAME:-DLNA Gateway 2.0}"

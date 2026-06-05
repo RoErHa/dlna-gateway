@@ -22,7 +22,7 @@ import subprocess
 import threading
 
 import dlna_discovery as _disc
-from dlna_config import load_config, save_config, setup_logging
+from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
                           ACOUSTID_FETCHER)
 from dlna_server import (GW_UDN, ThreadedHTTPServer,
@@ -199,6 +199,10 @@ Examples:
     args = parser.parse_args()
 
     setup_logging(debug=args.debug)
+    # macOS shells default to a 256 open-file soft limit; raise it so the
+    # gateway doesn't hit EMFILE → sqlite 'unable to open database file' under
+    # load. (1.x gets this from its launchd plist; shell-launched 2.x doesn't.)
+    raise_fd_limit()
 
     # ── --list-devices: print table and exit ──────────────────────
     if args.list_devices:
