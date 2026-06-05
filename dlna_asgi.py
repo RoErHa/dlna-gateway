@@ -19,6 +19,7 @@ TLS is APP-OWNED: once this app is the gateway, Hypercorn terminates TLS +
 HTTP/2/3 with a `tailscale cert`-issued cert. (`tailscale serve` was tried
 and dropped — broken on this tailnet; see docs/BUILDING_2.0.md.)
 """
+import asyncio
 import contextlib
 import functools
 import json
@@ -40,6 +41,7 @@ import dlna_server
 import dlna_stream_proxy
 from dlna_asgi_bridge import _LegacyH, make_bridged_route, run_subsonic_sync
 from dlna_config import VERSION, raise_fd_limit
+from dlna_events import EVENTS, sse_format
 from dlna_discovery import SERVERS
 from dlna_library import DB, INDEXER
 
@@ -81,6 +83,10 @@ async def _lifespan(app: FastAPI):
     # limit → EMFILE → sqlite 'unable to open database file'. Unconditional
     # (even GATEWAY_NO_SERVICES still serves /api/* DB reads).
     raise_fd_limit()
+    # Bind the SSE event bus to this loop so worker threads can publish() live
+    # updates to /api/events subscribers (R2). Unconditional — the web tier
+    # serves SSE regardless of GATEWAY_NO_SERVICES.
+    EVENTS.bind_loop(asyncio.get_running_loop())
     started = False
     device_server = None
     if not _truthy("GATEWAY_NO_SERVICES"):
@@ -107,6 +113,7 @@ async def _lifespan(app: FastAPI):
                     int(os.environ.get("GATEWAY_PORT", "8770")))
             except Exception:                       # noqa: BLE001
                 pass
+        EVENTS.bind_loop(None)      # drop the (now closing) loop reference
 
 
 app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
@@ -413,6 +420,40 @@ async def radio_stream(request: Request, url: str = ""):
         _relay(), media_type=media_type,
         headers={"Access-Control-Allow-Origin": "*",
                  "Cache-Control": "no-store"})
+
+
+# ── Server-Sent Events (R2) ───────────────────────────────────────────
+# Long-lived text/event-stream the PWA subscribes to (EventSource) for live
+# pushes — now-playing, index progress, device changes — instead of polling.
+# Worker threads call dlna_events.EVENTS.publish({...}); the bus (bound to this
+# loop in _lifespan) fans each event to every connected subscriber's queue.
+# A 15 s comment heartbeat keeps the connection alive through proxies/idle.
+_SSE_HEARTBEAT_SEC = 15.0
+
+
+@app.get("/api/events", include_in_schema=False)
+async def events(request: Request):
+    q = EVENTS.subscribe()
+
+    async def gen():
+        try:
+            yield sse_format({"type": "hello"})
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    ev = await asyncio.wait_for(q.get(), _SSE_HEARTBEAT_SEC)
+                    yield sse_format(ev)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"      # SSE comment frame
+        finally:
+            EVENTS.unsubscribe(q)
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-store",
+                 "Access-Control-Allow-Origin": "*",
+                 "X-Accel-Buffering": "no"})      # disable proxy buffering
 
 
 # ── Subsonic API (/rest/*) ────────────────────────────────────────────

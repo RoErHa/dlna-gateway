@@ -21,6 +21,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_asgi
+import dlna_events
 import dlna_gateway
 import api_subsonic
 from dlna_asgi_bridge import run_legacy_sync, run_subsonic_sync
@@ -698,6 +699,128 @@ class TestEntrypointLifespan(unittest.TestCase):
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye",
                                side_effect=RuntimeError("boom")):
             self._drive_lifespan()   # must not raise
+
+
+class _SseReq:
+    """Fake Request whose is_disconnected() returns True after N calls."""
+    def __init__(self, disconnect_after=1_000_000):
+        self._n = 0
+        self._after = disconnect_after
+
+    async def is_disconnected(self):
+        self._n += 1
+        return self._n > self._after
+
+
+class TestSSE(unittest.TestCase):
+    """R2 Server-Sent Events: the dlna_events bus + the /api/events stream."""
+
+    def tearDown(self):
+        dlna_events.EVENTS.bind_loop(None)   # don't leak a closed test loop
+
+    # ── the bus (no endpoint) ────────────────────────────────────────
+    def test_sse_format_shape(self):
+        f = dlna_events.sse_format({"type": "state", "x": 1})
+        self.assertTrue(f.startswith("event: state\n"))
+        self.assertIn('"x": 1', f)
+        self.assertTrue(f.endswith("\n\n"))
+
+    def test_sse_format_defaults_type_message(self):
+        self.assertTrue(dlna_events.sse_format({"a": 1}).startswith(
+            "event: message\n"))
+
+    def test_publish_without_loop_is_noop(self):
+        dlna_events.EventBus().publish({"type": "x"})   # must not raise
+
+    def test_bus_publish_subscribe_unsubscribe(self):
+        async def scenario():
+            bus = dlna_events.EventBus()
+            bus.bind_loop(asyncio.get_running_loop())
+            q = bus.subscribe()
+            self.assertEqual(bus.subscriber_count, 1)
+            bus.publish({"type": "x", "n": 1})
+            ev = await asyncio.wait_for(q.get(), 1)
+            bus.unsubscribe(q)
+            self.assertEqual(bus.subscriber_count, 0)
+            return ev
+        self.assertEqual(asyncio.run(scenario())["n"], 1)
+
+    def test_bus_drops_when_subscriber_full(self):
+        async def scenario():
+            bus = dlna_events.EventBus(max_queue=1)
+            bus.bind_loop(asyncio.get_running_loop())
+            q = bus.subscribe()
+            bus.publish({"type": "a"})
+            bus.publish({"type": "b"})       # queue full → dropped
+            await asyncio.sleep(0)           # let call_soon callbacks run
+            return q.qsize()
+        self.assertEqual(asyncio.run(scenario()), 1)
+
+    # ── the /api/events endpoint ─────────────────────────────────────
+    def test_route_registered_once(self):
+        n = sum(1 for r in dlna_asgi.app.routes
+                if getattr(r, "path", None) == "/api/events")
+        self.assertEqual(n, 1)
+
+    def test_endpoint_hello_then_published_event(self):
+        async def scenario():
+            dlna_events.EVENTS.bind_loop(asyncio.get_running_loop())
+            r = await dlna_asgi.events(_SseReq())
+            self.assertEqual(r.media_type, "text/event-stream")
+            it = r.body_iterator
+            first = await it.__anext__()
+            dlna_events.EVENTS.publish({"type": "now_playing", "title": "S"})
+            second = await it.__anext__()
+            await it.aclose()
+            return first, second
+        first, second = asyncio.run(scenario())
+        self.assertIn("event: hello", first)
+        self.assertIn("event: now_playing", second)
+        self.assertIn('"title": "S"', second)
+
+    def test_endpoint_heartbeat_on_idle(self):
+        prev = dlna_asgi._SSE_HEARTBEAT_SEC
+        dlna_asgi._SSE_HEARTBEAT_SEC = 0.02
+        try:
+            async def scenario():
+                dlna_events.EVENTS.bind_loop(asyncio.get_running_loop())
+                r = await dlna_asgi.events(_SseReq())
+                it = r.body_iterator
+                await it.__anext__()                 # hello
+                frame = await it.__anext__()         # no event → keepalive
+                await it.aclose()
+                return frame
+            self.assertTrue(asyncio.run(scenario()).startswith(":"))
+        finally:
+            dlna_asgi._SSE_HEARTBEAT_SEC = prev
+
+    def test_endpoint_unsubscribes_on_disconnect(self):
+        async def scenario():
+            dlna_events.EVENTS.bind_loop(asyncio.get_running_loop())
+            before = dlna_events.EVENTS.subscriber_count
+            r = await dlna_asgi.events(_SseReq(disconnect_after=0))
+            it = r.body_iterator
+            await it.__anext__()                     # hello, then disconnect
+            with self.assertRaises(StopAsyncIteration):
+                await it.__anext__()
+            return before, dlna_events.EVENTS.subscriber_count
+        before, after = asyncio.run(scenario())
+        self.assertEqual(after, before)   # subscriber cleaned up
+
+    def test_lifespan_binds_event_loop(self):
+        os.environ["GATEWAY_NO_SERVICES"] = "1"
+        try:
+            async def _run():
+                async with dlna_asgi.app.router.lifespan_context(dlna_asgi.app):
+                    # inside the lifespan the bus is bound → publish reaches a sub
+                    q = dlna_events.EVENTS.subscribe()
+                    dlna_events.EVENTS.publish({"type": "tick"})
+                    ev = await asyncio.wait_for(q.get(), 1)
+                    dlna_events.EVENTS.unsubscribe(q)
+                    return ev
+            self.assertEqual(asyncio.run(_run())["type"], "tick")
+        finally:
+            os.environ.pop("GATEWAY_NO_SERVICES", None)
 
 
 class TestFdLimit(unittest.TestCase):
