@@ -57,38 +57,49 @@ async def _lifespan(app: FastAPI):
     heartbeat), the gateway-as-MediaServer SSDP announcer, the album-art +
     AcoustID startup scans, and LocalFs wiring — the SAME set
     dlna_gateway.main() starts, via the SAME function
-    (dlna_gateway.start_background_services). Run exactly ONE of the two
-    entrypoints (stdlib OR Hypercorn), never both — they'd double-announce.
+    (dlna_gateway.start_background_services). It ALSO starts the device-tier
+    server (dlna_server.start_device_server) on GATEWAY_PORT, serving the
+    Naim-facing /gw/* UPnP surface over plain LAN HTTP — Hypercorn owns the
+    main port (and, later, TLS) but the Naim can't do HTTPS. The SSDP advert
+    points at GATEWAY_PORT, so it correctly lands on the device server. Run
+    exactly ONE of the two entrypoints (stdlib OR Hypercorn), never both —
+    they'd double-announce and clash on ports.
 
     Env knobs:
-      • GATEWAY_NO_SERVICES=1 — web tier only; skip all background startup
-        (e.g. behind a separate gateway process, or in experiments).
-      • GATEWAY_PORT (default 8766) — the port advertised for the
-        gateway-as-MediaServer SSDP record.
+      • GATEWAY_NO_SERVICES=1 — web tier only; skip ALL background startup +
+        the device server (e.g. running purely as a web tier, or experiments).
+      • GATEWAY_PORT (default 8770) — the plain-HTTP device-server port, also
+        the port advertised in the gateway-as-MediaServer SSDP record.
       • GATEWAY_DEBUG=1 — verbose logging.
 
-    Cutover caveat: under pure Hypercorn the /gw/* UPnP device routes are not
-    yet served (they're bridge-excluded; the Naim talks plain HTTP), so the
-    SSDP advert points at routes that 404 until the device server is wired.
-    Harmless on the dev rig; tracked as the next cutover item."""
+    Cleanup C (AFTER cutover): fold /gw/* into the ASGI app on a Hypercorn
+    `--insecure-bind` plain port and retire dlna_server + the device server, so
+    the whole gateway is one framework. See docs/BUILDING_2.0.md."""
     import dlna_gateway
     started = False
+    device_server = None
     if not _truthy("GATEWAY_NO_SERVICES"):
-        port = int(os.environ.get("GATEWAY_PORT", "8766"))
+        port = int(os.environ.get("GATEWAY_PORT", "8770"))
         dlna_gateway.setup_logging(debug=_truthy("GATEWAY_DEBUG"))
         lan_ip = dlna_gateway.get_lan_ip()
         dlna_gateway.start_background_services(lan_ip, port)
+        device_server = dlna_server.start_device_server("0.0.0.0", port)
         started = True
-        log.info("ASGI lifespan: gateway background services started "
-                 f"(MediaServer advert port {port})")
+        log.info("ASGI lifespan: gateway background services + device server "
+                 f"started (/gw/* + SSDP advert on port {port})")
     try:
         yield
     finally:
         if started:
+            if device_server is not None:
+                try:
+                    device_server.shutdown()
+                except Exception:                   # noqa: BLE001
+                    pass
             try:
                 dlna_gateway.gw_ssdp_byebye(
                     dlna_gateway.get_lan_ip(),
-                    int(os.environ.get("GATEWAY_PORT", "8766")))
+                    int(os.environ.get("GATEWAY_PORT", "8770")))
             except Exception:                       # noqa: BLE001
                 pass
 

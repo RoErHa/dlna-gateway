@@ -660,31 +660,74 @@ class TestEntrypointLifespan(unittest.TestCase):
     def test_disabled_by_env(self):
         os.environ["GATEWAY_NO_SERVICES"] = "1"
         with mock.patch.object(dlna_gateway, "start_background_services") as sbs, \
+             mock.patch.object(dlna_asgi.dlna_server,
+                               "start_device_server") as dev, \
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye") as bye:
             self._drive_lifespan()
         self.assertEqual(sbs.call_count, 0)
+        self.assertEqual(dev.call_count, 0)   # no device server either
         self.assertEqual(bye.call_count, 0)   # nothing started → no byebye
 
-    def test_enabled_starts_services_with_env_port(self):
+    def test_enabled_starts_services_and_device_server(self):
         os.environ.pop("GATEWAY_NO_SERVICES", None)
-        os.environ["GATEWAY_PORT"] = "8766"
+        os.environ["GATEWAY_PORT"] = "8770"
+        dev_srv = mock.MagicMock()
         with mock.patch.object(dlna_gateway, "start_background_services") as sbs, \
+             mock.patch.object(dlna_asgi.dlna_server, "start_device_server",
+                               return_value=dev_srv) as dev, \
              mock.patch.object(dlna_gateway, "setup_logging"), \
              mock.patch.object(dlna_gateway, "get_lan_ip",
                                return_value="10.0.0.5"), \
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye") as bye:
             self._drive_lifespan()
-        sbs.assert_called_once_with("10.0.0.5", 8766)
-        self.assertEqual(bye.call_count, 1)   # graceful byebye on shutdown
+        # SSDP advert + device server both on GATEWAY_PORT (the device port)
+        sbs.assert_called_once_with("10.0.0.5", 8770)
+        dev.assert_called_once_with("0.0.0.0", 8770)
+        dev_srv.shutdown.assert_called_once()   # device server torn down
+        self.assertEqual(bye.call_count, 1)      # graceful byebye on shutdown
 
-    def test_byebye_failure_swallowed(self):
+    def test_shutdown_failures_swallowed(self):
         os.environ.pop("GATEWAY_NO_SERVICES", None)
+        dev_srv = mock.MagicMock()
+        dev_srv.shutdown.side_effect = RuntimeError("dev boom")
         with mock.patch.object(dlna_gateway, "start_background_services"), \
+             mock.patch.object(dlna_asgi.dlna_server, "start_device_server",
+                               return_value=dev_srv), \
              mock.patch.object(dlna_gateway, "setup_logging"), \
              mock.patch.object(dlna_gateway, "get_lan_ip", return_value="x"), \
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye",
                                side_effect=RuntimeError("boom")):
             self._drive_lifespan()   # must not raise
+
+
+class TestDeviceServer(unittest.TestCase):
+    """The /gw/*-only device-tier server (dlna_server.DeviceHandler) that runs
+    alongside Hypercorn so the Naim reaches the UPnP surface over plain HTTP."""
+
+    def test_devicehandler_subclasses_gateway(self):
+        import dlna_server
+        self.assertTrue(issubclass(dlna_server.DeviceHandler,
+                                   dlna_server.GatewayHandler))
+
+    def test_serves_gw_404s_everything_else(self):
+        import dlna_server
+        import urllib.request
+        import urllib.error
+        srv = dlna_server.start_device_server("127.0.0.1", 0)
+        try:
+            port = srv.server_address[1]
+            base = f"http://127.0.0.1:{port}"
+            # /gw/device.xml → 200 XML
+            with urllib.request.urlopen(base + "/gw/device.xml", timeout=4) as r:
+                self.assertEqual(r.status, 200)
+                self.assertIn(b"<", r.read(32))
+            # non-/gw paths → 404 (API + PWA shell are NOT served here)
+            for p in ("/api/version", "/", "/static/app.js", "/rest/ping"):
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(base + p, timeout=4)
+                self.assertEqual(cm.exception.code, 404, p)
+        finally:
+            srv.shutdown()
 
 
 class TestStaticServing(unittest.TestCase):

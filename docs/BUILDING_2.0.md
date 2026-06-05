@@ -79,13 +79,15 @@ Throughout: the **run-all-tests-before-git gate** applies on the 2.0 branch; pul
 - [x] ASGI skeleton + Hypercorn (`dlna_asgi.py`, `/api/version` native)
 - [x] Legacy-handler bridge (`dlna_asgi_bridge.py`) — whole read API under Hypercorn
 - [x] Native read routes: servers/renderers; artists/albums/genres + drill-downs; decades/decade_*; search; browse_letter; index/status; track_meta; playlists/playlist; album_favourites(+check); radio/favourites
-- [ ] AcoustID **minimal removal** (endpoints + PWA 🔎 Enrich button) — scheduled next
+- [x] AcoustID **minimal removal** (endpoints + PWA 🔎 Enrich button)
 - [ ] Remaining bridged reads native (lyrics, radio/search, radio/nowplaying, radio, browse) — optional
-- [ ] POST routes (bridge, then native)
-- [ ] Byte-streamers as `StreamingResponse` (`/stream`, `/art`, `/radio_stream`)
-- [ ] Static serving (the PWA) under ASGI
+- [x] POST routes (bridged — whole write API under Hypercorn; native later)
+- [x] Byte-streamers as `StreamingResponse` (`/stream`, `/art`, `/radio_stream`)
+- [x] Subsonic `/rest/*` (JSON/XML bridged; stream/download/getCoverArt native)
+- [x] Static serving (the PWA) under ASGI
+- [x] Entrypoint: `dlna_asgi` lifespan starts the daemon threads (`dlna_gateway.start_background_services`) so `hypercorn dlna_asgi:app` runs standalone — launch via `run-2.0-asgi.sh`
+- [x] Device-tier server: `dlna_server.DeviceHandler` / `start_device_server` serves Naim-facing `/gw/*` plain-HTTP on `:8770` alongside Hypercorn (lifespan-started; SSDP advert points there)
 - [ ] **R2 — SSE push**
-- [ ] Make `dlna_asgi` the entrypoint (start daemon threads alongside Hypercorn); retire `dlna_server`
 - [ ] **TLS via Hypercorn** (`tailscale cert`) + `docs_url=None`
 
 **Phase 3 — library + providers**
@@ -94,3 +96,4 @@ Throughout: the **run-all-tests-before-git gate** applies on the 2.0 branch; pul
 **Cutover**
 - [ ] Copy user-data tables 1.x→2.x **except playlists** (fresh start); launchd→2.x; tag `v2.0.0`; merge `2.0 → main`
 - [ ] AcoustID **full cleanup** (module + worker + tests) once 2.0 is stable
+- [ ] **Cleanup C — one framework (do AFTER cutover is stable):** port `api_upnp` (`/gw/*`) into the ASGI app on a Hypercorn `--insecure-bind` plain port, then DELETE `dlna_server.py` + `DeviceHandler` + `start_device_server` + `run-2.0.sh`. The device-tier server (option A) is the deliberate interim so the cutover doesn't risk the fragile Naim-facing UPnP bytes; C makes the whole gateway one framework (Hypercorn). Verify `/gw/*` against the real Naim once more before deleting.

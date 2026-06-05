@@ -316,6 +316,49 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._html(404, "<h1>404 Not Found</h1>")
 
 
+# ── Device-tier server (/gw/* only) ───────────────────────────────
+# Serves ONLY the gateway-as-MediaServer UPnP surface (the /gw/* endpoints the
+# Naim browses) on a dedicated plain-HTTP LAN port. Needed in the 2.0 ASGI
+# deployment: Hypercorn owns the main port (and, later, TLS), but the Naim
+# can't do HTTPS and reaches /gw/* over plain LAN HTTP — so a small device
+# server runs alongside Hypercorn (started from dlna_asgi._lifespan).
+#
+# REMINDER — cleanup C (do AFTER the cutover is stable): port api_upnp into the
+# ASGI app on a Hypercorn `--insecure-bind` plain port and DELETE this
+# DeviceHandler + start_device_server, so the whole gateway is one framework
+# (Hypercorn) and dlna_server.py retires entirely. Tracked in docs/BUILDING_2.0.md.
+
+class DeviceHandler(GatewayHandler):
+    """GatewayHandler scoped to `/gw/*` — every other path 404s. Reuses the
+    parent's exact dispatch + response helpers, so the Naim sees byte-identical
+    UPnP/SOAP (zero behaviour change vs the full server on the device surface)."""
+
+    def _is_gw(self) -> bool:
+        return urllib.parse.urlparse(self.path).path.startswith("/gw/")
+
+    def do_GET(self):
+        if self._is_gw():
+            return super().do_GET()
+        self._html(404, "<h1>404 Not Found</h1>")
+
+    def do_POST(self):
+        if self._is_gw():
+            return super().do_POST()
+        self._html(404, "<h1>404 Not Found</h1>")
+
+
+def start_device_server(host: str, port: int) -> ThreadedHTTPServer:
+    """Start the device-tier server (DeviceHandler, /gw/* only) in a daemon
+    thread and return it (caller shuts it down). Bind 0.0.0.0 so the Naim on
+    the LAN reaches it. Used by dlna_asgi._lifespan when Hypercorn is the
+    gateway."""
+    server = ThreadedHTTPServer((host, port), DeviceHandler)
+    threading.Thread(target=server.serve_forever, daemon=True,
+                     name="device-server").start()
+    log.info(f"Device server (/gw/* only) up on http://{host}:{port}/gw/")
+    return server
+
+
 # ── Standalone test ───────────────────────────────────────────────
 
 def _test():
