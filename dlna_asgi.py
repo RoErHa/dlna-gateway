@@ -30,6 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, Response
 
 import api_browse
+import api_playback
 import dlna_routes
 import dlna_server
 from dlna_asgi_bridge import make_bridged_route
@@ -243,6 +244,22 @@ async def album_favourite_check(artist: str = "", album: str = "",
 async def radio_favourites():
     stations = await run_in_threadpool(DB.radio_fav_list)
     return {"stations": stations, "limit": DB.RADIO_FAV_MAX}
+
+
+# ── Binary proxies ────────────────────────────────────────────────────
+# /art is a one-shot image proxy (lock-screen artwork must be same-origin).
+# It shares api_playback.art_fetch with the legacy handler; the blocking
+# fetch runs in a threadpool. (/stream + /radio_stream — the Range/ICY byte
+# relays — are ported as StreamingResponse later; still excluded via _STREAMING.)
+
+@app.get("/art", include_in_schema=False)
+async def art(url: str = ""):
+    code, ctype, body = await run_in_threadpool(api_playback.art_fetch, url)
+    if code != 200:
+        return JSONResponse({"error": ctype}, status_code=code)
+    return Response(content=body, media_type=ctype,
+                    headers={"Cache-Control": "public, max-age=86400",
+                             "Access-Control-Allow-Origin": "*"})
 
 
 # Paths served by a native route above — must NOT also be bridged.

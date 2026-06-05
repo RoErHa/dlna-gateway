@@ -84,10 +84,11 @@ class TestBridgeWiring(unittest.TestCase):
         self.assertIn("/api/playlists", p)
         self.assertIn("/api/album_tracks", p)
 
-    def test_streaming_and_device_routes_not_bridged(self):
+    def test_unported_streams_and_device_routes_absent(self):
+        # /art is now a native route (TestArtProxy); /stream + /radio_stream
+        # are still unported, and /gw/* stays on the legacy LAN server.
         p = self._paths()
-        for excluded in ("/stream", "/art", "/radio_stream",
-                         "/gw/device.xml"):
+        for excluded in ("/stream", "/radio_stream", "/gw/device.xml"):
             self.assertNotIn(excluded, p, excluded)
 
     def test_native_routes_registered_exactly_once(self):
@@ -317,6 +318,34 @@ class TestPostBridge(unittest.TestCase):
         code, body, _ = run_legacy_sync(fake_post, '{"x":1}', command="POST")
         self.assertEqual(seen["body"], '{"x":1}')
         self.assertEqual((code, json.loads(body)), (200, {"ok": True}))
+
+
+class TestArtProxy(unittest.TestCase):
+    """The /art image proxy ported native (shares api_playback.art_fetch)."""
+
+    def test_registered_once_native(self):
+        n = sum(1 for r in dlna_asgi.app.routes
+                if getattr(r, "path", None) == "/art")
+        self.assertEqual(n, 1)
+
+    def test_art_fetch_validation(self):
+        import api_playback
+        self.assertEqual(api_playback.art_fetch("")[0], 400)        # missing
+        self.assertEqual(api_playback.art_fetch("ftp://x/y")[0], 400)  # scheme
+        self.assertEqual(api_playback.art_fetch("no-scheme")[0], 400)
+
+    def test_art_route_maps_fetch_result(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
+                               return_value=(400, "Missing url", b"")):
+            r = asyncio.run(dlna_asgi.art(url=""))
+            self.assertEqual(r.status_code, 400)
+        with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
+                               return_value=(200, "image/png", b"PNGDATA")):
+            r = asyncio.run(dlna_asgi.art(url="x"))
+            self.assertEqual((r.status_code, r.media_type), (200, "image/png"))
+            self.assertEqual(bytes(r.body), b"PNGDATA")
+            self.assertEqual(r.headers.get("Access-Control-Allow-Origin"), "*")
 
 
 class TestStaticServing(unittest.TestCase):
