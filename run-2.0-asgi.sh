@@ -44,5 +44,45 @@ if [ ! -x ".venv/bin/hypercorn" ]; then
   exit 1
 fi
 
-echo "▶  2.0 ASGI gateway → http://${BIND}   (device /gw/* + SSDP on :${GATEWAY_PORT}, LocalFs :${LOCALFS_PORT})"
-exec .venv/bin/hypercorn dlna_asgi:app --bind "${BIND}" "$@"
+# ── TLS (opt-in) ─────────────────────────────────────────────────────────────
+# Default = plain HTTP (current behaviour — for LAN testing). Set GATEWAY_TLS=1
+# to have HYPERCORN terminate TLS on the MAIN app port (it negotiates HTTP/2 via
+# ALPN automatically). The device server (/gw/* :${GATEWAY_PORT}) and LocalFs
+# (:${LOCALFS_PORT}) ALWAYS stay plain HTTP — the Naim can't do HTTPS.
+#   Cert resolution order: $GATEWAY_CERTFILE/$GATEWAY_KEYFILE → a single *.crt
+#   (+ matching .key) in this worktree → error with how to seed/point one.
+#   Seed a real one:  tailscale cert "$TAILSCALE_CERT_HOST"   (writes <host>.crt/.key here)
+#   Or point at the 1.x cert:  GATEWAY_CERTFILE=../dlna-gateway/<host>.crt \
+#                              GATEWAY_KEYFILE=../dlna-gateway/<host>.key
+# HTTP/3 (QUIC) is a later add: needs `pip install aioquic` + `--quic-bind`.
+HYP_ARGS=(dlna_asgi:app --bind "${BIND}")
+SCHEME="http"
+case "${GATEWAY_TLS:-}" in
+  1|true|yes)
+    CERTFILE="${GATEWAY_CERTFILE:-}"
+    KEYFILE="${GATEWAY_KEYFILE:-}"
+    if [ -z "${CERTFILE}" ]; then
+      for c in *.crt; do
+        [ -e "$c" ] || continue
+        k="${c%.crt}.key"
+        [ -f "$k" ] && { CERTFILE="$c"; KEYFILE="$k"; break; }
+      done
+    fi
+    if [ ! -f "${CERTFILE:-/nonexistent}" ] || [ ! -f "${KEYFILE:-/nonexistent}" ]; then
+      echo "✗  GATEWAY_TLS=1 but no cert/key found." >&2
+      echo "   Seed one in this worktree:" >&2
+      echo "       tailscale cert \"\$TAILSCALE_CERT_HOST\"   # writes <host>.crt/.key here" >&2
+      echo "   …or point at the existing 1.x cert:" >&2
+      echo "       GATEWAY_CERTFILE=../dlna-gateway/<host>.crt \\" >&2
+      echo "       GATEWAY_KEYFILE=../dlna-gateway/<host>.key  GATEWAY_TLS=1 ./run-2.0-asgi.sh" >&2
+      exit 1
+    fi
+    HYP_ARGS+=(--certfile "${CERTFILE}" --keyfile "${KEYFILE}")
+    SCHEME="https"
+    echo "🔒  TLS on — cert ${CERTFILE} (Hypercorn negotiates HTTP/2 via ALPN)"
+    echo "    device /gw/* :${GATEWAY_PORT} + LocalFs :${LOCALFS_PORT} stay PLAIN HTTP (the Naim needs it)"
+    ;;
+esac
+
+echo "▶  2.0 ASGI gateway → ${SCHEME}://${BIND}   (device /gw/* + SSDP on :${GATEWAY_PORT}, LocalFs :${LOCALFS_PORT})"
+exec .venv/bin/hypercorn "${HYP_ARGS[@]}" "$@"

@@ -88,7 +88,7 @@ Throughout: the **run-all-tests-before-git gate** applies on the 2.0 branch; pul
 - [x] Entrypoint: `dlna_asgi` lifespan starts the daemon threads (`dlna_gateway.start_background_services`) so `hypercorn dlna_asgi:app` runs standalone — launch via `run-2.0-asgi.sh`
 - [x] Device-tier server: `dlna_server.DeviceHandler` / `start_device_server` serves Naim-facing `/gw/*` plain-HTTP on `:8770` alongside Hypercorn (lifespan-started; SSDP advert points there)
 - [ ] **R2 — SSE push**
-- [ ] **TLS via Hypercorn** (`tailscale cert`) + `docs_url=None`
+- [~] **TLS via Hypercorn** — PREP DONE: `run-2.0-asgi.sh` is TLS-ready (`GATEWAY_TLS=1`, default stays plain HTTP). Verified with a self-signed cert → real TLS + HTTP/2 (ALPN). **Finish (next session):** ① seed the cert in the worktree — `tailscale cert "$TAILSCALE_CERT_HOST"` (writes `<host>.crt/.key` here) **or** point `GATEWAY_CERTFILE/GATEWAY_KEYFILE` at the 1.x cert `../dlna-gateway/ronsmacmini.tail5be6ad.ts.net.{crt,key}`; ② `GATEWAY_TLS=1 ./run-2.0-asgi.sh`, verify trusted h2 from the phone over the tailnet (`curl --http2 https://…:8768/api/version`, no `-k`); ③ at cutover set `docs_url=None` (drops the Swagger CDN call). NB: device `/gw/* :8770` + LocalFs `:8201` STAY plain HTTP (the Naim can't do HTTPS) — only the main app gets TLS. h3/QUIC = later add (`pip install aioquic` + `--quic-bind`). Cert-renewal machinery stays, becomes Hypercorn-pointed.
 
 **Phase 3 — library + providers**
 - [ ] R4 LocalFs completeness · R5 folder/`album_key` grouping · R6 Plex/Jellyfin
