@@ -823,6 +823,32 @@ class TestSSE(unittest.TestCase):
             os.environ.pop("GATEWAY_NO_SERVICES", None)
 
 
+class TestFdMonitor(unittest.TestCase):
+    """The FD watchdog (dlna_fdmon) — diagnostic for the EMFILE crash."""
+
+    def test_fd_count_and_limit_positive(self):
+        import dlna_fdmon
+        self.assertGreater(dlna_fdmon.fd_count(), 0)
+        self.assertGreater(dlna_fdmon.soft_limit(), 0)
+
+    def test_lsof_breakdown_returns_summary(self):
+        import dlna_fdmon
+        import os as _os
+        bd = dlna_fdmon.lsof_breakdown(_os.getpid())
+        self.assertIsInstance(bd, str)
+        self.assertTrue("types=" in bd or "unavailable" in bd, bd)
+
+    def test_start_fd_monitor_spawns_named_daemon(self):
+        import dlna_fdmon
+        import threading as _t
+        before = {x.name for x in _t.enumerate()}
+        dlna_fdmon.start_fd_monitor(interval=9999)   # won't tick during the test
+        names = {x.name for x in _t.enumerate()}
+        self.assertIn("fd-monitor", names)
+        mon = next(x for x in _t.enumerate() if x.name == "fd-monitor")
+        self.assertTrue(mon.daemon)
+
+
 class TestSSEPublishers(unittest.TestCase):
     """R2 slice 2: backend publishers (index status, device discovery). The
     RendererQueue 'state' publisher is covered in test_player."""

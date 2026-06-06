@@ -60,6 +60,7 @@ def _mb_lookup_cover(artist: str, album: str) -> Optional[str]:
             "query": q, "fmt": "json", "limit": "5",
         })
         conn = http.client.HTTPSConnection("musicbrainz.org", timeout=_MB_TIMEOUT)
+        resp = None
         try:
             conn.request("GET", path, headers={"User-Agent": _MB_USER_AGENT})
             resp = conn.getresponse()
@@ -70,6 +71,12 @@ def _mb_lookup_cover(artist: str, album: str) -> Optional[str]:
                 return None
             data = json.loads(body)
         finally:
+            # Close the response BEFORE the connection — an unclosed
+            # HTTPResponse triggers Python 3.14's noisy "Exception ignored
+            # while finalizing … I/O operation on closed file" GC warning
+            # (harmless, but it reads like a crash). Closing here is clean.
+            if resp is not None:
+                resp.close()
             conn.close()
 
         groups = data.get("release-groups") or []
@@ -87,6 +94,7 @@ def _mb_lookup_cover(artist: str, album: str) -> Optional[str]:
 
         conn = http.client.HTTPSConnection(
             "coverartarchive.org", timeout=_MB_TIMEOUT)
+        resp = None
         try:
             conn.request("HEAD", f"/release-group/{mbid}/front-500",
                          headers={"User-Agent": _MB_USER_AGENT})
@@ -100,6 +108,8 @@ def _mb_lookup_cover(artist: str, album: str) -> Optional[str]:
                      f"mbid={mbid}")
             return None
         finally:
+            if resp is not None:
+                resp.close()
             conn.close()
     except Exception as e:
         log.warning(f"MB/CAA lookup error for {artist!r} / {album!r}: {e}")

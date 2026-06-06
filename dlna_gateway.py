@@ -24,6 +24,7 @@ import threading
 import dlna_discovery as _disc
 from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
+from dlna_fdmon import start_fd_monitor
 from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
                           ACOUSTID_FETCHER)
 from dlna_server import (GW_UDN, ThreadedHTTPServer,
@@ -93,6 +94,11 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
     gateway's background work", shared by the stdlib entrypoint and the ASGI
     server. Run exactly one of the two (they'd otherwise double-announce on
     SSDP). `port` is the gateway-as-MediaServer advert port."""
+    # FD watchdog — logs open-FD count vs the limit so an FD leak shows up as a
+    # rising trajectory (and an lsof breakdown in the danger zone) BEFORE it
+    # exhausts the limit and crashes the gateway. See dlna_fdmon.
+    start_fd_monitor()
+
     # Wire the indexer callback into discovery
     _disc._on_server_found = _on_server_found
 

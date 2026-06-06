@@ -72,6 +72,10 @@ def raise_fd_limit(target: int = 8192) -> None:
         if soft < want:
             resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
             log.info(f"Raised open-file soft limit {soft} → {want} (hard={hard})")
+        else:
+            # Always log the effective limit — otherwise a silent no-op leaves
+            # us guessing whether the gateway has 256 or 8192 FDs of headroom.
+            log.info(f"Open-file soft limit already {soft} (hard={hard})")
     except (ValueError, OSError) as e:
         log.warning(f"Could not raise open-file limit: {e}")
 
