@@ -872,6 +872,25 @@ class TestLastNativePorts(unittest.TestCase):
         self.assertEqual(body["source"], "icy")
 
 
+class TestLoopExceptionHandler(unittest.TestCase):
+    """Benign client-transport teardown (TimeoutError/ETIMEDOUT a client left)
+    is swallowed; real errors pass through to the default handler."""
+
+    def test_swallows_benign_client_teardown(self):
+        loop = mock.MagicMock()
+        ctx = {"message": "Unhandled exception in client_connected_cb",
+               "exception": TimeoutError("[Errno 60] Operation timed out")}
+        dlna_asgi._loop_exception_handler(loop, ctx)
+        loop.default_exception_handler.assert_not_called()
+
+    def test_passes_through_real_errors(self):
+        loop = mock.MagicMock()
+        ctx = {"message": "Task exception was never retrieved",
+               "exception": ValueError("boom")}
+        dlna_asgi._loop_exception_handler(loop, ctx)
+        loop.default_exception_handler.assert_called_once_with(ctx)
+
+
 class TestFdMonitor(unittest.TestCase):
     """The FD watchdog (dlna_fdmon) — diagnostic for the EMFILE crash."""
 

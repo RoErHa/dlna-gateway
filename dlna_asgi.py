@@ -53,6 +53,21 @@ def _truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
 
 
+def _loop_exception_handler(loop, context):
+    """Downgrade benign client-transport teardown errors to debug. Hypercorn's
+    TCPServer._close() doesn't catch TimeoutError/ETIMEDOUT on Python 3.14, so a
+    client connection that times out or resets uncleanly escapes as 'Unhandled
+    exception in client_connected_cb' — a scary-looking but harmless traceback
+    (no request impact, no FD leak). Everything else goes to the default
+    handler so real bugs are still surfaced."""
+    exc = context.get("exception")
+    msg = context.get("message", "")
+    if "client_connected_cb" in msg and isinstance(exc, OSError):
+        log.debug(f"asyncio: benign client transport teardown — {exc!r}")
+        return
+    loop.default_exception_handler(context)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Boot the gateway's background services so `hypercorn dlna_asgi:app` runs
@@ -87,7 +102,9 @@ async def _lifespan(app: FastAPI):
     # Bind the SSE event bus to this loop so worker threads can publish() live
     # updates to /api/events subscribers (R2). Unconditional — the web tier
     # serves SSE regardless of GATEWAY_NO_SERVICES.
-    EVENTS.bind_loop(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    EVENTS.bind_loop(loop)
+    loop.set_exception_handler(_loop_exception_handler)
     started = False
     device_server = None
     if not _truthy("GATEWAY_NO_SERVICES"):
