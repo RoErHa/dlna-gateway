@@ -81,11 +81,17 @@ def _normalize_station(s: dict) -> dict:
 
 
 def search(h, params):
-    """GET /api/radio/search?q=&country=&tag=&limit=
+    code, body = search_payload(params)
+    h._json(code, body)
+
+
+def search_payload(params) -> tuple:
+    """Core of GET /api/radio/search?q=&country=&tag=&limit= → (status, body).
 
     Proxy a radio-browser station search. HLS streams are filtered out
     — UPnP renderers can't play them and browser <audio> only does on
-    Safari (see CLAUDE.md). Returns a JSON array of normalized stations.
+    Safari (see CLAUDE.md). On 200 the body is a JSON array of normalized
+    stations. Shared by the legacy handler and the 2.0 native route.
     """
     q       = (params.get("q") or "").strip()
     country = (params.get("country") or "").strip()
@@ -95,8 +101,7 @@ def search(h, params):
     except (TypeError, ValueError):
         limit = 40
     if not q and not country and not tag:
-        h._json(400, {"error": "need one of q, country, tag"})
-        return
+        return 400, {"error": "need one of q, country, tag"}
 
     query = {"limit": str(limit * 2),          # over-fetch; HLS filter trims
              "hidebroken": "true",
@@ -108,14 +113,12 @@ def search(h, params):
 
     data = _radiobrowser_get(path)
     if data is None:
-        h._json(502, {"error": "radio directory unreachable"})
-        return
+        return 502, {"error": "radio directory unreachable"}
     if not isinstance(data, list):
-        h._json(502, {"error": "radio directory returned bad data"})
-        return
+        return 502, {"error": "radio directory returned bad data"}
     out = [_normalize_station(s) for s in data
            if not s.get("hls") and (s.get("url_resolved") or s.get("url"))]
-    h._json(200, out[:limit])
+    return 200, out[:limit]
 
 
 def favourites(h, params):
@@ -202,17 +205,23 @@ def nowplaying(h, params):
     Returns {title, source}. An empty title means nothing is known yet
     (stream just started, or the station sends no metadata).
     """
+    code, body = nowplaying_payload(params)
+    h._json(code, body)
+
+
+def nowplaying_payload(params) -> tuple:
+    """Core of GET /api/radio/nowplaying → (status, body). Shared legacy +
+    native. NB the `?udn=` path calls snapshot() which may issue SOAP to the
+    renderer — runs in a threadpool on the native route."""
     stream = params.get("stream", "")
     udn    = params.get("udn", "")
     if stream:
         info = dlna_stream_proxy.icy_now(stream)
-        h._json(200, {"title":  (info or {}).get("title", ""),
-                      "source": "icy", "stream": stream})
-        return
+        return 200, {"title":  (info or {}).get("title", ""),
+                     "source": "icy", "stream": stream}
     if udn:
         q    = QUEUES.peek(udn)
         snap = q.snapshot() if q else {}
-        h._json(200, {"title":  snap.get("media_title", ""),
-                      "source": "upnp", "udn": udn})
-        return
-    h._json(400, {"error": "need stream or udn"})
+        return 200, {"title":  snap.get("media_title", ""),
+                     "source": "upnp", "udn": udn}
+    return 400, {"error": "need stream or udn"}

@@ -233,28 +233,33 @@ def lyrics(h, params):
       { plain: str|null, synced: str|null, source: str, cached: bool }
         source ∈ {'lrclib', 'notfound', 'manual'}
     """
+    code, body = lyrics_payload(params)
+    h._json(code, body)
+
+
+def lyrics_payload(params) -> tuple:
+    """Core of GET /api/lyrics → (status, body). Cache-first; one lrclib call
+    per URL on a miss. Shared by the legacy handler and the 2.0 native route
+    (the lrclib network call runs in a threadpool there)."""
     from dlna_player import _dur_to_sec
     import dlna_lyrics
 
     url = params.get("url", "")
     if not url:
-        h._json(400, {"error": "missing url"})
-        return
+        return 400, {"error": "missing url"}
 
     cached = DB.get_lyrics(url)
     if cached is not None:
-        h._json(200, {
+        return 200, {
             "plain":  cached["plain"],
             "synced": cached["synced"],
             "source": cached["source"],
             "cached": True,
-        })
-        return
+        }
 
     meta = DB.track_meta_by_url(url)
     if not meta or not (meta.get("title") and meta.get("artist")):
-        h._json(404, {"error": "track not in library", "source": "notfound"})
-        return
+        return 404, {"error": "track not in library", "source": "notfound"}
 
     duration_sec = _dur_to_sec(meta.get("duration") or 0)
     try:
@@ -263,23 +268,20 @@ def lyrics(h, params):
             meta.get("album") or "", duration_sec)
     except dlna_lyrics.LrclibNotFound:
         DB.set_lyrics(url, None, None, "notfound")
-        h._json(200, {"plain": None, "synced": None,
-                      "source": "notfound", "cached": False})
-        return
+        return 200, {"plain": None, "synced": None,
+                     "source": "notfound", "cached": False}
 
     if not result:
         # Network error — DON'T cache, so the next tap retries.
-        h._json(502, {"error": "lyrics provider unreachable",
-                      "source": "error"})
-        return
+        return 502, {"error": "lyrics provider unreachable", "source": "error"}
 
     DB.set_lyrics(url, result.get("plain"), result.get("synced"), "lrclib")
-    h._json(200, {
+    return 200, {
         "plain":  result.get("plain"),
         "synced": result.get("synced"),
         "source": "lrclib",
         "cached": False,
-    })
+    }
 
 
 # ── POST handlers ─────────────────────────────────────────────────

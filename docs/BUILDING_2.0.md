@@ -80,7 +80,7 @@ Throughout: the **run-all-tests-before-git gate** applies on the 2.0 branch; pul
 - [x] Legacy-handler bridge (`dlna_asgi_bridge.py`) — whole read API under Hypercorn
 - [x] Native read routes: servers/renderers; artists/albums/genres + drill-downs; decades/decade_*; search; browse_letter; index/status; track_meta; playlists/playlist; album_favourites(+check); radio/favourites
 - [x] AcoustID **minimal removal** (endpoints + PWA 🔎 Enrich button)
-- [ ] Remaining bridged reads native (lyrics, radio/search, radio/nowplaying, radio, browse) — optional
+- [x] Remaining bridged reads native (lyrics, radio/search, radio/nowplaying, radio, browse) — via the `*_payload()` extraction (shared core returns `(status, body)`; legacy handler + native route both call it → no divergence, incl. browse's side effects + the network calls run in the threadpool). The whole READ API is now native; only POST writes remain bridged.
 - [x] POST routes (bridged — whole write API under Hypercorn; native later)
 - [x] Byte-streamers as `StreamingResponse` (`/stream`, `/art`, `/radio_stream`)
 - [x] Subsonic `/rest/*` (JSON/XML bridged; stream/download/getCoverArt native)

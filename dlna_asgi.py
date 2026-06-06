@@ -35,6 +35,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 import api_browse
 import api_playback
+import api_radio
 import api_subsonic
 import dlna_routes
 import dlna_server
@@ -324,6 +325,47 @@ async def radio_favourites():
     return {"stations": stations, "limit": DB.RADIO_FAV_MAX}
 
 
+# ── Last bridged reads → native (the *_payload extraction pattern) ────
+# Each calls a shared core in its api_* module that returns (status, body);
+# the legacy (h, params) handler calls the SAME core, so there's no behaviour
+# divergence (incl. browse's SERVERS.touch/re-probe side effects and the
+# radio/search + lyrics network calls — all run in the threadpool here).
+
+@app.get("/api/browse", include_in_schema=False)
+async def browse_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_browse.browse_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/radio", include_in_schema=False)
+async def radio_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_browse.radio_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/radio/search", include_in_schema=False)
+async def radio_search_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_radio.search_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/radio/nowplaying", include_in_schema=False)
+async def radio_nowplaying_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_radio.nowplaying_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/lyrics", include_in_schema=False)
+async def lyrics_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_playback.lyrics_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
 # ── Binary proxies ────────────────────────────────────────────────────
 # /art is a one-shot image proxy (lock-screen artwork must be same-origin).
 # It shares api_playback.art_fetch with the legacy handler; the blocking
@@ -544,7 +586,9 @@ _NATIVE = {"/api/version", "/api/servers", "/api/renderers",
            "/api/search", "/api/browse_letter",
            "/api/index/status", "/api/track_meta", "/api/playlists",
            "/api/playlist", "/api/album_favourites",
-           "/api/album_favourites/check", "/api/radio/favourites"}
+           "/api/album_favourites/check", "/api/radio/favourites",
+           "/api/browse", "/api/radio", "/api/radio/search",
+           "/api/radio/nowplaying", "/api/lyrics"}
 
 
 # ── Bridged legacy read routes ────────────────────────────────────────

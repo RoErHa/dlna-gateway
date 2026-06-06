@@ -823,6 +823,55 @@ class TestSSE(unittest.TestCase):
             os.environ.pop("GATEWAY_NO_SERVICES", None)
 
 
+class TestLastNativePorts(unittest.TestCase):
+    """The final bridged reads ported native via the *_payload pattern:
+    /api/browse, /api/radio, /api/radio/search, /api/radio/nowplaying,
+    /api/lyrics. Phase 2 fully off the bridge for reads."""
+
+    _PATHS = ("/api/browse", "/api/radio", "/api/radio/search",
+              "/api/radio/nowplaying", "/api/lyrics")
+
+    def test_registered_once_native_not_bridged(self):
+        paths = [getattr(r, "path", None) for r in dlna_asgi.app.routes]
+        for p in self._PATHS:
+            self.assertEqual(paths.count(p), 1, p)
+            self.assertIn(p, dlna_asgi._NATIVE, p)
+            self.assertFalse(dlna_asgi._bridgeable(p), p)
+
+    @staticmethod
+    def _call(route, **qp):
+        req = types.SimpleNamespace(query_params=qp)
+        return asyncio.run(route(req))
+
+    def test_validation_bodies_match_legacy(self):
+        r = self._call(dlna_asgi.radio_route)               # missing udn
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(json.loads(r.body)["error"], "Missing udn")
+
+        r = self._call(dlna_asgi.radio_search_route)        # no q/country/tag
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("need one of", json.loads(r.body)["error"])
+
+        r = self._call(dlna_asgi.radio_nowplaying_route)    # no stream/udn
+        self.assertEqual(r.status_code, 400)
+
+        r = self._call(dlna_asgi.lyrics_route)              # no url
+        self.assertEqual(r.status_code, 400)
+
+        r = self._call(dlna_asgi.browse_route, udn="nope")  # unknown server
+        self.assertEqual(r.status_code, 404)
+
+    def test_nowplaying_icy_path_delegates(self):
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_radio.dlna_stream_proxy,
+                               "icy_now", return_value={"title": "Foo - Bar"}):
+            r = self._call(dlna_asgi.radio_nowplaying_route, stream="http://s")
+        self.assertEqual(r.status_code, 200)
+        body = json.loads(r.body)
+        self.assertEqual(body["title"], "Foo - Bar")
+        self.assertEqual(body["source"], "icy")
+
+
 class TestFdMonitor(unittest.TestCase):
     """The FD watchdog (dlna_fdmon) — diagnostic for the EMFILE crash."""
 
