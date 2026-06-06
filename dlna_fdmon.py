@@ -81,17 +81,26 @@ def lsof_breakdown(pid: int) -> str:
             f"file_dirs={dict(dirs.most_common(5))}")
 
 
-def start_fd_monitor(interval: float = 15.0,
+def start_fd_monitor(interval: float = 10.0,
                      warn_frac: float = 0.50,
                      dump_frac: float = 0.70,
-                     heartbeat_every: int = 16) -> None:
+                     rise_threshold: int = 500,
+                     dump_cooldown: float = 30.0,
+                     heartbeat_every: int = 24) -> None:
     """Start the FD watchdog daemon thread.
 
-    interval        — seconds between samples (default 15)
+    interval        — seconds between samples (default 10)
     warn_frac       — log a WARN once usage is this fraction of the limit
     dump_frac       — log a WARN + lsof breakdown above this fraction
-    heartbeat_every — also log an INFO baseline every Nth sample (default 16
-                      = every 4 min) so the steady-state count is visible too
+    rise_threshold  — ALSO dump the breakdown when FDs jump by this many
+                      between samples (default 500 — above the ~280 steady-
+                      state peak, so it fires on an abnormal climb and catches
+                      the culprit EARLY, before a fast leak reaches the limit
+                      and kills the gateway)
+    dump_cooldown   — min seconds between lsof dumps, so a sustained climb logs
+                      progression without spamming
+    heartbeat_every — log an INFO baseline every Nth sample (default 24 =
+                      every 4 min) so the steady-state count is visible too
     """
     pid = os.getpid()
     if fd_count() < 0:
@@ -100,27 +109,32 @@ def start_fd_monitor(interval: float = 15.0,
 
     def _loop():
         peak = 0
-        last_dump_at = 0
+        prev = fd_count()
+        last_dump_t = 0.0
         tick = 0
         while True:
             n = fd_count()
             lim = soft_limit()
             frac = (n / lim) if lim > 0 else 0.0
+            rapid = (n - prev) >= rise_threshold
             if n > peak + 100:                       # visible jump → record it
                 peak = n
                 log.info(f"FD high-water: {n}/{lim} ({frac:.0%})")
-            if frac >= dump_frac and n > last_dump_at + max(50, lim * 0.05):
-                last_dump_at = n
-                log.warning(f"FD usage HIGH {n}/{lim} ({frac:.0%}) — "
+            if (rapid or frac >= dump_frac) and (time.time() - last_dump_t) > dump_cooldown:
+                last_dump_t = time.time()
+                why = f"RAPID +{n - prev} in {int(interval)}s" if rapid \
+                    else f"{frac:.0%} of limit"
+                log.warning(f"FD usage ALERT ({why}) {n}/{lim} — "
                             f"breakdown: {lsof_breakdown(pid)}")
             elif frac >= warn_frac:
                 log.warning(f"FD usage rising {n}/{lim} ({frac:.0%})")
             elif tick % heartbeat_every == 0:
                 log.info(f"FD usage {n}/{lim} ({frac:.0%})")
+            prev = n
             tick += 1
             time.sleep(interval)
 
     threading.Thread(target=_loop, daemon=True, name="fd-monitor").start()
     log.info(f"FD monitor started: {fd_count()}/{soft_limit()} fds, "
              f"interval={int(interval)}s warn@{int(warn_frac*100)}% "
-             f"dump@{int(dump_frac*100)}%")
+             f"dump@{int(dump_frac*100)}% rapid@+{rise_threshold}")
