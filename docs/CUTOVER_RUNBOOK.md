@@ -74,7 +74,11 @@ Use the plist from **`CUTOVER_LAUNCHD.md`** (it sets `GW_UDN`, `LOCALFS_PORT=820
 the dual bind `:8765`+`:8443`, `GATEWAY_PORT=8770`, `SUBSONIC_*`, and the 8192 FD
 `SoftResourceLimits`).
 ```bash
-cp com.roha.dlna-gateway.plist ~/Library/LaunchAgents/   # the 2.x one
+# NB: the 2.x cutover plist is com.roha.dlna-gateway.cutover.plist — NOT the
+# public template com.roha.dlna-gateway.plist (placeholder paths, stdlib python).
+# It is installed UNDER the 1.x label name. Put the real SUBSONIC_PASSWORD into
+# the installed copy by hand (the committed plist ships it empty).
+cp com.roha.dlna-gateway.cutover.plist ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
 launchctl load ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
 tail -f /Users/ronhamersma/dlna-gateway-2.0/gateway.log  # watch it boot
 ```
@@ -95,7 +99,8 @@ track is re-upserted on the adopted `:8200` base and the copied `metadata_overri
 ```bash
 UDN=$(curl -sk https://127.0.0.1:8443/api/servers | python3 -c \
    'import sys,json;print(next(s["udn"] for s in json.load(sys.stdin) if s["udn"].startswith("uuid:localfs-")))')
-curl -sk "https://127.0.0.1:8443/api/index/rebuild?udn=$UDN" -X POST
+# NB: /api/index/rebuild is a GET route (in GET_ROUTES) — a -X POST returns 405.
+curl -sk "https://127.0.0.1:8443/api/index/rebuild?udn=$UDN"
 # watch gateway.log for "rescan complete" / index done
 ```
 
@@ -103,6 +108,14 @@ curl -sk "https://127.0.0.1:8443/api/index/rebuild?udn=$UDN" -X POST
 - **PWA**: open `https://ronsmacmini.tail5be6ad.ts.net:8443/` from the phone (trusted h2, no warning); browse shows ~2,110 folder-grouped albums; album **covers** present; a known **year correction** shows in now-playing; **radio stations** present; playlists/favourites **empty** (fresh, by design).
 - **Naim**: queue an album → plays, gapless across tracks.
 - **Amperfy/CarPlay**: connects to `https://…:8443/rest`, browses, plays.
+- **Art port**: if you soaked on a *different* `LOCALFS_PORT` (e.g. `:8201` via
+  `run-2.0-asgi.sh`) than the cutover (`:8200`), `tracks.art` may still carry the
+  stale soak port — the force rebuild does NOT rewrite already-set art. Check +
+  fix:
+  ```bash
+  sqlite3 library.db "SELECT COUNT(*) FROM tracks WHERE art LIKE '%:8201/%';"   # must be 0
+  sqlite3 library.db "UPDATE tracks SET art=replace(art,':8201/localfs/art/',':8200/localfs/art/') WHERE art LIKE 'http://%:8201/localfs/art/%';"
+  ```
 - **FD monitor**: `grep "FD usage" gateway.log` — flat, low (no subnet-scan spikes).
 - **No** `Servers offline — subnet scan` and **no** asyncio `client_connected_cb` tracebacks.
 
