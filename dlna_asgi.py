@@ -134,7 +134,10 @@ async def _lifespan(app: FastAPI):
         EVENTS.bind_loop(None)      # drop the (now closing) loop reference
 
 
-app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url="/api/docs",
+# docs_url=None: disable the Swagger UI page — it pulls swagger-ui assets from a
+# CDN (jsdelivr) on load, an outbound call we don't want from a LAN/tailnet-only
+# gateway. redoc_url already off. (Cutover runbook step 1, privacy.)
+app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url=None,
               redoc_url=None, lifespan=_lifespan)
 
 
