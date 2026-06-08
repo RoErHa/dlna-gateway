@@ -127,11 +127,14 @@ existing weekly auto-renewal (`renew-cert.sh` + `com.roha.dlna-cert-renew`).
         <key>GATEWAY_PORT</key>
         <string>8770</string>
 
-        <!-- Subsonic (CarPlay/Amperfy) — same creds as 1.x -->
+        <!-- Subsonic (CarPlay/Amperfy). NEVER hardcode the password in a
+             committed file. Put the real value ONLY in the installed plist
+             (~/Library/LaunchAgents, not in git) or via
+             `launchctl setenv SUBSONIC_PASSWORD …` / .env (gitignored). -->
         <key>SUBSONIC_USER</key>
         <string>ronhamer</string>
         <key>SUBSONIC_PASSWORD</key>
-        <string>Xadvyz-8rijsy-jyzkih</string>
+        <string></string>
     </dict>
 </dict>
 </plist>
