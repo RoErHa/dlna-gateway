@@ -10,6 +10,12 @@ Built because the manufacturer apps (Focal & Naim, etc.) are slow,
 flaky, or platform-locked. This one runs anywhere Python runs and is
 usable from any device with a browser.
 
+**2.0** — the gateway is a **FastAPI ASGI app served by Hypercorn**, which
+terminates **TLS + HTTP/2** natively (HTTP/3 ready) using a `tailscale cert`.
+A LAN-only plain-HTTP device tier (`/gw/*`) and the RoHaLocalFS file server
+stay un-encrypted for UPnP renderers that can't do HTTPS. See
+[docs/ARCHITECTURE.PDF](docs/ARCHITECTURE.PDF) for the full picture.
+
 ---
 
 ## Features
@@ -114,6 +120,15 @@ cp .env.example .env       # then edit to set SUBSONIC_PASSWORD etc.
 ```
 
 Open `http://localhost:8765/` in any browser.
+
+**Running the 2.0 ASGI stack (Hypercorn + TLS/HTTP-2).** `./setup.sh --run`
+(and `python dlna_gateway.py`) start the legacy stdlib server; the 2.0 edge is
+Hypercorn serving `dlna_asgi:app`. Use **`./run-2.0-asgi.sh`** for that
+(`GATEWAY_TLS=1` to terminate TLS+h2 on `:8443`, auto-discovering a
+`tailscale cert`). The device tier `/gw/*` (`:8770`) and RoHaLocalFS (`:8200`)
+are started in-process and stay plain HTTP. A production LaunchAgent that adopts
+this on `:8443`/`:8765` is documented in
+[docs/CUTOVER_LAUNCHD.md](docs/CUTOVER_LAUNCHD.md).
 
 For auto-start at login: see the comments at the top of
 `com.roha.dlna-gateway.plist` (it's a LaunchAgent template — edit the
@@ -281,10 +296,15 @@ radio favourites) survives a `clear()` / rebuild-index. See `schema.sql`
 
 ## Architecture
 
-For a deep dive on threading, the per-renderer playback model,
-external services, and module layout, read [CLAUDE.md](CLAUDE.md).
-It's written for a future engineer (or AI assistant) picking up
-the code cold.
+A one-page coloured diagram of the whole 2.0 system (every program,
+tool, device, external service, and scheduled job, with the request
+flows colour-coded) plus reference tables is in
+[docs/ARCHITECTURE.PDF](docs/ARCHITECTURE.PDF).
+
+For the deep dive on threading, the ASGI app + bridge, the per-renderer
+playback model, the `LibraryProvider` seam, external services, and module
+layout, read [CLAUDE.md](CLAUDE.md). It's written for a future engineer
+(or AI assistant) picking up the code cold.
 
 ## Acknowledgments
 
