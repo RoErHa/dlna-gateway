@@ -130,7 +130,6 @@ def main():
         print(f"  📦 backed up dest → {bak}")
 
     filled = notfound = reused = 0
-    now = int(time.time())
     for ak, artist, album in cand:
         c = cached_album_art(conn, artist, album)
         if c and c["source"] == "notfound" and not args.retry_notfound:
@@ -140,11 +139,13 @@ def main():
             reused += 1
         else:
             art_url = _mb_lookup_cover(artist, album)
+            # album_art.art_url is NOT NULL — a miss is stored as '' (same as
+            # the AlbumArtFetcher's sticky notfound). updated_at defaults.
             conn.execute(
-                "INSERT OR REPLACE INTO album_art(artist, album, art_url, "
-                "source, updated_at) VALUES (?,?,?,?,?)",
-                (artist, album, art_url,
-                 "musicbrainz" if art_url else "notfound", now))
+                "INSERT OR REPLACE INTO album_art(artist, album, art_url, source) "
+                "VALUES (?,?,?,?)",
+                (artist, album, art_url or "",
+                 "musicbrainz" if art_url else "notfound"))
             conn.commit()
             time.sleep(_MB_RATE_LIMIT_SEC)
             if not art_url:
