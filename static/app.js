@@ -332,7 +332,12 @@ function showTab(tab){
   $("browse-modes").style.display = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
   $("letter-bar").style.display   = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
   if(tab==="browse"){
-    if(curServer) { buildLetterBar(); loadBrowsePage(); }
+    // Entering Browse always returns to the ROOT (artist list + letter bar).
+    // Without resetting the drill state, re-tapping Browse after drilling into
+    // an album (e.g. on returning from Now Playing) left drillArtist/drillAlbum
+    // set: loadBrowsePage hid the back button while letter-bar/browse-modes
+    // stayed hidden too — no nav chrome at all, stuck on the album.
+    if(curServer) { buildLetterBar(); exitDrillDown(true); }
   } else if(tab==="playlists"){
     loadPlaylists();
   } else if(tab==="favourites"){
