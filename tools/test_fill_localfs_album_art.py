@@ -67,6 +67,15 @@ class TestArtlessSelection(unittest.TestCase):
              "http://localfs/art/abc")
         # Album C: art-less but no usable artist/album (Various/blank).
         _add(self.c, "u5", "", "", "Comp/Unknown", "")
+        # Album D: Various-Artists compilation (3 distinct artists, none
+        # dominant) → must be SKIPPED (never wrong-arted).
+        _add(self.c, "u6", "Artist A", "Top Hits", "VA/TopHits", "")
+        _add(self.c, "u7", "Artist B", "Top Hits", "VA/TopHits", "")
+        _add(self.c, "u8", "Artist C", "Top Hits", "VA/TopHits", "")
+        # Album E: one artist dominates (4 of 5) + a guest → KEPT.
+        for i in range(9, 13):
+            _add(self.c, f"u{i}", "Main", "LP", "Main/LP", "")
+        _add(self.c, "u13", "Guest", "LP", "Main/LP", "")
         self.c.commit()
 
     def tearDown(self):
@@ -84,6 +93,13 @@ class TestArtlessSelection(unittest.TestCase):
         rows = {r[0]: (r[1], r[2]) for r in fill.artless_folder_albums(self.c)}
         self.assertEqual(rows["Camel/Mirage"], ("Camel", "Mirage"))
         self.assertEqual(rows["Comp/Unknown"], ("", ""))   # no usable metadata
+
+    def test_compilation_skipped_dominant_artist_kept(self):
+        rows = {r[0]: (r[1], r[2]) for r in fill.artless_folder_albums(self.c)}
+        # Various-Artists comp → skipped (no single artist to look up).
+        self.assertEqual(rows["VA/TopHits"], ("", ""))
+        # One artist owns 4/5 → kept for lookup.
+        self.assertEqual(rows["Main/LP"], ("Main", "LP"))
 
 
 class TestApply(unittest.TestCase):
