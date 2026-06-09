@@ -36,6 +36,25 @@ def _add(c, url, artist, album, ak, art=""):
               "VALUES (?,?,?,?,?)", (url, artist, album, ak, art))
 
 
+class TestCleanAlbum(unittest.TestCase):
+    def test_strips_edition_format_disc_noise(self):
+        cases = {
+            "The Snow Goose (SHM-CD)": "The Snow Goose",
+            "Playback- Spoiled & Mistreated-CD2": "Playback- Spoiled & Mistreated",
+            "Born to Run [30th Anniversary Edition] Disc 3": "Born to Run",
+            "The Very Best of Paul Anka [RCA US]": "The Very Best of Paul Anka",
+            "Old School Soul Party Disc 1": "Old School Soul Party",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(fill.clean_album(raw), want, raw)
+
+    def test_plain_name_unchanged(self):
+        self.assertEqual(fill.clean_album("Fragile"), "Fragile")
+
+    def test_all_noise_returns_empty(self):
+        self.assertEqual(fill.clean_album("(Deluxe Edition)"), "")
+
+
 class TestArtlessSelection(unittest.TestCase):
     def setUp(self):
         self.path, self.c = _make_db()
@@ -48,6 +67,15 @@ class TestArtlessSelection(unittest.TestCase):
              "http://localfs/art/abc")
         # Album C: art-less but no usable artist/album (Various/blank).
         _add(self.c, "u5", "", "", "Comp/Unknown", "")
+        # Album D: Various-Artists compilation (3 distinct artists, none
+        # dominant) → must be SKIPPED (never wrong-arted).
+        _add(self.c, "u6", "Artist A", "Top Hits", "VA/TopHits", "")
+        _add(self.c, "u7", "Artist B", "Top Hits", "VA/TopHits", "")
+        _add(self.c, "u8", "Artist C", "Top Hits", "VA/TopHits", "")
+        # Album E: one artist dominates (4 of 5) + a guest → KEPT.
+        for i in range(9, 13):
+            _add(self.c, f"u{i}", "Main", "LP", "Main/LP", "")
+        _add(self.c, "u13", "Guest", "LP", "Main/LP", "")
         self.c.commit()
 
     def tearDown(self):
@@ -65,6 +93,13 @@ class TestArtlessSelection(unittest.TestCase):
         rows = {r[0]: (r[1], r[2]) for r in fill.artless_folder_albums(self.c)}
         self.assertEqual(rows["Camel/Mirage"], ("Camel", "Mirage"))
         self.assertEqual(rows["Comp/Unknown"], ("", ""))   # no usable metadata
+
+    def test_compilation_skipped_dominant_artist_kept(self):
+        rows = {r[0]: (r[1], r[2]) for r in fill.artless_folder_albums(self.c)}
+        # Various-Artists comp → skipped (no single artist to look up).
+        self.assertEqual(rows["VA/TopHits"], ("", ""))
+        # One artist owns 4/5 → kept for lookup.
+        self.assertEqual(rows["Main/LP"], ("Main", "LP"))
 
 
 class TestApply(unittest.TestCase):

@@ -29,6 +29,7 @@ first.
 """
 import argparse
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -37,11 +38,27 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def clean_album(album: str) -> str:
+    """Strip edition / format / disc noise that stops a MusicBrainz match.
+    'The Snow Goose (SHM-CD)' → 'The Snow Goose'; 'Born to Run [30th
+    Anniversary Edition] Disc 3' → 'Born to Run'. Returns '' if nothing's left
+    (caller falls back to the raw name)."""
+    a = re.sub(r'\s*[\(\[][^)\]]*[\)\]]', ' ', album)       # (Deluxe), [FLAC]
+    a = re.sub(r'[-–—]?\s*\b(cd|disc|disk)\s*\.?\s*\d+\b', ' ', a, flags=re.I)
+    a = re.sub(r'\s+', ' ', a).strip(" -–—,;:")
+    return a
+
+
+_COMP_MIN_DOMINANCE = 0.6   # one artist must own >=60% of a folder's tracks
+
+
 def artless_folder_albums(conn: sqlite3.Connection):
     """Return [(album_key, artist, album)] for folder albums where NO track has
-    art, using the most common (artist, album) among each album's tracks as the
-    lookup key. Albums with no usable artist+album are returned with '' fields
-    (the caller skips them)."""
+    art, using the most common (artist, album) as the lookup key. Albums with no
+    usable artist+album — OR that look like Various-Artists COMPILATIONS — are
+    returned with '' fields so the caller skips them: a comp has no single
+    artist, so a per-(artist, album) MB lookup would risk writing a WRONG cover
+    onto it. Compilations are left exactly as-is (blank), never mis-arted."""
     artless = [r[0] for r in conn.execute(
         "SELECT album_key FROM tracks WHERE album_key!='' GROUP BY album_key "
         "HAVING MAX(CASE WHEN art!='' THEN 1 ELSE 0 END)=0").fetchall()]
@@ -51,10 +68,19 @@ def artless_folder_albums(conn: sqlite3.Connection):
             "SELECT artist, album, COUNT(*) n FROM tracks "
             "WHERE album_key=? AND artist!='' AND album!='' "
             "GROUP BY artist, album ORDER BY n DESC LIMIT 1", (ak,)).fetchone()
-        if row:
-            out.append((ak, row["artist"], row["album"]))
-        else:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE album_key=? AND artist!=''",
+            (ak,)).fetchone()[0]
+        if not row or not total:
             out.append((ak, "", ""))
+            continue
+        artist = row["artist"]
+        dom = conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE album_key=? AND artist=?",
+            (ak, artist)).fetchone()[0]
+        is_comp = ("various" in artist.lower()
+                   or dom / total < _COMP_MIN_DOMINANCE)
+        out.append((ak, "", "") if is_comp else (ak, artist, row["album"]))
     return out
 
 
@@ -98,9 +124,9 @@ def main():
 
     print(f"  Fill LocalFs album art  [{'APPLY' if args.apply else 'DRY-RUN'}]")
     print(f"    art-less folder albums : {len(albums)}")
-    print(f"    with usable metadata   : {len(cand)}"
+    print(f"    single-artist (lookup) : {len(cand)}"
           + (f"  (capped to {args.limit})" if args.limit else ""))
-    print(f"    no artist/album (skip) : {skip_meta}")
+    print(f"    comp / no-metadata skip: {skip_meta}  (left as-is, never wrong-arted)")
 
     if not args.apply:
         # Preview only — no network. Show how many are already cached vs new.
@@ -138,7 +164,10 @@ def main():
             art_url = c["art_url"]
             reused += 1
         else:
-            art_url = _mb_lookup_cover(artist, album)
+            # Query MB with the noise-stripped album name (much higher match
+            # rate on edition/disc-suffixed titles); fall back to the raw name.
+            q_album = clean_album(album) or album
+            art_url = _mb_lookup_cover(artist, q_album)
             # album_art.art_url is NOT NULL — a miss is stored as '' (same as
             # the AlbumArtFetcher's sticky notfound). updated_at defaults.
             conn.execute(
