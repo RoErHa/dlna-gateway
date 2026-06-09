@@ -572,13 +572,13 @@ async def subsonic(request: Request, rest_path: str):
         params = api_subsonic._parse_params(query, body)
         sid = params.get("id", "")
         if method == "getcoverart":
-            art_url = await run_in_threadpool(api_subsonic._cover_art_url, sid)
-            if not art_url:
-                return Response(content=b"no art", status_code=404)
+            # Try every candidate art URL for the id (folder albums have one
+            # per track; some files lack embedded art) and serve the first that
+            # actually fetches 200 — not an arbitrary one that may 404.
             code, ctype, art_body = await run_in_threadpool(
-                api_playback.art_fetch_cached, art_url)
+                api_subsonic._resolve_cover, sid, api_playback.art_fetch_cached)
             if code != 200:
-                return JSONResponse({"error": ctype}, status_code=code)
+                return Response(content=b"no art", status_code=404)
             return Response(content=art_body, media_type=ctype,
                             headers={"Cache-Control": "public, max-age=86400",
                                      "Access-Control-Allow-Origin": "*"})

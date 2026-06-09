@@ -755,44 +755,44 @@ def _stream(h, params):
     proxy_stream(url, h)
 
 
-def _cover_art_url(sid: str) -> str:
-    """Resolve a Subsonic cover ID (al:/tr:/ar:) to an art URL, or '' if none.
-    Pure DB lookups — shared by the legacy byte handler `_get_cover_art` and
-    the 2.0 native /rest/getCoverArt route (dlna_asgi)."""
-    art_url = ""
+def _cover_art_candidates(sid: str) -> list:
+    """Ordered candidate art URLs for a Subsonic cover id (al:/tr:/ar:).
+
+    A folder album's tracks each carry their OWN `/localfs/art/<id>` URL, and
+    some files have no embedded picture (that id 404s). The old code took an
+    arbitrary `LIMIT 1`, so getCoverArt could 404 even though OTHER tracks in
+    the same folder have art. We return ALL distinct candidates and let
+    `_resolve_cover` serve the first that actually fetches 200. Pure DB lookups."""
+    out = []
     if sid.startswith("al:"):
         decoded = _album_id_decode(sid)
         if decoded:
             artist, album, album_key = decoded
             with DB._pool.read() as c:
                 if album_key:
-                    # LocalFs folder identity: art lives on the folder's
-                    # tracks, not under (artist, album) in album_art.
-                    row = c.execute(
-                        "SELECT art FROM tracks WHERE album_key=? "
-                        "AND art != '' LIMIT 1", (album_key,)).fetchone()
-                    if row:
-                        art_url = row["art"]
+                    # LocalFs folder identity: art lives on the folder's tracks.
+                    rows = c.execute(
+                        "SELECT DISTINCT art FROM tracks WHERE album_key=? "
+                        "AND art != '' ORDER BY url LIMIT 12", (album_key,)).fetchall()
+                    out = [r["art"] for r in rows]
                 else:
                     row = c.execute(
                         "SELECT art_url FROM album_art "
                         "WHERE artist=? AND album=?", (artist, album)).fetchone()
                     if row and row["art_url"]:
-                        art_url = row["art_url"]
-                    else:
-                        row = c.execute(
-                            "SELECT art FROM tracks WHERE artist=? AND album=? "
-                            "AND art != '' LIMIT 1", (artist, album)).fetchone()
-                        if row:
-                            art_url = row["art"]
+                        out.append(row["art_url"])
+                    rows = c.execute(
+                        "SELECT DISTINCT art FROM tracks WHERE artist=? AND album=? "
+                        "AND art != '' ORDER BY url LIMIT 12", (artist, album)).fetchall()
+                    out.extend(r["art"] for r in rows if r["art"] not in out)
     elif sid.startswith("tr:"):
         u = _track_id_decode(sid)
         if u:
             with DB._pool.read() as c:
                 row = c.execute(
                     "SELECT art FROM tracks WHERE url=?", (u,)).fetchone()
-                if row:
-                    art_url = row["art"]
+                if row and row["art"]:
+                    out.append(row["art"])
     elif sid.startswith("ar:"):
         artist = _artist_id_decode(sid)
         if artist:
@@ -800,26 +800,45 @@ def _cover_art_url(sid: str) -> str:
                 row = c.execute(
                     "SELECT MAX(art) AS art FROM tracks WHERE artist=? "
                     "AND art != ''", (artist,)).fetchone()
-                if row:
-                    art_url = row["art"] or ""
+                if row and row["art"]:
+                    out.append(row["art"])
+    return out
 
-    return art_url
+
+def _cover_art_url(sid: str) -> str:
+    """First candidate art URL for a Subsonic cover id, or '' if none.
+    Back-compat single-URL accessor; prefer `_resolve_cover` for serving."""
+    c = _cover_art_candidates(sid)
+    return c[0] if c else ""
+
+
+def _resolve_cover(sid: str, fetch):
+    """Serve a cover: try each candidate art URL via `fetch` (art_fetch_cached),
+    return the first `(status, ctype, body)` that comes back 200; else
+    `(404, 'no art', b'')`. `fetch` is injected so this is unit-testable."""
+    for url in _cover_art_candidates(sid):
+        code, ctype, body = fetch(url)
+        if code == 200:
+            return code, ctype, body
+    return 404, "no art", b""
 
 
 def _get_cover_art(h, params):
-    """Legacy byte handler: resolve the cover ID, then reuse the existing
-    /art proxy to serve the bytes to the stdlib handler's socket."""
-    from api_playback import art as art_handler
+    """Legacy byte handler: resolve the cover ID to the first candidate art URL
+    that actually fetches, then reuse the /art proxy to serve the bytes. Tries
+    every candidate so a folder album with a dead-art first track still serves
+    (see _cover_art_candidates)."""
+    from api_playback import art as art_handler, art_fetch_cached
     sid = params.get("id", "")
-    art_url = _cover_art_url(sid)
-    if not art_url:
-        # Subsonic clients tolerate a 404 here gracefully.
-        h.send_error(404, "no art")
-        return
-
-    p2 = dict(params)
-    p2["url"] = art_url
-    art_handler(h, p2)
+    for url in _cover_art_candidates(sid):
+        code, _ct, _b = art_fetch_cached(url)   # probe (warms the cache too)
+        if code == 200:
+            p2 = dict(params)
+            p2["url"] = url
+            art_handler(h, p2)                   # serves from the warmed cache
+            return
+    # Subsonic clients tolerate a 404 here gracefully.
+    h.send_error(404, "no art")
 
 
 def _scrobble(h, params):
