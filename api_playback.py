@@ -13,6 +13,7 @@ import ssl
 import threading
 import urllib.parse
 
+import dlna_art_cache
 from dlna_avtransport import avtransport_send
 from dlna_config import VERSION
 from dlna_discovery import RENDERERS, SERVERS
@@ -176,14 +177,34 @@ def art_fetch(upstream: str):
                 pass
 
 
+def art_fetch_cached(upstream: str):
+    """`art_fetch` fronted by an on-disk byte cache (dlna_art_cache).
+
+    Covers are fetched over and over — Amperfy syncs every cover in the library,
+    and the same album cover is requested once per song. `art_fetch` re-hits the
+    source every time (external coverartarchive over the network, or
+    `/localfs/art/<id>` re-decoding the audio file). The cache serves repeat
+    requests — across clients AND gateway restarts — from disk. Only 200s are
+    cached; covers for a URL don't meaningfully change (TTL-bounded; delete the
+    cache dir to force-refresh). Same `(status, ctype_or_msg, body)` contract."""
+    if upstream:
+        hit = dlna_art_cache.get(upstream)
+        if hit is not None:
+            return 200, hit[0], hit[1]
+    code, ctype, body = art_fetch(upstream)
+    if code == 200 and body:
+        dlna_art_cache.put(upstream, ctype, body)
+    return code, ctype, body
+
+
 def art(h, params):
     """Proxy an arbitrary image URL through the gateway (legacy stdlib path).
 
     Purpose: iOS MediaSession will NOT load cross-origin artwork on the lock
     screen. The PWA rewrites track art URLs to `/art?url=<external>` so the
     fetch is same-origin. The 2.0 ASGI route (dlna_asgi.art) shares
-    `art_fetch` with this. No Range (art is small, one-shot)."""
-    code, ctype, body = art_fetch(params.get("url", ""))
+    `art_fetch_cached` with this. No Range (art is small, one-shot)."""
+    code, ctype, body = art_fetch_cached(params.get("url", ""))
     if code != 200:
         h.send_error(code, ctype)
         return

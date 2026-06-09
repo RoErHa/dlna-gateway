@@ -64,3 +64,6 @@ library_dump.sql
 # Per-library scan output from tools/find_corrupt_audio.py — user-specific,
 # not project content.
 corrupt-audio.txt
+
+# server-side cover-art byte cache (dlna_art_cache)
+art_cache/

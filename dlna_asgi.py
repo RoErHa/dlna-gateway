@@ -394,7 +394,7 @@ async def lyrics_route(request: Request):
 
 @app.get("/art", include_in_schema=False)
 async def art(url: str = ""):
-    code, ctype, body = await run_in_threadpool(api_playback.art_fetch, url)
+    code, ctype, body = await run_in_threadpool(api_playback.art_fetch_cached, url)
     if code != 200:
         return JSONResponse({"error": ctype}, status_code=code)
     return Response(content=body, media_type=ctype,
@@ -576,7 +576,7 @@ async def subsonic(request: Request, rest_path: str):
             if not art_url:
                 return Response(content=b"no art", status_code=404)
             code, ctype, art_body = await run_in_threadpool(
-                api_playback.art_fetch, art_url)
+                api_playback.art_fetch_cached, art_url)
             if code != 200:
                 return JSONResponse({"error": ctype}, status_code=code)
             return Response(content=art_body, media_type=ctype,
