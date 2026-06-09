@@ -127,14 +127,11 @@ existing weekly auto-renewal (`renew-cert.sh` + `com.roha.dlna-cert-renew`).
         <key>GATEWAY_PORT</key>
         <string>8770</string>
 
-        <!-- Subsonic (CarPlay/Amperfy). NEVER hardcode the password in a
-             committed file. Put the real value ONLY in the installed plist
-             (~/Library/LaunchAgents, not in git) or via
-             `launchctl setenv SUBSONIC_PASSWORD …` / .env (gitignored). -->
-        <key>SUBSONIC_USER</key>
-        <string>ronhamer</string>
-        <key>SUBSONIC_PASSWORD</key>
-        <string></string>
+        <!-- Subsonic (CarPlay/Amperfy): SUBSONIC_USER / SUBSONIC_PASSWORD come
+             from .env (gitignored), NOT from this plist. The gateway loads
+             .env via dlna_config; plist EnvironmentVariables OVERRIDE .env, so
+             these keys are deliberately absent — .env is the single source for
+             all names / emails / passwords. -->
     </dict>
 </dict>
 </plist>

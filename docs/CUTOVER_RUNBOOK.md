@@ -71,13 +71,16 @@ pkill -f "dlna-gateway-2.0/dlna_gateway.py" 2>/dev/null
 
 ### 3 — Install the 2.x LaunchAgent (adopts 1.x identity) and load it
 Use the plist from **`CUTOVER_LAUNCHD.md`** (it sets `GW_UDN`, `LOCALFS_PORT=8200`,
-the dual bind `:8765`+`:8443`, `GATEWAY_PORT=8770`, `SUBSONIC_*`, and the 8192 FD
-`SoftResourceLimits`).
+the dual bind `:8765`+`:8443`, `GATEWAY_PORT=8770`, and the 8192 FD
+`SoftResourceLimits`). `SUBSONIC_USER`/`SUBSONIC_PASSWORD` and
+`GATEWAY_CONTACT_EMAIL` are NOT in the plist — they come from `.env`
+(gitignored), the single source for names/emails/passwords.
 ```bash
 # NB: the 2.x cutover plist is com.roha.dlna-gateway.cutover.plist — NOT the
 # public template com.roha.dlna-gateway.plist (placeholder paths, stdlib python).
-# It is installed UNDER the 1.x label name. Put the real SUBSONIC_PASSWORD into
-# the installed copy by hand (the committed plist ships it empty).
+# It is installed UNDER the 1.x label name. Put SUBSONIC_USER/PASSWORD +
+# GATEWAY_CONTACT_EMAIL in <repo>/.env (the gateway loads it via dlna_config);
+# the plist deliberately omits them so .env stays authoritative.
 cp com.roha.dlna-gateway.cutover.plist ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
 launchctl load ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
 tail -f /Users/ronhamersma/dlna-gateway-2.0/gateway.log  # watch it boot
