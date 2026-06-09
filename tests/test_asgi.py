@@ -611,9 +611,9 @@ class TestSubsonicAsgi(unittest.TestCase):
 
     def test_cover_art_happy(self):
         from unittest import mock
-        with mock.patch.object(dlna_asgi.api_subsonic, "_cover_art_url",
-                               return_value="http://x/art.jpg"), \
-             mock.patch.object(dlna_asgi.api_playback, "art_fetch",
+        # Native getCoverArt now serves via _resolve_cover (tries each candidate
+        # art URL until one fetches 200).
+        with mock.patch.object(dlna_asgi.api_subsonic, "_resolve_cover",
                                return_value=(200, "image/jpeg", b"JPG")):
             r = self._call("getCoverArt", {"u": "user", "p": "pw",
                                            "id": "al:whatever"})
@@ -623,8 +623,8 @@ class TestSubsonicAsgi(unittest.TestCase):
 
     def test_cover_art_missing_404(self):
         from unittest import mock
-        with mock.patch.object(dlna_asgi.api_subsonic, "_cover_art_url",
-                               return_value=""):
+        with mock.patch.object(dlna_asgi.api_subsonic, "_resolve_cover",
+                               return_value=(404, "no art", b"")):
             r = self._call("getCoverArt", {"u": "user", "p": "pw", "id": "al:x"})
         self.assertEqual(r.status_code, 404)
 

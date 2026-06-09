@@ -424,7 +424,11 @@ class TestCoverArt(unittest.TestCase):
         def fake_art(h, params):
             captured["url"] = params.get("url")
         api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
+        # The handler now PROBES each candidate via art_fetch_cached before
+        # delegating to the /art proxy — mock the probe to resolve.
         with patch.object(api_subsonic, "DB", self.db), \
+             patch("api_playback.art_fetch_cached",
+                   return_value=(200, "image/jpeg", b"img")), \
              patch("api_playback.art", side_effect=fake_art), \
              patch("api_subsonic.SERVERS"):
             h = _MockH()
@@ -663,6 +667,87 @@ class TestAlbumKey(unittest.TestCase):
         _, body = _call("getStarred2", {}, db=self.db)
         ids = [a["id"] for a in body["starred2"]["album"]]
         self.assertIn(aid, ids)
+
+
+class TestCoverArtResolution(unittest.TestCase):
+    """Folder-album cover bug: an album's tracks each carry their own
+    /localfs/art/<id> URL, and some files have no embedded art (that id 404s).
+    The old `LIMIT 1` picked an arbitrary track → getCoverArt could 404 even
+    though OTHER tracks in the same folder have art. Fix: gather all candidate
+    art URLs and serve the first that actually resolves."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+        # One folder album (album_key set), 3 tracks, DISTINCT art urls; the
+        # first (by url order) is a dead /localfs/art id, the others are live.
+        ak = "Camel/The Snow Goose (Deluxe)"
+        rows = [
+            ("Camel", "The Snow Goose", "Preludep", "http://srv/1.flac",
+             "http://localfs/art/DEAD", ak),
+            ("Camel", "The Snow Goose", "Migration", "http://srv/2.flac",
+             "http://localfs/art/LIVE2", ak),
+            ("Camel", "The Snow Goose", "Rhayader", "http://srv/3.flac",
+             "http://localfs/art/LIVE3", ak),
+        ]
+        with self.db._pool.write() as c:
+            for i, (ar, al, ti, url, art, key) in enumerate(rows):
+                c.execute(
+                    "INSERT INTO tracks(udn, obj_id, url, title, artist, album,"
+                    " duration, art, mime, genre, file_path, album_key) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("uuid:srv1", f"t{i}", url, ti, ar, al, "0:03:30", art,
+                     "audio/flac", "", "", key))
+
+    def tearDown(self):
+        self.db._pool.close()
+        os.unlink(self.tmp.name)
+
+    def test_candidates_folder_album_returns_all_distinct_track_arts(self):
+        aid = api_subsonic._album_id("Camel", "The Snow Goose",
+                                     "Camel/The Snow Goose (Deluxe)")
+        with patch.object(api_subsonic, "DB", self.db):
+            cands = api_subsonic._cover_art_candidates(aid)
+        self.assertIn("http://localfs/art/DEAD", cands)
+        self.assertIn("http://localfs/art/LIVE2", cands)
+        self.assertIn("http://localfs/art/LIVE3", cands)
+
+    def test_candidates_single_for_track_id(self):
+        tid = api_subsonic._track_id("http://srv/2.flac")
+        with patch.object(api_subsonic, "DB", self.db):
+            cands = api_subsonic._cover_art_candidates(tid)
+        self.assertEqual(cands, ["http://localfs/art/LIVE2"])
+
+    def test_resolve_cover_skips_dead_first_candidate(self):
+        aid = api_subsonic._album_id("Camel", "The Snow Goose",
+                                     "Camel/The Snow Goose (Deluxe)")
+
+        def fake_fetch(url):
+            if url.endswith("DEAD"):
+                return 404, "Upstream 404", b""
+            return 200, "image/jpeg", b"REALCOVER" + b"x" * 100
+
+        with patch.object(api_subsonic, "DB", self.db):
+            code, ctype, body = api_subsonic._resolve_cover(aid, fake_fetch)
+        self.assertEqual(code, 200)
+        self.assertEqual(ctype, "image/jpeg")
+        self.assertTrue(body.startswith(b"REALCOVER"))
+
+    def test_resolve_cover_all_dead_returns_404(self):
+        aid = api_subsonic._album_id("Camel", "The Snow Goose",
+                                     "Camel/The Snow Goose (Deluxe)")
+        with patch.object(api_subsonic, "DB", self.db):
+            code, _ctype, body = api_subsonic._resolve_cover(
+                aid, lambda u: (404, "Upstream 404", b""))
+        self.assertEqual(code, 404)
+        self.assertEqual(body, b"")
+
+    def test_resolve_cover_no_candidates_returns_404(self):
+        with patch.object(api_subsonic, "DB", self.db):
+            code, _ctype, _body = api_subsonic._resolve_cover(
+                "al:bogus", lambda u: (200, "image/jpeg", b"x" * 100))
+        self.assertEqual(code, 404)
 
 
 if __name__ == "__main__":
