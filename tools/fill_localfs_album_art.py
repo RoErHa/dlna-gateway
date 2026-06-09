@@ -29,12 +29,24 @@ first.
 """
 import argparse
 import os
+import re
 import shutil
 import sqlite3
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def clean_album(album: str) -> str:
+    """Strip edition / format / disc noise that stops a MusicBrainz match.
+    'The Snow Goose (SHM-CD)' → 'The Snow Goose'; 'Born to Run [30th
+    Anniversary Edition] Disc 3' → 'Born to Run'. Returns '' if nothing's left
+    (caller falls back to the raw name)."""
+    a = re.sub(r'\s*[\(\[][^)\]]*[\)\]]', ' ', album)       # (Deluxe), [FLAC]
+    a = re.sub(r'[-–—]?\s*\b(cd|disc|disk)\s*\.?\s*\d+\b', ' ', a, flags=re.I)
+    a = re.sub(r'\s+', ' ', a).strip(" -–—,;:")
+    return a
 
 
 def artless_folder_albums(conn: sqlite3.Connection):
@@ -138,7 +150,10 @@ def main():
             art_url = c["art_url"]
             reused += 1
         else:
-            art_url = _mb_lookup_cover(artist, album)
+            # Query MB with the noise-stripped album name (much higher match
+            # rate on edition/disc-suffixed titles); fall back to the raw name.
+            q_album = clean_album(album) or album
+            art_url = _mb_lookup_cover(artist, q_album)
             # album_art.art_url is NOT NULL — a miss is stored as '' (same as
             # the AlbumArtFetcher's sticky notfound). updated_at defaults.
             conn.execute(

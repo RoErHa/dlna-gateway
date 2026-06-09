@@ -36,6 +36,25 @@ def _add(c, url, artist, album, ak, art=""):
               "VALUES (?,?,?,?,?)", (url, artist, album, ak, art))
 
 
+class TestCleanAlbum(unittest.TestCase):
+    def test_strips_edition_format_disc_noise(self):
+        cases = {
+            "The Snow Goose (SHM-CD)": "The Snow Goose",
+            "Playback- Spoiled & Mistreated-CD2": "Playback- Spoiled & Mistreated",
+            "Born to Run [30th Anniversary Edition] Disc 3": "Born to Run",
+            "The Very Best of Paul Anka [RCA US]": "The Very Best of Paul Anka",
+            "Old School Soul Party Disc 1": "Old School Soul Party",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(fill.clean_album(raw), want, raw)
+
+    def test_plain_name_unchanged(self):
+        self.assertEqual(fill.clean_album("Fragile"), "Fragile")
+
+    def test_all_noise_returns_empty(self):
+        self.assertEqual(fill.clean_album("(Deluxe Edition)"), "")
+
+
 class TestArtlessSelection(unittest.TestCase):
     def setUp(self):
         self.path, self.c = _make_db()
