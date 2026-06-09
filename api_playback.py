@@ -127,54 +127,72 @@ def stream(h, params):
 
 # Cap art payload at 5MB — real album art is <1MB; this just prevents a
 # malicious/broken upstream from making the gateway allocate arbitrary memory.
-_ART_MAX_BYTES = 5 * 1024 * 1024
-_ART_TIMEOUT   = 10
+_ART_MAX_BYTES   = 5 * 1024 * 1024
+_ART_MIN_BYTES   = 64            # below this it isn't a real cover (junk/empty 200)
+_ART_TIMEOUT     = 10
+_ART_MAX_REDIRECTS = 4           # coverartarchive front-500 → archive.org CDN
 
 
 def art_fetch(upstream: str):
     """Fetch + validate an image for the /art proxy. Returns
     (status, content_type_or_error_message, body_bytes). Pure/blocking —
     shared by the legacy stdlib handler and the native ASGI route so there's
-    a single source of truth. Caps at 5 MB, refuses non-image responses
-    (an upstream HTML 404 page would otherwise poison the SW cache)."""
+    a single source of truth.
+
+    Follows up to `_ART_MAX_REDIRECTS` redirects — `coverartarchive.org`'s
+    `front-500` URLs answer 307 to the archive.org CDN, and http.client does
+    NOT auto-follow, so without this those covers never load. Caps at 5 MB,
+    rejects non-image responses (an upstream HTML 404 page) and suspiciously
+    tiny (<64 B) bodies (junk/empty 200s) so neither can poison the cache."""
     if not upstream:
         return 400, "Missing url", b""
-    try:
-        parsed = urllib.parse.urlparse(upstream)
-    except Exception:
-        return 400, "Bad url", b""
-    if parsed.scheme not in ("http", "https"):
-        return 400, "Bad scheme", b""
-    host = parsed.netloc
-    path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
-    conn = None
-    try:
-        if parsed.scheme == "https":
-            conn = http.client.HTTPSConnection(
-                host, timeout=_ART_TIMEOUT,
-                context=ssl._create_unverified_context())
-        else:
-            conn = http.client.HTTPConnection(host, timeout=_ART_TIMEOUT)
-        conn.request("GET", path, headers={"User-Agent": "DLNAGateway/1.0"})
-        resp = conn.getresponse()
-        if resp.status != 200:
-            return resp.status, f"Upstream {resp.status}", b""
-        body = resp.read(_ART_MAX_BYTES + 1)
-        if len(body) > _ART_MAX_BYTES:
-            return 502, "Image too large", b""
-        ctype = resp.getheader("Content-Type") or "image/jpeg"
-        if not ctype.lower().startswith("image/"):
-            return 502, f"Not an image: {ctype}", b""
-        return 200, ctype, body
-    except Exception as e:                           # noqa: BLE001
-        log.debug(f"art proxy: {upstream[:80]}  {type(e).__name__}: {e}")
-        return 502, str(e), b""
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+    url = upstream
+    for _hop in range(_ART_MAX_REDIRECTS + 1):
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
+            return 400, "Bad url", b""
+        if parsed.scheme not in ("http", "https"):
+            return 400, "Bad scheme", b""
+        host = parsed.netloc
+        path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        conn = None
+        try:
+            if parsed.scheme == "https":
+                conn = http.client.HTTPSConnection(
+                    host, timeout=_ART_TIMEOUT,
+                    context=ssl._create_unverified_context())
+            else:
+                conn = http.client.HTTPConnection(host, timeout=_ART_TIMEOUT)
+            conn.request("GET", path, headers={"User-Agent": "DLNAGateway/1.0"})
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                loc = resp.getheader("Location")
+                if not loc:
+                    return resp.status, f"Upstream {resp.status} (no Location)", b""
+                url = urllib.parse.urljoin(url, loc)   # resolves relative + absolute
+                continue
+            if resp.status != 200:
+                return resp.status, f"Upstream {resp.status}", b""
+            body = resp.read(_ART_MAX_BYTES + 1)
+            if len(body) > _ART_MAX_BYTES:
+                return 502, "Image too large", b""
+            ctype = resp.getheader("Content-Type") or "image/jpeg"
+            if not ctype.lower().startswith("image/"):
+                return 502, f"Not an image: {ctype}", b""
+            if len(body) < _ART_MIN_BYTES:
+                return 502, "Image too small", b""
+            return 200, ctype, body
+        except Exception as e:                       # noqa: BLE001
+            log.debug(f"art proxy: {url[:80]}  {type(e).__name__}: {e}")
+            return 502, str(e), b""
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return 508, "Too many redirects", b""
 
 
 def art_fetch_cached(upstream: str):

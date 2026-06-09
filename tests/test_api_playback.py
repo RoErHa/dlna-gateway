@@ -11,9 +11,12 @@ No network, no gateway. RENDERERS and QUEUES are patched with fakes.
 import json
 import os
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch, MagicMock
+
+import dlna_art_cache
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
@@ -310,6 +313,18 @@ class TestArtHandler(unittest.TestCase):
         def end_headers(self): pass
         def write(self, data): self.body += data
 
+    def setUp(self):
+        # art() now routes through art_fetch_cached → isolate the on-disk cache
+        # to a throwaway dir so tests don't pollute (or get served stale art by)
+        # the real art_cache/ and the http.client mocks are actually exercised.
+        self._tmp = tempfile.TemporaryDirectory()
+        self._saved_cache_dir = dlna_art_cache.CACHE_DIR
+        dlna_art_cache.CACHE_DIR = self._tmp.name
+
+    def tearDown(self):
+        dlna_art_cache.CACHE_DIR = self._saved_cache_dir
+        self._tmp.cleanup()
+
     def test_missing_url_returns_400(self):
         h = self._ArtHandler()
         api_playback.art(h, {})
@@ -322,9 +337,10 @@ class TestArtHandler(unittest.TestCase):
 
     def test_successful_image_proxies_through(self):
         h = self._ArtHandler()
+        jpeg = b"\xff\xd8\xff\xe0" + b"FAKEJPEG" * 16   # >= _ART_MIN_BYTES (64)
         fake_resp = MagicMock()
         fake_resp.status = 200
-        fake_resp.read.return_value = b"\xff\xd8\xff\xe0FAKEJPEG"
+        fake_resp.read.return_value = jpeg
         fake_resp.getheader.side_effect = lambda k: {
             "Content-Type": "image/jpeg",
         }.get(k)
@@ -334,7 +350,7 @@ class TestArtHandler(unittest.TestCase):
             api_playback.art(h, {"url": "http://fake.local/cover.jpg"})
         self.assertEqual(h.status, 200)
         self.assertEqual(h.headers.get("Content-Type"), "image/jpeg")
-        self.assertEqual(h.body, b"\xff\xd8\xff\xe0FAKEJPEG")
+        self.assertEqual(h.body, jpeg)
         self.assertIn("max-age=", h.headers.get("Cache-Control", ""))
 
     def test_non_image_upstream_rejected(self):
@@ -377,6 +393,67 @@ class TestArtHandler(unittest.TestCase):
         with patch("http.client.HTTPConnection", return_value=fake_conn):
             api_playback.art(h, {"url": "http://fake.local/missing.jpg"})
         self.assertEqual(h.error_status, 404)
+
+    # ── redirect following (coverartarchive front-500 → archive.org CDN) ──
+    @staticmethod
+    def _resp(status, *, location=None, ctype=None, body=b""):
+        r = MagicMock()
+        r.status = status
+        r.read.return_value = body
+        r.getheader.side_effect = lambda k: {
+            "Location": location, "Content-Type": ctype}.get(k)
+        return r
+
+    def test_follows_307_redirect_to_image(self):
+        jpeg = b"\xff\xd8\xff\xe0" + b"A" * 200
+        redirect = self._resp(307, location="https://cdn.test/real.jpg")
+        image = self._resp(200, ctype="image/jpeg", body=jpeg)
+        fake_conn = MagicMock()
+        fake_conn.getresponse.side_effect = [redirect, image]
+        with patch("http.client.HTTPSConnection", return_value=fake_conn):
+            code, ctype, body = api_playback.art_fetch(
+                "https://coverartarchive.org/release-group/x/front-500")
+        self.assertEqual((code, ctype, body), (200, "image/jpeg", jpeg))
+
+    def test_follows_relative_redirect(self):
+        jpeg = b"\xff\xd8\xff\xe0" + b"B" * 200
+        redirect = self._resp(302, location="/cdn/real.jpg")   # relative Location
+        image = self._resp(200, ctype="image/jpeg", body=jpeg)
+        fake_conn = MagicMock()
+        fake_conn.getresponse.side_effect = [redirect, image]
+        with patch("http.client.HTTPSConnection", return_value=fake_conn):
+            code, _ctype, body = api_playback.art_fetch("https://host.test/front")
+        self.assertEqual(code, 200)
+        self.assertEqual(body, jpeg)
+
+    def test_redirect_without_location_is_not_an_infinite_loop(self):
+        bad = self._resp(302, location=None)
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = bad
+        with patch("http.client.HTTPSConnection", return_value=fake_conn):
+            code, _msg, body = api_playback.art_fetch("https://host.test/x")
+        self.assertEqual(code, 302)
+        self.assertEqual(body, b"")
+
+    def test_too_many_redirects_bails(self):
+        loop = self._resp(307, location="https://host.test/again")
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = loop      # always redirects
+        with patch("http.client.HTTPSConnection", return_value=fake_conn):
+            code, _msg, body = api_playback.art_fetch("https://host.test/start")
+        self.assertNotEqual(code, 200)                 # gave up, didn't hang
+        self.assertEqual(body, b"")
+
+    def test_tiny_body_rejected(self):
+        # A 200 image/* with a junk near-empty body (the 3–12 B entries seen in
+        # the live cache) must NOT be served/cached as a real cover.
+        tiny = self._resp(200, ctype="image/jpeg", body=b"\xff\xd8\xff")
+        fake_conn = MagicMock()
+        fake_conn.getresponse.return_value = tiny
+        with patch("http.client.HTTPConnection", return_value=fake_conn):
+            code, _msg, body = api_playback.art_fetch("http://host.test/junk.jpg")
+        self.assertEqual(code, 502)
+        self.assertEqual(body, b"")
 
 
 # ── /api/client_log observability endpoint ────────────────────────
