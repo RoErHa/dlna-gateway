@@ -82,15 +82,12 @@
         <key>GATEWAY_PORT</key>
         <string>8770</string>
 
-        <!-- Subsonic (CarPlay/Amperfy). The committed copy keeps this EMPTY.
-             The real password lives ONLY in the INSTALLED plist
-             (~/Library/LaunchAgents, not in git) — set it there by hand, or
-             via `launchctl setenv SUBSONIC_PASSWORD …` / .env (gitignored).
-             An empty value makes /rest/* return 503 (safe default). -->
-        <key>SUBSONIC_USER</key>
-        <string>ronhamer</string>
-        <key>SUBSONIC_PASSWORD</key>
-        <string></string>
+        <!-- Subsonic (CarPlay/Amperfy): SUBSONIC_USER / SUBSONIC_PASSWORD come
+             from .env (gitignored), NOT from this plist. The gateway loads
+             .env via dlna_config; plist EnvironmentVariables would OVERRIDE
+             .env, so these keys are deliberately absent — .env is the single
+             source for all names / emails / passwords. An empty/unset password
+             makes /rest/* return 503 (safe default). -->
     </dict>
 </dict>
 </plist>
