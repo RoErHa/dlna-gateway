@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (1.x)
+"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.0)
 DLNA Gateway architecture plus reference lists.
 
 Page 1  : the architecture drawing + colour legend.
@@ -88,7 +88,7 @@ def build_diagram():
     d = Drawing(W, H)
 
     # title
-    txt(d, 6, H - 16, "DLNA Gateway — Current Architecture (1.x)",
+    txt(d, 6, H - 16, "DLNA Gateway — Architecture (2.0 · ASGI/Hypercorn)",
         size=15, bold=True, color=INK)
     txt(d, 6, H - 30,
         "What runs where · stream colours show direction/scope · node codes "
@@ -115,13 +115,14 @@ def build_diagram():
     # ── GATEWAY PROCESS (centre) ─────────────────────────────────────
     gx, gw_ = 228, 478
     cluster(d, gx, 180, gw_, 468,
-            "GATEWAY PROCESS   (P/g1 dlna_gateway.py — wires modules, "
-            "spawns daemon threads)", INK, GW_L)
+            "GATEWAY PROCESS   (Hypercorn serves P/g27 dlna_asgi:app; "
+            "P/g1 start_background_services spawns daemon threads)", INK, GW_L)
     ix, iw = gx + 9, gw_ - 18
 
-    tile(d, ix, 580, iw, 44, "HTTP edge  (HTTP :8765 · HTTPS :8443, TLS)", [
-        "P/g2 dlna_server   P/g3 dlna_routes   "
-        "(ThreadingMixIn, HTTP/1.1 keep-alive)",
+    tile(d, ix, 580, iw, 44,
+         "HTTP edge  (Hypercorn ASGI · TLS+HTTP/2 :8443 · plain :8765)", [
+        "P/g27 dlna_asgi (FastAPI)  P/g28 dlna_asgi_bridge (legacy shim)  "
+        "P/g30 dlna_events (SSE /api/events)",
     ], INK)
     tile(d, ix, 518, iw, 56, "API handlers  (/api/*  /rest/*  /gw/*)", [
         "P/g20 api_browse   P/g21 api_playback   P/g22 api_playlists",
@@ -359,13 +360,19 @@ def list_pages():
          "Subsonic client for CarPlay over Tailscale. Talks /rest/* to the "
          "gateway; never to the music server directly."),
         ("P/g1", "dlna_gateway.py",
-         "Main entry. Wires every module; spawns daemon threads (SSDP "
-         "listener, pre-prober, subnet scanner, heartbeat, gateway "
-         "announcer, HTTP + optional HTTPS servers)."),
+         "Module-wiring + start_background_services(): spawns the daemon "
+         "threads (SSDP listener, pre-prober, subnet scanner, heartbeat, "
+         "gateway announcer). Called from the dlna_asgi lifespan so "
+         "`hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib "
+         "HTTP edge + TLS were removed in 2.0 (Hypercorn owns the edge)."),
         ("P/g2", "dlna_server.py",
-         "Threaded HTTP/HTTPS server (BaseHTTPRequestHandler + ThreadingMixIn). "
-         "HTTP/1.1 keep-alive + 15 s idle timeout. Delegates routing to P/g3."),
-        ("P/g3", "dlna_routes.py", "GET_ROUTES / POST_ROUTES path→handler maps."),
+         "2.0: reduced to the DEVICE-TIER server — plain-HTTP /gw/* for the "
+         "Naim (DeviceHandler/start_device_server) on :8770 (GATEWAY_PORT), "
+         "started by the ASGI lifespan alongside Hypercorn. The old main HTTP "
+         "edge role moved to P/g27. (Cleanup C will fold /gw into the ASGI app "
+         "and retire this.)"),
+        ("P/g3", "dlna_routes.py", "GET_ROUTES / POST_ROUTES path→handler maps; "
+         "the ASGI bridge (P/g28) mounts the not-yet-native ones."),
         ("P/g4", "dlna_discovery.py",
          "SSDP multicast listener, probe, subnet scanner, renderer/server "
          "heartbeat. Holds SERVERS / RENDERERS singletons."),
@@ -438,7 +445,30 @@ def list_pages():
          "ICY now-playing."),
         ("P/g26", "dlna_config.py",
          "Constants (DB_FILE/CFG_FILE/LOG_FILE), logging setup, config "
-         "load/save, .env load (if dotenv present)."),
+         "load/save, .env load (if dotenv present), raise_fd_limit(8192)."),
+        ("P/g27", "dlna_asgi.py",
+         "2.0 MAIN EDGE. FastAPI app served by Hypercorn (TLS+HTTP/2 on :8443 "
+         "via ALPN, plain :8765); owns the tailscale cert. Native routes for "
+         "the read API, /art, /stream + /radio_stream relays, static/PWA, and "
+         "the Subsonic byte methods; legacy handlers run via the bridge. "
+         "Lifespan boots P/g1 services + the P/g2 device server. docs_url off "
+         "(no CDN call)."),
+        ("P/g28", "dlna_asgi_bridge.py",
+         "Shim that runs the legacy (h, params) handlers unchanged inside the "
+         "ASGI app (a fake `h` captures _json/_html/_xml/send_error; runs in a "
+         "threadpool). Routes are rewritten native one batch at a time, then "
+         "dropped from the bridge."),
+        ("P/g29", "dlna_art_cache.py",
+         "On-disk cover-art byte cache keyed by source URL. art_fetch_cached() "
+         "(in P/g21) fronts art_fetch so /art and Subsonic getCoverArt serve "
+         "repeat covers from disk (across clients + restarts) instead of "
+         "re-fetching coverartarchive / re-decoding embedded art. TTL + size "
+         "capped; art_cache/ gitignored."),
+        ("P/g30", "dlna_events.py",
+         "EventBus/EVENTS — thread-safe publish to the asyncio loop; native "
+         "GET /api/events (SSE). Publishers: RendererQueue state, index status "
+         "transitions, discovery changes. The PWA opens an EventSource as a "
+         "polling accelerator (fallback intact)."),
     ]
     for c, f, r in progs:
         prog_rows.append([C(c), P(f), P(r)])
@@ -591,10 +621,13 @@ def list_pages():
         cmd_rows.append([P("<b>%s</b>" % ctx, body), C(cmd)])
     story.append(make_table(cmd_rows, [150, 910], INK))
     story.append(Spacer(1, 8))
-    story.append(P("Ports: 8765 HTTP · 8443 HTTPS · 8200 RoHaLocalFS file "
-                   "server · 26125 (legacy AssetUPnP, decommissioned). "
-                   "See CLAUDE.md and REQUIREMENTS_2.0.md for the HTTP/2 + "
-                   "free-TLS roadmap.", note))
+    story.append(P("Ports (2.0): 8443 HTTPS — Hypercorn TLS + HTTP/2 (ALPN), "
+                   "tailscale cert · 8765 plain HTTP · 8200 RoHaLocalFS file "
+                   "server · 8770 device-tier /gw/* (plain, for the Naim; "
+                   "SSDP advert points here) · 26125 (legacy AssetUPnP, "
+                   "decommissioned). The HTTP/2 + app-owned-TLS roadmap is now "
+                   "DONE — Hypercorn terminates TLS/h2 natively. Cutover: "
+                   "docs/CUTOVER_RUNBOOK.md + CUTOVER_LAUNCHD.md.", note))
 
     # ---- Tool options reference (per tool, every flag explained) ----
     story.append(PageBreak())
