@@ -20,13 +20,16 @@ Test:
 """
 import json
 import logging
+import os
 import urllib.parse
 import urllib.request
 
 log = logging.getLogger("dlna.lyrics")
 
 _LRCLIB_BASE = "https://lrclib.net/api/get"
-_USER_AGENT  = "DLNAGateway/1.0 ( https://github.com/ronhamersma/dlna-gateway )"
+# Contact in the UA comes from .env (GATEWAY_CONTACT_EMAIL), the single source —
+# same pattern as the MusicBrainz/CAA/radio-browser User-Agents.
+_USER_AGENT  = f"DLNAGateway/1.0 ( {os.environ.get('GATEWAY_CONTACT_EMAIL', 'you@example.com')} )"
 _TIMEOUT     = 8.0
 
 
