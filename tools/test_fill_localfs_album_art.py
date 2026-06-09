@@ -23,7 +23,9 @@ def _make_db():
           id INTEGER PRIMARY KEY, url TEXT, artist TEXT, album TEXT,
           album_key TEXT, art TEXT DEFAULT '');
         CREATE TABLE album_art(
-          artist TEXT, album TEXT, art_url TEXT, source TEXT, updated_at INTEGER,
+          artist TEXT NOT NULL, album TEXT NOT NULL, art_url TEXT NOT NULL,
+          source TEXT DEFAULT 'sibling',
+          updated_at TEXT DEFAULT (datetime('now')),
           PRIMARY KEY (artist, album));
     """)
     return path, c
@@ -107,8 +109,8 @@ class TestApply(unittest.TestCase):
     def test_cached_notfound_skips_lookup(self):
         # Pre-seed Camel as notfound → lookup must NOT be called.
         c = sqlite3.connect(self.path)
-        c.execute("INSERT INTO album_art VALUES('Camel','Mirage',NULL,'notfound',1)")
-        c.execute("INSERT INTO album_art VALUES('Gong','Camembert',NULL,'notfound',1)")
+        c.execute("INSERT INTO album_art VALUES('Camel','Mirage','','notfound',1)")
+        c.execute("INSERT INTO album_art VALUES('Gong','Camembert','','notfound',1)")
         c.commit(); c.close()
         called = []
         def lookup(artist, album):
@@ -122,7 +124,7 @@ class TestApply(unittest.TestCase):
         c.execute("INSERT INTO album_art VALUES('Camel','Mirage',"
                   "'https://coverartarchive.org/release-group/Y/front-500',"
                   "'musicbrainz',1)")
-        c.execute("INSERT INTO album_art VALUES('Gong','Camembert',NULL,'notfound',1)")
+        c.execute("INSERT INTO album_art VALUES('Gong','Camembert','','notfound',1)")
         c.commit(); c.close()
         called = []
         self._run(["--apply"], lambda a, b: called.append(a))
@@ -136,8 +138,8 @@ class TestApply(unittest.TestCase):
     def test_retry_notfound_requeries_and_can_fill(self):
         # Camel cached notfound; with --retry-notfound MB is re-asked and now hits.
         c = sqlite3.connect(self.path)
-        c.execute("INSERT INTO album_art VALUES('Camel','Mirage',NULL,'notfound',1)")
-        c.execute("INSERT INTO album_art VALUES('Gong','Camembert',NULL,'notfound',1)")
+        c.execute("INSERT INTO album_art VALUES('Camel','Mirage','','notfound',1)")
+        c.execute("INSERT INTO album_art VALUES('Gong','Camembert','','notfound',1)")
         c.commit(); c.close()
         called = []
         def lookup(artist, album):
