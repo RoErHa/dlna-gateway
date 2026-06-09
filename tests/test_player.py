@@ -275,5 +275,43 @@ class TestRendererQueueSendFailure(unittest.TestCase):
                              f"(limit {RendererQueue._MAX_CONSECUTIVE_FAILS})")
 
 
+class TestRendererQueueSseEvents(unittest.TestCase):
+    """R2: RendererQueue publishes a `state` SSE nudge when now-playing
+    changes (a track is sent) and when playback stops."""
+
+    def _track(self):
+        return {"url": "http://127.0.0.1:1/s.flac", "title": "S",
+                "artist": "A", "album": "Al", "mime": "audio/flac",
+                "duration": "3:00"}
+
+    def test_send_current_publishes_state(self):
+        import dlna_events
+        q = RendererQueue()
+        with patch("dlna_avtransport.avtransport_stop", return_value=True), \
+             patch("dlna_avtransport.avtransport_send", return_value=True), \
+             patch("dlna_avtransport.avtransport_probe_state",
+                   return_value=("STOPPED", "")), \
+             patch.object(dlna_events.EVENTS, "publish") as pub:
+            try:
+                q.start("http://fake/ctrl", [self._track()], "R")
+            finally:
+                q._cancel()
+        self.assertTrue(
+            any(c.args and c.args[0].get("type") == "state"
+                for c in pub.call_args_list),
+            "a successful send must publish a 'state' event")
+
+    def test_stop_publishes_state(self):
+        import dlna_events
+        q = RendererQueue()
+        with patch("dlna_avtransport.avtransport_stop", return_value=True), \
+             patch.object(dlna_events.EVENTS, "publish") as pub:
+            q.stop()
+        self.assertTrue(
+            any(c.args and c.args[0].get("type") == "state"
+                for c in pub.call_args_list),
+            "stop() must publish a 'state' event")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

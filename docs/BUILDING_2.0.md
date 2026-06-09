@@ -39,61 +39,64 @@ Commit-message prefixes (`1.xx`/`2.xx`) are weak — they don't gate anything an
 - **Surface the version in the running app** — add a `VERSION` constant (or read the nearest git tag) exposed at `/api/version` and shown in the PWA footer. With two instances live, you *want* the UI to say "2.0.0-alpha" vs "1.4.0" so you know which one you're looking at. Small, high-value, do it early.
 - Keep your existing `type(scope):` commit style (e.g. `feat(transport): …`) — the branch already tells you the line, so no `[2.x]` clutter needed.
 
-## Concrete runthrough — the order to actually build it
+## Status (2026-06-04)
 
-Following `REQUIREMENTS_2.0.md §3`'s cut order, adapted for side-by-side:
+- **Phase 0 — parallel rig: ✅ DONE.** `2.0` branch + worktree at `../dlna-gateway-2.0`; 2.x runs on `:8766` / LocalFs `:8201` / distinct UPnP UDN+name via `./run-2.0.sh`; `/api/version` + header badge; its own `library.db`/`config.json`/`gateway.log` (separate working dir, derived from `__file__`). 1.x and 2.x verified running side by side. (tag `v2.0.0-alpha.1`.)
+- **Phase 1 — drop the gateway's own TLS: ✅ CODE DONE** (`baa2c0c`). Removed `TLSThreadedHTTPServer`, the HTTP→HTTPS redirect, the cert auto-detect / `_warn_if_cert_expiring_soon`, and the `--tls-*` args. The stdlib gateway now serves **plain HTTP** on `0.0.0.0:8766`; device endpoints (`/stream`, `/gw/`, LocalFs `:8201`) stay un-proxied on the LAN.
+- **Phase 2 — Hypercorn + FastAPI ASGI rewrite: ✅ COMPLETE.** `dlna_asgi.py` (FastAPI) served by **Hypercorn** runs the WHOLE gateway: read API (native routes + `dlna_asgi_bridge.py` shim for the rest), POST writes (bridged), byte relays (`/stream`/`/art`/`/radio_stream` native StreamingResponse), Subsonic `/rest/*`, static/PWA, the `_lifespan` entrypoint (starts the daemon threads via `dlna_gateway.start_background_services`), the plain-HTTP `/gw/*` device tier (`dlna_server.start_device_server`, :8770), TLS+HTTP/2 (`GATEWAY_TLS=1`, auto-discovers the tailscale cert), and SSE push (`/api/events`). Launch: `./run-2.0-asgi.sh`. Only optional native-port polish + the stdlib retirement (cleanup C, post-cutover) remain.
 
-1. **✅ DONE — parallel rig.** `2.0` branch + worktree at `../dlna-gateway-2.0`; 2.x on `:8766` / LocalFs `:8201` / distinct UPnP UDN+name; `/api/version` + header badge; own `library.db`/`config.json`/`gateway.log` (separate working dir). Both run side-by-side, verified. Run with `./run-2.0.sh`. (commit `755601a`, tag `v2.0.0-alpha.1`.)
-2. **`tailscale serve` front + drop 2.x's TLS** (§1, B5/B6): bind 2.x to localhost HTTP, `tailscale serve` it on 443, delete `TLSThreadedHTTPServer` / the HTTP→HTTPS redirect / `_warn_if_cert_expiring_soon` *in the 2.x checkout only*. Keep `/stream`, `/radio_stream`, `:8201` LocalFs, and `/gw/` device endpoints on plain LAN HTTP, un-proxied (the Naim caveat). Biggest simplification for the least code.
-3. **Hypercorn + FastAPI/Starlette ASGI rewrite — the "modern app."** Move the handlers off stdlib `BaseHTTPRequestHandler` onto an ASGI app served by Hypercorn (behind the `tailscale serve` front, so h2 + cert-deletion + privacy are retained). Do it **incrementally** — port endpoints in batches, keep the test gate green each step — not big-bang. Mind the hard parts: the `/stream` + `/radio_stream` byte relays (streaming responses), the UPnP SOAP/XML + `/gw/` device endpoints (stay plain-HTTP, un-proxied), static serving, and the SSDP/threading model.
-4. **R2 — SSE push** for now-playing + index status (unlocked by the ASGI move): kills the polling storm; biggest *felt* responsiveness win.
-5. **R4 + R5 — make LocalFs complete + folder-grouped**: full one-pass import of the music root, a coverage report (files-on-disk vs rows), consistent `album_key` grouping so boxed sets are one album everywhere. Can run in parallel with the above.
-6. **R6 — Plex/Jellyfin providers** opportunistically once the seam's exercised.
-7. **HTTP/3 — deferred, low priority.** Tipping point: **when `tailscale serve` itself supports h3** → h3 comes for free while keeping the front (no cert re-ownership). *Not* planning to drop `tailscale serve` to get h3 (that re-introduces the cert machinery and h3's tailnet RTT win is likely marginal — measure first if ever pursued).
-8. **Cutover**: copy the user-data tables 1.x→2.x, point launchd at the 2.x checkout, retire 1.x's cert LaunchAgent, tag `v2.0.0`, merge `2.0 → main`.
+## Transport / TLS decision — REVISED 2026-06-04: `tailscale serve` DROPPED
 
-Throughout: the **run-all-tests-before-git gate** applies on the 2.0 branch, and main fixes are pulled in via periodic `git merge main` into the worktree.
+The original plan was to front the gateway with **`tailscale serve`** (h2 + free TLS, delete the cert machinery). It's **abandoned** after a full day of debugging — `tailscale serve` on `:443` is **broken on this Mac mini's Tailscale install**. The clincher: from a phone with healthy DNS + data path, 1.x's *self-served* HTTPS on `:8443` loads fine, but `serve` on `:443` does not. Gateway, tailnet data path, macOS firewall, and `ShieldsUp` were all ruled out — it's the `serve` subsystem itself (likely update damage: stale system-extensions + a MagicDNS regression). The MacBook's Tailscale is *separately* broken (dead DNS + data path) — a standalone "reinstall Tailscale" chore, unrelated to 2.0.
 
----
+**New plan — TLS is APP-OWNED via Hypercorn.** Once the ASGI app is the gateway, **Hypercorn terminates TLS + HTTP/2/3 natively** with a `tailscale cert`-issued cert. No `tailscale serve`. This is *proven viable* (self-served TLS demonstrably works over the tailnet), gives h2/h3 without a proxy, and the cert-renewal machinery **stays** (Hypercorn-owned, not deleted). **B-later (chosen):** change nothing about 2.x TLS now — 2.x stays plain-HTTP / LAN-only for testing; it gains TLS when Hypercorn becomes the server. Mobile-anywhere + privacy still come from Tailscale (the tunnel), independent of who terminates TLS.
 
-## Decisions locked (2026-06-03)
+## Runthrough — remaining order
 
-- **Branch model: A + C.** `main` = stable 1.x daily-driver (untouched); 2.0 on a long-lived `2.0` branch in a worktree at `../dlna-gateway-2.0`. Merge `main → 2.0` periodically.
-- **Transport: `tailscale serve` first** (h2 + free TLS, deletes the cert machinery, zero app rewrite) — *then* the Hypercorn/ASGI rewrite for a modern app (async + WebSocket/SSE). These compose: Hypercorn runs behind the `tailscale serve` front.
-- **HTTP/3: low priority, gated on `tailscale serve` gaining h3 support.** Keep the Tailscale front; don't drop it to chase h3.
-- **Mobile-anywhere + privacy come from Tailscale (tailnet overlay)** and hold through every phase, independent of which server terminates TLS.
-- **Versioning:** SemVer tags + branch name (no commit-subject version prefixes).
+1. ✅ Parallel rig (Phase 0).
+2. ✅ Drop the stdlib gateway's own TLS (Phase 1) — plain-HTTP backend.
+3. 🔄 **Hypercorn + FastAPI ASGI rewrite (Phase 2)** — incremental: native route batches + bridge for the rest; then POST routes, the byte-streamers as `StreamingResponse`, static serving; finally make `dlna_asgi` the entrypoint (start the gateway's daemon threads alongside Hypercorn) and retire `dlna_server`.
+4. **TLS via Hypercorn** — point Hypercorn at the `tailscale cert`; HTTPS + h2 (h3 when wanted). Set `docs_url=None` here (drops the Swagger CDN call — privacy).
+5. **R4 + R5** — LocalFs completeness + folder/`album_key` grouping.
+6. **R2 — SSE push** for now-playing + index status (unlocked by ASGI).
+7. **R6 — Plex/Jellyfin providers**.
+8. **Cutover** — copy user-data tables 1.x→2.x **except playlists** (start those fresh — beets gives good genres); point launchd at the 2.x checkout; tag `v2.0.0`; merge `2.0 → main`.
 
-## 2.0 task list
+Throughout: the **run-all-tests-before-git gate** applies on the 2.0 branch; pull 1.x fixes in via periodic `git merge main`.
+
+## Task list
 
 **Phase 0 — rig**
-- [x] `2.0` branch + worktree, separate ports/DB/UDN, `/api/version` + badge, side-by-side verified (`755601a`)
-- [x] Merge `main` beets fixes into `2.0` (`aaf9a35`)
+- [x] `2.0` branch + worktree, separate ports/DB/UDN, `/api/version` + badge
+- [x] Merge `main` beets fixes into `2.0`
 
-**Phase 1 — `tailscale serve` transport (next)**
-- [ ] Bind 2.x gateway to `127.0.0.1` HTTP only (no TLS bind)
-- [ ] `tailscale serve` 443 → `http://127.0.0.1:<port>`; verify h2 + trusted cert on mobile over tailnet
-- [ ] Delete 2.x TLS code: `TLSThreadedHTTPServer`, HTTP→HTTPS redirect, `_warn_if_cert_expiring_soon`, `*.crt/.key` auto-detect
-- [ ] Confirm device path untouched: Naim still reaches `/stream`, `/gw/`, LocalFs `:8201` on plain LAN HTTP (un-proxied)
-- [ ] Update CLAUDE.md / ARCHITECTURE.PDF for the new transport (on request)
+**Phase 1 — drop gateway TLS**
+- [x] Remove TLSThreadedHTTPServer / redirect / cert-detect / cert-expiry-warn / `--tls-*` (`baa2c0c`)
+- [x] Plain HTTP on `0.0.0.0`; device endpoints un-proxied on LAN
+- [~] ~~`tailscale serve` front~~ — **dropped** (broken on this tailnet); TLS → Hypercorn instead
 
-**Phase 2 — Hypercorn + FastAPI/Starlette (the modern app)**
-- [ ] Stand up an ASGI app skeleton served by Hypercorn behind `tailscale serve`
-- [ ] Port `/api/*` JSON handlers off `BaseHTTPRequestHandler` (incremental, gate-green each batch)
-- [ ] Port the byte relays (`/stream`, `/radio_stream`) as ASGI streaming responses
-- [ ] Keep UPnP SOAP/XML + `/gw/` device endpoints plain-HTTP, un-proxied
-- [ ] Port static serving + retire the threading/`ThreadingMixIn` model
-- [ ] **R2 — SSE push** for now-playing + index status (replace the PWA poll loop)
+**Phase 2 — Hypercorn + FastAPI ✅ COMPLETE**
+- [x] ASGI skeleton + Hypercorn (`dlna_asgi.py`, `/api/version` native)
+- [x] Legacy-handler bridge (`dlna_asgi_bridge.py`) — whole read API under Hypercorn
+- [x] Native read routes: servers/renderers; artists/albums/genres + drill-downs; decades/decade_*; search; browse_letter; index/status; track_meta; playlists/playlist; album_favourites(+check); radio/favourites
+- [x] AcoustID **minimal removal** (endpoints + PWA 🔎 Enrich button)
+- [x] Remaining bridged reads native (lyrics, radio/search, radio/nowplaying, radio, browse) — via the `*_payload()` extraction (shared core returns `(status, body)`; legacy handler + native route both call it → no divergence, incl. browse's side effects + the network calls run in the threadpool). The whole READ API is now native; only POST writes remain bridged.
+- [x] POST routes (bridged — whole write API under Hypercorn; native later)
+- [x] Byte-streamers as `StreamingResponse` (`/stream`, `/art`, `/radio_stream`)
+- [x] Subsonic `/rest/*` (JSON/XML bridged; stream/download/getCoverArt native)
+- [x] Static serving (the PWA) under ASGI
+- [x] Entrypoint: `dlna_asgi` lifespan starts the daemon threads (`dlna_gateway.start_background_services`) so `hypercorn dlna_asgi:app` runs standalone — launch via `run-2.0-asgi.sh`
+- [x] Device-tier server: `dlna_server.DeviceHandler` / `start_device_server` serves Naim-facing `/gw/*` plain-HTTP on `:8770` alongside Hypercorn (lifespan-started; SSDP advert points there)
+- [x] **R2 — SSE push** — DONE. Slice 1: `dlna_events.EventBus`/`EVENTS` (thread-safe `publish()` → `loop.call_soon_threadsafe`, fan-out to per-subscriber `asyncio.Queue`, drop-on-full) + native `GET /api/events` `text/event-stream` (hello frame, 15 s comment heartbeat, unsubscribe on disconnect); loop bound in `_lifespan`. Slice 2: publishers — `RendererQueue` `{state}` on track-send + stop; `IndexState.update` `{index}` ONLY on a status transition (no progress flood); discovery `{devices}` in `_on_server_found`. Frontend: PWA opens `EventSource('/api/events')` in `startPolling()` as an ACCELERATOR over the polls (`state`→pollState, `index`→pollIndex, `devices`→refresh servers/renderers); polling stays as the fallback so nothing breaks when SSE is absent (stdlib server / old browser). Each publish is a no-op until the ASGI loop is bound, so the stdlib path is unaffected. Tests: TestSSE (12) + TestSSEPublishers (2) + RendererQueue state (2) + Playwright opens-/api/events (1); verified live (`curl -N /api/events` → `event: hello`). SSE is ASGI-only.
+- [x] **TLS via Hypercorn** — DONE. `GATEWAY_TLS=1 ./run-2.0-asgi.sh` serves HTTPS + HTTP/2 (ALPN); default stays plain HTTP for LAN testing. Cert auto-discovery: this worktree → the sibling 1.x checkout's tailscale cert (`../dlna-gateway/ronsmacmini.tail5be6ad.ts.net.{crt,key}`), so 2.x reuses 1.x's cert + auto-renewal (picks up renewals on restart); override via `GATEWAY_CERTFILE/GATEWAY_KEYFILE`. Verified live over the tailnet hostname: **trusted** h2 (`curl --http2 https://…/api/version` → http_version=2, code=200, ssl_verify_result=0, no `-k`). Device `/gw/* :8770` + LocalFs `:8201` STAY plain HTTP (the Naim can't do HTTPS). h3/QUIC = later add (`pip install aioquic` + `--quic-bind`). NB the shared cert expires Jun 12 2026 — renew via 1.x's `renew-cert.sh`/cron (daily-driver concern).
 
 **Phase 3 — library + providers**
-- [ ] R4 LocalFs completeness (full import + files-on-disk vs rows coverage report)
-- [ ] R5 folder/`album_key` grouping consistent across browse / UPnP / Subsonic
-- [ ] R6 Plex / Jellyfin providers on the seam
-
-**Phase 4 — deferred**
-- [ ] HTTP/3 — *only when `tailscale serve` supports it* (low priority)
+- [x] **R4 LocalFs completeness** — verified already complete (2026-06-06): disk 24,146 audio files → scanner read 24,130 (`malformed: 0`) → 23,920 DB rows; the ~210 gap is legitimate metadata-dedup (same artist+album+title+bit_depth+sample_rate in two folders). LocalFs indexes ~99.9% of disk, fails on nothing. The old "lost ~38%" was the *playlist*-relink metadata-match loss (moot — playlists start fresh at cutover), not the scan.
+- [x] **R5 folder/`album_key` grouping** — verified already implemented + tested (2026-06-06): every album-listing method folder-groups for LocalFs (`all_albums`/`artist_albums`/`browse_letter`/`genre_albums`/`decade_albums`/`search` + `album_count`), the API + frontend pass `album_key` through, and a VA comp opens by folder (384 tracks / 337 artists). Browse shows **2,110** folder-grouped albums (not the raw 5,979 `(artist,album)` pairs). Came in with the `album_key` A2-A3 work, before the `2.0` branch. Guarded by `tests/test_album_grouping.py` + `tests/frontend/test_album_grouping.py`.
+- [ ] **R6 Plex/Jellyfin** — deferred to AFTER cutover (user's call). Weekend project on the proven `LibraryProvider` seam.
 
 **Cutover**
-- [ ] Copy user-data tables 1.x → 2.x (playlists, playlist_tracks, album_favourites, radio_favourites, play_counts, lyrics, metadata_overrides)
-- [ ] Point launchd at the 2.x checkout, retire 1.x cert LaunchAgent
-- [ ] Tag `v2.0.0`, merge `2.0 → main`
+- [ ] Set `docs_url=None` (drops the Swagger UI CDN call — privacy/LAN ethos; ReDoc already off)
+- [ ] Copy user-data tables 1.x→2.x **except playlists** (fresh start); launchd→2.x; tag `v2.0.0`; merge `2.0 → main`
+- [ ] AcoustID **full cleanup** (module + worker + tests) once 2.0 is stable
+- [ ] **Cleanup C — one framework (do AFTER cutover is stable):** port `api_upnp` (`/gw/*`) into the ASGI app on a Hypercorn `--insecure-bind` plain port, then DELETE `dlna_server.py` + `DeviceHandler` + `start_device_server` + `run-2.0.sh`. The device-tier server (option A) is the deliberate interim so the cutover doesn't risk the fragile Naim-facing UPnP bytes; C makes the whole gateway one framework (Hypercorn). Verify `/gw/*` against the real Naim once more before deleting.

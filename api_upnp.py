@@ -12,6 +12,7 @@ Also exports: GW_UDN, GW_NAME, gw_ssdp_announcer, gw_ssdp_byebye
 """
 import base64
 import logging
+import os
 import socket
 import struct
 import time
@@ -22,8 +23,11 @@ from dlna_library import DB
 log = logging.getLogger("dlna.api.upnp")
 
 # ── Gateway UPnP identity ─────────────────────────────────────────
-GW_UDN  = "uuid:dlna-gateway-iina-8765"
-GW_NAME = "DLNA Gateway (IINA)"
+# Env-overridable so a side-by-side 2.0 instance announces a DISTINCT
+# MediaServer (different UDN + friendly name) on the LAN — otherwise the
+# Naim sees two servers with the same identity. Defaults keep 1.x behaviour.
+GW_UDN  = os.environ.get("GW_UDN",  "uuid:dlna-gateway-iina-8765")
+GW_NAME = os.environ.get("GW_NAME", "DLNA Gateway (IINA)")
 
 
 def _get_lan_ip() -> str:

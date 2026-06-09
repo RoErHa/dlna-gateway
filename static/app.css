@@ -272,6 +272,16 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 .letter-bar::-webkit-scrollbar{display:none}
 .letter-btn{flex-shrink:0;min-width:28px;height:28px;padding:0 4px;font-size:11px;font-family:var(--fh);font-weight:700;border:1px solid var(--border);border-radius:5px;background:var(--raised);color:var(--ink-dim);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .12s;-webkit-tap-highlight-color:transparent}
 .letter-btn.active{background:var(--amber);border-color:var(--amber);color:var(--bg)}
+/* Desktop (>768px): the letter bar lives in the fixed 360px #browser sidebar
+   and the 29 letters overflow past ~H. A mouse can't swipe a hidden-scrollbar
+   row, so reveal a thin scrollbar here. Mobile (<=768px) keeps the clean
+   single-row touch-swipe (scrollbar-width:none on .letter-bar above). */
+@media (min-width:769px){
+  .letter-bar{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+  .letter-bar::-webkit-scrollbar{display:block;height:6px}
+  .letter-bar::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  .letter-bar::-webkit-scrollbar-track{background:transparent}
+}
 /* ── Browse pagination ───────────────────────────────────────── */
 .browse-pager{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:1px solid var(--border);flex-shrink:0;font-size:11px;color:var(--ink-dim)}
 .browse-pager.hidden{display:none}

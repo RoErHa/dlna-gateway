@@ -19,6 +19,14 @@ DB_FILE   = os.path.join(_BASE_DIR, "library.db")
 CFG_FILE  = os.path.join(_BASE_DIR, "config.json")
 LOG_FILE  = os.path.join(_BASE_DIR, "gateway.log")
 
+# ── Version ───────────────────────────────────────────────────────
+# Release-line marker. 1.x lives on `main`; this `2.0` branch carries
+# the transport/architecture refresh (see REQUIREMENTS_2.0.md and
+# docs/BUILDING_2.0.md). Surfaced at /api/version and in the
+# PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
+# Override with $APP_VERSION for ad-hoc builds.
+VERSION = os.environ.get("APP_VERSION", "2.0.0-alpha.1")
+
 # ── .env loader (optional) ────────────────────────────────────────
 # Load <repo>/.env into os.environ BEFORE any other module reads it.
 # Imported here because dlna_config is the first module imported by
@@ -38,6 +46,38 @@ os.makedirs(_BASE_DIR, exist_ok=True)
 M3U_TMP   = "/tmp/dlna-gw-current.m3u"   # current playback playlist (IINA local)
 IINA_M3U  = "/tmp/dlna-gw-iina.m3u"      # HTTP-served M3U for remote IINA
 IPC_SOCK  = "/tmp/dlna-gw-mpv.sock"       # mpv / IINA IPC socket
+
+
+# ── Open-file limit ───────────────────────────────────────────────
+def raise_fd_limit(target: int = 8192) -> None:
+    """Raise this process's open-file SOFT limit toward `target`. Best-effort
+    — never raises.
+
+    macOS's default soft RLIMIT_NOFILE is 256. The 1.x gateway gets 8192 from
+    its launchd plist (SoftResourceLimits/NumberOfFiles); a SHELL-launched
+    process (run-2.0.sh / run-2.0-asgi.sh) instead inherits the Terminal's 256.
+    Under Hypercorn's request threadpool + the boot-time LocalFs scan the
+    gateway opens enough concurrent FDs (each WAL connection = db + -wal + -shm,
+    plus sockets + scanned files) to blow past 256 → EMFILE → sqlite3
+    'unable to open database file' (see db_pool.py's FD-exhaustion note). Call
+    this at every entrypoint so all launchers match 1.x's headroom."""
+    try:
+        import resource
+    except ImportError:
+        return                      # non-unix; nothing to do
+    log = logging.getLogger("dlna.config")
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            log.info(f"Raised open-file soft limit {soft} → {want} (hard={hard})")
+        else:
+            # Always log the effective limit — otherwise a silent no-op leaves
+            # us guessing whether the gateway has 256 or 8192 FDs of headroom.
+            log.info(f"Open-file soft limit already {soft} (hard={hard})")
+    except (ValueError, OSError) as e:
+        log.warning(f"Could not raise open-file limit: {e}")
 
 
 # ── Logging ───────────────────────────────────────────────────────

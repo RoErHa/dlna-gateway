@@ -11,10 +11,7 @@ Standalone test (starts server on port 8766 for 30 s):
 import json
 import logging
 import os
-import socket
-import ssl
 import struct
-import sys
 import threading
 import time
 import urllib.parse
@@ -40,47 +37,13 @@ log = logging.getLogger("dlna.server")
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-
-class TLSThreadedHTTPServer(ThreadedHTTPServer):
-    """
-    HTTPS variant hardened against accept-loop stalls.
-
-    The default `SSLSocket.accept()` performs the TLS handshake inline on
-    the accepting thread. A single client that opens a TCP connection and
-    never sends a ClientHello (port scanner, sleeping phone, dropped peer)
-    blocks the entire HTTPS server until that handshake completes — which
-    is never. Has been observed to wedge the gateway for days.
-
-    This subclass:
-      • requires the listening socket to be wrapped with
-        `do_handshake_on_connect=False`, so accept() returns immediately
-        with an unhandshaked SSLSocket; the handshake then happens lazily
-        on the per-request worker thread's first read;
-      • sets a per-connection socket timeout, so a stalled handshake or
-        slow client tears down its own thread instead of leaking forever;
-      • downgrades the noisy stderr traceback for routine handshake/timeout
-        errors to a single log.warning line.
-    """
-
-    REQUEST_TIMEOUT = 30.0  # per read/write op, not total connection
-
-    def get_request(self):
-        sock, addr = self.socket.accept()
-        try:
-            sock.settimeout(self.REQUEST_TIMEOUT)
-        except OSError:
-            pass
-        return sock, addr
-
-    def handle_error(self, request, client_address):
-        exc = sys.exc_info()[1]
-        if isinstance(exc, (ssl.SSLError, socket.timeout,
-                            ConnectionResetError, BrokenPipeError, OSError)):
-            log.warning(
-                f"HTTPS: dropped {client_address}: "
-                f"{type(exc).__name__}: {exc}")
-            return
-        super().handle_error(request, client_address)
+# NOTE (2.0): the stdlib gateway no longer terminates TLS itself — it serves
+# plain HTTP. The old TLSThreadedHTTPServer + HTTPS-redirect machinery were
+# removed here. TLS + HTTP/2 become APP-OWNED once the Hypercorn/ASGI app
+# (dlna_asgi.py) is the server: Hypercorn terminates TLS with a `tailscale
+# cert`-issued cert. (`tailscale serve` was tried and dropped — it was broken
+# on this tailnet; see docs/BUILDING_2.0.md.) Device endpoints (/stream, /gw/,
+# LocalFs :8201) stay on plain LAN HTTP, reached directly by the Naim.
 
 
 # ── PWA icon generator ────────────────────────────────────────────
@@ -218,31 +181,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    # ── HTTPS redirect ────────────────────────────────────────────
-
-    # Paths that must stay on HTTP — UPnP renderers can't do HTTPS
-    _HTTP_ONLY = ("/stream", "/gw/")
-
-    def _redirect_https(self) -> bool:
-        """
-        If HTTPS is running and this request arrived on the plain HTTP server,
-        send a 301 to the HTTPS equivalent — except for device-only endpoints.
-        Returns True if a redirect was sent (caller should return immediately).
-        """
-        tls_port = getattr(self.server, "tls_port", None)
-        if not tls_port:
-            return False   # HTTPS not configured
-        path = urllib.parse.urlparse(self.path).path
-        if any(path.startswith(p) for p in self._HTTP_ONLY):
-            return False   # device endpoint — keep on HTTP
-        host = self.headers.get("Host", "").split(":")[0] or "localhost"
-        self.send_response(301)
-        self.send_header("Location", f"https://{host}:{tls_port}{self.path}")
-        self.send_header("Content-Length", "0")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        return True
-
     # ── OPTIONS (CORS pre-flight) ─────────────────────────────────
 
     def do_OPTIONS(self):
@@ -257,8 +195,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     # Route tables live in dlna_routes — see that module to add endpoints.
 
     def do_GET(self):
-        if self._redirect_https():
-            return
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         params = dict(urllib.parse.parse_qsl(parsed.query))
@@ -358,8 +294,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
     # ── POST ──────────────────────────────────────────────────────
 
     def do_POST(self):
-        if self._redirect_https():
-            return
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path
         length = int(self.headers.get("Content-Length", 0))
@@ -380,6 +314,49 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         self._html(404, "<h1>404 Not Found</h1>")
+
+
+# ── Device-tier server (/gw/* only) ───────────────────────────────
+# Serves ONLY the gateway-as-MediaServer UPnP surface (the /gw/* endpoints the
+# Naim browses) on a dedicated plain-HTTP LAN port. Needed in the 2.0 ASGI
+# deployment: Hypercorn owns the main port (and, later, TLS), but the Naim
+# can't do HTTPS and reaches /gw/* over plain LAN HTTP — so a small device
+# server runs alongside Hypercorn (started from dlna_asgi._lifespan).
+#
+# REMINDER — cleanup C (do AFTER the cutover is stable): port api_upnp into the
+# ASGI app on a Hypercorn `--insecure-bind` plain port and DELETE this
+# DeviceHandler + start_device_server, so the whole gateway is one framework
+# (Hypercorn) and dlna_server.py retires entirely. Tracked in docs/BUILDING_2.0.md.
+
+class DeviceHandler(GatewayHandler):
+    """GatewayHandler scoped to `/gw/*` — every other path 404s. Reuses the
+    parent's exact dispatch + response helpers, so the Naim sees byte-identical
+    UPnP/SOAP (zero behaviour change vs the full server on the device surface)."""
+
+    def _is_gw(self) -> bool:
+        return urllib.parse.urlparse(self.path).path.startswith("/gw/")
+
+    def do_GET(self):
+        if self._is_gw():
+            return super().do_GET()
+        self._html(404, "<h1>404 Not Found</h1>")
+
+    def do_POST(self):
+        if self._is_gw():
+            return super().do_POST()
+        self._html(404, "<h1>404 Not Found</h1>")
+
+
+def start_device_server(host: str, port: int) -> ThreadedHTTPServer:
+    """Start the device-tier server (DeviceHandler, /gw/* only) in a daemon
+    thread and return it (caller shuts it down). Bind 0.0.0.0 so the Naim on
+    the LAN reaches it. Used by dlna_asgi._lifespan when Hypercorn is the
+    gateway."""
+    server = ThreadedHTTPServer((host, port), DeviceHandler)
+    threading.Thread(target=server.serve_forever, daemon=True,
+                     name="device-server").start()
+    log.info(f"Device server (/gw/* only) up on http://{host}:{port}/gw/")
+    return server
 
 
 # ── Standalone test ───────────────────────────────────────────────

@@ -17,18 +17,17 @@ Test individual modules:
 """
 import argparse
 import logging
-import os
 import socket
-import ssl
 import subprocess
 import threading
-import time
 
 import dlna_discovery as _disc
-from dlna_config import load_config, save_config, setup_logging
+from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
+from dlna_events import EVENTS
+from dlna_fdmon import start_fd_monitor
 from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
                           ACOUSTID_FETCHER)
-from dlna_server import (GW_UDN, ThreadedHTTPServer, TLSThreadedHTTPServer,
+from dlna_server import (GW_UDN, ThreadedHTTPServer,
                          GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
 
 log = logging.getLogger("dlna.gateway")
@@ -73,6 +72,7 @@ def _on_server_found(server):
     Skip indexing for combined devices (e.g. Naim Uniti) that appear as
     both a MediaServer and a MediaRenderer — they have no music library."""
     from dlna_discovery import RENDERERS
+    EVENTS.publish({"type": "devices"})     # SSE: source list changed (R2)
     if RENDERERS.get(server.udn):
         log.info(f"Skipping indexer for {server.name!r} "
                  f"— registered as renderer (combined device)")
@@ -80,29 +80,99 @@ def _on_server_found(server):
     INDEXER.start(server, force=False)
 
 
-def _warn_if_cert_expiring_soon(cert_path: str, threshold_days: int = 14):
-    # Backup safety net for the weekly renew-cert.sh LaunchAgent. If that
-    # silently dies we still want a loud signal in gateway.log when the cert
-    # gets close to expiry.
-    try:
-        out = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-noout", "-enddate"],
-            capture_output=True, text=True, timeout=5)
-        if out.returncode != 0:
-            log.warning(f"cert expiry check: openssl failed: {out.stderr.strip()}")
-            return
-        end_str = out.stdout.strip().split("=", 1)[1] if "=" in out.stdout else ""
-        end_t = time.strptime(end_str, "%b %d %H:%M:%S %Y %Z")
-        days_left = (time.mktime(end_t) - time.time()) / 86400
-        if days_left < threshold_days:
-            log.warning(
-                f"TLS cert {os.path.basename(cert_path)} expires in "
-                f"{days_left:.1f} days — renew-cert.sh may have failed; "
-                f"run ./renew-cert.sh --force or check cert-renewal.log")
-        else:
-            log.info(f"TLS cert valid for {days_left:.0f} more days")
-    except Exception as e:
-        log.warning(f"cert expiry check failed: {e}")
+# ── Background services ───────────────────────────────────────────
+
+def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> None:
+    """Start every daemon thread + background worker the gateway needs:
+    discovery (DB pre-probe / SSDP / subnet-scan fallback / heartbeat), the
+    gateway-as-MediaServer SSDP announcer, the album-art + AcoustID startup
+    mop-up scans, and the LocalFs provider wiring. Optionally kick a one-off
+    `probe` URL.
+
+    Extracted from main() so the 2.0 ASGI app starts the SAME services from
+    its Hypercorn lifespan (dlna_asgi._lifespan) — ONE definition of "boot the
+    gateway's background work", shared by the stdlib entrypoint and the ASGI
+    server. Run exactly one of the two (they'd otherwise double-announce on
+    SSDP). `port` is the gateway-as-MediaServer advert port."""
+    # FD watchdog — logs open-FD count vs the limit so an FD leak shows up as a
+    # rising trajectory (and an lsof breakdown in the danger zone) BEFORE it
+    # exhausts the limit and crashes the gateway. See dlna_fdmon.
+    start_fd_monitor()
+
+    # Wire the indexer callback into discovery
+    _disc._on_server_found = _on_server_found
+
+    # Load persistent device role cache BEFORE any discovery thread starts, so
+    # a combined device (Uniti) is classified renderer-only with no race.
+    DEVICE_ROLES.load()
+
+    # Immediately probe all previously-known servers from the DB cache — gets
+    # them online in < 1s, before SSDP / subnet scan run.
+    known_servers = DEVICE_ROLES.known_servers()
+    if known_servers:
+        log.info(f"Pre-probing {len(known_servers)} known server(s) from DB…")
+        for s in known_servers:
+            log.info(f"  → {s['name']!r}  {s['location']}")
+            threading.Thread(
+                target=_disc.probe_url,
+                args=(s["location"], GW_UDN),
+                daemon=True,
+                name=f"probe-{s['udn'][:8]}").start()
+
+    # SSDP discovery — finds MediaServers AND MediaRenderers
+    threading.Thread(
+        target=_disc.ssdp_discovery_thread,
+        args=(lan_ip, GW_UDN),
+        daemon=True, name="ssdp").start()
+
+    # Gateway SSDP announcer — broadcasts ourselves as a MediaServer
+    threading.Thread(
+        target=gw_ssdp_announcer,
+        args=(lan_ip, port),
+        daemon=True, name="gw-ssdp").start()
+
+    # Subnet scanner fallback — only fires if nothing was found via pre-probe
+    # or SSDP (a genuinely fresh install with no DB cache).
+    threading.Thread(
+        target=_disc.subnet_scan_if_empty,
+        args=(lan_ip, GW_UDN),
+        daemon=True, name="subnet-scan").start()
+
+    # Server heartbeat — keeps last_seen fresh, eliminates offline flicker
+    threading.Thread(
+        target=_disc.heartbeat_thread,
+        args=(GW_UDN,),
+        daemon=True, name="heartbeat").start()
+
+    # Album-art fetcher — one-shot startup scan 120s after boot to mop up
+    # anything left bare by a previous interrupted run. Steady-state refills
+    # come from Indexer._run() on each successful crawl; no periodic poll.
+    ART_FETCHER.start_initial_scan()
+    # AcoustID metadata enrichment — same one-shot startup mop-up. Dormant if
+    # ACOUSTID_API_KEY is unset (Option A: beets is the metadata authority).
+    ACOUSTID_FETCHER.start_initial_scan()
+
+    # LocalFs provider — wires in the in-process indexer + file server when
+    # LOCALFS_MUSIC_ROOT is configured. Additive: UPnP discovery keeps running.
+    from dlna_localfs_wiring import maybe_start_localfs
+    maybe_start_localfs(get_lan_ip)
+
+    # CLI --probe or config.json probe (fresh install / manual override). On
+    # subsequent runs the DB cache handles this — but honour an explicit probe.
+    probe_url = probe
+    if not probe_url and not known_servers:
+        cfg = load_config()
+        probe_url = cfg.get("probe", "")
+        if probe_url:
+            log.info(f"No DB cache yet — probing saved URL: {probe_url}")
+
+    if probe_url:
+        def _probe():
+            _disc.probe_url(probe_url, GW_UDN)
+            cfg = load_config()
+            cfg["probe"] = probe_url
+            save_config(cfg)
+        threading.Thread(target=_probe, daemon=True).start()
 
 
 # ── Main ──────────────────────────────────────────────────────────
@@ -121,12 +191,9 @@ Examples:
         """)
     parser.add_argument("--host",          default="0.0.0.0")
     parser.add_argument("--port",          type=int, default=8765)
-    parser.add_argument("--tls-port",      type=int, default=8443,
-                        help="HTTPS port (only used when --tls-cert is set)")
-    parser.add_argument("--tls-cert",      default="",
-                        help="Path to TLS certificate (.crt) for HTTPS")
-    parser.add_argument("--tls-key",       default="",
-                        help="Path to TLS private key (.key) for HTTPS")
+    # The stdlib gateway no longer terminates TLS in 2.0 (no --tls-* args); it
+    # serves plain HTTP. TLS + HTTP/2 become app-owned via Hypercorn once the
+    # ASGI app (dlna_asgi.py) is the server. See dlna_server note + BUILDING_2.0.md.
     parser.add_argument("--probe",         default="",
                         help="Direct device URL — bypasses SSDP, adds permanently to DB")
     parser.add_argument("--no-browser",    action="store_true")
@@ -140,6 +207,10 @@ Examples:
     args = parser.parse_args()
 
     setup_logging(debug=args.debug)
+    # macOS shells default to a 256 open-file soft limit; raise it so the
+    # gateway doesn't hit EMFILE → sqlite 'unable to open database file' under
+    # load. (1.x gets this from its launchd plist; shell-launched 2.x doesn't.)
+    raise_fd_limit()
 
     # ── --list-devices: print table and exit ──────────────────────
     if args.list_devices:
@@ -183,158 +254,34 @@ Examples:
     print(f" │  Web UI   :  {url:<33}                       │")
     print(f" │  LAN IP   :  {lan_ip:<33}                    │")
     print("  ├──────────────────────────────────────────────┤")
-    print("  │  Remote   :  http://<tailscale-ip>:8765/     │")
-    print("  │  HTTPS    :  https://<tailscale-ip>:8443/    │")
+    print("  │  TLS/h2   :  app-owned via Hypercorn (P2)    │")
     print("  │  Module tests:  python dlna_config.py        │")
     print("  │                 python dlna_discovery.py     │")
     print("  │                 python dlna_library.py       │")
     print("  └──────────────────────────────────────────────┘")
     print()
 
-    # Wire the indexer callback into discovery
-    _disc._on_server_found = _on_server_found
+    # Start all background services (discovery, fetchers, LocalFs, probe).
+    # Shared verbatim with the 2.0 ASGI lifespan (dlna_asgi._lifespan).
+    start_background_services(lan_ip, args.port, probe=args.probe)
 
-    # Load persistent device role cache BEFORE any discovery thread starts.
-    # This means the Uniti (or any other combined device seen before) is
-    # classified as renderer-only instantly, with no race condition.
-    DEVICE_ROLES.load()
-
-    # Immediately probe all previously-known servers from the DB cache.
-    # This gets AssetUPnP (and any other servers) online in < 1 second,
-    # before SSDP or subnet scan have a chance to run.
-    known_servers = DEVICE_ROLES.known_servers()
-    if known_servers:
-        log.info(f"Pre-probing {len(known_servers)} known server(s) from DB…")
-        for s in known_servers:
-            log.info(f"  → {s['name']!r}  {s['location']}")
-            threading.Thread(
-                target=_disc.probe_url,
-                args=(s["location"], GW_UDN),
-                daemon=True,
-                name=f"probe-{s['udn'][:8]}").start()
-
-    # SSDP discovery — finds MediaServers AND MediaRenderers
-    threading.Thread(
-        target=_disc.ssdp_discovery_thread,
-        args=(lan_ip, GW_UDN),
-        daemon=True, name="ssdp").start()
-
-    # Gateway SSDP announcer — broadcasts ourselves as a MediaServer
-    threading.Thread(
-        target=gw_ssdp_announcer,
-        args=(lan_ip, args.port),
-        daemon=True, name="gw-ssdp").start()
-
-    # Subnet scanner fallback — only fires if nothing was found via
-    # pre-probe or SSDP (i.e. a genuinely fresh install with no DB cache).
-    threading.Thread(
-        target=_disc.subnet_scan_if_empty,
-        args=(lan_ip, GW_UDN),
-        daemon=True, name="subnet-scan").start()
-
-    # Server heartbeat — keeps last_seen fresh, eliminates offline flicker
-    threading.Thread(
-        target=_disc.heartbeat_thread,
-        args=(GW_UDN,),
-        daemon=True, name="heartbeat").start()
-
-    # Album-art fetcher — one-shot startup scan 120s after boot to mop
-    # up anything left bare by a previous interrupted run. Steady-state
-    # refills come from Indexer._run() triggering on each successful
-    # crawl; there is no periodic poll. Rate-limited to ≤1 MB req/sec.
-    ART_FETCHER.start_initial_scan()
-    # AcoustID metadata enrichment — same one-shot startup mop-up. Dormant
-    # if ACOUSTID_API_KEY is unset. Steady-state work comes from the
-    # Indexer._run() tail trigger; weekly notfound retries are handled by
-    # the com.roha.dlna-acoustid-retry LaunchAgent.
-    ACOUSTID_FETCHER.start_initial_scan()
-
-    # LocalFs provider (Phase 4 of the AssetUPnP migration) — wires
-    # in the in-process indexer + file server when LOCALFS_MUSIC_ROOT
-    # is configured. Additive: AssetUPnP / MinimServer discovery keeps
-    # running; both UDNs coexist in SERVERS and the PWA picks whichever
-    # is being browsed. See CLAUDE.md → "Library backend migration".
-    from dlna_localfs_wiring import maybe_start_localfs
-    maybe_start_localfs(get_lan_ip)
-
-    # CLI --probe or config.json probe (fresh install / manual override).
-    # On subsequent runs the DB cache handles this — but honour explicit CLI.
-    probe_url = args.probe
-    if not probe_url and not known_servers:
-        # Only fall back to config.json probe if DB has no known servers
-        cfg = load_config()
-        probe_url = cfg.get("probe", "")
-        if probe_url:
-            log.info(f"No DB cache yet — probing saved URL: {probe_url}")
-
-    if probe_url:
-        def _probe():
-            _disc.probe_url(probe_url, GW_UDN)
-            cfg = load_config()
-            cfg["probe"] = probe_url
-            save_config(cfg)
-        threading.Thread(target=_probe, daemon=True).start()
-
-    # HTTP server
+    # HTTP server (stdlib). 2.0: TLS is NOT terminated here — it becomes
+    # app-owned via Hypercorn once the ASGI app (dlna_asgi.py) is the server;
+    # `hypercorn dlna_asgi:app` boots the same background services through the
+    # ASGI lifespan. This stdlib path serves plain HTTP on 0.0.0.0 so LAN
+    # devices (the Naim) reach the un-proxied device endpoints (/stream, /gw/,
+    # LocalFs :8201) directly. See docs/BUILDING_2.0.md.
     server = ThreadedHTTPServer((args.host, args.port), GatewayHandler)
-    server.tls_port = None   # filled in below if HTTPS starts successfully
-
-    # ── HTTPS server (Tailscale certs) ───────────────────────────
-    # Auto-detect cert files in working directory if not specified
-    tls_cert = args.tls_cert
-    tls_key  = args.tls_key
-    if not tls_cert:
-        import glob
-        certs = glob.glob(os.path.join(os.getcwd(), "*.crt"))
-        keys  = glob.glob(os.path.join(os.getcwd(), "*.key"))
-        if len(certs) == 1 and len(keys) == 1:
-            tls_cert = certs[0]
-            tls_key  = keys[0]
-            log.info(f"Auto-detected TLS cert: {os.path.basename(tls_cert)}")
-
-    tls_server = None
-    if tls_cert and tls_key:
-        if os.path.isfile(tls_cert) and os.path.isfile(tls_key):
-            try:
-                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                ctx.load_cert_chain(tls_cert, tls_key)
-                tls_server = TLSThreadedHTTPServer(
-                    (args.host, args.tls_port), GatewayHandler)
-                # do_handshake_on_connect=False is critical: it makes
-                # SSLSocket.accept() return immediately with an unhandshaked
-                # socket so a stalled client cannot block the accept loop.
-                # The handshake happens lazily on first read in the worker
-                # thread, bounded by TLSThreadedHTTPServer.REQUEST_TIMEOUT.
-                tls_server.socket = ctx.wrap_socket(
-                    tls_server.socket,
-                    server_side=True,
-                    do_handshake_on_connect=False,
-                    suppress_ragged_eofs=True,
-                )
-                threading.Thread(
-                    target=tls_server.serve_forever,
-                    daemon=True, name="https").start()
-                server.tls_port = args.tls_port   # tells HTTP handler where to redirect
-                log.info(f"HTTPS ready → https://localhost:{args.tls_port}/")
-                _warn_if_cert_expiring_soon(tls_cert)
-            except Exception as e:
-                log.warning(f"HTTPS failed to start: {e}")
-                tls_server = None
-        else:
-            log.warning(f"TLS cert/key not found: {tls_cert} / {tls_key}")
 
     if not args.no_browser:
         threading.Timer(1.0, open_browser, args=(args.port,)).start()
 
-    tls_note = f"  HTTPS  → https://localhost:{args.tls_port}/" if tls_server else ""
-    log.info(f"Gateway ready → {url}{('  |  ' + tls_note) if tls_note else ''}   (Ctrl-C to stop)")
+    log.info(f"Gateway ready → {url}   (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print()
         log.info("Shutting down…")
-        if tls_server:
-            tls_server.shutdown()
         gw_ssdp_byebye(lan_ip, args.port)
         server.shutdown()
 

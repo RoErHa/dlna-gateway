@@ -1,0 +1,96 @@
+<!--
+  com.roha.dlna-gateway.cutover.plist  (2.x cutover — adopts 1.x identity)
+  ───────────────────────────────────────────────────────────────────────
+  The REAL cutover LaunchAgent (NOT the public template
+  com.roha.dlna-gateway.plist). Runs the 2.0 ASGI gateway (Hypercorn +
+  dlna_asgi:app) under 1.x's label, ports, UDN and log paths. Full rationale:
+  docs/CUTOVER_LAUNCHD.md. Installed at runbook step 3 as
+  ~/Library/LaunchAgents/com.roha.dlna-gateway.plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roha.dlna-gateway</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ronhamersma/dlna-gateway-2.0</string>
+
+    <!-- Hypercorn owns TLS. --bind = TLS (8443, HTTP/2 via ALPN);
+         --insecure-bind = plain HTTP (8765). The device /gw/* server (:8770)
+         and the LocalFs file server (:8200) are started IN-PROCESS by the app
+         (GATEWAY_PORT / LOCALFS_PORT below) and ALWAYS stay plain HTTP. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ronhamersma/dlna-gateway-2.0/.venv/bin/hypercorn</string>
+        <string>dlna_asgi:app</string>
+        <string>--bind</string>
+        <string>0.0.0.0:8443</string>
+        <string>--insecure-bind</string>
+        <string>0.0.0.0:8765</string>
+        <string>--certfile</string>
+        <string>/Users/ronhamersma/dlna-gateway/ronsmacmini.tail5be6ad.ts.net.crt</string>
+        <string>--keyfile</string>
+        <string>/Users/ronhamersma/dlna-gateway/ronsmacmini.tail5be6ad.ts.net.key</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- MUST be inside SoftResourceLimits or launchd silently ignores it.
+         Hypercorn threadpool + LocalFs scan otherwise hit the default 256 FD
+         limit → EMFILE → sqlite "unable to open database file". The app also
+         raises this in-process (raise_fd_limit) as a backstop. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+        <key>NumberOfProcesses</key>
+        <integer>512</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dlna-gateway.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dlna-gateway.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+
+        <!-- Identity adopted from 1.x (locked-in decisions) -->
+        <key>GW_UDN</key>
+        <string>uuid:dlna-gateway-iina-8765</string>
+        <key>GW_NAME</key>
+        <string>DLNA Gateway (IINA)</string>
+        <key>APP_VERSION</key>
+        <string>2.0.0</string>
+
+        <!-- LocalFs: same music root + 1.x's :8200 so stream URLs are
+             byte-identical to 1.x's → copied play_counts/lyrics/overrides
+             match after the step-5 force rebuild. -->
+        <key>LOCALFS_MUSIC_ROOT</key>
+        <string>/Volumes/SAMDATA/Music</string>
+        <key>LOCALFS_PORT</key>
+        <string>8200</string>
+
+        <!-- Device tier: plain-HTTP /gw/* for the Naim + the SSDP advert port -->
+        <key>GATEWAY_PORT</key>
+        <string>8770</string>
+
+        <!-- Subsonic (CarPlay/Amperfy). The committed copy keeps this EMPTY.
+             The real password lives ONLY in the INSTALLED plist
+             (~/Library/LaunchAgents, not in git) — set it there by hand, or
+             via `launchctl setenv SUBSONIC_PASSWORD …` / .env (gitignored).
+             An empty value makes /rest/* return 503 (safe default). -->
+        <key>SUBSONIC_USER</key>
+        <string>ronhamer</string>
+        <key>SUBSONIC_PASSWORD</key>
+        <string></string>
+    </dict>
+</dict>
+</plist>

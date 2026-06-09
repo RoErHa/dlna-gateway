@@ -10,6 +10,8 @@ import threading
 import time
 from typing import Optional
 
+from dlna_events import EVENTS
+
 log = logging.getLogger("dlna.player")
 
 
@@ -250,6 +252,7 @@ class RendererQueue:
         if url:
             avtransport_stop(url)
         self._invalidate_snap()
+        EVENTS.publish({"type": "state"})       # SSE: playback stopped (R2)
 
     def _set_volume_async(self, rc_url: str, level: int):
         """Fire SetVolume in a daemon thread so the caller never blocks
@@ -511,6 +514,7 @@ class RendererQueue:
             with self._lock:
                 self._consecutive_fails = 0
             self._queue_next_uri()
+            EVENTS.publish({"type": "state"})   # SSE: now-playing changed (R2)
             return True
 
         log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "

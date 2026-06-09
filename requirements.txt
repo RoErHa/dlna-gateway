@@ -25,3 +25,12 @@ mutagen>=1.47
 # Filesystem change notifications (FSEvents on macOS) — drives
 # LocalFsProvider.watch_changes() for incremental rescans.
 watchdog>=4.0
+
+# ── 2.0 transport refresh — ASGI app server (Phase 2) ─────────
+# The 2.0 line migrates the stdlib BaseHTTPRequestHandler app onto an
+# ASGI app (FastAPI) served by Hypercorn (async, HTTP/2-capable, a path
+# to WebSocket/SSE). Required to run the 2.0 ASGI entrypoint
+# (dlna_asgi.py); the legacy stdlib server still runs without them.
+# See docs/BUILDING_2.0_SIDE_BY_SIDE.md → Phase 2.
+fastapi>=0.110.0
+hypercorn>=0.16.0

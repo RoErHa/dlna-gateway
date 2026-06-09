@@ -1886,20 +1886,6 @@ async function pollIndex(){
     pb.style.background="var(--amber)";pb.style.width=pct+"%";
     return;
   }
-  // Otherwise, surface the AcoustID enrichment worker.
-  const ar=await api("/api/acoustid/status");
-  const a=ar?await ar.json():null;
-  // The 🔎 Enrich button only makes sense when AcoustID is configured.
-  const eb=$("btn-enrich"); if(eb) eb.style.display=(a&&a.enabled)?"":"none";
-  if(a && a.in_progress){
-    bar.style.display="";
-    const tot=(a.processed||0)+(a.remaining||0);
-    const pct=tot>0?Math.round((a.processed/tot)*100):0;
-    const match=a.last_match?` · ${a.last_match}`:"";
-    lbl.textContent=`🔎 Enriching metadata… ${a.processed} done · ${a.remaining} left${match}`;
-    pb.style.background="var(--amber)";pb.style.width=pct+"%";
-    return;
-  }
   if(s.status==="error"){
     bar.style.display="";
     lbl.textContent=`Index error: ${s.error}`;
@@ -1908,8 +1894,7 @@ async function pollIndex(){
   }
   // Done, OR idle but a library exists (the LocalFs case: the UPnP-only
   // INDEXER never runs, so status stays 'idle' even though db_tracks>0).
-  // Show the library line so the index bar — and its 🔎 Enrich button —
-  // is reachable.
+  // Show the library line.
   if(s.status==="done" || (s.db_tracks||0)>0){
     bar.style.display="";
     lbl.textContent=`Library: ${(s.db_tracks||0).toLocaleString()} tracks indexed ✓`;
@@ -1917,13 +1902,6 @@ async function pollIndex(){
   }
 }
 
-async function acoustidEnrich(){
-  const r=await api("/api/acoustid/enrich",{method:"POST"});
-  if(!r){toast("Couldn't reach the gateway");return;}
-  if(r.status===503){toast("AcoustID not configured (set ACOUSTID_API_KEY)");return;}
-  toast("🔎 Enriching metadata — progress shows in the index bar",3000);
-  pollIndex();   // refresh the bar promptly
-}
 
 async function reindex(){
   if(!curServer)return;
@@ -1935,12 +1913,32 @@ async function reindex(){
 // ── Polling — paused when tab hidden to save iOS battery ─────────
 let _t_servers, _t_renderers, _t_state, _t_index;
 
+// ── SSE (R2) — instant pushes on top of the polls ───────────────
+// The 2.0 ASGI gateway pushes server-sent events on state/index/device
+// changes (dlna_events). We treat them as an ACCELERATOR: an event just
+// fires the same refresh the interval would, so updates feel instant.
+// Polling stays as the fallback — if SSE never connects (stdlib server,
+// older browser), nothing is lost. EventSource auto-reconnects on drop.
+let _es=null;
+function initEventSource(){
+  if(_es) return;                                   // open once
+  if(typeof EventSource==="undefined") return;      // unsupported → polling
+  try{
+    _es=new EventSource("/api/events");
+    _es.addEventListener("state",   ()=>pollState());
+    _es.addEventListener("index",   ()=>pollIndex());
+    _es.addEventListener("devices", ()=>{refreshServers();refreshRenderers();});
+    _es.onerror=()=>{};   // transient drop — EventSource retries on its own
+  }catch(e){ /* SSE is optional; polling carries on */ }
+}
+
 function startPolling(){
   stopPolling();
   _t_servers   = setInterval(refreshServers,   8000);
   _t_renderers = setInterval(refreshRenderers, 10000);
   _t_state     = setInterval(pollState,        1000);
   _t_index     = setInterval(pollIndex,        2000);
+  initEventSource();
 }
 function stopPolling(){
   clearInterval(_t_servers);
@@ -1982,6 +1980,9 @@ browserAudio.addEventListener("play", ()=>{
 });
 
 // ── Init ──────────────────────────────────────────────────────────
+// Version badge — lets a side-by-side 1.x / 2.0 instance be told apart.
+// Defensive: any failure (older 1.x with no /api/version) just leaves it blank.
+api("/api/version").then(async r=>{try{if(r&&r.ok){const j=await r.json();const el=$("app-version");if(el&&j&&j.version)el.textContent="v"+j.version;}}catch{}});
 refreshServers();
 refreshRenderers();
 loadPlaylists().then(showPlaylists);

@@ -66,11 +66,6 @@ class StubGateway:
         # index status
         self.index_status: dict = {"status": "idle", "progress": 0, "total": 0,
                                    "tracks": 0, "db_tracks": 0}
-        # AcoustID metadata-enrichment worker status (/api/acoustid/status)
-        self.acoustid_status: dict = {
-            "enabled": False, "fpcalc": True, "in_progress": False,
-            "processed": 0, "remaining": 0, "threshold": 0.85,
-            "last_match": "", "last_url": ""}
         # /api/render_queue can be told to reject with 409 once
         self.render_queue_busy: dict | None = None
         # internet radio ("📡 Stations") — Phase 2 frontend
@@ -78,6 +73,7 @@ class StubGateway:
         self.radio_search_results: list[dict] = []
         self.radio_fav_full: bool = False      # force /add to 409
         self.icy_title: str = ""               # /api/radio/nowplaying
+        self.sse_events: list[dict] = []       # frames /api/events emits on connect
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -204,6 +200,21 @@ class _Handler(BaseHTTPRequestHandler):
         self._capture()
         gw = self.gateway
 
+        # SSE (R2): serve a minimal text/event-stream. A long `retry` keeps
+        # EventSource from reconnect-churning during a test; any frames in
+        # gw.sse_events are emitted once on connect, then we close.
+        if path == "/api/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self._safe_write(b"retry: 86400000\n\n")
+            for ev in list(gw.sse_events or []):
+                frame = (f"event: {ev.get('type','message')}\n"
+                         f"data: {json.dumps(ev)}\n\n")
+                self._safe_write(frame.encode("utf-8"))
+            return
+
         # Static files
         if path in ("/", "/index.html"):
             self._send_static(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -256,6 +267,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         # API endpoints
+        if path == "/api/version":
+            self._send_json({"version": "test"})
+            return
         if path == "/api/servers":
             self._send_json(gw.servers)
             return
@@ -430,9 +444,6 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/index/status":
             self._send_json(gw.index_status)
             return
-        if path == "/api/acoustid/status":
-            self._send_json(gw.acoustid_status)
-            return
         if path == "/api/index/rebuild":
             gw.index_status = {"status": "running", "progress": 0, "total": 100,
                                "tracks": 0, "db_tracks": 0}
@@ -509,12 +520,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/control":
             self._send_json({"ok": True})
-            return
-        if path == "/api/acoustid/enrich":
-            if gw.acoustid_status.get("enabled"):
-                self._send_json({"ok": True})
-            else:
-                self._send_json({"error": "acoustid_disabled"}, status=503)
             return
         if path == "/api/edit_track":
             self._send_json({"ok": True})

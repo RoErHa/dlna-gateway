@@ -17,6 +17,7 @@
 </head>
 <header>
   <div class="logo">DLNA<sup>GW</sup></div>
+  <span id="app-version" title="gateway version" style="font-size:10px;color:var(--ink-dim);letter-spacing:.04em;flex-shrink:0;align-self:center"></span>
   <div class="sep"></div>
   <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
     <span style="font-size:10px;color:var(--ink-dim);letter-spacing:.05em">SRC</span>
@@ -49,7 +50,6 @@
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <span style="font-size:11px;color:var(--ink-dim)" id="index-label">Indexing library…</span>
         <span style="display:flex;gap:6px;flex-shrink:0">
-          <button class="icon-btn" id="btn-enrich" style="font-size:10px" onclick="acoustidEnrich()" title="Fingerprint untagged tracks and fetch metadata (AcoustID)">🔎 Enrich</button>
           <button class="icon-btn" style="font-size:10px" onclick="reindex()">↺ Rebuild</button>
         </span>
       </div>

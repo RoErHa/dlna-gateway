@@ -755,13 +755,10 @@ def _stream(h, params):
     proxy_stream(url, h)
 
 
-def _get_cover_art(h, params):
-    """Resolve a Subsonic cover ID back to a URL, then reuse the
-    existing /art proxy. IDs can be track / album / artist; we look
-    each up against the DB."""
-    from api_playback import art as art_handler
-    sid = params.get("id", "")
-
+def _cover_art_url(sid: str) -> str:
+    """Resolve a Subsonic cover ID (al:/tr:/ar:) to an art URL, or '' if none.
+    Pure DB lookups — shared by the legacy byte handler `_get_cover_art` and
+    the 2.0 native /rest/getCoverArt route (dlna_asgi)."""
     art_url = ""
     if sid.startswith("al:"):
         decoded = _album_id_decode(sid)
@@ -806,6 +803,15 @@ def _get_cover_art(h, params):
                 if row:
                     art_url = row["art"] or ""
 
+    return art_url
+
+
+def _get_cover_art(h, params):
+    """Legacy byte handler: resolve the cover ID, then reuse the existing
+    /art proxy to serve the bytes to the stdlib handler's socket."""
+    from api_playback import art as art_handler
+    sid = params.get("id", "")
+    art_url = _cover_art_url(sid)
     if not art_url:
         # Subsonic clients tolerate a 404 here gracefully.
         h.send_error(404, "no art")

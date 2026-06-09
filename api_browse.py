@@ -21,7 +21,10 @@ log = logging.getLogger("dlna.api.browse")
 _reprobe_times: dict = {}
 
 
-def servers(h, params):
+def servers_payload():
+    """Build the /api/servers list. Pure data — shared by the legacy
+    handler and the native FastAPI route (dlna_asgi) so there's a single
+    source of truth during the 2.0 migration."""
     now = time.time()
     result = []
     for s in SERVERS.all():
@@ -42,20 +45,31 @@ def servers(h, params):
         d["tracks"] = DB.track_count(s.udn)
         d["albums"] = DB.album_count(s.udn)
         result.append(d)
-    h._json(200, result)
+    return result
+
+
+def servers(h, params):
+    h._json(200, servers_payload())
+
+
+def renderers_payload():
+    """Build the /api/renderers list. Shared by legacy + native route."""
+    return [r.to_dict() for r in RENDERERS.all()]
 
 
 def renderers(h, params):
-    h._json(200, [r.to_dict() for r in RENDERERS.all()])
+    h._json(200, renderers_payload())
 
 
-def browse(h, params):
+def browse_payload(params) -> tuple:
+    """Core of GET /api/browse → (status, body). Shared by the legacy handler
+    and the 2.0 native route (dlna_asgi) so there's one source of truth incl.
+    the side effects (SERVERS.touch, re-probe-on-error throttling)."""
     udn = params.get("udn", "")
     oid = params.get("id", "0")
     srv = SERVERS.get(udn)
     if not srv:
-        h._json(404, {"error": "Server not found — still discovering?"})
-        return
+        return 404, {"error": "Server not found — still discovering?"}
     provider = get_provider(udn)
     if provider is None:
         # Discovery should have bound a provider on add — defensive
@@ -83,7 +97,12 @@ def browse(h, params):
                 args=(loc, GW_UDN), daemon=True).start()
         else:
             log.debug(f"Browse failed for {srv.name!r} — re-probe throttled")
-    h._json(200, result)
+    return 200, result
+
+
+def browse(h, params):
+    code, body = browse_payload(params)
+    h._json(code, body)
 
 
 def artists(h, params):
@@ -99,10 +118,17 @@ def radio(h, params):
     lowest play count so the same 100 don't keep surfacing. Each
     returned URL's play_count is incremented server-side so the next
     call picks fresher material."""
+    code, body = radio_payload(params)
+    h._json(code, body)
+
+
+def radio_payload(params) -> tuple:
+    """Core of GET /api/radio → (status, body). Shared by the legacy handler
+    and the 2.0 native route. Note: radio_tracks() bumps play_counts, so this
+    has a side effect — it runs once per call on either path, never both."""
     udn = params.get("udn", "")
     if not udn:
-        h._json(400, {"error": "Missing udn"})
-        return
+        return 400, {"error": "Missing udn"}
     try:
         limit = int(params.get("limit", "100"))
     except ValueError:
@@ -111,7 +137,7 @@ def radio(h, params):
                                        # can't grab the whole library
     tracks = DB.radio_tracks(udn, limit)
     log.info(f"/api/radio  {len(tracks)} tracks  udn={udn[:16]}…  limit={limit}")
-    h._json(200, {"tracks": tracks})
+    return 200, {"tracks": tracks}
 
 
 def search(h, params):

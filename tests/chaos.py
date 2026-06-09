@@ -42,7 +42,10 @@ _ctx.check_hostname = False
 _ctx.verify_mode   = ssl.CERT_NONE
 _opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ctx))
 
-STDERR_PATH = "/tmp/dlna-gateway.err"
+# Default is 1.x's launchd stderr; override for the 2.x side-by-side rig
+# (run-2.0-asgi.sh writes elsewhere) so the silent-thread-death check watches
+# the gateway actually under test.
+STDERR_PATH = os.environ.get("CHAOS_STDERR_PATH", "/tmp/dlna-gateway.err")
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────

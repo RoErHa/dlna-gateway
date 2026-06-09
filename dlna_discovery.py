@@ -357,6 +357,45 @@ def subnet_scan_if_empty(lan_ip: str, gw_udn: str = "",
 _heartbeat_fails: dict = {}   # udn → consecutive failure count
 
 
+def _heartbeat_once():
+    """One heartbeat pass over SERVERS. Extracted from the loop so it's
+    unit-testable."""
+    for srv in SERVERS.all():
+        udn = srv.udn
+        # The in-process LocalFs file server is ALWAYS online — it runs in this
+        # process. HTTP-probing its base URL (`:8201/`, which 404s on GET /)
+        # would falsely mark it offline → SERVERS.online() goes empty →
+        # subnet_scan_if_empty fires a 254-host scan every 60 s (the FD sawtooth
+        # / the EMFILE-crash contributor). Just keep last_seen fresh.
+        if udn.startswith("uuid:localfs-"):
+            SERVERS.touch(udn)
+            continue
+        try:
+            req = urllib.request.Request(
+                srv.location, headers={"User-Agent": "DLNAGateway/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read(512)   # just enough to confirm the server is alive
+            SERVERS.touch(udn)
+            if udn in _heartbeat_fails:
+                log.info(f"Heartbeat: {srv.name!r} back online")
+                _heartbeat_fails.pop(udn)
+            else:
+                log.debug(f"Heartbeat OK: {srv.name!r}")
+        except Exception as e:
+            fails = _heartbeat_fails.get(udn, 0) + 1
+            _heartbeat_fails[udn] = fails
+            log.debug(f"Heartbeat fail ({fails}×): {srv.name!r}: {e}")
+            if fails == 2:
+                # First crossover: force offline so the UI reflects reality
+                # within 60 s. Subsequent ticks skip both the log and the
+                # write — already offline, idempotent.
+                with SERVERS._lock:
+                    if udn in SERVERS._d:
+                        SERVERS._d[udn].last_seen = 0
+                log.info(f"Heartbeat: {srv.name!r} marked offline "
+                         f"(2 consecutive failures)")
+
+
 def heartbeat_thread(gw_udn: str = ""):
     """
     Background thread: ping each known server's location URL every 30 s.
@@ -364,35 +403,11 @@ def heartbeat_thread(gw_udn: str = ""):
     On success  → SERVERS.touch(udn) keeps last_seen fresh → no offline flicker.
     On failure  → increment per-server counter; after 2 consecutive failures
                   (≥ 60 s) set last_seen = 0 so the UI shows offline promptly.
+    The in-process LocalFs server is exempt (always online) — see _heartbeat_once.
     """
     time.sleep(15)   # let SSDP / pre-probe settle first
     while True:
-        for srv in SERVERS.all():
-            udn = srv.udn
-            try:
-                req = urllib.request.Request(
-                    srv.location, headers={"User-Agent": "DLNAGateway/1.0"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    resp.read(512)   # just enough to confirm the server is alive
-                SERVERS.touch(udn)
-                if udn in _heartbeat_fails:
-                    log.info(f"Heartbeat: {srv.name!r} back online")
-                    _heartbeat_fails.pop(udn)
-                else:
-                    log.debug(f"Heartbeat OK: {srv.name!r}")
-            except Exception as e:
-                fails = _heartbeat_fails.get(udn, 0) + 1
-                _heartbeat_fails[udn] = fails
-                log.debug(f"Heartbeat fail ({fails}×): {srv.name!r}: {e}")
-                if fails == 2:
-                    # First crossover: force offline so the UI reflects reality
-                    # within 60 s. Subsequent ticks skip both the log and the
-                    # write — already offline, idempotent.
-                    with SERVERS._lock:
-                        if udn in SERVERS._d:
-                            SERVERS._d[udn].last_seen = 0
-                    log.info(f"Heartbeat: {srv.name!r} marked offline "
-                             f"(2 consecutive failures)")
+        _heartbeat_once()
         time.sleep(30)
 
 

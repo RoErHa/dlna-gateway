@@ -13,13 +13,21 @@ import ssl
 import threading
 import urllib.parse
 
+import dlna_art_cache
 from dlna_avtransport import avtransport_send
+from dlna_config import VERSION
 from dlna_discovery import RENDERERS, SERVERS
 from dlna_library import DB, INDEXER
 from dlna_player import QUEUES, proxy_stream
 from dlna_providers import get_provider
 
 log = logging.getLogger("dlna.api.playback")
+
+
+def version(h, params):
+    """Report the running gateway version (release-line marker). Lets a
+    side-by-side 1.x / 2.0 instance be told apart from the PWA and curl."""
+    h._json(200, {"version": VERSION})
 
 
 def _parse_json_or_400(h, body):
@@ -68,28 +76,9 @@ def index_status(h, params):
     h._json(200, {**INDEXER.state.get(), "db_tracks": count})
 
 
-def acoustid_status(h, params):
-    """AcoustID metadata-enrichment worker progress, for the PWA index
-    bar. `ACOUSTID_FETCHER.status()` (enabled / fpcalc / in_progress /
-    processed / threshold / last_match / last_url) plus `remaining` —
-    distinct-URL tracks still lacking any metadata_overrides row."""
-    from dlna_library import ACOUSTID_FETCHER
-    st = ACOUSTID_FETCHER.status()
-    st["remaining"] = DB.bare_metadata_count()
-    h._json(200, st)
-
-
-def acoustid_enrich(h, params):
-    """Manually kick an enrichment pass (the "🔎 Enrich" button). 503 when
-    ACOUSTID_API_KEY is unset (worker dormant). trigger() is a no-op if a
-    pass is already running."""
-    from dlna_library import ACOUSTID_FETCHER
-    if not ACOUSTID_FETCHER.status().get("enabled"):
-        h._json(503, {"error": "acoustid_disabled",
-                      "message": "ACOUSTID_API_KEY not set"})
-        return
-    ACOUSTID_FETCHER.trigger()
-    h._json(200, {"ok": True})
+# AcoustID enrichment endpoints (acoustid_status / acoustid_enrich) were
+# removed in 2.0 (Option A: beets is the sole metadata authority; the AcoustID
+# worker is dormant). The dlna_acoustid module remains for a later full cleanup.
 
 
 def index_rebuild(h, params):
@@ -138,84 +127,115 @@ def stream(h, params):
 
 # Cap art payload at 5MB — real album art is <1MB; this just prevents a
 # malicious/broken upstream from making the gateway allocate arbitrary memory.
-_ART_MAX_BYTES = 5 * 1024 * 1024
-_ART_TIMEOUT   = 10
+_ART_MAX_BYTES   = 5 * 1024 * 1024
+_ART_MIN_BYTES   = 64            # below this it isn't a real cover (junk/empty 200)
+_ART_TIMEOUT     = 10
+_ART_MAX_REDIRECTS = 4           # coverartarchive front-500 → archive.org CDN
+
+
+def art_fetch(upstream: str):
+    """Fetch + validate an image for the /art proxy. Returns
+    (status, content_type_or_error_message, body_bytes). Pure/blocking —
+    shared by the legacy stdlib handler and the native ASGI route so there's
+    a single source of truth.
+
+    Follows up to `_ART_MAX_REDIRECTS` redirects — `coverartarchive.org`'s
+    `front-500` URLs answer 307 to the archive.org CDN, and http.client does
+    NOT auto-follow, so without this those covers never load. Caps at 5 MB,
+    rejects non-image responses (an upstream HTML 404 page) and suspiciously
+    tiny (<64 B) bodies (junk/empty 200s) so neither can poison the cache."""
+    if not upstream:
+        return 400, "Missing url", b""
+    url = upstream
+    for _hop in range(_ART_MAX_REDIRECTS + 1):
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
+            return 400, "Bad url", b""
+        if parsed.scheme not in ("http", "https"):
+            return 400, "Bad scheme", b""
+        host = parsed.netloc
+        path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        conn = None
+        try:
+            if parsed.scheme == "https":
+                conn = http.client.HTTPSConnection(
+                    host, timeout=_ART_TIMEOUT,
+                    context=ssl._create_unverified_context())
+            else:
+                conn = http.client.HTTPConnection(host, timeout=_ART_TIMEOUT)
+            conn.request("GET", path, headers={"User-Agent": "DLNAGateway/1.0"})
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                loc = resp.getheader("Location")
+                if not loc:
+                    return resp.status, f"Upstream {resp.status} (no Location)", b""
+                url = urllib.parse.urljoin(url, loc)   # resolves relative + absolute
+                continue
+            if resp.status != 200:
+                return resp.status, f"Upstream {resp.status}", b""
+            body = resp.read(_ART_MAX_BYTES + 1)
+            if len(body) > _ART_MAX_BYTES:
+                return 502, "Image too large", b""
+            ctype = resp.getheader("Content-Type") or "image/jpeg"
+            if not ctype.lower().startswith("image/"):
+                return 502, f"Not an image: {ctype}", b""
+            if len(body) < _ART_MIN_BYTES:
+                return 502, "Image too small", b""
+            return 200, ctype, body
+        except Exception as e:                       # noqa: BLE001
+            log.debug(f"art proxy: {url[:80]}  {type(e).__name__}: {e}")
+            return 502, str(e), b""
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return 508, "Too many redirects", b""
+
+
+def art_fetch_cached(upstream: str):
+    """`art_fetch` fronted by an on-disk byte cache (dlna_art_cache).
+
+    Covers are fetched over and over — Amperfy syncs every cover in the library,
+    and the same album cover is requested once per song. `art_fetch` re-hits the
+    source every time (external coverartarchive over the network, or
+    `/localfs/art/<id>` re-decoding the audio file). The cache serves repeat
+    requests — across clients AND gateway restarts — from disk. Only 200s are
+    cached; covers for a URL don't meaningfully change (TTL-bounded; delete the
+    cache dir to force-refresh). Same `(status, ctype_or_msg, body)` contract."""
+    if upstream:
+        hit = dlna_art_cache.get(upstream)
+        if hit is not None:
+            return 200, hit[0], hit[1]
+    code, ctype, body = art_fetch(upstream)
+    if code == 200 and body:
+        dlna_art_cache.put(upstream, ctype, body)
+    return code, ctype, body
 
 
 def art(h, params):
-    """Proxy an arbitrary image URL through the gateway.
+    """Proxy an arbitrary image URL through the gateway (legacy stdlib path).
 
-    Purpose: iOS MediaSession will NOT load cross-origin artwork on the
-    lock screen. The PWA rewrites track art URLs to `/art?url=<external>`
-    so the lock-screen fetch is same-origin as the app. Same story for
-    the Service Worker's art cache — same-origin URLs are cacheable
-    without CORS headaches.
-
-    No Range support (art is small, one-shot). Short timeout (10s) —
-    slow upstream just fails fast.
-    """
-    upstream = params.get("url", "")
-    if not upstream:
-        h.send_error(400, "Missing url")
+    Purpose: iOS MediaSession will NOT load cross-origin artwork on the lock
+    screen. The PWA rewrites track art URLs to `/art?url=<external>` so the
+    fetch is same-origin. The 2.0 ASGI route (dlna_asgi.art) shares
+    `art_fetch_cached` with this. No Range (art is small, one-shot)."""
+    code, ctype, body = art_fetch_cached(params.get("url", ""))
+    if code != 200:
+        h.send_error(code, ctype)
         return
-
+    h.send_response(200)
+    h.send_header("Content-Type",  ctype)
+    h.send_header("Content-Length", str(len(body)))
+    h.send_header("Cache-Control",  "public, max-age=86400")  # art rarely changes
+    h.send_header("Access-Control-Allow-Origin", "*")
+    h.end_headers()
     try:
-        parsed = urllib.parse.urlparse(upstream)
-    except Exception:
-        h.send_error(400, "Bad url")
-        return
-    if parsed.scheme not in ("http", "https"):
-        h.send_error(400, "Bad scheme")
-        return
-    host = parsed.netloc
-    path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
-
-    conn = None
-    try:
-        if parsed.scheme == "https":
-            conn = http.client.HTTPSConnection(
-                host, timeout=_ART_TIMEOUT,
-                context=ssl._create_unverified_context())
-        else:
-            conn = http.client.HTTPConnection(host, timeout=_ART_TIMEOUT)
-
-        conn.request("GET", path, headers={"User-Agent": "DLNAGateway/1.0"})
-        resp = conn.getresponse()
-        if resp.status != 200:
-            h.send_error(resp.status, f"Upstream {resp.status}")
-            return
-
-        body = resp.read(_ART_MAX_BYTES + 1)
-        if len(body) > _ART_MAX_BYTES:
-            h.send_error(502, "Image too large")
-            return
-
-        ctype = resp.getheader("Content-Type") or "image/jpeg"
-        # Refuse non-image responses — a 200 with HTML body (upstream's
-        # prettier 404 page) would otherwise be served as-is and confuse
-        # the browser/SW cache.
-        if not ctype.lower().startswith("image/"):
-            h.send_error(502, f"Not an image: {ctype}")
-            return
-
-        h.send_response(200)
-        h.send_header("Content-Type",  ctype)
-        h.send_header("Content-Length", str(len(body)))
-        # Art rarely changes — let the SW + browser cache it aggressively.
-        h.send_header("Cache-Control",  "public, max-age=86400")
-        h.send_header("Access-Control-Allow-Origin", "*")
-        h.end_headers()
         h.wfile.write(body)
-    except Exception as e:
-        log.debug(f"art proxy: {upstream[:80]}  {type(e).__name__}: {e}")
-        try:
-            h.send_error(502, str(e))
-        except Exception:
-            pass
-    finally:
-        if conn:
-            try: conn.close()
-            except Exception: pass
+    except (BrokenPipeError, ConnectionResetError):
+        pass
 
 
 def track_meta(h, params):
@@ -252,28 +272,33 @@ def lyrics(h, params):
       { plain: str|null, synced: str|null, source: str, cached: bool }
         source ∈ {'lrclib', 'notfound', 'manual'}
     """
+    code, body = lyrics_payload(params)
+    h._json(code, body)
+
+
+def lyrics_payload(params) -> tuple:
+    """Core of GET /api/lyrics → (status, body). Cache-first; one lrclib call
+    per URL on a miss. Shared by the legacy handler and the 2.0 native route
+    (the lrclib network call runs in a threadpool there)."""
     from dlna_player import _dur_to_sec
     import dlna_lyrics
 
     url = params.get("url", "")
     if not url:
-        h._json(400, {"error": "missing url"})
-        return
+        return 400, {"error": "missing url"}
 
     cached = DB.get_lyrics(url)
     if cached is not None:
-        h._json(200, {
+        return 200, {
             "plain":  cached["plain"],
             "synced": cached["synced"],
             "source": cached["source"],
             "cached": True,
-        })
-        return
+        }
 
     meta = DB.track_meta_by_url(url)
     if not meta or not (meta.get("title") and meta.get("artist")):
-        h._json(404, {"error": "track not in library", "source": "notfound"})
-        return
+        return 404, {"error": "track not in library", "source": "notfound"}
 
     duration_sec = _dur_to_sec(meta.get("duration") or 0)
     try:
@@ -282,23 +307,20 @@ def lyrics(h, params):
             meta.get("album") or "", duration_sec)
     except dlna_lyrics.LrclibNotFound:
         DB.set_lyrics(url, None, None, "notfound")
-        h._json(200, {"plain": None, "synced": None,
-                      "source": "notfound", "cached": False})
-        return
+        return 200, {"plain": None, "synced": None,
+                     "source": "notfound", "cached": False}
 
     if not result:
         # Network error — DON'T cache, so the next tap retries.
-        h._json(502, {"error": "lyrics provider unreachable",
-                      "source": "error"})
-        return
+        return 502, {"error": "lyrics provider unreachable", "source": "error"}
 
     DB.set_lyrics(url, result.get("plain"), result.get("synced"), "lrclib")
-    h._json(200, {
+    return 200, {
         "plain":  result.get("plain"),
         "synced": result.get("synced"),
         "source": "lrclib",
         "cached": False,
-    })
+    }
 
 
 # ── POST handlers ─────────────────────────────────────────────────

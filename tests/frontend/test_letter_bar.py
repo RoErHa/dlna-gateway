@@ -23,3 +23,28 @@ def test_click_letter_fires_api_with_letter(app, gateway):
 def test_letter_bar_hidden_in_search_tab(app):
     app.locator("#tab-search").click()
     assert app.locator("#letter-bar").is_hidden()
+
+
+def test_desktop_letter_bar_overflows_the_sidebar(app):
+    # Regression: on desktop the bar lives in the fixed 360px #browser sidebar
+    # and the 29 letters can't all fit — so it MUST be horizontally scrollable.
+    sw, cw = app.evaluate(
+        "() => {const b=document.getElementById('letter-bar');"
+        " return [b.scrollWidth, b.clientWidth];}")
+    assert sw > cw, f"expected overflow (scrollWidth {sw} > clientWidth {cw})"
+
+
+def test_desktop_letter_bar_shows_scrollbar(app):
+    # Desktop (mouse, no touch-swipe): the overflowing letters past ~H are only
+    # reachable if a scrollbar is shown. Was hidden (scrollbar-width:none) →
+    # stuck at H. Must be 'thin'/'auto' on the desktop layout (>768px).
+    sbw = app.evaluate(
+        "() => getComputedStyle(document.getElementById('letter-bar')).scrollbarWidth")
+    assert sbw in ("thin", "auto"), f"desktop scrollbar hidden (scrollbarWidth={sbw!r})"
+
+
+def test_mobile_letter_bar_keeps_scrollbar_hidden(mobile_app):
+    # Mobile keeps the clean hidden-scrollbar single-row swipe (iOS unaffected).
+    sbw = mobile_app.evaluate(
+        "() => getComputedStyle(document.getElementById('letter-bar')).scrollbarWidth")
+    assert sbw == "none", f"mobile scrollbar should stay hidden (got {sbw!r})"
