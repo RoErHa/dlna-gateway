@@ -1007,7 +1007,7 @@ The gateway is LAN-only except for album-art, lyrics, radio-catalogue, and (in f
 
 Required contract:
 
-- **User-Agent** — `_MB_USER_AGENT = "DLNAGateway/1.0 ( hintt@me.com )"` in `dlna_library.py`. MusicBrainz's ToS demands an identifying UA with contact info; anonymous calls get 403-blocked.
+- **User-Agent** — `_MB_USER_AGENT` in `dlna_art_fetcher.py` is built as `DLNAGateway/1.0 ( <GATEWAY_CONTACT_EMAIL> )` from the `.env` value (single source for the contact email; never hardcoded). MusicBrainz's ToS demands an identifying UA with contact info; anonymous/placeholder calls get throttled (HTTP 503) or 403-blocked.
 - **Rate limit** — `_MB_RATE_LIMIT_SEC = 1.1` between calls, enforced in `AlbumArtFetcher.run_once()`. MB allows 1 req/sec sustained; 1.1s gives a small safety margin.
 - **Timeout** — `_MB_TIMEOUT = 10.0` per connection. Exceptions inside `_mb_lookup_cover()` are caught and returned as `None` (album gets cached as `notfound`).
 - **No retries** — a transient failure ends up as `notfound` and stays sticky; see the "Sticky notfound cache" subsection above for how to force a retry.
@@ -2746,7 +2746,7 @@ A **4th outbound host** (also listed in the "External services" table above):
   `all.api.radio-browser.info` and pick a server, or hard-code
   `de1`/`nl1` with failover. Do not pin a single host.
 - **User-Agent required** — same contract as MusicBrainz; reuse the
-  `DLNAGateway/1.0 ( hintt@me.com )` pattern.
+  `DLNAGateway/1.0 ( <GATEWAY_CONTACT_EMAIL> )` pattern (email from `.env`).
 - **`hidebroken=true`** drops dead streams; `order=clickcount` surfaces
   popular stations first.
 - **HLS filter** — exclude records where `hls == 1`; UPnP renderers

@@ -136,7 +136,7 @@ def _ensure_schema(conn: sqlite3.Connection):
 # ── MB query (paginated, rate-limited) ───────────────────────────
 
 import os
-_UA = f"DLNAGateway/1.0 ( {os.environ.get('GATEWAY_CONTACT_EMAIL', 'hintt@me.com')} )"
+_UA = f"DLNAGateway/1.0 ( {os.environ.get('GATEWAY_CONTACT_EMAIL', 'you@example.com')} )"
 _RATE_LIMIT_SEC = 1.1
 _TIMEOUT = 12.0
 _MAX_PAGES = 5         # cap at 500 recordings — diminishing returns past that
