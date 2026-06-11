@@ -211,7 +211,7 @@ def build_diagram():
     tools = [
         "T/a1  regen_schema.py", "T/a2  prune_empty_music_dirs.py",
         "T/a3  find_corrupt_audio.py", "T/a4  find_duplicate_audio.py",
-        "T/a5  retry_notfound_metadata.py", "T/a6  relink_orphan_overrides.py",
+        "T/a6  relink_orphan_overrides.py",
         "T/a7  relink_playlists_to_localfs.py", "T/a8  audit_override_mismatches.py",
         "T/a9  correct_year_drift.py", "T/a10 improve_song_years.py",
         "T/a11 localfs_scan.py", "T/a12 localfs_serve.py",
@@ -490,9 +490,6 @@ def list_pages():
          "Find duplicate recordings on disk (same acoustid metadata); ranks "
          "a winner by bit-depth/sample-rate/size. <b>--trash --hard-delete "
          "-v -y</b>."),
-        ("T/a5", "retry_notfound_metadata.py",
-         "Drop bogus 'notfound' metadata_overrides so AcoustID retries. "
-         "<b>--all | --since TS · --dry-run -y --log</b>."),
         ("T/a6", "relink_orphan_overrides.py",
          "Relink metadata_overrides orphaned by a UPnP rescan via d-id + "
          "fuzzy (artist,title). <b>--apply --db</b>."),
@@ -672,19 +669,6 @@ def list_pages():
         ("-v / --verbose", "Per-URL ambiguity / not-found logs."),
         ("--trash", "Move the loser files to the Trash (winner kept)."),
         ("--hard-delete", "Permanent delete of losers. NOT recoverable."),
-        ("-y / --yes", "Skip the confirmation prompt."),
-     ]),
-     ("T/a5", "retry_notfound_metadata.py",
-      "Drop bogus 'notfound' metadata_overrides so AcoustID retries them.", [
-        ("(no args)", "Report only: counts + HTTP 5xx lines found in the "
-         "log. No deletions."),
-        ("--all", "Delete EVERY source='notfound' row (re-runs legit misses "
-         "too)."),
-        ("--since 'TS'", "Delete only notfound rows updated after the "
-         "timestamp. Mutually exclusive with --all."),
-        ("--dry-run", "Show what would be deleted without acting."),
-        ("--log PATH", "Log file to scan for HTTP 5xx (default "
-         "acoustid-firstpass.log)."),
         ("-y / --yes", "Skip the confirmation prompt."),
      ]),
      ("T/a6", "relink_orphan_overrides.py",

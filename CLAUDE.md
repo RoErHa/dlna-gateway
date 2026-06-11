@@ -1747,58 +1747,6 @@ unreadable files recorded separately (not auto-deleted). Run standalone:
 python3 -m unittest tools.test_find_corrupt_audio -v
 ```
 
-### `tools/retry_notfound_metadata.py`
-
-Cleanup script that deletes bogus `'notfound'` rows from
-`metadata_overrides` so the AcoustID worker can re-try them on the
-next pass. Written 2026-05-25 after an AcoustID 503 outage left
-several transient lookup failures cached as permanent `notfound`
-rows. The runtime fix in `dlna_acoustid._lookup` prevents future
-poisoning (see "Transient AcoustID failures stay bare" above); this
-tool is for cleaning up the once-only damage from the pre-fix run.
-
-#### Defaults & safety
-
-- **Default mode = report only.** No deletions unless `--all` or
-  `--since TIMESTAMP` is passed explicitly.
-- The tool also scans `acoustid-firstpass.log` (or `--log <path>`)
-  for `HTTP 5xx` lines so you can size the bogus-notfound count
-  before acting.
-- `--all` and `--since` are mutually exclusive (one or the other).
-- `--dry-run` shows what would be deleted without acting.
-- `-y` / `--yes` skips the confirmation prompt before deleting.
-
-#### Usage
-
-```bash
-# Just report what's in metadata_overrides, plus HTTP 5xx count from log:
-python3 tools/retry_notfound_metadata.py
-
-# Surgical — delete only notfound rows updated after a known outage start:
-python3 tools/retry_notfound_metadata.py --since '2026-05-25 14:30:00'
-
-# Wholesale — delete every notfound (re-runs legit misses too, ~1.5s each):
-python3 tools/retry_notfound_metadata.py --all
-
-# Preview before acting:
-python3 tools/retry_notfound_metadata.py --all --dry-run
-
-# Non-interactive cleanup (CI / scripts):
-python3 tools/retry_notfound_metadata.py --all -y
-```
-
-#### Tests
-
-`tools/test_retry_notfound_metadata.py` — 8 tests over a throw-away
-SQLite, covering default report-only mode, `--all` scope (only
-`notfound` deleted), `--since` scope (only newer notfound deleted),
-`--dry-run` no-mutation, mutually-exclusive flag rejection, missing-DB
-clean failure, and the `_scan_log_for_5xx` helper.
-
-```bash
-python3 -m unittest tools.test_retry_notfound_metadata -v
-```
-
 ### `tools/find_duplicate_audio.py`
 
 Finds **duplicate audio FILES on disk** — two or more physical files
@@ -1863,7 +1811,7 @@ python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --hard-delete -y
 After trashing duplicate files:
 1. **Rescan AssetUPnP** so it drops the now-missing URLs from its UPnP responses.
 2. **Trigger a gateway rebuild-index** (`POST /api/index/rebuild` or PWA → settings → Rebuild). The indexer's `clear(udn)` wipes the old `tracks` rows and re-crawls AssetUPnP cleanly.
-3. **`metadata_overrides` is unaffected** — keyed by URL; the rows for deleted files become orphans, harmless. (Use `tools/retry_notfound_metadata.py` or manual SQL to prune orphans later if desired.)
+3. **`metadata_overrides` is unaffected** — keyed by URL; the rows for deleted files become orphans, harmless. (Prune orphans later with manual SQL if desired.)
 
 #### Tests
 
