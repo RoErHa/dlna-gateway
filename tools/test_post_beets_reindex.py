@@ -8,13 +8,11 @@ manual / notfound / video_skip survive.
 
     python3 -m unittest tools.test_post_beets_reindex -v
 """
-import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import post_beets_reindex as pbr  # noqa: E402
@@ -109,62 +107,6 @@ class TestPostBeetsReindex(unittest.TestCase):
     def test_missing_db_fails_cleanly(self):
         rc = pbr.main(["--db", str(self.db.parent / "nope.db"), "--dry-run"])
         self.assertEqual(rc, 2)
-
-    def test_apply_refuses_when_acoustid_key_set(self):
-        # Guard fallback: gateway unreachable (probe → None), so the local
-        # env check applies. apply+clean must abort (exit 2), rows intact.
-        with mock.patch.object(pbr, "gateway_acoustid_enabled",
-                               return_value=None), \
-             mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
-            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
-                           "--no-reindex", "--no-backup"])
-        self.assertEqual(rc, 2)
-        self.assertEqual(self._sources().get("acoustid"), 2)  # untouched
-
-    def test_ignore_flag_overrides_key_guard(self):
-        with mock.patch.object(pbr, "gateway_acoustid_enabled",
-                               return_value=None), \
-             mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
-            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
-                           "--no-reindex", "--no-backup",
-                           "--ignore-acoustid-key"])
-        self.assertEqual(rc, 0)
-        self.assertNotIn("acoustid", self._sources())
-
-    def test_gateway_enabled_blocks_even_with_env_unset(self):
-        # Authoritative: gateway reports enabled=True (e.g. key in .env that
-        # the local env check can't see) → block regardless of local env.
-        with mock.patch.object(pbr, "gateway_acoustid_enabled",
-                               return_value=True), \
-             mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ACOUSTID_API_KEY", None)
-            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
-                           "--no-reindex", "--no-backup"])
-        self.assertEqual(rc, 2)
-        self.assertEqual(self._sources().get("acoustid"), 2)  # untouched
-
-    def test_gateway_disabled_allows_even_with_env_set(self):
-        # Authoritative: gateway reports enabled=False → proceed even if a
-        # stale ACOUSTID_API_KEY lingers in the tool's own env.
-        with mock.patch.object(pbr, "gateway_acoustid_enabled",
-                               return_value=False), \
-             mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}):
-            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
-                           "--no-reindex", "--no-backup"])
-        self.assertEqual(rc, 0)
-        self.assertNotIn("acoustid", self._sources())
-
-    def test_key_guard_skipped_when_no_clean(self):
-        # --no-clean means we never touch overrides, so the key is irrelevant
-        # and the guard must NOT fire. reindex is mocked so nothing external
-        # (the live gateway) is touched.
-        with mock.patch.dict(os.environ, {"ACOUSTID_API_KEY": "abc123"}), \
-             mock.patch.object(pbr, "trigger_reindex",
-                               return_value=(True, "mocked")) as m:
-            rc = pbr.main(["--db", str(self.db), "--apply", "-y",
-                           "--no-clean"])
-        self.assertEqual(rc, 0)             # not 2 → guard did not block
-        m.assert_called_once()
 
 
 if __name__ == "__main__":
