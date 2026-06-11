@@ -693,7 +693,7 @@ External CLI binaries — optional per feature:
 
 | Binary | Used by | Install |
 |---|---|---|
-| `fpcalc` (Chromaprint) | `AcoustIDFetcher` (fingerprint generation) | `brew install chromaprint` |
+| `fpcalc` (Chromaprint) | the **beets** enrichment tool (`tools/beets_enrich.py` via pyacoustid) — the in-process AcoustID worker was removed in 2.0 | `brew install chromaprint` |
 
 Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
 
@@ -1078,7 +1078,22 @@ immediately and is sticky for the rest of the queue.
 | `tests/test_player_volume.py` | first track sets `STARTUP_VOLUME` once, GetVolume never called, no per-track re-assert, trim composes around the baseline, trim resets on a new queue |
 | `tests/frontend/test_vol_extras.py` | UPnP volume body asserts `action=trim_db` (relative offset, not absolute) + `device="upnp:<udn>"` |
 
-## Metadata enrichment via AcoustID (Phase 1, in flight)
+## Metadata enrichment via AcoustID (REMOVED in 2.0 — historical)
+
+> **⛔ REMOVED (2026-06-11).** The in-process AcoustID worker is gone — under
+> Option A, **beets is the sole metadata authority** (see "beets vs the AcoustID
+> worker"). Deleted: `dlna_acoustid.py` (`AcoustIDFetcher`), the
+> `ACOUSTID_FETCHER` singleton, its `dlna_gateway`/`dlna_indexer` wiring, the
+> `/api/acoustid/*` endpoints, the worker-only `LibraryDB` methods
+> (`bare_metadata_tracks`/`bare_metadata_count`/`propagate_overrides_to_siblings`/
+> `sync_tracks_from_overrides`/`metadata_override_mark_notfound`), and the weekly
+> `com.roha.dlna-acoustid-retry` agent. **Still present (data, not the worker):**
+> the `metadata_overrides` table incl. historical `source='acoustid'` rows, and
+> the tools that operate on them (`tools/post_beets_reindex.py` clears the
+> acoustid rows after a beets run; `tools/audit_override_mismatches.py`,
+> `correct_year_drift.py`, `improve_song_years.py`, `find_duplicate_audio.py`
+> read them). Everything below this banner is **historical reference** describing
+> the removed worker — it no longer reflects running code.
 
 Background worker that fingerprints library tracks via Chromaprint's
 `fpcalc`, resolves the fingerprint to MusicBrainz metadata through the
@@ -2381,11 +2396,13 @@ worker stays OFF.** Concretely:
   --quiet` (incremental — only new folders; already-seen dirs need
   `--revisit`) → `post_beets_reindex.py --apply`.
 
-The `dlna_acoustid.py` module and the ~52k historical `acoustid` override
-rows remain (and `post_beets_reindex.py` clears the latter), but the worker
-is dormant by design. Re-enabling it (setting the key) would re-create the
-overrides on the next restart and re-mask beets — which is exactly what the
-`post_beets_reindex.py` key-guard prevents.
+**Fully removed in 2.0 (2026-06-11):** the `dlna_acoustid.py` module, the
+`ACOUSTID_FETCHER` singleton + all its wiring, the `/api/acoustid/*` endpoints,
+and the weekly retry agent are gone — beets is now the only metadata path. The
+~52k historical `acoustid` `metadata_overrides` rows remain as data, and
+`post_beets_reindex.py` still clears them after a beets run so the file tags show
+through. (Because the worker no longer exists, that clear is now unconditionally
+safe — the old "refuse while the worker is live" guard was removed too.)
 
 ## Subsonic API (Phase 1, in flight)
 
