@@ -26,8 +26,8 @@ from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
 from dlna_fdmon import start_fd_monitor
 from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER
-from dlna_server import (GW_UDN, ThreadedHTTPServer,
-                         GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
+from api_upnp import GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye  # noqa: F401
+from dlna_server import ThreadedHTTPServer, GatewayHandler  # stdlib main(); retired in Cleanup C
 
 log = logging.getLogger("dlna.gateway")
 

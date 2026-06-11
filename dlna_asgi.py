@@ -37,6 +37,7 @@ import api_browse
 import api_playback
 import api_radio
 import api_subsonic
+import api_upnp
 import dlna_routes
 import dlna_server
 import dlna_stream_proxy
@@ -106,29 +107,22 @@ async def _lifespan(app: FastAPI):
     EVENTS.bind_loop(loop)
     loop.set_exception_handler(_loop_exception_handler)
     started = False
-    device_server = None
     if not _truthy("GATEWAY_NO_SERVICES"):
-        port = int(os.environ.get("GATEWAY_PORT", "8770"))
         dlna_gateway.setup_logging(debug=_truthy("GATEWAY_DEBUG"))
         lan_ip = dlna_gateway.get_lan_ip()
-        dlna_gateway.start_background_services(lan_ip, port)
-        device_server = dlna_server.start_device_server("0.0.0.0", port)
+        # Cleanup C: /gw/* is served by THIS app on the plain port (PLAIN_PORT,
+        # a module global defined below); the SSDP advert + device.xml URLBase
+        # point there — no separate device server any more.
+        dlna_gateway.start_background_services(lan_ip, PLAIN_PORT)
         started = True
-        log.info("ASGI lifespan: gateway background services + device server "
-                 f"started (/gw/* + SSDP advert on port {port})")
+        log.info("ASGI lifespan: gateway background services started "
+                 f"(/gw/* native + SSDP advert on :{PLAIN_PORT})")
     try:
         yield
     finally:
         if started:
-            if device_server is not None:
-                try:
-                    device_server.shutdown()
-                except Exception:                   # noqa: BLE001
-                    pass
             try:
-                dlna_gateway.gw_ssdp_byebye(
-                    dlna_gateway.get_lan_ip(),
-                    int(os.environ.get("GATEWAY_PORT", "8770")))
+                dlna_gateway.gw_ssdp_byebye(dlna_gateway.get_lan_ip(), PLAIN_PORT)
             except Exception:                       # noqa: BLE001
                 pass
         EVENTS.bind_loop(None)      # drop the (now closing) loop reference
@@ -139,6 +133,12 @@ async def _lifespan(app: FastAPI):
 # gateway. redoc_url already off. (Cutover runbook step 1, privacy.)
 app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url=None,
               redoc_url=None, lifespan=_lifespan)
+
+# The plain-HTTP port the Naim reaches /gw/* on (Hypercorn's --insecure-bind).
+# device.xml's URLBase + the SSDP advert point here (NEVER the TLS :8443 — the
+# Naim can't do HTTPS). Cleanup C: /gw/* is served by this app on this port,
+# replacing the old separate device server on :8770.
+PLAIN_PORT = int(os.environ.get("GATEWAY_PLAIN_PORT", "8765"))
 
 
 # ── Native routes ─────────────────────────────────────────────────────
@@ -400,6 +400,41 @@ async def art(url: str = ""):
     return Response(content=body, media_type=ctype,
                     headers={"Cache-Control": "public, max-age=86400",
                              "Access-Control-Allow-Origin": "*"})
+
+
+# ── Gateway-as-MediaServer UPnP surface (/gw/*) ────────────────────────
+# Cleanup C: the Naim browses these over plain HTTP on PLAIN_PORT (:8765). They
+# reuse api_upnp's pure helpers, so the SOAP/descriptors are byte-identical to
+# the retired dlna_server device tier. Served on both binds; the Naim uses the
+# plain one (device.xml's URLBase = http://<lan-ip>:PLAIN_PORT).
+_GW_XML = 'text/xml; charset="utf-8"'
+
+
+@app.get("/gw/device.xml", include_in_schema=False)
+async def gw_device_xml():
+    import dlna_gateway
+    lan_ip = await run_in_threadpool(dlna_gateway.get_lan_ip)
+    return Response(api_upnp._gw_device_xml(lan_ip, PLAIN_PORT).encode(),
+                    media_type=_GW_XML)
+
+
+@app.get("/gw/cd/desc.xml", include_in_schema=False)
+async def gw_cd_desc():
+    return Response(api_upnp._gw_cd_desc_xml().encode(), media_type=_GW_XML)
+
+
+@app.api_route("/gw/cd/events", methods=["GET", "SUBSCRIBE"],
+               include_in_schema=False)
+async def gw_cd_events():
+    return Response(status_code=200)            # stub — no GENA eventing
+
+
+@app.post("/gw/cd/control", include_in_schema=False)
+async def gw_cd_control(request: Request):
+    body = await request.body()
+    status, ctype, payload = await run_in_threadpool(
+        api_upnp.cd_control_soap, body)
+    return Response(payload, status_code=status, media_type=ctype)
 
 
 async def _audio_relay_response(url: str, range_hdr: str):
