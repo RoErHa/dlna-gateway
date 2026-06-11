@@ -311,7 +311,11 @@ def cd_events(h, params):
 
 # ── POST handler ──────────────────────────────────────────────────
 
-def cd_control(h, body):
+def cd_control_soap(body: bytes):
+    """Pure ContentDirectory#Browse SOAP handler: parse the request body, run
+    the Browse, and return (status, content_type, body_bytes). Shared by the
+    native ASGI /gw/cd/control route (dlna_asgi) and the legacy stdlib handler
+    below, so the Naim sees byte-identical UPnP either way."""
     try:
         root   = ET.fromstring(body.decode("utf-8"))
         ns     = {"s": "http://schemas.xmlsoap.org/soap/envelope/",
@@ -321,8 +325,7 @@ def cd_control(h, body):
             browse = root.find(".//Browse")
         if browse is None:
             log.debug("GW Browse: no Browse element in SOAP body (ignored)")
-            h._html(400, "<h1>Missing Browse element</h1>")
-            return
+            return 400, "text/html", b"<h1>Missing Browse element</h1>"
         obj_id = browse.findtext("ObjectID") or "0"
         flag   = browse.findtext("BrowseFlag") or "BrowseDirectChildren"
         start  = int(browse.findtext("StartingIndex") or 0)
@@ -332,10 +335,20 @@ def cd_control(h, body):
         result_xml, n_ret, total = _gw_browse(obj_id, flag, start, count)
         resp = _gw_browse_response(result_xml, n_ret, total)
         log.debug(f"GW SOAP Browse {obj_id!r} → {n_ret}/{total}")
-        h._xml_response(200, resp)
+        return 200, 'text/xml; charset="utf-8"', resp
     except Exception as e:
         log.error(f"GW Browse error: {e}")
-        h._html(500, f"<h1>Browse error: {e}</h1>")
+        return 500, "text/html", f"<h1>Browse error: {e}</h1>".encode("utf-8")
+
+
+def cd_control(h, body):
+    """Legacy stdlib wrapper around cd_control_soap (kept until dlna_server is
+    retired in Cleanup C phase C)."""
+    status, _ctype, payload = cd_control_soap(body)
+    if status == 200:
+        h._xml_response(200, payload)
+    else:
+        h._html(status, payload.decode("utf-8"))
 
 
 # ── SSDP announcer ────────────────────────────────────────────────

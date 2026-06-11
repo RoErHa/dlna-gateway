@@ -24,6 +24,7 @@ import dlna_asgi
 import dlna_events
 import dlna_gateway
 import api_subsonic
+import api_upnp
 from dlna_asgi_bridge import run_legacy_sync, run_subsonic_sync
 from dlna_config import VERSION
 
@@ -89,13 +90,13 @@ class TestBridgeWiring(unittest.TestCase):
         self.assertIn("/api/playlists", p)
         self.assertIn("/api/album_tracks", p)
 
-    def test_streams_native_and_device_routes_absent(self):
-        # /art + /stream + /radio_stream are all native byte relays now;
-        # only the /gw/* UPnP device routes stay on the legacy LAN server.
+    def test_streams_and_gw_routes_native(self):
+        # /art + /stream + /radio_stream are native byte relays; the /gw/* UPnP
+        # device routes are native too now (Cleanup C — no separate server).
         p = self._paths()
-        for native in ("/art", "/stream", "/radio_stream"):
+        for native in ("/art", "/stream", "/radio_stream",
+                       "/gw/device.xml", "/gw/cd/control"):
             self.assertIn(native, p, native)
-        self.assertNotIn("/gw/device.xml", p)
 
     def test_native_routes_registered_exactly_once(self):
         # ported natively → present, and NOT also bridged (no duplicate route)
@@ -311,8 +312,12 @@ class TestPostBridge(unittest.TestCase):
                      "/api/radio/favourites/reorder"):
             self.assertIn(path, p, path)
 
-    def test_device_post_not_bridged(self):
-        self.assertNotIn("/gw/cd/control", self._post_paths())
+    def test_gw_control_native_post(self):
+        # /gw/cd/control is a NATIVE POST route now (Cleanup C), registered once.
+        self.assertIn("/gw/cd/control", self._post_paths())
+        n = sum(1 for r in dlna_asgi.app.routes
+                if getattr(r, "path", None) == "/gw/cd/control")
+        self.assertEqual(n, 1)
 
     def test_bridge_runs_post_handler_with_body(self):
         # The shim passes the raw POST body to the legacy (h, body) handler.
@@ -669,36 +674,28 @@ class TestEntrypointLifespan(unittest.TestCase):
         self.assertEqual(dev.call_count, 0)   # no device server either
         self.assertEqual(bye.call_count, 0)   # nothing started → no byebye
 
-    def test_enabled_starts_services_and_device_server(self):
+    def test_enabled_starts_services_no_device_server(self):
+        # Cleanup C: /gw is native on the ASGI app — the SSDP advert points at
+        # the PLAIN port and there's NO separate device server.
         os.environ.pop("GATEWAY_NO_SERVICES", None)
-        os.environ["GATEWAY_PORT"] = "8770"
-        dev_srv = mock.MagicMock()
         with mock.patch.object(dlna_gateway, "start_background_services") as sbs, \
-             mock.patch.object(dlna_asgi.dlna_server, "start_device_server",
-                               return_value=dev_srv) as dev, \
              mock.patch.object(dlna_gateway, "setup_logging"), \
              mock.patch.object(dlna_gateway, "get_lan_ip",
                                return_value="10.0.0.5"), \
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye") as bye:
             self._drive_lifespan()
-        # SSDP advert + device server both on GATEWAY_PORT (the device port)
-        sbs.assert_called_once_with("10.0.0.5", 8770)
-        dev.assert_called_once_with("0.0.0.0", 8770)
-        dev_srv.shutdown.assert_called_once()   # device server torn down
-        self.assertEqual(bye.call_count, 1)      # graceful byebye on shutdown
+        sbs.assert_called_once_with("10.0.0.5", dlna_asgi.PLAIN_PORT)
+        self.assertEqual(bye.call_count, 1)
+        self.assertEqual(bye.call_args.args, ("10.0.0.5", dlna_asgi.PLAIN_PORT))
 
     def test_shutdown_failures_swallowed(self):
         os.environ.pop("GATEWAY_NO_SERVICES", None)
-        dev_srv = mock.MagicMock()
-        dev_srv.shutdown.side_effect = RuntimeError("dev boom")
         with mock.patch.object(dlna_gateway, "start_background_services"), \
-             mock.patch.object(dlna_asgi.dlna_server, "start_device_server",
-                               return_value=dev_srv), \
              mock.patch.object(dlna_gateway, "setup_logging"), \
              mock.patch.object(dlna_gateway, "get_lan_ip", return_value="x"), \
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye",
                                side_effect=RuntimeError("boom")):
-            self._drive_lifespan()   # must not raise
+            self._drive_lifespan()   # byebye error must be swallowed, no raise
 
 
 class _SseReq:
@@ -1049,6 +1046,63 @@ class TestStaticServing(unittest.TestCase):
         r = asyncio.run(dlna_asgi._service_worker())
         self.assertEqual(r.headers.get("Service-Worker-Allowed"), "/")
         self.assertIn("no-store", r.headers.get("Cache-Control", ""))
+
+
+class TestGwDeviceAsgi(unittest.TestCase):
+    """Cleanup C: the /gw/* UPnP device surface served NATIVELY by the ASGI app
+    on the plain port (was a separate dlna_server on :8770). The SOAP reuses
+    api_upnp's _gw_* helpers → byte-identical to the old device server."""
+
+    def test_gw_routes_registered(self):
+        paths = {getattr(r, "path", None) for r in dlna_asgi.app.routes}
+        for p in ("/gw/device.xml", "/gw/cd/desc.xml", "/gw/cd/events",
+                  "/gw/cd/control"):
+            self.assertIn(p, paths, p)
+
+    def test_device_xml_urlbase_is_plain_port(self):
+        with mock.patch.object(dlna_gateway, "get_lan_ip",
+                               return_value="10.0.0.5"):
+            r = asyncio.run(dlna_asgi.gw_device_xml())
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("xml", r.media_type)
+        body = bytes(r.body).decode()
+        # URLBase MUST be the plain ASGI port (the Naim can't do TLS), never :8443
+        self.assertIn(f"http://10.0.0.5:{dlna_asgi.PLAIN_PORT}", body)
+        self.assertNotIn(":8443", body)
+        self.assertIn("uuid:dlna-gateway-iina-8765", body)   # adopted identity
+        self.assertIn("ContentDirectory", body)
+
+    def test_cd_desc_xml_is_scpd(self):
+        r = asyncio.run(dlna_asgi.gw_cd_desc())
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b"Browse", bytes(r.body))
+
+    def test_cd_events_stub_200(self):
+        r = asyncio.run(dlna_asgi.gw_cd_events())
+        self.assertEqual(r.status_code, 200)
+
+    def test_cd_control_browse_wraps_result(self):
+        soap = (b'<?xml version="1.0"?><s:Envelope '
+                b'xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                b'<u:Browse xmlns:u="urn:schemas-upnp-org:service:'
+                b'ContentDirectory:1"><ObjectID>0</ObjectID>'
+                b'<BrowseFlag>BrowseDirectChildren</BrowseFlag>'
+                b'<StartingIndex>0</StartingIndex><RequestedCount>0'
+                b'</RequestedCount></u:Browse></s:Body></s:Envelope>')
+
+        class _Req:
+            async def body(self_inner):
+                return soap
+
+        with mock.patch.object(api_upnp, "_gw_browse",
+                               return_value=("<container id='x'/>", 1, 1)) as m:
+            r = asyncio.run(dlna_asgi.gw_cd_control(_Req()))
+        m.assert_called_once()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("xml", r.media_type)
+        body = bytes(r.body)
+        self.assertIn(b"BrowseResponse", body)
+        self.assertIn(b"<TotalMatches>1</TotalMatches>", body)
 
 
 if __name__ == "__main__":
