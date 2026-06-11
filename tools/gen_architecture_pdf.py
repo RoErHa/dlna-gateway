@@ -152,7 +152,7 @@ def build_diagram():
     ], GREEN)
     tile(d, ix, 196, iw, 64, "Background fetchers  (event-driven, TLS out)", [
         "P/g17 dlna_art_fetcher (MusicBrainz + Cover Art Archive)",
-        "P/g18 dlna_acoustid (fpcalc → AcoustID → metadata_overrides)",
+        "P/g29 dlna_art_cache (on-disk cover bytes)",
         "P/g19 dlna_lyrics (lrclib)   ·   P/g26 dlna_config (logging/config)",
     ], RED)
 
@@ -184,7 +184,7 @@ def build_diagram():
     ], GREEN)
     tile(d, dx + 10, 226, 226, 74, "D/4  fpcalc  (local binary)", [
         "Chromaprint CLI (brew)",
-        "fingerprints files for P/g18",
+        "fingerprints files for beets (T/a13)",
         "(local process — internal)",
     ], GREY)
 
@@ -196,7 +196,7 @@ def build_diagram():
         ("E/x2  coverartarchive", "front-cover presence"),
         ("E/x3  lrclib.net", "on-demand lyrics"),
         ("E/x4  radio-browser", "station catalogue"),
-        ("E/x5  api.acoustid.org", "fingerprint → MB meta"),
+        ("E/x5  api.acoustid.org", "beets tool only (T/a13)"),
     ]
     ey = 568
     for code, desc in exb:
@@ -230,7 +230,6 @@ def build_diagram():
     jobs = [
         ("J/1  com.roha.dlna-gateway", "runs the gateway (launchd)"),
         ("J/2  cert-renew + renew-cert.sh", "weekly TLS cert (Mon 04:30)"),
-        ("J/3  acoustid-retry weekly", "DISABLED (Option A: beets is authority)"),
         ("J/4  setup.sh", "venv + run / restart / probe"),
     ]
     jy = 124
@@ -418,12 +417,6 @@ def list_pages():
         ("P/g17", "dlna_art_fetcher.py",
          "AlbumArtFetcher — MusicBrainz release-group + Cover Art Archive "
          "lookup; sticky notfound cache; ~1 req/s."),
-        ("P/g18", "dlna_acoustid.py",
-         "AcoustIDFetcher — fpcalc fingerprint → AcoustID → MusicBrainz "
-         "metadata into metadata_overrides; transient-vs-permanent split; "
-         "year backfill. DORMANT under Option A: beets (T/a13) is now the "
-         "metadata authority, so ACOUSTID_API_KEY is left unset and this "
-         "worker no-ops."),
         ("P/g19", "dlna_lyrics.py",
          "On-demand lrclib lyrics; cached in the lyrics table; sticky "
          "positive + negative."),
@@ -557,7 +550,7 @@ def list_pages():
          "read-only). Indexed by P/g9; tags read by localfs provider; bytes "
          "served by P/g11.", GREEN),
         ("D/4", "fpcalc", "Chromaprint CLI binary (brew). Local fingerprinter "
-         "for P/g18. Internal/local — not network.", GREY),
+         "for the beets tool (T/a13). Internal/local — not network.", GREY),
         ("E/x1", "musicbrainz.org", "GET /ws/2/release-group — MBID + original "
          "year. UA + 1.1 s rate limit required.", RED),
         ("E/x2", "coverartarchive.org", "HEAD /release-group/{mbid}/front-500 "
@@ -566,18 +559,15 @@ def list_pages():
          "playing track.", RED),
         ("E/x4", "*.api.radio-browser.info", "GET /json/stations/search — "
          "internet-radio catalogue (HLS filtered).", RED),
-        ("E/x5", "api.acoustid.org", "POST /v2/lookup — fingerprint → "
-         "MusicBrainz metadata. Needs an APPLICATION key.", RED),
+        ("E/x5", "api.acoustid.org", "fingerprint → MusicBrainz metadata — used "
+         "ONLY by the beets tool (T/a13) now; the in-process AcoustID worker "
+         "was removed in 2.0.", RED),
         ("J/1", "com.roha.dlna-gateway", "LaunchAgent that runs the gateway. "
          "Restart: launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway.",
          GREY),
         ("J/2", "com.roha.dlna-cert-renew + renew-cert.sh", "Weekly TLS cert "
          "renewal (Mon 04:30; no-op unless &lt;30 days). cert-renewal.log.",
          GREY),
-        ("J/3", "com.roha.dlna-acoustid-retry + retry-acoustid-weekly.sh",
-         "Weekly notfound-clear + gateway restart for AcoustID (Mon 05:30). "
-         "DISABLED under Option A (beets is the metadata authority) — agent "
-         "unloaded via launchctl bootout. acoustid-retry.log.", GREY),
         ("J/4", "setup.sh", "venv setup + run / restart / probe. --run "
          "--restart --no-browser --debug --probe URL --list-devices "
          "--reset-devices. See the setup.sh options reference.", GREY),
@@ -598,7 +588,6 @@ def list_pages():
          "com.roha.dlna-gateway)"),
         ("Cert (J/2)", "./renew-cert.sh [--force]   ·   launchctl kickstart "
          "gui/$(id -u)/com.roha.dlna-cert-renew"),
-        ("AcoustID retry (J/3)", "./retry-acoustid-weekly.sh [--dry-run]"),
         ("Subsonic auth", "launchctl setenv SUBSONIC_PASSWORD … ; "
          "launchctl getenv SUBSONIC_PASSWORD"),
         ("Full test suite", "python tests/run_all.py [--offline | --frontend | "

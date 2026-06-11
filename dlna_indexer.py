@@ -261,11 +261,6 @@ class Indexer:
                 ART_FETCHER.trigger()
             except Exception:
                 pass   # module not yet fully initialised (test harness)
-            try:
-                from dlna_library import ACOUSTID_FETCHER
-                ACOUSTID_FETCHER.trigger()
-            except Exception:
-                pass   # module not yet fully initialised (test harness)
 
         except Exception:
             # Let everything bubble up — _run wraps this call in

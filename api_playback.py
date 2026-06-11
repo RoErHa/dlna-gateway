@@ -76,9 +76,10 @@ def index_status(h, params):
     h._json(200, {**INDEXER.state.get(), "db_tracks": count})
 
 
-# AcoustID enrichment endpoints (acoustid_status / acoustid_enrich) were
-# removed in 2.0 (Option A: beets is the sole metadata authority; the AcoustID
-# worker is dormant). The dlna_acoustid module remains for a later full cleanup.
+# AcoustID enrichment is fully removed in 2.0 (Option A: beets is the sole
+# metadata authority). The endpoints, the dlna_acoustid worker module, and its
+# wiring are all gone; historical metadata_overrides rows (incl. source=
+# 'acoustid') stay as data and are cleaned by tools/post_beets_reindex.py.
 
 
 def index_rebuild(h, params):

@@ -25,8 +25,7 @@ import dlna_discovery as _disc
 from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
 from dlna_fdmon import start_fd_monitor
-from dlna_library import (DB, INDEXER, DEVICE_ROLES, ART_FETCHER,
-                          ACOUSTID_FETCHER)
+from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER
 from dlna_server import (GW_UDN, ThreadedHTTPServer,
                          GatewayHandler, gw_ssdp_announcer, gw_ssdp_byebye)
 
@@ -148,9 +147,6 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
     # anything left bare by a previous interrupted run. Steady-state refills
     # come from Indexer._run() on each successful crawl; no periodic poll.
     ART_FETCHER.start_initial_scan()
-    # AcoustID metadata enrichment — same one-shot startup mop-up. Dormant if
-    # ACOUSTID_API_KEY is unset (Option A: beets is the metadata authority).
-    ACOUSTID_FETCHER.start_initial_scan()
 
     # LocalFs provider — wires in the in-process indexer + file server when
     # LOCALFS_MUSIC_ROOT is configured. Additive: UPnP discovery keeps running.

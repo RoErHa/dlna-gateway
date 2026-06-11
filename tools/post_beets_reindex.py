@@ -42,21 +42,17 @@ Usage:
     # only reindex, keep all overrides (no DB mutation)
     python3 tools/post_beets_reindex.py --apply --no-clean
 
-We chose Option A — beets is the SOLE metadata authority and the gateway's
-AcoustID worker stays off. As a guard, this tool REFUSES to clear overrides
-while ACOUSTID_API_KEY is set (the worker would just re-create them on the
-next startup scan). Unset it first (`launchctl unsetenv ACOUSTID_API_KEY`),
-or override with --ignore-acoustid-key.
+We chose Option A — beets is the SOLE metadata authority. The in-process
+AcoustID worker was REMOVED in 2.0, so clearing the acoustid overrides is now
+unconditionally safe — nothing re-creates them (no startup-scan guard needed).
 
     # point at a non-default gateway / server / DB
     python3 tools/post_beets_reindex.py --apply --gateway http://host:8765 \
         --udn uuid:localfs-... --db /path/to/library.db
 """
 import argparse
-import os
 import shutil
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -66,43 +62,12 @@ from typing import Iterable, Optional
 # `python3 tools/post_beets_reindex.py` (tools/ on sys.path[0]) and a
 # `tools.post_beets_reindex` package import (tests / -m).
 try:
-    from beets_enrich import (gateway_acoustid_enabled,  # noqa: F401
-                              pick_localfs_udn, trigger_reindex)
+    from beets_enrich import pick_localfs_udn, trigger_reindex
 except ImportError:                                  # pragma: no cover
-    from tools.beets_enrich import (gateway_acoustid_enabled,  # noqa: F401
-                                    pick_localfs_udn, trigger_reindex)
+    from tools.beets_enrich import pick_localfs_udn, trigger_reindex
 
 _DEFAULT_DB = Path(__file__).resolve().parent.parent / "library.db"
 _DEFAULT_GATEWAY = "http://127.0.0.1:8765"
-
-
-def _acoustid_key_active(gateway: str = "") -> bool:
-    """True if the AcoustID worker is (or would be) live — clearing the
-    acoustid overrides then is pointless, because the gateway's 120s startup
-    scan re-fingerprints every now-bare track and re-creates them, re-masking
-    beets (Option A: beets is the sole authority, so AcoustID must stay off).
-
-    PRIMARY signal: ask the running gateway via GET /api/acoustid/status —
-    its `enabled` reflects the actually-loaded key regardless of source
-    (.env via python-dotenv, launchctl setenv, or the plist). This is the
-    only reliable check: the 2026-06-03 incident was a key in `.env` that a
-    local `os.environ` / `launchctl getenv` check could not see.
-
-    FALLBACK (gateway unreachable / field missing): this process's own env
-    and `launchctl getenv`. These miss the .env source, so they're a weak
-    backstop, not the truth."""
-    if gateway:
-        enabled = gateway_acoustid_enabled(gateway)
-        if enabled is not None:
-            return enabled              # authoritative
-    if os.environ.get("ACOUSTID_API_KEY", "").strip():
-        return True
-    try:
-        out = subprocess.run(["launchctl", "getenv", "ACOUSTID_API_KEY"],
-                             capture_output=True, text=True, timeout=5)
-        return bool(out.stdout.strip())
-    except Exception:                                # noqa: BLE001
-        return False
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -176,9 +141,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                    help="Skip the reindex (clean overrides only)")
     p.add_argument("--no-backup", action="store_true",
                    help="Skip the library.db backup before deleting")
-    p.add_argument("--ignore-acoustid-key", action="store_true",
-                   help="Proceed even if ACOUSTID_API_KEY is set (default: "
-                        "refuse to clear overrides while the worker is live)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="Skip the confirmation prompt")
     args = p.parse_args(argv)
@@ -203,28 +165,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(f"Mode:    {'APPLY' if apply else 'dry-run (preview only)'}")
         print()
 
-        # The acoustid-worker footgun only matters when we're clearing.
-        key_active = (not args.no_clean) and _acoustid_key_active(args.gateway)
-
         n_acoustid = _count_acoustid(conn)
         if not args.no_clean:
             _report_overrides(conn)
             print(f"Step 1 — clear overrides: {n_acoustid:,} "
                   f"source='acoustid' row(s) would be deleted "
                   "(manual / notfound / video_skip kept).")
-            if key_active:
-                print("\n  ⚠ The gateway's AcoustID worker is LIVE "
-                      "(/api/acoustid/status: enabled).\n"
-                      "    Clearing overrides now is futile: the 120s startup "
-                      "scan will re-fingerprint\n"
-                      "    every bare track and re-create them, re-masking "
-                      "beets. We chose Option A\n"
-                      "    (beets is the sole authority), so turn AcoustID off "
-                      "first. The key may come\n"
-                      "    from .env (comment the ACOUSTID_API_KEY line) OR "
-                      "launchctl setenv — check\n"
-                      "    /api/acoustid/status after restarting. Override with "
-                      "--ignore-acoustid-key.")
         else:
             print("Step 1 — clear overrides: SKIPPED (--no-clean).")
 
@@ -239,18 +185,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if not apply:
             print("Dry-run; nothing changed. Re-run with --apply to act.")
             return 0
-
-        # ── guard: refuse to clear while the acoustid worker is live ─────
-        if key_active and not args.ignore_acoustid_key:
-            print("error: the gateway's AcoustID worker is enabled "
-                  "(/api/acoustid/status) — refusing to clear overrides "
-                  "(they'd be re-created on the next startup scan).\n"
-                  "       turn it off first — the key is usually in .env "
-                  "(comment the ACOUSTID_API_KEY line) or launchctl setenv — "
-                  "then restart the gateway,\n"
-                  "       or pass --ignore-acoustid-key / --no-clean.",
-                  file=sys.stderr)
-            return 2
 
         # ── confirmation ────────────────────────────────────────────────
         if not args.yes:
