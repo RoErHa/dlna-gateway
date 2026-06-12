@@ -423,20 +423,51 @@ async def gw_cd_desc(request: Request):
     return Response(api_upnp._gw_cd_desc_xml().encode(), media_type=_GW_XML)
 
 
-@app.api_route("/gw/cd/events", methods=["GET", "SUBSCRIBE", "UNSUBSCRIBE"],
-               include_in_schema=False)
-async def gw_cd_events(request: Request):
-    log.info("GW /gw/cd/events %s by %s", request.method, _peer(request))
+async def _gw_event_route(request: Request, label: str, props: dict):
+    """Shared GENA handler for /gw/cd/events + /gw/cm/events: a valid SUBSCRIBE
+    (SID + TIMEOUT) then the initial NOTIFY — strict GUPnP/dLeyna needs both."""
+    log.info("GW %s %s by %s", label, request.method, _peer(request))
     if request.method == "SUBSCRIBE":
-        # Valid GENA SUBSCRIBE: return SID + TIMEOUT, then push the initial
-        # NOTIFY — strict GUPnP/dLeyna (the Naim) needs both to finish setup.
         hdrs, callback, sid = await run_in_threadpool(
             api_upnp.gw_event_subscribe, dict(request.headers))
         if callback:
             asyncio.create_task(run_in_threadpool(
-                api_upnp.gw_event_initial_notify, callback, sid))
+                api_upnp.gw_event_initial_notify, callback, sid, props))
         return Response(status_code=200, headers=hdrs)
     return Response(status_code=200)            # GET / UNSUBSCRIBE
+
+
+@app.api_route("/gw/cd/events", methods=["GET", "SUBSCRIBE", "UNSUBSCRIBE"],
+               include_in_schema=False)
+async def gw_cd_events(request: Request):
+    return await _gw_event_route(request, "/gw/cd/events", {"SystemUpdateID": "1"})
+
+
+@app.get("/gw/cm/desc.xml", include_in_schema=False)
+async def gw_cm_desc(request: Request):
+    log.info("GW /gw/cm/desc.xml fetched by %s", _peer(request))
+    return Response(api_upnp._gw_cm_desc_xml().encode(), media_type=_GW_XML)
+
+
+@app.post("/gw/cm/control", include_in_schema=False)
+async def gw_cm_control(request: Request):
+    body = await request.body()
+    import re as _re
+    action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1].strip('"')
+              or "?")
+    log.info("GW /gw/cm/control from %s: action=%s", _peer(request), action)
+    status, ctype, payload = await run_in_threadpool(api_upnp.cm_control_soap, body)
+    if status != 200:
+        log.warning("GW /gw/cm/control → %s for action=%s", status, action)
+    return Response(payload, status_code=status, media_type=ctype)
+
+
+@app.api_route("/gw/cm/events", methods=["GET", "SUBSCRIBE", "UNSUBSCRIBE"],
+               include_in_schema=False)
+async def gw_cm_events(request: Request):
+    return await _gw_event_route(request, "/gw/cm/events", {
+        "SourceProtocolInfo": api_upnp._GW_SOURCE_PROTOCOLS,
+        "SinkProtocolInfo": "", "CurrentConnectionIDs": "0"})
 
 
 @app.post("/gw/cd/control", include_in_schema=False)

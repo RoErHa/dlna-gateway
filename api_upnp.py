@@ -74,13 +74,24 @@ def _gw_device_xml(lan_ip: str, port: int) -> str:
         # recognise us as a Digital Media Server, not just a bare UPnP device.
         '<dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">'
         'DMS-1.50</dlna:X_DLNADOC>'
-        '<serviceList><service>'
+        '<serviceList>'
+        '<service>'
         '<serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>'
         '<serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>'
         '<SCPDURL>/gw/cd/desc.xml</SCPDURL>'
         '<controlURL>/gw/cd/control</controlURL>'
         '<eventSubURL>/gw/cd/events</eventSubURL>'
-        '</service></serviceList>'
+        '</service>'
+        # ConnectionManager is MANDATORY for a DLNA Media Server — without it
+        # strict clients (LG TV, Naim) reject the device and never browse.
+        '<service>'
+        '<serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>'
+        '<serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>'
+        '<SCPDURL>/gw/cm/desc.xml</SCPDURL>'
+        '<controlURL>/gw/cm/control</controlURL>'
+        '<eventSubURL>/gw/cm/events</eventSubURL>'
+        '</service>'
+        '</serviceList>'
         '</device></root>'
     )
 
@@ -545,6 +556,20 @@ def cd_events(h, params):
 
 _SOAP_CTYPE = 'text/xml; charset="utf-8"'
 _CD_NS = "urn:schemas-upnp-org:service:ContentDirectory:1"
+_CM_NS = "urn:schemas-upnp-org:service:ConnectionManager:1"
+# Source protocolInfo advertised via ConnectionManager#GetProtocolInfo — the
+# formats the gateway can serve (LocalFs streams the original bytes). A DLNA
+# control point uses this to decide it can talk to us.
+_GW_SOURCE_PROTOCOLS = (
+    "http-get:*:audio/mpeg:*,http-get:*:audio/flac:*,"
+    "http-get:*:audio/x-flac:*,http-get:*:audio/mp4:*,"
+    "http-get:*:audio/aac:*,http-get:*:audio/x-aac:*,"
+    "http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,"
+    "http-get:*:audio/L16:*,http-get:*:audio/ogg:*,"
+    "http-get:*:application/ogg:*,http-get:*:audio/x-aiff:*,"
+    "http-get:*:audio/aiff:*,http-get:*:audio/dsd:*,"
+    "http-get:*:application/octet-stream:*"
+)
 _EMPTY_DIDL = ('&lt;DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
                'xmlns:dc="http://purl.org/dc/elements/1.1/" '
                'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"&gt;'
@@ -559,14 +584,108 @@ def _cd_action_name(root) -> str:
     return body[0].tag.split("}")[-1]
 
 
-def _soap_cd_response(action: str, inner: str) -> bytes:
+def _soap_svc_response(ns: str, action: str, inner: str) -> bytes:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
         's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
-        f'<u:{action}Response xmlns:u="{_CD_NS}">{inner}'
+        f'<u:{action}Response xmlns:u="{ns}">{inner}'
         f'</u:{action}Response></s:Body></s:Envelope>'
     ).encode("utf-8")
+
+
+def _soap_cd_response(action: str, inner: str) -> bytes:
+    return _soap_svc_response(_CD_NS, action, inner)
+
+
+def cm_control_soap(body: bytes):
+    """ConnectionManager SOAP handler → (status, content_type, body_bytes).
+    A DLNA Media Server MUST expose ConnectionManager (alongside
+    ContentDirectory) or strict clients (LG TV, Naim) reject the device and
+    never browse. We have no real connections — GetProtocolInfo advertises the
+    formats we serve; the connection actions report the single static id 0."""
+    try:
+        root   = ET.fromstring(body.decode("utf-8"))
+        action = _cd_action_name(root)
+        if action == "GetProtocolInfo":
+            inner = (f"<Source>{_xml_esc(_GW_SOURCE_PROTOCOLS)}</Source>"
+                     "<Sink></Sink>")
+            return 200, _SOAP_CTYPE, _soap_svc_response(_CM_NS, action, inner)
+        if action == "GetCurrentConnectionIDs":
+            return 200, _SOAP_CTYPE, _soap_svc_response(
+                _CM_NS, action, "<ConnectionIDs>0</ConnectionIDs>")
+        if action == "GetCurrentConnectionInfo":
+            inner = ("<RcsID>-1</RcsID><AVTransportID>-1</AVTransportID>"
+                     "<ProtocolInfo></ProtocolInfo>"
+                     "<PeerConnectionManager></PeerConnectionManager>"
+                     "<PeerConnectionID>-1</PeerConnectionID>"
+                     "<Direction>Output</Direction><Status>OK</Status>")
+            return 200, _SOAP_CTYPE, _soap_svc_response(_CM_NS, action, inner)
+        log.debug("GW CM: unhandled action %r", action)
+        return 400, "text/html", f"<h1>Unsupported action: {action}</h1>".encode()
+    except Exception as e:
+        log.error(f"GW CM control error: {e}")
+        return 500, "text/html", f"<h1>error: {e}</h1>".encode("utf-8")
+
+
+def _gw_cm_desc_xml() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<scpd xmlns="urn:schemas-upnp-org:service-1-0">'
+        '<specVersion><major>1</major><minor>0</minor></specVersion>'
+        '<actionList>'
+        '<action><name>GetProtocolInfo</name><argumentList>'
+        '<argument><name>Source</name><direction>out</direction>'
+        '<relatedStateVariable>SourceProtocolInfo</relatedStateVariable></argument>'
+        '<argument><name>Sink</name><direction>out</direction>'
+        '<relatedStateVariable>SinkProtocolInfo</relatedStateVariable></argument>'
+        '</argumentList></action>'
+        '<action><name>GetCurrentConnectionIDs</name><argumentList>'
+        '<argument><name>ConnectionIDs</name><direction>out</direction>'
+        '<relatedStateVariable>CurrentConnectionIDs</relatedStateVariable></argument>'
+        '</argumentList></action>'
+        '<action><name>GetCurrentConnectionInfo</name><argumentList>'
+        '<argument><name>ConnectionID</name><direction>in</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_ConnectionID</relatedStateVariable></argument>'
+        '<argument><name>RcsID</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_RcsID</relatedStateVariable></argument>'
+        '<argument><name>AVTransportID</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_AVTransportID</relatedStateVariable></argument>'
+        '<argument><name>ProtocolInfo</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_ProtocolInfo</relatedStateVariable></argument>'
+        '<argument><name>PeerConnectionManager</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_ConnectionManager</relatedStateVariable></argument>'
+        '<argument><name>PeerConnectionID</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_ConnectionID</relatedStateVariable></argument>'
+        '<argument><name>Direction</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_Direction</relatedStateVariable></argument>'
+        '<argument><name>Status</name><direction>out</direction>'
+        '<relatedStateVariable>A_ARG_TYPE_ConnectionStatus</relatedStateVariable></argument>'
+        '</argumentList></action>'
+        '</actionList>'
+        '<serviceStateTable>'
+        '<stateVariable sendEvents="yes"><name>SourceProtocolInfo</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="yes"><name>SinkProtocolInfo</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="yes"><name>CurrentConnectionIDs</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionStatus</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionManager</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_Direction</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_ProtocolInfo</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionID</name>'
+        '<dataType>i4</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_AVTransportID</name>'
+        '<dataType>i4</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>A_ARG_TYPE_RcsID</name>'
+        '<dataType>i4</dataType></stateVariable>'
+        '</serviceStateTable></scpd>'
+    )
 
 
 def cd_control_soap(body: bytes):
@@ -730,17 +849,19 @@ def gw_event_subscribe(headers: dict):
             callback, new_sid)
 
 
-def gw_event_initial_notify(callback: str, sid: str):
-    """Push the GENA initial event (SystemUpdateID) to a new subscriber's
-    callback so a GUPnP-based control point completes its subscription. Sent
-    slightly after the SUBSCRIBE response so the client has the SID first."""
+def gw_event_initial_notify(callback: str, sid: str, props: dict):
+    """Push the GENA initial event (the service's evented variables) to a new
+    subscriber's callback so a GUPnP-based control point completes its
+    subscription. Sent slightly after the SUBSCRIBE response so the client has
+    the SID first. `props` = {variable: value} for this service."""
     if not callback:
         return
     time.sleep(0.3)
-    body = ('<?xml version="1.0"?>'
-            '<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">'
-            '<e:property><SystemUpdateID>1</SystemUpdateID></e:property>'
-            '</e:propertyset>').encode("utf-8")
+    inner = "".join(f"<e:property><{k}>{_xml_esc(str(v))}</{k}></e:property>"
+                    for k, v in props.items())
+    body = (f'<?xml version="1.0"?>'
+            f'<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">'
+            f'{inner}</e:propertyset>').encode("utf-8")
     try:
         u = urlparse(callback)
         conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=4)
