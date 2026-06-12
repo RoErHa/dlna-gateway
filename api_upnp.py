@@ -18,6 +18,7 @@ Also exports: GW_UDN, GW_NAME, gw_ssdp_announcer, gw_ssdp_byebye
 import base64
 import logging
 import os
+import re
 import socket
 import struct
 import time
@@ -163,10 +164,11 @@ def _gw_browse(obj_id: str, browse_flag: str,
         artist = r.get("artist", "")
         album  = r.get("album", "")
         cid    = _encode_lib_album_id(artist, album, r.get("album_key", ""))
-        if artist and album:
+        show_artist = bool(artist) and not _is_junk_name(artist)
+        if album and show_artist:
             title = f"{album} — {artist}"
         else:                       # avoid a leading " — " when one side is blank
-            title = album or artist or "(album)"
+            title = album or (artist if show_artist else "") or "(album)"
         return container(cid, parent, title, r.get("track_count", 0))
 
     OPEN  = ('<?xml version="1.0" encoding="UTF-8"?>'
@@ -179,9 +181,9 @@ def _gw_browse(obj_id: str, browse_flag: str,
         if browse_flag == "BrowseMetadata":
             return OPEN + container("0", "-1", GW_NAME, 5) + CLOSE, 1, 1
         udn       = DB.primary_udn()
-        n_artists = len(DB.all_artists(udn)) if udn else 0
-        n_albums  = len(DB.all_albums(udn))  if udn else 0
-        n_genres  = len(DB.all_genres(udn))  if udn else 0
+        n_artists = len(_lib_artists(udn))   if udn else 0
+        n_albums  = len(_album_letters(udn)) if udn else 0   # # of letter buckets
+        n_genres  = len(_lib_genres(udn))    if udn else 0
         n_favs    = len(DB.album_fav_list())
         n_pls     = len(DB.pl_list())
         items  = [
@@ -200,20 +202,21 @@ def _gw_browse(obj_id: str, browse_flag: str,
     # resolves correctly through album_tracks.
     if obj_id == "artists":
         udn   = DB.primary_udn()
-        rows  = DB.all_artists(udn) if udn else []
+        rows  = _lib_artists(udn) if udn else []
         total = len(rows)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container("artists", "0", "Artists", total) + CLOSE, 1, 1)
         page  = rows[start:start + count] if count else rows[start:]
         items = [container("gartist:" + _b64e(r["artist"]), "artists",
                            r["artist"], r.get("album_count", 0))
-                 for r in page if r.get("artist")]
+                 for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
 
     if obj_id.startswith("gartist:"):
         artist = _b64d(obj_id[len("gartist:"):])
         udn    = DB.primary_udn()
-        rows   = DB.artist_albums(udn, artist) if udn else []
+        rows   = [r for r in DB.artist_albums(udn, artist)
+                  if not _is_junk_name(r.get("album"))] if udn else []
         total  = len(rows)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container(obj_id, "artists",
@@ -222,14 +225,27 @@ def _gw_browse(obj_id: str, browse_flag: str,
         items = [album_container(r, obj_id) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
 
+    # "Albums" is a #-0-A..Z letter index (not one flat 2,000-entry list).
     if obj_id == "albums":
-        udn   = DB.primary_udn()
-        rows  = DB.all_albums(udn) if udn else []
-        total = len(rows)
+        udn     = DB.primary_udn()
+        letters = _album_letters(udn) if udn else []
+        total   = len(letters)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container("albums", "0", "Albums", total) + CLOSE, 1, 1)
+        page  = letters[start:start + count] if count else letters[start:]
+        items = [container("albumltr:" + L, "albums", L, cnt) for L, cnt in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("albumltr:"):
+        letter = obj_id[len("albumltr:"):]
+        udn    = DB.primary_udn()
+        rows   = [r for r in _lib_albums(udn)
+                  if _letter_of(r.get("album")) == letter] if udn else []
+        total  = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "albums", letter, total) + CLOSE, 1, 1)
         page  = rows[start:start + count] if count else rows[start:]
-        items = [album_container(r, "albums") for r in page]
+        items = [album_container(r, obj_id) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
 
     if obj_id.startswith("galbum:"):
@@ -246,20 +262,21 @@ def _gw_browse(obj_id: str, browse_flag: str,
 
     if obj_id == "genres":
         udn   = DB.primary_udn()
-        rows  = DB.all_genres(udn) if udn else []
+        rows  = _lib_genres(udn) if udn else []
         total = len(rows)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container("genres", "0", "Genres", total) + CLOSE, 1, 1)
         page  = rows[start:start + count] if count else rows[start:]
         items = [container("ggenre:" + _b64e(r["genre"]), "genres",
                            r["genre"], r.get("album_count", 0))
-                 for r in page if r.get("genre")]
+                 for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
 
     if obj_id.startswith("ggenre:"):
         genre = _b64d(obj_id[len("ggenre:"):])
         udn   = DB.primary_udn()
-        rows  = DB.genre_albums(udn, genre) if udn else []
+        rows  = [r for r in DB.genre_albums(udn, genre)
+                 if not _is_junk_name(r.get("album"))] if udn else []
         total = len(rows)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container(obj_id, "genres",
@@ -377,6 +394,63 @@ def _decode_lib_album_id(obj_id: str) -> tuple:
     return (parts[0] if len(parts) > 0 else "",
             parts[1] if len(parts) > 1 else "",
             parts[2] if len(parts) > 2 else "")
+
+
+# ── Junk-name filter (untagged / track-number-as-name) ───────────
+# The library carries filename-derived metadata gaps (artist "07", album
+# "10. Some Title …", or a blank album name). These clutter the Naim browse,
+# so the gateway-as-MediaServer tree hides them (the PWA still shows the raw
+# data; beets enrichment fixes the tags over time). DISPLAY-only filter.
+_JUNK_PREFIX_RE = re.compile(r'^\d+\s*[.):\-]')   # "10.", "1)", "07 -", "3:"
+
+def _is_junk_name(s: str) -> bool:
+    s = (s or "").strip()
+    if not s:                       # blank → "(album)" / unnamed
+        return True
+    if _JUNK_PREFIX_RE.match(s):    # track-number-as-name
+        return True
+    if re.fullmatch(r'\d{1,2}', s): # bare 1–2 digit number ("07")
+        return True
+    return False
+
+
+def _lib_artists(udn: str) -> list:
+    return [r for r in DB.all_artists(udn) if not _is_junk_name(r.get("artist"))]
+
+
+def _lib_albums(udn: str) -> list:
+    return [r for r in DB.all_albums(udn) if not _is_junk_name(r.get("album"))]
+
+
+def _lib_genres(udn: str) -> list:
+    return [r for r in DB.all_genres(udn) if not _is_junk_name(r.get("genre"))]
+
+
+def _letter_of(name: str) -> str:
+    """First-letter bucket matching LibraryDB.browse_letter / the PWA letter
+    bar: 'A'..'Z', '0' for a leading digit, '#' for anything else."""
+    s = (name or "").strip()
+    if not s:
+        return "#"
+    c = s[0].upper()
+    if "A" <= c <= "Z":
+        return c
+    if "0" <= c <= "9":
+        return "0"
+    return "#"
+
+
+_LETTER_ORDER = ["#", "0"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+
+def _album_letters(udn: str) -> list:
+    """Ordered (letter, count) for the non-empty album-letter buckets
+    (junk-filtered), so the Naim's 'Albums' folder is a #-0-A..Z index
+    rather than one flat 2,000-entry list."""
+    buckets: dict = {}
+    for r in _lib_albums(udn):
+        L = _letter_of(r.get("album"))
+        buckets[L] = buckets.get(L, 0) + 1
+    return [(L, buckets[L]) for L in _LETTER_ORDER if L in buckets]
 
 
 def _encode_album_id(artist: str, album: str, album_key: str = "") -> str:

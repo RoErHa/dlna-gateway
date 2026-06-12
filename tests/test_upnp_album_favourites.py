@@ -266,12 +266,22 @@ class TestFullLibraryBrowse(unittest.TestCase):
         gid = api_upnp._encode_lib_album_id("Alice", "Alpha", "Alice/Alpha")
         self.assertIn(f'id="{gid}"', xml)
 
-    def test_albums_lists_all(self):
+    def test_albums_is_letter_index(self):
+        # "Albums" is a #-0-A..Z index now; Alpha→A, Beta→B = two buckets.
         xml, n_ret, total = api_upnp._gw_browse(
             "albums", "BrowseDirectChildren", 0, 0)
         self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn('id="albumltr:A"', xml)
+        self.assertIn('id="albumltr:B"', xml)
+        self.assertIn("<dc:title>A</dc:title>", xml)
+
+    def test_album_letter_lists_albums(self):
+        xml, n_ret, total = api_upnp._gw_browse(
+            "albumltr:A", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (1, 1))
         self.assertIn("Alpha — Alice", xml)
-        self.assertIn("Beta — Bob", xml)
+        gid = api_upnp._encode_lib_album_id("Alice", "Alpha", "Alice/Alpha")
+        self.assertIn(f'id="{gid}"', xml)
 
     def test_album_tracks_have_res_urls(self):
         gid = api_upnp._encode_lib_album_id("Alice", "Alpha", "Alice/Alpha")
@@ -298,12 +308,11 @@ class TestFullLibraryBrowse(unittest.TestCase):
         self.assertEqual((n_ret, total), (1, 1))
         self.assertIn("Alpha — Alice", xml)
 
-    def test_albums_pagination(self):
-        # Page 1: first album only.
+    def test_albums_letter_pagination(self):
+        # Two letter buckets (A, B); page through them one at a time.
         xml1, n1, total1 = api_upnp._gw_browse(
             "albums", "BrowseDirectChildren", 0, 1)
         self.assertEqual((n1, total1), (1, 2))
-        # Page 2: the second.
         xml2, n2, total2 = api_upnp._gw_browse(
             "albums", "BrowseDirectChildren", 1, 1)
         self.assertEqual((n2, total2), (1, 2))
@@ -316,19 +325,47 @@ class TestFullLibraryBrowse(unittest.TestCase):
         self.assertIn('id="artists"', xml)
         self.assertIn('parentID="0"', xml)
 
-    def test_album_title_no_leading_dash_when_blank_side(self):
-        # A folder-album whose album name is blank (artist-only) must render as
-        # the artist, never as " — Artist"; a fully-blank one is "(album)".
+    def _insert(self, ak, artist, album, genre="Rock"):
         with self.db._pool.write() as c:
             c.execute(
                 "INSERT INTO tracks(udn,obj_id,url,title,artist,album,"
                 "album_key,duration,art,mime,genre,file_path) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (self.udn, "k1", "http://h/k1", "T", "Solo Act", "", "k1",
-                 "0:01:00", "", "audio/flac", "", "/m/k1/1.flac"))
+                (self.udn, ak, f"http://h/{ak}", "T", artist, album, ak,
+                 "0:01:00", "", "audio/flac", genre, f"/m/{ak}/1.flac"))
+
+    def test_blank_and_junk_albums_hidden(self):
+        # A blank album name and a "NN. Title" album name are untagged junk —
+        # they must NOT create a '#' or '0' letter bucket nor show up.
+        self._insert("jk1", "Solo Act", "")                 # blank → "#"
+        self._insert("jk2", "Solo Act", "10. Some Title")   # track-no → "0"
         xml, _, _ = api_upnp._gw_browse("albums", "BrowseDirectChildren", 0, 0)
-        self.assertNotIn("<dc:title> — ", xml)        # no leading dash anywhere
-        self.assertIn("<dc:title>Solo Act</dc:title>", xml)
+        self.assertNotIn('id="albumltr:#"', xml)
+        self.assertNotIn('id="albumltr:0"', xml)
+        self.assertNotIn("10. Some Title", xml)
+
+    def test_junk_artists_hidden(self):
+        self._insert("jk3", "07", "Junk Album One")
+        self._insert("jk4", "10. Mad About The Boy", "Junk Album Two")
+        xml, _, total = api_upnp._gw_browse("artists", "BrowseDirectChildren", 0, 0)
+        # Only Alice + Bob survive; the two filename-derived artists are gone.
+        self.assertEqual(total, 2)
+        self.assertNotIn("Mad About The Boy", xml)
+        self.assertNotIn("gartist:" + api_upnp._b64e("07"), xml)
+
+    def test_is_junk_name_cases(self):
+        for junk in ("", "  ", "07", "10. Mad About The Boy", "1) Intro",
+                     "3 - Track"):
+            self.assertTrue(api_upnp._is_junk_name(junk), junk)
+        for ok in ("Pink Floyd", "100 Proof Aged in Soul", "311",
+                   "*NSYNC", "U2", "98 Degrees"):
+            self.assertFalse(api_upnp._is_junk_name(ok), ok)
+
+    def test_letter_of_buckets(self):
+        self.assertEqual(api_upnp._letter_of("Animals"), "A")
+        self.assertEqual(api_upnp._letter_of("9 to 5"), "0")
+        self.assertEqual(api_upnp._letter_of("(parens)"), "#")
+        self.assertEqual(api_upnp._letter_of(""), "#")
 
     def test_unknown_ids_return_empty(self):
         for oid in ("gartist:" + api_upnp._b64e("Nobody"),
