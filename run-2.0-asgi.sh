@@ -12,7 +12,7 @@
 #
 # Live config (matches CUTOVER_LAUNCHD.md):
 #   • Hypercorn main app   :8443 TLS+HTTP/2 (ALPN)  +  :8765 plain  (--insecure-bind)
-#   • device server /gw/*  :8770  ($GATEWAY_PORT, plain — the Naim can't do HTTPS)
+#   • /gw/* (UPnP, Naim)   served by the app on the :8765 plain bind (no HTTPS)
 #   • LocalFs file server  :8200  ($LOCALFS_PORT, plain — the Naim fetches bytes)
 #   identity: GW_UDN / GW_NAME (adopts 1.x's "DLNA Gateway (IINA)").
 #   Secrets (SUBSONIC_*, GATEWAY_CONTACT_EMAIL) come from .env (loaded in-process
@@ -30,12 +30,12 @@ LABEL="com.roha.dlna-gateway"
 
 # ── Refuse to clash with the launchd-managed gateway ─────────────────────────
 # Running this while launchd has the gateway loaded would double-bind :8443 /
-# :8200 / :8770 and double-announce on SSDP (it's what wedged the gateway
+# :8765 / :8200 and double-announce on SSDP (it's what wedged the gateway
 # before). Use the launchd copy, or stop it first to run manually.
 if launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; then
   echo "✗  The gateway is already running under launchd (${LABEL}) on" >&2
   echo "   https://127.0.0.1:8443 — this script starts the SAME Hypercorn app," >&2
-  echo "   so it would clash on :8443 / :8200 / :8770." >&2
+  echo "   so it would clash on :8443 / :8765 / :8200." >&2
   echo >&2
   echo "   • Just restart it:   launchctl kickstart -k gui/\$(id -u)/${LABEL}" >&2
   echo "   • Run manually here: launchctl bootout gui/\$(id -u)/${LABEL}  &&  ./run-2.0-asgi.sh" >&2
@@ -55,8 +55,8 @@ export GW_UDN="${GW_UDN:-uuid:dlna-gateway-iina-8765}"
 export GW_NAME="${GW_NAME:-DLNA Gateway (IINA)}"
 export LOCALFS_MUSIC_ROOT="${LOCALFS_MUSIC_ROOT:-/Volumes/SAMDATA/Music}"
 export LOCALFS_PORT="${LOCALFS_PORT:-8200}"
-# Device-tier server port (plain-HTTP /gw/* for the Naim) + SSDP advert port.
-export GATEWAY_PORT="${GATEWAY_PORT:-8770}"
+# /gw/* (UPnP for the Naim) + the SSDP advert are served by the app on the
+# plain :8765 bind (GATEWAY_PLAIN_PORT, default 8765) — no separate device port.
 
 if [ ! -x ".venv/bin/hypercorn" ]; then
   echo "✗  .venv/bin/hypercorn not found." >&2
@@ -68,7 +68,7 @@ fi
 # ── Transport: TLS+HTTP/2 on :8443 (default) + plain on :8765 ─────────────────
 # Hypercorn terminates TLS and negotiates HTTP/2 via ALPN on the --bind port;
 # --insecure-bind serves plain HTTP on :8765. Set GATEWAY_TLS=0 for plain-only
-# (LAN testing, no cert). The device server (/gw/* :${GATEWAY_PORT}) and LocalFs
+# (LAN testing, no cert). /gw/* (on the :8765 plain bind) and LocalFs
 # (:${LOCALFS_PORT}) ALWAYS stay plain HTTP — the Naim can't do HTTPS.
 HYP_ARGS=(dlna_asgi:app)
 SCHEME="http"
@@ -107,5 +107,5 @@ case "${GATEWAY_TLS:-1}" in
     ;;
 esac
 
-echo "    device /gw/* + SSDP on :${GATEWAY_PORT}, LocalFs :${LOCALFS_PORT} (both plain HTTP for the Naim)"
+echo "    /gw/* + SSDP on the plain :8765 bind, LocalFs :${LOCALFS_PORT} (plain HTTP for the Naim)"
 exec .venv/bin/hypercorn "${HYP_ARGS[@]}" "$@"

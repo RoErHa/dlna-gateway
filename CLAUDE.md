@@ -83,7 +83,6 @@ python dlna_content.py <control-url>  # UPnP SOAP
 python dlna_library.py             # DB operations
 python db_pool.py                  # concurrent DB stress test
 python dlna_player.py              # QueueRegistry + duration-parser self-test
-python dlna_server.py              # HTTP server (30s on :8766)
 ```
 
 ## Architecture
@@ -104,8 +103,7 @@ python dlna_server.py              # HTTP server (30s on :8766)
 | File | Responsibility |
 |---|---|
 | `dlna_gateway.py` | Module wiring + `start_background_services()` (spawns the daemon threads). **2.0:** no longer the process entry — the `dlna_asgi` lifespan calls it so `hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib HTTP edge + TLS were removed. |
-| `dlna_server.py` | **2.0 (cutover done):** reduced to the **device-tier server** — plain-HTTP `/gw/*` for the Naim (`DeviceHandler`/`start_device_server`) on `:8770` (`GATEWAY_PORT`), started by the ASGI lifespan alongside Hypercorn. Its old main-edge role moved to `dlna_asgi`. (Cleanup C will fold `/gw/*` into the ASGI app and retire this + `run-2.0.sh`.) |
-| `dlna_asgi.py` | **2.0 — THE main HTTP edge.** FastAPI app served by Hypercorn; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, and the Subsonic byte methods; remaining legacy handlers run via the bridge. Lifespan boots `start_background_services` + the device server. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
+| `dlna_asgi.py` | **2.0 — THE server (Hypercorn owns the whole edge).** FastAPI app; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, the Subsonic byte methods, and the **Naim-facing `/gw/*` UPnP surface** (device.xml/desc.xml/events/control on the plain `:8765` bind — Cleanup C folded it in here, retiring the separate `dlna_server.py` device server + `run-2.0.sh`). Remaining legacy handlers run via the bridge. Lifespan boots `start_background_services`. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
 | `dlna_asgi_bridge.py` | Shim that runs the legacy `(h, params)` handlers unchanged inside the ASGI app (fake `h` captures `_json`/`_html`/`_xml_response`/`send_error`; runs in a threadpool). Routes are rewritten native one batch at a time, then dropped from the bridge. |
 | `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL. `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
 | `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
@@ -277,7 +275,7 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
 - Hard-caps at 5 MB per image to prevent memory abuse.
 - Validates Content-Type starts with `image/` — an upstream HTML 404 page won't poison the SW cache.
 - 10-second timeout; slow upstream fails fast.
-- The handler is in `api_playback.art()` routed at `/art` in `dlna_server.py`.
+- The handler is in `api_playback.art()` routed at `/art` in `dlna_asgi.py`.
 
 ### Browser audio error handling (MediaError discrimination)
 
@@ -339,8 +337,9 @@ launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 > **done**: the gateway is a **Hypercorn + FastAPI ASGI app (`dlna_asgi.py` +
 > `dlna_asgi_bridge.py`)** that **terminates TLS and negotiates HTTP/2 (ALPN)
 > natively** on `:8443` (plain HTTP on `:8765`), using a `tailscale cert`-issued
-> cert (cert-renewal machinery kept, now Hypercorn-owned). The device tier
-> `/gw/*` (`:8770`) and RoHaLocalFS (`:8200`) stay plain HTTP for the Naim.
+> cert (cert-renewal machinery kept, now Hypercorn-owned). The Naim-facing
+> `/gw/*` UPnP surface (on the plain `:8765` bind, folded into the ASGI app by
+> Cleanup C) and RoHaLocalFS (`:8200`) stay plain HTTP for the Naim.
 > HTTP/3 (QUIC) is a later `--quic-bind` add. **`tailscale serve` was tried and
 > dropped** (broken on this mini's Tailscale `:443`) — the app owning TLS is the
 > chosen end-state. Verified trusted h2 over the tailnet hostname. Full detail:

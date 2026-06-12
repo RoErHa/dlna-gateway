@@ -2,10 +2,10 @@
 """
 dlna_routes.py — HTTP path → handler-function route tables.
 
-Separated from dlna_server.py so the router stays thin and adding an
-endpoint doesn't grow the server module. Each handler receives
-`(handler_instance, params_or_body)` — GET handlers take the parsed
-query-string dict, POST handlers take the raw request body.
+These tables drive the ASGI bridge (dlna_asgi_bridge): legacy `(h, params)`
+handlers not yet ported to native FastAPI routes are dispatched through here.
+Each handler receives `(handler_instance, params_or_body)` — GET handlers take
+the parsed query-string dict, POST handlers take the raw request body.
 
 Adding a new endpoint:
     1. Define the handler function in the relevant api_* module.

@@ -25,6 +25,8 @@ import functools
 import json
 import logging
 import os
+import struct
+import zlib
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -39,7 +41,6 @@ import api_radio
 import api_subsonic
 import api_upnp
 import dlna_routes
-import dlna_server
 import dlna_stream_proxy
 from dlna_asgi_bridge import _LegacyH, make_bridged_route, run_subsonic_sync
 from dlna_config import VERSION, raise_fd_limit
@@ -74,26 +75,18 @@ async def _lifespan(app: FastAPI):
     """Boot the gateway's background services so `hypercorn dlna_asgi:app` runs
     the gateway standalone: discovery (DB pre-probe / SSDP / subnet-scan /
     heartbeat), the gateway-as-MediaServer SSDP announcer, the album-art +
-    AcoustID startup scans, and LocalFs wiring — the SAME set
-    dlna_gateway.main() starts, via the SAME function
-    (dlna_gateway.start_background_services). It ALSO starts the device-tier
-    server (dlna_server.start_device_server) on GATEWAY_PORT, serving the
-    Naim-facing /gw/* UPnP surface over plain LAN HTTP — Hypercorn owns the
-    main port (and, later, TLS) but the Naim can't do HTTPS. The SSDP advert
-    points at GATEWAY_PORT, so it correctly lands on the device server. Run
-    exactly ONE of the two entrypoints (stdlib OR Hypercorn), never both —
-    they'd double-announce and clash on ports.
+    AcoustID startup scans, and LocalFs wiring, via
+    dlna_gateway.start_background_services. The Naim-facing /gw/* UPnP surface
+    is served NATIVELY by THIS app on the plain port (PLAIN_PORT) — Hypercorn
+    owns TLS on :8443 but the Naim can't do HTTPS, so the SSDP advert +
+    device.xml URLBase point at PLAIN_PORT. Hypercorn is the only server
+    (Cleanup C retired the separate stdlib device tier).
 
     Env knobs:
-      • GATEWAY_NO_SERVICES=1 — web tier only; skip ALL background startup +
-        the device server (e.g. running purely as a web tier, or experiments).
-      • GATEWAY_PORT (default 8770) — the plain-HTTP device-server port, also
-        the port advertised in the gateway-as-MediaServer SSDP record.
-      • GATEWAY_DEBUG=1 — verbose logging.
-
-    Cleanup C (AFTER cutover): fold /gw/* into the ASGI app on a Hypercorn
-    `--insecure-bind` plain port and retire dlna_server + the device server, so
-    the whole gateway is one framework. See docs/BUILDING_2.0.md."""
+      • GATEWAY_NO_SERVICES=1 — web tier only; skip ALL background startup.
+      • GATEWAY_PLAIN_PORT (default 8765) — the plain-HTTP port the Naim reaches
+        /gw/* on, advertised in the gateway-as-MediaServer SSDP record.
+      • GATEWAY_DEBUG=1 — verbose logging."""
     import dlna_gateway
     # Raise the open-file limit BEFORE serving — Hypercorn's threadpool + the
     # LocalFs scan open enough concurrent FDs to hit macOS's default 256-soft
@@ -732,8 +725,60 @@ async def _manifest():
     return Response(content=_MANIFEST, media_type="application/manifest+json")
 
 
+def _make_icon_png(size: int) -> bytes:
+    """Generate a simple PNG icon: dark square with amber ♪ symbol.
+    Relocated from dlna_server.py (retired in Cleanup C) — this app is now the
+    sole server, so the only caller (the /icon routes) keeps it local."""
+    bg    = (14, 13, 11)
+    amber = (212, 168, 67)
+
+    img = [list(bg + (255,)) for _ in range(size * size)]
+
+    s = size / 192.0
+
+    def filled_circle(cx, cy, rad, color):
+        for dy in range(-rad - 1, rad + 2):
+            for dx in range(-rad - 1, rad + 2):
+                if dx * dx + dy * dy <= rad * rad:
+                    px, py = int(cx + dx), int(cy + dy)
+                    if 0 <= px < size and 0 <= py < size:
+                        img[py * size + px] = list(color + (255,))
+
+    def filled_rect(x1, y1, x2, y2, color):
+        for py in range(max(0, y1), min(size, y2)):
+            for px in range(max(0, x1), min(size, x2)):
+                img[py * size + px] = list(color + (255,))
+
+    sx, sy = int(110 * s), int(60 * s)
+    sw, sh = max(6, int(12 * s)), int(90 * s)
+    filled_rect(sx, sy, sx + sw, sy + sh, amber)
+    nx, ny = int(88 * s), int(135 * s)
+    nr = max(8, int(20 * s))
+    filled_circle(nx, ny, nr, amber)
+    fx, fy = sx + sw, sy
+    filled_rect(fx, fy, fx + int(35 * s), fy + int(10 * s), amber)
+    filled_rect(fx, fy + int(20 * s), fx + int(28 * s), fy + int(30 * s), amber)
+
+    def png_chunk(tag, data):
+        c = zlib.crc32(tag + data) & 0xffffffff
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', c)
+
+    raw = b''
+    for row in range(size):
+        raw += bytes([0])
+        for col in range(size):
+            raw += bytes(img[row * size + col])
+
+    compressed = zlib.compress(raw, 6)
+    png  = b'\x89PNG\r\n\x1a\n'
+    png += png_chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0))
+    png += png_chunk(b'IDAT', compressed)
+    png += png_chunk(b'IEND', b'')
+    return png
+
+
 def _icon(size: int) -> Response:
-    return Response(content=dlna_server._make_icon_png(size),
+    return Response(content=_make_icon_png(size),
                     media_type="image/png",
                     headers={"Cache-Control": "public, max-age=86400"})
 

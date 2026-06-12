@@ -121,13 +121,14 @@ cp .env.example .env       # then edit to set SUBSONIC_PASSWORD etc.
 
 Open `http://localhost:8765/` in any browser.
 
-**Running the 2.0 ASGI stack (Hypercorn + TLS/HTTP-2).** `./setup.sh --run`
-(and `python dlna_gateway.py`) start the legacy stdlib server; the 2.0 edge is
-Hypercorn serving `dlna_asgi:app`. Use **`./run-2.0-asgi.sh`** for that
-(`GATEWAY_TLS=1` to terminate TLS+h2 on `:8443`, auto-discovering a
-`tailscale cert`). The device tier `/gw/*` (`:8770`) and RoHaLocalFS (`:8200`)
-are started in-process and stay plain HTTP. A production LaunchAgent that adopts
-this on `:8443`/`:8765` is documented in
+**Running the 2.0 ASGI stack (Hypercorn + TLS/HTTP-2).** The gateway IS the
+Hypercorn-served `dlna_asgi:app` — `./setup.sh --run` launches it via
+**`./run-2.0-asgi.sh`** (`GATEWAY_TLS=1` to terminate TLS+h2 on `:8443`,
+auto-discovering a `tailscale cert`). The Naim-facing `/gw/*` UPnP surface is
+served by the app on the plain `:8765` bind; RoHaLocalFS (`:8200`) runs
+in-process — both stay plain HTTP for the Naim. `python dlna_gateway.py` is no
+longer a server (Cleanup C); it keeps only `--list-devices` / `--reset-devices`.
+A production LaunchAgent that adopts this on `:8443`/`:8765` is documented in
 [docs/CUTOVER_LAUNCHD.md](docs/CUTOVER_LAUNCHD.md).
 
 For auto-start at login: see the comments at the top of
