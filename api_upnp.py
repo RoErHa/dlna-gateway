@@ -16,13 +16,16 @@ Handles: GET /gw/device.xml, /gw/cd/desc.xml, /gw/cd/events
 Also exports: GW_UDN, GW_NAME, gw_ssdp_announcer, gw_ssdp_byebye
 """
 import base64
+import http.client
 import logging
 import os
 import re
 import socket
 import struct
 import time
+import uuid
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 from dlna_library import DB
 
@@ -694,6 +697,62 @@ def gw_ssdp_announcer(lan_ip: str, port: int):
 
 def gw_ssdp_byebye(lan_ip: str, port: int):
     _gw_ssdp_notify(lan_ip, port, alive=False)
+
+
+# ── GENA eventing (ContentDirectory /gw/cd/events) ────────────────
+# We don't push real state changes (SystemUpdateID is constant), but a strict
+# GUPnP/dLeyna control point (the Naim) requires a VALID SUBSCRIBE response —
+# an SID + TIMEOUT — and an initial NOTIFY, or it treats device setup as failed
+# and never browses. A bare 200 (the old stub) is not enough.
+
+def _parse_callback(header: str) -> str:
+    """First callback URL from a GENA CALLBACK header like '<url1><url2>'."""
+    if not header:
+        return ""
+    start = header.find("<")
+    end = header.find(">", start + 1)
+    return header[start + 1:end].strip() if (start != -1 and end != -1) else ""
+
+
+def gw_event_subscribe(headers: dict):
+    """Handle a GENA SUBSCRIBE (or renewal). Returns
+    (response_headers, callback_url, sid). A renewal carries SID (echo it);
+    a new subscription gets a fresh SID + a callback to push the initial
+    NOTIFY to."""
+    h = {k.lower(): v for k, v in headers.items()}
+    sid = h.get("sid")
+    if sid:                                   # renewal — just extend
+        return {"SID": sid, "TIMEOUT": "Second-1800"}, "", sid
+    new_sid = "uuid:" + str(uuid.uuid4())
+    callback = _parse_callback(h.get("callback", ""))
+    return ({"SID": new_sid, "TIMEOUT": "Second-1800",
+             "SERVER": "Python/3 UPnP/1.0 dlna-gateway/1.0"},
+            callback, new_sid)
+
+
+def gw_event_initial_notify(callback: str, sid: str):
+    """Push the GENA initial event (SystemUpdateID) to a new subscriber's
+    callback so a GUPnP-based control point completes its subscription. Sent
+    slightly after the SUBSCRIBE response so the client has the SID first."""
+    if not callback:
+        return
+    time.sleep(0.3)
+    body = ('<?xml version="1.0"?>'
+            '<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">'
+            '<e:property><SystemUpdateID>1</SystemUpdateID></e:property>'
+            '</e:propertyset>').encode("utf-8")
+    try:
+        u = urlparse(callback)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=4)
+        conn.request("NOTIFY", u.path or "/", body, {
+            "HOST": f"{u.hostname}:{u.port or 80}",
+            "CONTENT-TYPE": 'text/xml; charset="utf-8"',
+            "NT": "upnp:event", "NTS": "upnp:propchange",
+            "SID": sid, "SEQ": "0"})
+        conn.getresponse()
+        conn.close()
+    except Exception as e:
+        log.debug("GW event initial NOTIFY to %s failed: %s", callback, e)
 
 
 def _gw_msearch_response(st: str, usn: str, location: str) -> bytes:
