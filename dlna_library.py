@@ -1057,6 +1057,18 @@ class LibraryDB:
             "artists": [dict(r) for r in artists],
         }
 
+    def primary_udn(self) -> str:
+        """The udn of the library to expose as 'the' gateway MediaServer —
+        the server owning the most tracks (in this single-library deployment,
+        the LocalFs backend). Used by the gateway-as-MediaServer UPnP browse
+        (api_upnp._gw_browse) to back the Artists/Albums/Genres tree. Returns
+        '' when no library is indexed yet."""
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT udn FROM tracks GROUP BY udn "
+                "ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
+        return row["udn"] if row else ""
+
     def all_artists(self, udn: str) -> list:
         """Return all artists with album/track counts. Track count is
         the browse-visible (deduped) count."""
