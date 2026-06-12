@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import struct
+import threading
 import zlib
 from typing import Optional
 
@@ -431,8 +432,13 @@ async def _gw_event_route(request: Request, label: str, props: dict):
         hdrs, callback, sid = await run_in_threadpool(
             api_upnp.gw_event_subscribe, dict(request.headers))
         if callback:
-            asyncio.create_task(run_in_threadpool(
-                api_upnp.gw_event_initial_notify, callback, sid, props))
+            # Fire the initial NOTIFY in a daemon thread — NOT
+            # asyncio.create_task (an un-referenced task can be GC'd before it
+            # runs, so the NOTIFY would never be sent and a GUPnP/dLeyna client
+            # would keep re-subscribing and never browse).
+            threading.Thread(
+                target=api_upnp.gw_event_initial_notify,
+                args=(callback, sid, props), daemon=True).start()
         return Response(status_code=200, headers=hdrs)
     return Response(status_code=200)            # GET / UNSUBSCRIBE
 
