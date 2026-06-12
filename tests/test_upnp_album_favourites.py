@@ -389,9 +389,58 @@ class TestContentDirectorySCPD(unittest.TestCase):
         root = ET.fromstring(scpd)              # must be well-formed XML
         NS = "{urn:schemas-upnp-org:service-1-0}"
         names = [e.text for e in root.iter(NS + "name")]
-        # The Browse action + its key arguments must be discoverable by name.
-        for n in ("Browse", "ObjectID", "BrowseFlag", "Result", "TotalMatches"):
+        # The Browse action + its key arguments + the DLNA handshake actions
+        # must be discoverable by name.
+        for n in ("Browse", "ObjectID", "BrowseFlag", "Result", "TotalMatches",
+                  "GetSearchCapabilities", "GetSortCapabilities",
+                  "GetSystemUpdateID"):
             self.assertIn(n, names, n)
+
+
+class TestContentDirectoryActions(unittest.TestCase):
+    """The DLNA pre-browse handshake — GetSearchCapabilities / GetSortCapabilities
+    / GetSystemUpdateID (+ optional GetSortExtensionCapabilities / GetFeatureList
+    / Search) — must return 200 empty-but-valid SOAP, or NaimUPnP 400s and drops
+    the server (2026-06-12 incident)."""
+
+    def _soap(self, action):
+        return (f'<?xml version="1.0"?><s:Envelope '
+                f'xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                f'<u:{action} xmlns:u="{api_upnp._CD_NS}"></u:{action}>'
+                f'</s:Body></s:Envelope>').encode()
+
+    def test_handshake_actions_return_200_valid_soap(self):
+        import xml.etree.ElementTree as ET
+        for action, needle in [
+            ("GetSearchCapabilities", b"<SearchCaps>"),
+            ("GetSortCapabilities", b"<SortCaps>"),
+            ("GetSortExtensionCapabilities", b"<SortExtensionCaps>"),
+            ("GetSystemUpdateID", b"<Id>1</Id>"),
+            ("GetFeatureList", b"FeatureList"),
+        ]:
+            st, ct, body = api_upnp.cd_control_soap(self._soap(action))
+            self.assertEqual(st, 200, action)
+            self.assertIn("xml", ct)
+            ET.fromstring(body)                       # well-formed
+            self.assertIn(f"{action}Response".encode(), body)
+            self.assertIn(needle, body)
+
+    def test_search_returns_empty_result(self):
+        st, ct, body = api_upnp.cd_control_soap(self._soap("Search"))
+        self.assertEqual(st, 200)
+        self.assertIn(b"SearchResponse", body)
+        self.assertIn(b"<TotalMatches>0</TotalMatches>", body)
+
+    def test_unknown_action_400(self):
+        st, ct, body = api_upnp.cd_control_soap(self._soap("Frobnicate"))
+        self.assertEqual(st, 400)
+
+    def test_device_xml_advertises_dlna_dms(self):
+        import xml.etree.ElementTree as ET
+        dx = api_upnp._gw_device_xml("10.0.0.5", 8765)
+        ET.fromstring(dx)                              # well-formed
+        self.assertIn("X_DLNADOC", dx)
+        self.assertIn("DMS-1.50", dx)
 
 
 class TestMSearchResponder(unittest.TestCase):

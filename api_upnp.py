@@ -67,6 +67,10 @@ def _gw_device_xml(lan_ip: str, port: int) -> str:
         '<manufacturer>dlna-gateway</manufacturer>'
         '<modelName>dlna-gateway</modelName>'
         f'<UDN>{GW_UDN}</UDN>'
+        # DLNA device marker — lets a strict DLNA control point (the Naim)
+        # recognise us as a Digital Media Server, not just a bare UPnP device.
+        '<dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">'
+        'DMS-1.50</dlna:X_DLNADOC>'
         '<serviceList><service>'
         '<serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>'
         '<serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>'
@@ -104,7 +108,20 @@ def _gw_cd_desc_xml() -> str:
         '<relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>'
         '<argument><name>UpdateID</name><direction>out</direction>'
         '<relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>'
-        '</argumentList></action></actionList>'
+        '</argumentList></action>'
+        '<action><name>GetSearchCapabilities</name><argumentList>'
+        '<argument><name>SearchCaps</name><direction>out</direction>'
+        '<relatedStateVariable>SearchCapabilities</relatedStateVariable></argument>'
+        '</argumentList></action>'
+        '<action><name>GetSortCapabilities</name><argumentList>'
+        '<argument><name>SortCaps</name><direction>out</direction>'
+        '<relatedStateVariable>SortCapabilities</relatedStateVariable></argument>'
+        '</argumentList></action>'
+        '<action><name>GetSystemUpdateID</name><argumentList>'
+        '<argument><name>Id</name><direction>out</direction>'
+        '<relatedStateVariable>SystemUpdateID</relatedStateVariable></argument>'
+        '</argumentList></action>'
+        '</actionList>'
         '<serviceStateTable>'
         '<stateVariable sendEvents="no"><name>A_ARG_TYPE_ObjectID</name>'
         '<dataType>string</dataType></stateVariable>'
@@ -122,6 +139,10 @@ def _gw_cd_desc_xml() -> str:
         '<dataType>string</dataType></stateVariable>'
         '<stateVariable sendEvents="yes"><name>SystemUpdateID</name>'
         '<dataType>ui4</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>SearchCapabilities</name>'
+        '<dataType>string</dataType></stateVariable>'
+        '<stateVariable sendEvents="no"><name>SortCapabilities</name>'
+        '<dataType>string</dataType></stateVariable>'
         '</serviceStateTable></scpd>'
     )
 
@@ -519,34 +540,86 @@ def cd_events(h, params):
 
 # ── POST handler ──────────────────────────────────────────────────
 
+_SOAP_CTYPE = 'text/xml; charset="utf-8"'
+_CD_NS = "urn:schemas-upnp-org:service:ContentDirectory:1"
+_EMPTY_DIDL = ('&lt;DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+               'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+               'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"&gt;'
+               '&lt;/DIDL-Lite&gt;')
+
+
+def _cd_action_name(root) -> str:
+    """The ContentDirectory action element name under <s:Body> (e.g. 'Browse')."""
+    body = root.find("{http://schemas.xmlsoap.org/soap/envelope/}Body")
+    if body is None or len(body) == 0:
+        return ""
+    return body[0].tag.split("}")[-1]
+
+
+def _soap_cd_response(action: str, inner: str) -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+        's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+        f'<u:{action}Response xmlns:u="{_CD_NS}">{inner}'
+        f'</u:{action}Response></s:Body></s:Envelope>'
+    ).encode("utf-8")
+
+
 def cd_control_soap(body: bytes):
-    """Pure ContentDirectory#Browse SOAP handler: parse the request body, run
-    the Browse, and return (status, content_type, body_bytes). Shared by the
-    native ASGI /gw/cd/control route (dlna_asgi) and the legacy stdlib handler
-    below, so the Naim sees byte-identical UPnP either way."""
+    """Pure ContentDirectory SOAP handler → (status, content_type, body_bytes).
+    Shared by the native ASGI /gw/cd/control route and the legacy stdlib handler.
+
+    Implements the DLNA handshake a control point (the Naim) runs BEFORE it will
+    browse — GetSearchCapabilities / GetSortCapabilities / GetSystemUpdateID
+    (+ the optional GetSortExtensionCapabilities / GetFeatureList / Search) —
+    returning empty-but-valid responses, plus Browse. Without the handshake
+    actions NaimUPnP got HTTP 400 and dropped the server (2026-06-12)."""
     try:
         root   = ET.fromstring(body.decode("utf-8"))
-        ns     = {"s": "http://schemas.xmlsoap.org/soap/envelope/",
-                  "u": "urn:schemas-upnp-org:service:ContentDirectory:1"}
-        browse = root.find(".//u:Browse", ns)
-        if browse is None:
-            browse = root.find(".//Browse")
-        if browse is None:
-            log.debug("GW Browse: no Browse element in SOAP body (ignored)")
-            return 400, "text/html", b"<h1>Missing Browse element</h1>"
-        obj_id = browse.findtext("ObjectID") or "0"
-        flag   = browse.findtext("BrowseFlag") or "BrowseDirectChildren"
-        start  = int(browse.findtext("StartingIndex") or 0)
-        count  = int(browse.findtext("RequestedCount") or 0)
-        if count == 0:
-            count = 9999
-        result_xml, n_ret, total = _gw_browse(obj_id, flag, start, count)
-        resp = _gw_browse_response(result_xml, n_ret, total)
-        log.debug(f"GW SOAP Browse {obj_id!r} → {n_ret}/{total}")
-        return 200, 'text/xml; charset="utf-8"', resp
+        action = _cd_action_name(root)
+
+        if action == "Browse":
+            ns = {"s": "http://schemas.xmlsoap.org/soap/envelope/", "u": _CD_NS}
+            browse = root.find(".//u:Browse", ns) or root.find(".//Browse")
+            if browse is None:
+                return 400, "text/html", b"<h1>Missing Browse element</h1>"
+            obj_id = browse.findtext("ObjectID") or "0"
+            flag   = browse.findtext("BrowseFlag") or "BrowseDirectChildren"
+            start  = int(browse.findtext("StartingIndex") or 0)
+            count  = int(browse.findtext("RequestedCount") or 0) or 9999
+            result_xml, n_ret, total = _gw_browse(obj_id, flag, start, count)
+            log.debug(f"GW SOAP Browse {obj_id!r} → {n_ret}/{total}")
+            return 200, _SOAP_CTYPE, _gw_browse_response(result_xml, n_ret, total)
+
+        if action == "GetSearchCapabilities":
+            return 200, _SOAP_CTYPE, _soap_cd_response(action, "<SearchCaps></SearchCaps>")
+        if action == "GetSortCapabilities":
+            return 200, _SOAP_CTYPE, _soap_cd_response(action, "<SortCaps></SortCaps>")
+        if action == "GetSortExtensionCapabilities":
+            return 200, _SOAP_CTYPE, _soap_cd_response(
+                action, "<SortExtensionCaps></SortExtensionCaps>")
+        if action == "GetSystemUpdateID":
+            return 200, _SOAP_CTYPE, _soap_cd_response(action, "<Id>1</Id>")
+        if action == "GetFeatureList":
+            return 200, _SOAP_CTYPE, _soap_cd_response(
+                action, "<FeatureList>&lt;Features "
+                'xmlns="urn:schemas-upnp-org:av:avs" '
+                'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+                'xsi:schemaLocation="urn:schemas-upnp-org:av:avs '
+                'http://www.upnp.org/schemas/av/avs.xsd"&gt;&lt;/Features&gt;'
+                "</FeatureList>")
+        if action == "Search":
+            inner = (f"<Result>{_EMPTY_DIDL}</Result>"
+                     "<NumberReturned>0</NumberReturned>"
+                     "<TotalMatches>0</TotalMatches><UpdateID>1</UpdateID>")
+            return 200, _SOAP_CTYPE, _soap_cd_response("Search", inner)
+
+        log.debug("GW CD: unhandled action %r", action)
+        return 400, "text/html", f"<h1>Unsupported action: {action}</h1>".encode()
     except Exception as e:
-        log.error(f"GW Browse error: {e}")
-        return 500, "text/html", f"<h1>Browse error: {e}</h1>".encode("utf-8")
+        log.error(f"GW CD control error: {e}")
+        return 500, "text/html", f"<h1>error: {e}</h1>".encode("utf-8")
 
 
 def cd_control(h, body):
