@@ -23,6 +23,10 @@ The Naim only ever requests `/gw/*` paths; they coexist with `/api`/PWA on
 `:8765` by path. The `device.xml` URLBase **MUST stay plain `http://…:8765`**
 (the Naim can't do HTTPS).
 
+
+
+
+
 ---
 
 ## Current state (facts, file:line — verified 2026-06-11)

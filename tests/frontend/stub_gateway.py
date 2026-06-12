@@ -229,7 +229,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_static(STATIC_DIR / "sw.js", "application/javascript")
             return
         if path == "/manifest.json":
-            # Mirror the real backend manifest (dlna_server.py:294–311) so the
+            # Mirror the real backend manifest (dlna_asgi._MANIFEST) so the
             # PWA test asserts the same install contract production serves.
             data = json.dumps({
                 "name": "DLNA Gateway",

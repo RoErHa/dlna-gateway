@@ -442,23 +442,6 @@ if os.path.isfile(upnp_path):
                "gw_ssdp_announcer", "gw_ssdp_byebye"]:
         check(f"  api_upnp.{fn}", f"def {fn}(" in uc)
 
-section("T2.7 — dlna_server.py is slim router")
-srv_path = os.path.join(PROJECT, "dlna_server.py")
-if os.path.isfile(srv_path):
-    srv = open(srv_path).read()
-    srv_lines = srv.count("\n")
-    # Budget bumped 400→410 (2026-06-02) for the HTTP/1.1 keep-alive
-    # transport config — legitimate server-module content, not routing
-    # bloat. Still guards against the module re-absorbing business logic.
-    check(f"dlna_server.py is slim ({srv_lines} lines)", srv_lines < 410,
-          f"got {srv_lines} lines")
-    check("imports api_browse",    "import api_browse"    in srv)
-    check("imports api_playback",  "import api_playback"  in srv)
-    check("imports api_playlists", "import api_playlists" in srv)
-    check("imports api_upnp",      "import api_upnp"      in srv)
-    check("re-exports GW_UDN",     "GW_UDN" in srv)
-    check("no domain logic in router", "_gw_browse" not in srv)
-
 section("T2.8 — dlna_routes.py endpoint routing")
 if os.path.isfile(routes_path):
     routes = open(routes_path).read()

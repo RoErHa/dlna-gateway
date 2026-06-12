@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-dlna_gateway.py — Entry point. Wires all modules together and starts the server.
+dlna_gateway.py — module wiring + background-service boot.
 
-Usage:
-    python dlna_gateway.py [--host 0.0.0.0] [--port 8765]
-                           [--probe http://<ip>:<port>/desc.xml]
-                           [--debug] [--no-browser]
+The HTTP edge is the ASGI app (`hypercorn dlna_asgi:app`); this module is no
+longer a server entrypoint (Cleanup C retired the stdlib server). It owns
+start_background_services() + get_lan_ip() (imported by the ASGI lifespan) and
+the device-DB CLIs:
+    ./setup.sh --run --list-devices    # show known devices, then exit
+    ./setup.sh --run --reset-devices   # clear the device DB, then exit
 
 Test individual modules:
     python dlna_config.py
@@ -13,12 +15,10 @@ Test individual modules:
     python dlna_content.py <control-url>
     python dlna_library.py
     python dlna_player.py [http://test-url]
-    python dlna_server.py
 """
 import argparse
 import logging
 import socket
-import subprocess
 import threading
 
 import dlna_discovery as _disc
@@ -27,17 +27,15 @@ from dlna_events import EVENTS
 from dlna_fdmon import start_fd_monitor
 from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER
 from api_upnp import GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye  # noqa: F401
-from dlna_server import ThreadedHTTPServer, GatewayHandler  # stdlib main(); retired in Cleanup C
 
 log = logging.getLogger("dlna.gateway")
 
 
-# ── Web UI ────────────────────────────────────────────────────────
-# Imported by dlna_server.GatewayHandler when serving GET /
-
-# ── Web UI is now served from static/ directory ──────────────────
-# See static/index.html, static/app.css, static/app.js
-# The server routes GET / to static/index.html
+# This module is no longer an HTTP entrypoint (Cleanup C retired the stdlib
+# server). It keeps start_background_services() + get_lan_ip() — the ASGI
+# lifespan (dlna_asgi._lifespan) imports both to boot the gateway — plus the
+# device-DB CLIs (main(): --list-devices / --reset-devices). The web edge is
+# `hypercorn dlna_asgi:app`; the PWA shell is served from static/ by that app.
 
 
 
@@ -53,17 +51,6 @@ def get_lan_ip() -> str:
         return ip
     except Exception:
         return "127.0.0.1"
-
-
-def open_browser(port: int):
-    url = f"http://localhost:{port}/"
-    for cmd in (["open", url], ["xdg-open", url]):
-        try:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-            return
-        except FileNotFoundError:
-            continue
 
 
 def _on_server_found(server):
@@ -185,14 +172,13 @@ Examples:
   ./setup.sh --run --reset-devices                  # Clear device DB and rediscover everything
   ./setup.sh --run --list-devices                   # Show known devices table then exit
         """)
-    parser.add_argument("--host",          default="0.0.0.0")
-    parser.add_argument("--port",          type=int, default=8765)
-    # The stdlib gateway no longer terminates TLS in 2.0 (no --tls-* args); it
-    # serves plain HTTP. TLS + HTTP/2 become app-owned via Hypercorn once the
-    # ASGI app (dlna_asgi.py) is the server. See dlna_server note + BUILDING_2.0.md.
-    parser.add_argument("--probe",         default="",
-                        help="Direct device URL — bypasses SSDP, adds permanently to DB")
-    parser.add_argument("--no-browser",    action="store_true")
+    # Legacy stdlib-server flags — accepted-but-ignored so forwarded args from
+    # `setup.sh --run …` don't crash argparse. The HTTP edge is Hypercorn now
+    # (dlna_asgi:app); only --list-devices/--reset-devices/--debug still act.
+    parser.add_argument("--host",          default="0.0.0.0", help=argparse.SUPPRESS)
+    parser.add_argument("--port",          type=int, default=8765, help=argparse.SUPPRESS)
+    parser.add_argument("--probe",         default="", help=argparse.SUPPRESS)
+    parser.add_argument("--no-browser",    action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--debug",         action="store_true")
     parser.add_argument("--reset-devices", action="store_true",
                         help="Clear the device_roles table and rediscover from scratch. "
@@ -238,48 +224,22 @@ Examples:
         print("   Add --probe <url> if a server doesn't respond to SSDP.\n")
         return
 
-    setup_logging(debug=args.debug)
-
-    lan_ip = get_lan_ip()
-    url    = f"http://localhost:{args.port}/ "
-
+    # ── No utility flag: the gateway runs via the ASGI stack now ──
+    # Cleanup C retired the stdlib HTTP server; this entrypoint no longer
+    # serves. start_background_services()/get_lan_ip() live on for the ASGI
+    # lifespan (dlna_asgi._lifespan) to import. Point the user at the real
+    # entrypoints and exit.
     print()
-    print("  ┌──────────────────────────────────────────────┐")
-    print("  │         DLNA / UPnP  Music  Gateway  v2      │")
-    print("  ├──────────────────────────────────────────────┤")
-    print(f" │  Web UI   :  {url:<33}                       │")
-    print(f" │  LAN IP   :  {lan_ip:<33}                    │")
-    print("  ├──────────────────────────────────────────────┤")
-    print("  │  TLS/h2   :  app-owned via Hypercorn (P2)    │")
-    print("  │  Module tests:  python dlna_config.py        │")
-    print("  │                 python dlna_discovery.py     │")
-    print("  │                 python dlna_library.py       │")
-    print("  └──────────────────────────────────────────────┘")
+    print("  The DLNA Gateway now runs as an ASGI app (Hypercorn + dlna_asgi:app).")
+    print("  Start it with one of:")
+    print("    • production (launchd):  launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway")
+    print("                             (or ./setup.sh --restart)")
+    print("    • foreground / dev:      ./run-2.0-asgi.sh")
     print()
-
-    # Start all background services (discovery, fetchers, LocalFs, probe).
-    # Shared verbatim with the 2.0 ASGI lifespan (dlna_asgi._lifespan).
-    start_background_services(lan_ip, args.port, probe=args.probe)
-
-    # HTTP server (stdlib). 2.0: TLS is NOT terminated here — it becomes
-    # app-owned via Hypercorn once the ASGI app (dlna_asgi.py) is the server;
-    # `hypercorn dlna_asgi:app` boots the same background services through the
-    # ASGI lifespan. This stdlib path serves plain HTTP on 0.0.0.0 so LAN
-    # devices (the Naim) reach the un-proxied device endpoints (/stream, /gw/,
-    # LocalFs :8201) directly. See docs/BUILDING_2.0.md.
-    server = ThreadedHTTPServer((args.host, args.port), GatewayHandler)
-
-    if not args.no_browser:
-        threading.Timer(1.0, open_browser, args=(args.port,)).start()
-
-    log.info(f"Gateway ready → {url}   (Ctrl-C to stop)")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print()
-        log.info("Shutting down…")
-        gw_ssdp_byebye(lan_ip, args.port)
-        server.shutdown()
+    print("  This entrypoint only keeps the device-DB utilities:")
+    print("    ./setup.sh --run --list-devices    # show known devices")
+    print("    ./setup.sh --run --reset-devices   # clear the device DB")
+    print()
 
 
 if __name__ == "__main__":

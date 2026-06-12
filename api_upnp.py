@@ -342,8 +342,9 @@ def cd_control_soap(body: bytes):
 
 
 def cd_control(h, body):
-    """Legacy stdlib wrapper around cd_control_soap (kept until dlna_server is
-    retired in Cleanup C phase C)."""
+    """Legacy (h, body) wrapper around cd_control_soap. Cleanup C made /gw/*
+    native in the ASGI app (which calls cd_control_soap directly), so this is
+    no longer on a live path — retained as the dlna_routes fallback shape."""
     status, _ctype, payload = cd_control_soap(body)
     if status == 200:
         h._xml_response(200, payload)

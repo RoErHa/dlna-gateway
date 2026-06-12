@@ -641,8 +641,7 @@ class TestEntrypointLifespan(unittest.TestCase):
 
     def setUp(self):
         self._env = {k: os.environ.get(k)
-                     for k in ("GATEWAY_NO_SERVICES", "GATEWAY_PORT",
-                               "GATEWAY_DEBUG")}
+                     for k in ("GATEWAY_NO_SERVICES", "GATEWAY_DEBUG")}
 
     def tearDown(self):
         for k, v in self._env.items():
@@ -666,12 +665,9 @@ class TestEntrypointLifespan(unittest.TestCase):
     def test_disabled_by_env(self):
         os.environ["GATEWAY_NO_SERVICES"] = "1"
         with mock.patch.object(dlna_gateway, "start_background_services") as sbs, \
-             mock.patch.object(dlna_asgi.dlna_server,
-                               "start_device_server") as dev, \
              mock.patch.object(dlna_gateway, "gw_ssdp_byebye") as bye:
             self._drive_lifespan()
         self.assertEqual(sbs.call_count, 0)
-        self.assertEqual(dev.call_count, 0)   # no device server either
         self.assertEqual(bye.call_count, 0)   # nothing started → no byebye
 
     def test_enabled_starts_services_no_device_server(self):
@@ -981,36 +977,6 @@ class TestFdLimit(unittest.TestCase):
             r.assert_called_once()
         finally:
             os.environ.pop("GATEWAY_NO_SERVICES", None)
-
-
-class TestDeviceServer(unittest.TestCase):
-    """The /gw/*-only device-tier server (dlna_server.DeviceHandler) that runs
-    alongside Hypercorn so the Naim reaches the UPnP surface over plain HTTP."""
-
-    def test_devicehandler_subclasses_gateway(self):
-        import dlna_server
-        self.assertTrue(issubclass(dlna_server.DeviceHandler,
-                                   dlna_server.GatewayHandler))
-
-    def test_serves_gw_404s_everything_else(self):
-        import dlna_server
-        import urllib.request
-        import urllib.error
-        srv = dlna_server.start_device_server("127.0.0.1", 0)
-        try:
-            port = srv.server_address[1]
-            base = f"http://127.0.0.1:{port}"
-            # /gw/device.xml → 200 XML
-            with urllib.request.urlopen(base + "/gw/device.xml", timeout=4) as r:
-                self.assertEqual(r.status, 200)
-                self.assertIn(b"<", r.read(32))
-            # non-/gw paths → 404 (API + PWA shell are NOT served here)
-            for p in ("/api/version", "/", "/static/app.js", "/rest/ping"):
-                with self.assertRaises(urllib.error.HTTPError) as cm:
-                    urllib.request.urlopen(base + p, timeout=4)
-                self.assertEqual(cm.exception.code, 404, p)
-        finally:
-            srv.shutdown()
 
 
 class TestStaticServing(unittest.TestCase):

@@ -4,13 +4,13 @@
 #
 # Usage:
 #   chmod +x setup.sh && ./setup.sh              # set up only
-#   ./setup.sh --run                             # set up + start
-#   ./setup.sh --run --no-browser                # don't auto-open browser
-#   ./setup.sh --run --debug                     # verbose logging
-#   ./setup.sh --run --probe http://<ip>/desc.xml  # add server manually
+#   ./setup.sh --run                             # set up + start (Hypercorn ASGI)
 #   ./setup.sh --run --list-devices              # show known devices, exit
 #   ./setup.sh --run --reset-devices             # wipe device DB, exit
 #   ./setup.sh --restart                         # refresh deps + restart launchd gateway
+#
+# --run launches the ASGI gateway via run-2.0-asgi.sh (Hypercorn + dlna_asgi:app);
+# it refuses to clash with the launchd copy — use --restart for production.
 #
 # ── Mac Mini (always-on server) ───────────────────────────────────────────────
 # First-time setup on Mac Mini:
@@ -168,10 +168,20 @@ if $RESTART; then
     echo
     info "Tail the log with: tail -f $SCRIPT_DIR/gateway.log"
 elif $RUN; then
+    # Device-DB utilities run the Python CLI directly (no server start).
+    for a in ${FWD[@]+"${FWD[@]}"}; do
+        case "$a" in
+            --list-devices|--reset-devices)
+                exec "$VENV_PY" "$GATEWAY" ${FWD[@]+"${FWD[@]}"} ;;
+        esac
+    done
+    # Otherwise the gateway IS the ASGI app (Hypercorn + dlna_asgi:app).
+    # run-2.0-asgi.sh owns ports/TLS/identity and refuses to clash with the
+    # launchd copy (use ./setup.sh --restart for the production restart).
     echo
-    echo -e "${B}Starting gateway…${N}"
+    echo -e "${B}Starting gateway (Hypercorn + dlna_asgi:app)…${N}"
     echo
-    exec "$VENV_PY" "$GATEWAY" ${FWD[@]+"${FWD[@]}"}
+    exec "$SCRIPT_DIR/run-2.0-asgi.sh"
 else
     print_done
 fi

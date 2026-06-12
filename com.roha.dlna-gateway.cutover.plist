@@ -16,9 +16,9 @@
     <string>/Users/ronhamersma/dlna-gateway-2.0</string>
 
     <!-- Hypercorn owns TLS. --bind = TLS (8443, HTTP/2 via ALPN);
-         --insecure-bind = plain HTTP (8765). The device /gw/* server (:8770)
-         and the LocalFs file server (:8200) are started IN-PROCESS by the app
-         (GATEWAY_PORT / LOCALFS_PORT below) and ALWAYS stay plain HTTP. -->
+         --insecure-bind = plain HTTP (8765). /gw/* (UPnP for the Naim) is
+         served by the app on the :8765 plain bind; the LocalFs file server
+         (:8200, LOCALFS_PORT below) is started IN-PROCESS — both plain HTTP. -->
     <key>ProgramArguments</key>
     <array>
         <string>/Users/ronhamersma/dlna-gateway-2.0/.venv/bin/hypercorn</string>
@@ -78,9 +78,9 @@
         <key>LOCALFS_PORT</key>
         <string>8200</string>
 
-        <!-- Device tier: plain-HTTP /gw/* for the Naim + the SSDP advert port -->
-        <key>GATEWAY_PORT</key>
-        <string>8770</string>
+        <!-- /gw/* (UPnP for the Naim) + the SSDP advert are served by the app
+             on the plain :8765 bind (GATEWAY_PLAIN_PORT defaults to 8765) — no
+             separate device port. GATEWAY_PORT was retired in Cleanup C. -->
 
         <!-- Subsonic (CarPlay/Amperfy): SUBSONIC_USER / SUBSONIC_PASSWORD come
              from .env (gitignored), NOT from this plist. The gateway loads

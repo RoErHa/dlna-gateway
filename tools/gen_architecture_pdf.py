@@ -364,12 +364,6 @@ def list_pages():
          "gateway announcer). Called from the dlna_asgi lifespan so "
          "`hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib "
          "HTTP edge + TLS were removed in 2.0 (Hypercorn owns the edge)."),
-        ("P/g2", "dlna_server.py",
-         "2.0: reduced to the DEVICE-TIER server — plain-HTTP /gw/* for the "
-         "Naim (DeviceHandler/start_device_server) on :8770 (GATEWAY_PORT), "
-         "started by the ASGI lifespan alongside Hypercorn. The old main HTTP "
-         "edge role moved to P/g27. (Cleanup C will fold /gw into the ASGI app "
-         "and retire this.)"),
         ("P/g3", "dlna_routes.py", "GET_ROUTES / POST_ROUTES path→handler maps; "
          "the ASGI bridge (P/g28) mounts the not-yet-native ones."),
         ("P/g4", "dlna_discovery.py",
@@ -440,12 +434,14 @@ def list_pages():
          "Constants (DB_FILE/CFG_FILE/LOG_FILE), logging setup, config "
          "load/save, .env load (if dotenv present), raise_fd_limit(8192)."),
         ("P/g27", "dlna_asgi.py",
-         "2.0 MAIN EDGE. FastAPI app served by Hypercorn (TLS+HTTP/2 on :8443 "
-         "via ALPN, plain :8765); owns the tailscale cert. Native routes for "
-         "the read API, /art, /stream + /radio_stream relays, static/PWA, and "
-         "the Subsonic byte methods; legacy handlers run via the bridge. "
-         "Lifespan boots P/g1 services + the P/g2 device server. docs_url off "
-         "(no CDN call)."),
+         "2.0 — THE server (Hypercorn owns the whole edge). FastAPI app: "
+         "TLS+HTTP/2 on :8443 via ALPN, plain :8765; owns the tailscale cert. "
+         "Native routes for the read API, /art, /stream + /radio_stream relays, "
+         "static/PWA, the Subsonic byte methods, and the Naim-facing /gw/* UPnP "
+         "surface (device.xml/desc.xml/events/control on the plain :8765 bind — "
+         "Cleanup C folded it in here, retiring the separate device server). "
+         "Remaining legacy handlers run via the bridge. Lifespan boots P/g1 "
+         "services. docs_url off (no CDN call)."),
         ("P/g28", "dlna_asgi_bridge.py",
          "Shim that runs the legacy (h, params) handlers unchanged inside the "
          "ASGI app (a fake `h` captures _json/_html/_xml/send_error; runs in a "
@@ -595,8 +591,7 @@ def list_pages():
          "[--seed S] [--quiet] [--base https://host:8443]"),
         ("Schema gate (T/a1)", "python3 tools/regen_schema.py [--check]"),
         ("Module self-tests", "python dlna_discovery.py | dlna_content.py "
-         "<url> | dlna_library.py | db_pool.py | dlna_player.py | "
-         "dlna_server.py"),
+         "<url> | dlna_library.py | db_pool.py | dlna_player.py"),
         ("Range / 206 check", "curl -r 0-1023 -D - "
          "http://&lt;host&gt;:8200/localfs/stream/&lt;id&gt; -o /dev/null"),
         ("Tools (T/a2–a12)", "python3 tools/&lt;tool&gt;.py [--dry-run|--apply|"

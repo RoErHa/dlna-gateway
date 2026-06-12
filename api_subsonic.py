@@ -1007,9 +1007,9 @@ def _parse_params(query, body: bytes = b"") -> dict:
 
 
 def handle(h, http_method: str, path: str, query, body: bytes = b""):
-    """Single entry point — called from dlna_server when path starts
-    with /rest/. Parses params, authenticates, dispatches to the
-    per-method handler. `query` is the raw query string in production;
+    """Single entry point — called from the ASGI app (via the bridge) when
+    the path starts with /rest/. Parses params, authenticates, dispatches to
+    the per-method handler. `query` is the raw query string in production;
     tests may pass a pre-built param dict."""
     query_params = _parse_params(query, body)
     method = _method_from_path(path)
