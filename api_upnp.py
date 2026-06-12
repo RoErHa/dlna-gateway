@@ -560,20 +560,25 @@ def cd_control(h, body):
         h._html(status, payload.decode("utf-8"))
 
 
-# ── SSDP announcer ────────────────────────────────────────────────
+# ── SSDP announcer + M-SEARCH responder ───────────────────────────
 
-def _gw_ssdp_notify(lan_ip: str, port: int, alive: bool = True):
-    location = f"http://{lan_ip}:{port}/gw/device.xml"
-    entries = [
-        ("upnp:rootdevice",
-         f"{GW_UDN}::upnp:rootdevice"),
-        (GW_UDN,
-         GW_UDN),
+def _gw_ssdp_entries() -> list:
+    """(NT/ST, USN) pairs the gateway-as-MediaServer advertises in NOTIFY and
+    answers M-SEARCH for: the root device, its UDN, the MediaServer device
+    type, and the ContentDirectory service."""
+    return [
+        ("upnp:rootdevice", f"{GW_UDN}::upnp:rootdevice"),
+        (GW_UDN, GW_UDN),
         ("urn:schemas-upnp-org:device:MediaServer:1",
          f"{GW_UDN}::urn:schemas-upnp-org:device:MediaServer:1"),
         ("urn:schemas-upnp-org:service:ContentDirectory:1",
          f"{GW_UDN}::urn:schemas-upnp-org:service:ContentDirectory:1"),
     ]
+
+
+def _gw_ssdp_notify(lan_ip: str, port: int, alive: bool = True):
+    location = f"http://{lan_ip}:{port}/gw/device.xml"
+    entries = _gw_ssdp_entries()
     msgs = []
     for nt, usn in entries:
         if alive:
@@ -616,3 +621,80 @@ def gw_ssdp_announcer(lan_ip: str, port: int):
 
 def gw_ssdp_byebye(lan_ip: str, port: int):
     _gw_ssdp_notify(lan_ip, port, alive=False)
+
+
+def _gw_msearch_response(st: str, usn: str, location: str) -> bytes:
+    return (
+        "HTTP/1.1 200 OK\r\n"
+        "CACHE-CONTROL: max-age=1800\r\n"
+        f"LOCATION: {location}\r\n"
+        "SERVER: Python/3 UPnP/1.0 dlna-gateway/1.0\r\n"
+        "EXT:\r\n"
+        f"ST: {st}\r\n"
+        f"USN: {usn}\r\n\r\n"
+    ).encode("utf-8")
+
+
+def _gw_msearch_replies(data: bytes, location: str) -> list:
+    """If `data` is an SSDP M-SEARCH this MediaServer should answer, return the
+    [(ST, USN, response_bytes), …] to unicast back; else []. Answers ssdp:all,
+    upnp:rootdevice, our UDN, the MediaServer device type and the
+    ContentDirectory service. Pure → unit-testable without sockets."""
+    try:
+        msg = data.decode("utf-8", "replace")
+    except Exception:
+        return []
+    if not msg.split("\n", 1)[0].strip().upper().startswith("M-SEARCH"):
+        return []
+    if "ssdp:discover" not in msg.lower():
+        return []
+    st = ""
+    for line in msg.splitlines():
+        if line.lower().startswith("st:"):
+            st = line.split(":", 1)[1].strip()
+            break
+    entries = _gw_ssdp_entries()
+    chosen = entries if st in ("", "ssdp:all") else [
+        (s, u) for s, u in entries if s == st]
+    return [(s, u, _gw_msearch_response(s, u, location)) for s, u in chosen]
+
+
+def gw_ssdp_responder(lan_ip: str, port: int):
+    """Answer SSDP M-SEARCH so ACTIVE control points (the Naim app/device, which
+    search on demand) discover the gateway-as-MediaServer immediately — the 60s
+    NOTIFY alive only reaches passive listeners, so without this the gateway is
+    invisible to a Naim that searches after the last NOTIFY's cache expired.
+    Binds :1900 alongside the discovery listener (SO_REUSEPORT); degrades to
+    passive-NOTIFY-only if the bind fails."""
+    location = f"http://{lan_ip}:{port}/gw/device.xml"
+    time.sleep(2)
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (AttributeError, OSError):
+            pass
+        sock.bind(("0.0.0.0", 1900))
+        mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton(lan_ip)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                        socket.inet_aton(lan_ip))
+    except OSError as e:
+        log.warning(f"GW SSDP M-SEARCH responder: cannot bind :1900 ({e}) "
+                    f"— passive NOTIFY only")
+        return
+    log.info(f"GW SSDP M-SEARCH responder active ({lan_ip}:1900 → {location})")
+    while True:
+        try:
+            data, addr = sock.recvfrom(2048)
+        except Exception as e:
+            log.debug(f"GW SSDP responder recv: {e}")
+            time.sleep(0.2)
+            continue
+        try:
+            for _st, _usn, resp in _gw_msearch_replies(data, location):
+                sock.sendto(resp, addr)
+                time.sleep(0.02)
+        except Exception as e:
+            log.debug(f"GW SSDP responder reply: {e}")

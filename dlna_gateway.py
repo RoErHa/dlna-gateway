@@ -26,7 +26,8 @@ from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
 from dlna_fdmon import start_fd_monitor
 from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER
-from api_upnp import GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye  # noqa: F401
+from api_upnp import (GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye,  # noqa: F401
+                      gw_ssdp_responder)
 
 log = logging.getLogger("dlna.gateway")
 
@@ -116,6 +117,14 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
         target=gw_ssdp_announcer,
         args=(lan_ip, port),
         daemon=True, name="gw-ssdp").start()
+
+    # Gateway SSDP M-SEARCH responder — answers active discovery so control
+    # points that SEARCH (the Naim app/device) find us immediately, not only
+    # if they happen to catch a periodic NOTIFY alive.
+    threading.Thread(
+        target=gw_ssdp_responder,
+        args=(lan_ip, port),
+        daemon=True, name="gw-ssdp-respond").start()
 
     # Subnet scanner fallback — only fires if nothing was found via pre-probe
     # or SSDP (a genuinely fresh install with no DB cache).
