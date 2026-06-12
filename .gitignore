@@ -18,6 +18,7 @@ PREPARE_PUBLIC_RELEASE.md
 __pycache__/
 *.pyc
 .venv/
+.venv
 venv/
 
 # Node / JS
