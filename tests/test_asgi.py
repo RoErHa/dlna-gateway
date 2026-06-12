@@ -1060,6 +1060,16 @@ class TestGwDeviceAsgi(unittest.TestCase):
         r = asyncio.run(dlna_asgi.gw_cd_events(_FakeReq(method="GET")))
         self.assertEqual(r.status_code, 200)
 
+    def test_cd_events_subscribe_returns_sid(self):
+        # No CALLBACK → no initial-NOTIFY task; just assert a valid SID/TIMEOUT.
+        req = _FakeReq(method="SUBSCRIBE", headers={"nt": "upnp:event",
+                                                    "timeout": "Second-1800"})
+        r = asyncio.run(dlna_asgi.gw_cd_events(req))
+        self.assertEqual(r.status_code, 200)
+        hdrs = {k.lower(): v for k, v in r.headers.items()}
+        self.assertTrue(hdrs.get("sid", "").startswith("uuid:"))
+        self.assertEqual(hdrs.get("timeout"), "Second-1800")
+
     def test_cd_control_browse_wraps_result(self):
         soap = (b'<?xml version="1.0"?><s:Envelope '
                 b'xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'

@@ -423,11 +423,20 @@ async def gw_cd_desc(request: Request):
     return Response(api_upnp._gw_cd_desc_xml().encode(), media_type=_GW_XML)
 
 
-@app.api_route("/gw/cd/events", methods=["GET", "SUBSCRIBE"],
+@app.api_route("/gw/cd/events", methods=["GET", "SUBSCRIBE", "UNSUBSCRIBE"],
                include_in_schema=False)
 async def gw_cd_events(request: Request):
     log.info("GW /gw/cd/events %s by %s", request.method, _peer(request))
-    return Response(status_code=200)            # stub — no GENA eventing
+    if request.method == "SUBSCRIBE":
+        # Valid GENA SUBSCRIBE: return SID + TIMEOUT, then push the initial
+        # NOTIFY — strict GUPnP/dLeyna (the Naim) needs both to finish setup.
+        hdrs, callback, sid = await run_in_threadpool(
+            api_upnp.gw_event_subscribe, dict(request.headers))
+        if callback:
+            asyncio.create_task(run_in_threadpool(
+                api_upnp.gw_event_initial_notify, callback, sid))
+        return Response(status_code=200, headers=hdrs)
+    return Response(status_code=200)            # GET / UNSUBSCRIBE
 
 
 @app.post("/gw/cd/control", include_in_schema=False)

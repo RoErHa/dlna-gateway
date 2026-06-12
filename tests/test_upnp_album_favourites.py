@@ -443,6 +443,33 @@ class TestContentDirectoryActions(unittest.TestCase):
         self.assertIn("DMS-1.50", dx)
 
 
+class TestGenaEvents(unittest.TestCase):
+    """A GENA SUBSCRIBE must get a valid SID + TIMEOUT (the old stub returned a
+    bare 200, so dLeyna/GUPnP on the Naim aborted device setup and never
+    browsed)."""
+
+    def test_new_subscription_gets_sid_timeout_callback(self):
+        hdrs, cb, sid = api_upnp.gw_event_subscribe(
+            {"CALLBACK": "<http://10.0.0.9:49152/evt>", "NT": "upnp:event",
+             "TIMEOUT": "Second-1800"})
+        self.assertTrue(sid.startswith("uuid:"))
+        self.assertEqual(hdrs["SID"], sid)
+        self.assertEqual(hdrs["TIMEOUT"], "Second-1800")
+        self.assertEqual(cb, "http://10.0.0.9:49152/evt")
+
+    def test_renewal_echoes_sid_no_callback(self):
+        hdrs, cb, sid = api_upnp.gw_event_subscribe({"SID": "uuid:abc-123"})
+        self.assertEqual(hdrs["SID"], "uuid:abc-123")
+        self.assertEqual(sid, "uuid:abc-123")
+        self.assertEqual(cb, "")
+
+    def test_parse_callback(self):
+        self.assertEqual(api_upnp._parse_callback("<http://a/1><http://b/2>"),
+                         "http://a/1")
+        self.assertEqual(api_upnp._parse_callback(""), "")
+        self.assertEqual(api_upnp._parse_callback("garbage"), "")
+
+
 class TestMSearchResponder(unittest.TestCase):
     """The gateway answers SSDP M-SEARCH so the Naim's ACTIVE discovery finds
     'DLNA Gateway (IINA)' (not only via the passive 60s NOTIFY)."""
