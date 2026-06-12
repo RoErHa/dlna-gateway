@@ -975,18 +975,24 @@ then `⭐ Favourite Albums` and `Playlists`.
 **Full-library tree** — backed by `LibraryDB` on `DB.primary_udn()` (the udn
 owning the most tracks = the LocalFs backend):
 - `artists` → `gartist:<b64(artist)>` → that artist's albums.
-- `albums` → all albums A–Z.
+- `albums` → a **#-0-A..Z letter index** (`albumltr:<L>`, only non-empty buckets,
+  matching `LibraryDB.browse_letter` / the PWA letter bar) → that letter's albums
+  → tracks. (Not one flat ~2,000-entry list — unbrowsable on a Naim remote.)
 - `galbum:<b64(artist\x00album\x00album_key)>` → the album's tracks as
   `musicTrack` items whose `<res>` is the `/localfs/stream` URL the Naim plays.
 - `genres` → `ggenre:<b64(genre)>` → that genre's albums.
+- **Untagged junk is hidden** (`_is_junk_name`, DISPLAY-only): blank names, a
+  `NN.`/`NN)`/`NN -` track-number prefix, or a bare 1–2-digit number ("07") are
+  dropped from Artists/Albums/Genres + the album sub-lists, and a junk artist is
+  suppressed from the `album — artist` title. The raw DB is untouched (the PWA
+  still shows it; beets enrichment fixes tags over time).
 - Every list **paginates** via `StartingIndex`/`RequestedCount` (the slice is
-  applied to the full `LibraryDB` result — fine at this library size; a future
-  optimisation would push `LIMIT/OFFSET` into the queries). Album ids carry the
-  LocalFs `album_key` so folder-albums (incl. Various-Artists comps) resolve.
-  Codecs: `_b64e`/`_b64d` (single value) + `_encode/_decode_lib_album_id`
+  applied to the junk-filtered `LibraryDB` result — fine at this library size; a
+  future optimisation would push `LIMIT/OFFSET` into the queries). Album ids
+  carry the LocalFs `album_key` so folder-albums (incl. Various-Artists comps)
+  resolve. Codecs: `_b64e`/`_b64d` (single value) + `_encode/_decode_lib_album_id`
   (`galbum:*`, distinct from the favourites `favalbum:*` codec); garbled ids →
-  empty container, never 500. Album-container titles: `"album — artist"`, else
-  whichever side is non-blank, else `"(album)"` (no dangling dash).
+  empty container, never 500.
 
 **Favourites tree** — `⭐ Favourite Albums`: one container per favourited album
 titled `"<album> — <artist>"`. One level deeper: the album's tracks, resolved
