@@ -376,5 +376,59 @@ class TestFullLibraryBrowse(unittest.TestCase):
             self.assertEqual((n_ret, total), (0, 0), oid)
 
 
+class TestMSearchResponder(unittest.TestCase):
+    """The gateway answers SSDP M-SEARCH so the Naim's ACTIVE discovery finds
+    'DLNA Gateway (IINA)' (not only via the passive 60s NOTIFY)."""
+
+    LOC = "http://10.0.0.5:8765/gw/device.xml"
+
+    def _msearch(self, st):
+        return ("\r\n".join([
+            "M-SEARCH * HTTP/1.1", "HOST: 239.255.255.250:1900",
+            'MAN: "ssdp:discover"', "MX: 2", f"ST: {st}", "", ""]).encode())
+
+    def test_mediaserver_search_answered(self):
+        rs = api_upnp._gw_msearch_replies(
+            self._msearch("urn:schemas-upnp-org:device:MediaServer:1"), self.LOC)
+        self.assertEqual(len(rs), 1)
+        st, usn, raw = rs[0]
+        self.assertEqual(st, "urn:schemas-upnp-org:device:MediaServer:1")
+        self.assertIn(api_upnp.GW_UDN, usn)
+        self.assertIn(b"HTTP/1.1 200 OK", raw)
+        self.assertIn(self.LOC.encode(), raw)
+        self.assertIn(b"ST: urn:schemas-upnp-org:device:MediaServer:1", raw)
+
+    def test_ssdp_all_answers_every_entry(self):
+        rs = api_upnp._gw_msearch_replies(self._msearch("ssdp:all"), self.LOC)
+        self.assertEqual(len(rs), 4)
+        sts = {st for st, _, _ in rs}
+        self.assertIn("upnp:rootdevice", sts)
+        self.assertIn("urn:schemas-upnp-org:service:ContentDirectory:1", sts)
+        self.assertIn(api_upnp.GW_UDN, sts)
+
+    def test_rootdevice_search_answered(self):
+        rs = api_upnp._gw_msearch_replies(self._msearch("upnp:rootdevice"), self.LOC)
+        self.assertEqual(len(rs), 1)
+        self.assertEqual(rs[0][0], "upnp:rootdevice")
+
+    def test_unrelated_search_ignored(self):
+        rs = api_upnp._gw_msearch_replies(
+            self._msearch("urn:schemas-upnp-org:device:MediaRenderer:1"), self.LOC)
+        self.assertEqual(rs, [])
+
+    def test_notify_is_not_answered(self):
+        notify = (b"NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+                  b"NT: upnp:rootdevice\r\nNTS: ssdp:alive\r\n\r\n")
+        self.assertEqual(api_upnp._gw_msearch_replies(notify, self.LOC), [])
+
+    def test_msearch_without_discover_ignored(self):
+        bad = (b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+               b"ST: ssdp:all\r\n\r\n")   # no MAN: "ssdp:discover"
+        self.assertEqual(api_upnp._gw_msearch_replies(bad, self.LOC), [])
+
+    def test_garbage_datagram_ignored(self):
+        self.assertEqual(api_upnp._gw_msearch_replies(b"\x00\x01\x02", self.LOC), [])
+
+
 if __name__ == "__main__":
     unittest.main()
