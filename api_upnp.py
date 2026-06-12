@@ -74,6 +74,14 @@ def _gw_device_xml(lan_ip: str, port: int) -> str:
         # recognise us as a Digital Media Server, not just a bare UPnP device.
         '<dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">'
         'DMS-1.50</dlna:X_DLNADOC>'
+        # Icons — some control points (TVs especially) won't list a server
+        # without one. Served by the ASGI app (/icon-192.png, /icon-512.png).
+        '<iconList>'
+        '<icon><mimetype>image/png</mimetype><width>192</width>'
+        '<height>192</height><depth>24</depth><url>/icon-192.png</url></icon>'
+        '<icon><mimetype>image/png</mimetype><width>512</width>'
+        '<height>512</height><depth>24</depth><url>/icon-512.png</url></icon>'
+        '</iconList>'
         '<serviceList>'
         '<service>'
         '<serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>'
@@ -870,10 +878,11 @@ def gw_event_initial_notify(callback: str, sid: str, props: dict):
             "CONTENT-TYPE": 'text/xml; charset="utf-8"',
             "NT": "upnp:event", "NTS": "upnp:propchange",
             "SID": sid, "SEQ": "0"})
-        conn.getresponse()
+        resp = conn.getresponse()
+        log.info("GW event initial NOTIFY → %s : HTTP %s", callback, resp.status)
         conn.close()
     except Exception as e:
-        log.debug("GW event initial NOTIFY to %s failed: %s", callback, e)
+        log.info("GW event initial NOTIFY to %s FAILED: %s", callback, e)
 
 
 def _gw_msearch_response(st: str, usn: str, location: str) -> bytes:
