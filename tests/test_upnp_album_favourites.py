@@ -443,6 +443,61 @@ class TestContentDirectoryActions(unittest.TestCase):
         self.assertIn("DMS-1.50", dx)
 
 
+class TestConnectionManager(unittest.TestCase):
+    """A DLNA Media Server MUST expose ConnectionManager alongside
+    ContentDirectory, or strict clients (LG TV, Naim) reject the device and
+    never browse (2026-06-13 incident — both clients fetched device.xml + the
+    CD SCPD then quit)."""
+
+    def _soap(self, action):
+        return (f'<?xml version="1.0"?><s:Envelope '
+                f'xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                f'<u:{action} xmlns:u="{api_upnp._CM_NS}"></u:{action}>'
+                f'</s:Body></s:Envelope>').encode()
+
+    def test_device_xml_lists_both_services(self):
+        import xml.etree.ElementTree as ET
+        dx = api_upnp._gw_device_xml("10.0.0.5", 8765)
+        root = ET.fromstring(dx)
+        svc = [e.text for e in
+               root.iter("{urn:schemas-upnp-org:device-1-0}serviceType")]
+        self.assertIn("urn:schemas-upnp-org:service:ContentDirectory:1", svc)
+        self.assertIn("urn:schemas-upnp-org:service:ConnectionManager:1", svc)
+
+    def test_cm_scpd_valid_with_actions(self):
+        import xml.etree.ElementTree as ET
+        scpd = api_upnp._gw_cm_desc_xml()
+        self.assertNotIn("<n>", scpd)
+        root = ET.fromstring(scpd)
+        names = [e.text for e in
+                 root.iter("{urn:schemas-upnp-org:service-1-0}name")]
+        for a in ("GetProtocolInfo", "GetCurrentConnectionIDs",
+                  "GetCurrentConnectionInfo", "SourceProtocolInfo"):
+            self.assertIn(a, names, a)
+
+    def test_get_protocol_info_advertises_audio(self):
+        import xml.etree.ElementTree as ET
+        st, ct, body = api_upnp.cm_control_soap(self._soap("GetProtocolInfo"))
+        self.assertEqual(st, 200)
+        ET.fromstring(body)
+        self.assertIn(b"GetProtocolInfoResponse", body)
+        self.assertIn(b"<Source>", body)
+        self.assertIn(b"audio/flac", body)
+        self.assertIn(b"<Sink></Sink>", body)
+
+    def test_connection_ids_and_info(self):
+        st, _, body = api_upnp.cm_control_soap(self._soap("GetCurrentConnectionIDs"))
+        self.assertEqual(st, 200)
+        self.assertIn(b"<ConnectionIDs>0</ConnectionIDs>", body)
+        st2, _, body2 = api_upnp.cm_control_soap(self._soap("GetCurrentConnectionInfo"))
+        self.assertEqual(st2, 200)
+        self.assertIn(b"<Status>OK</Status>", body2)
+
+    def test_unknown_cm_action_400(self):
+        st, _, _ = api_upnp.cm_control_soap(self._soap("Frobnicate"))
+        self.assertEqual(st, 400)
+
+
 class TestGenaEvents(unittest.TestCase):
     """A GENA SUBSCRIBE must get a valid SID + TIMEOUT (the old stub returned a
     bare 200, so dLeyna/GUPnP on the Naim aborted device setup and never
