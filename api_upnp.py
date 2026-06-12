@@ -163,7 +163,10 @@ def _gw_browse(obj_id: str, browse_flag: str,
         artist = r.get("artist", "")
         album  = r.get("album", "")
         cid    = _encode_lib_album_id(artist, album, r.get("album_key", ""))
-        title  = f"{album} — {artist}" if artist else (album or "(album)")
+        if artist and album:
+            title = f"{album} — {artist}"
+        else:                       # avoid a leading " — " when one side is blank
+            title = album or artist or "(album)"
         return container(cid, parent, title, r.get("track_count", 0))
 
     OPEN  = ('<?xml version="1.0" encoding="UTF-8"?>'

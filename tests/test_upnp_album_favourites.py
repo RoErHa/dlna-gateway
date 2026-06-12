@@ -316,6 +316,20 @@ class TestFullLibraryBrowse(unittest.TestCase):
         self.assertIn('id="artists"', xml)
         self.assertIn('parentID="0"', xml)
 
+    def test_album_title_no_leading_dash_when_blank_side(self):
+        # A folder-album whose album name is blank (artist-only) must render as
+        # the artist, never as " — Artist"; a fully-blank one is "(album)".
+        with self.db._pool.write() as c:
+            c.execute(
+                "INSERT INTO tracks(udn,obj_id,url,title,artist,album,"
+                "album_key,duration,art,mime,genre,file_path) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (self.udn, "k1", "http://h/k1", "T", "Solo Act", "", "k1",
+                 "0:01:00", "", "audio/flac", "", "/m/k1/1.flac"))
+        xml, _, _ = api_upnp._gw_browse("albums", "BrowseDirectChildren", 0, 0)
+        self.assertNotIn("<dc:title> — ", xml)        # no leading dash anywhere
+        self.assertIn("<dc:title>Solo Act</dc:title>", xml)
+
     def test_unknown_ids_return_empty(self):
         for oid in ("gartist:" + api_upnp._b64e("Nobody"),
                     api_upnp._encode_lib_album_id("X", "Y", "Z/none"),
