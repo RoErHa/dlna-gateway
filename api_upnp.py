@@ -2,8 +2,13 @@
 """
 api_upnp.py — UPnP ContentDirectory gateway + SSDP announcer.
 
-Exposes the gateway's playlists/favourites as a UPnP MediaServer so that
-the Naim Uniti (and other UPnP control points) can browse and play them.
+Exposes the library as a UPnP MediaServer so the Naim Uniti (and other UPnP
+control points) can browse and play it without the PWA. Root tree: Artists →
+Albums → Tracks, an Albums A–Z list, Genres → Albums → Tracks (all backed by
+LibraryDB on the primary library udn, DB.primary_udn()), plus the ⭐ Favourite
+Albums + Playlists convenience trees. Lists paginate via StartingIndex /
+RequestedCount; album ObjectIDs carry the LocalFs album_key so folder-albums
+(incl. Various-Artists comps) resolve correctly.
 
 Handles: GET /gw/device.xml, /gw/cd/desc.xml, /gw/cd/events
          POST /gw/cd/control  (SOAP ContentDirectory Browse)
@@ -152,6 +157,15 @@ def _gw_browse(obj_id: str, browse_flag: str,
             f'duration="{dur}">{url}</res>'
             f'</item>')
 
+    def album_container(r, parent):
+        """A galbum:* container from an album row (all_albums / artist_albums /
+        genre_albums shape: artist, album, album_key, track_count)."""
+        artist = r.get("artist", "")
+        album  = r.get("album", "")
+        cid    = _encode_lib_album_id(artist, album, r.get("album_key", ""))
+        title  = f"{album} — {artist}" if artist else (album or "(album)")
+        return container(cid, parent, title, r.get("track_count", 0))
+
     OPEN  = ('<?xml version="1.0" encoding="UTF-8"?>'
              '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
              'xmlns:dc="http://purl.org/dc/elements/1.1/" '
@@ -160,14 +174,96 @@ def _gw_browse(obj_id: str, browse_flag: str,
 
     if obj_id == "0":
         if browse_flag == "BrowseMetadata":
-            return OPEN + container("0", "-1", GW_NAME, 2) + CLOSE, 1, 1
-        n_pls  = len(DB.pl_list())
-        n_favs = len(DB.album_fav_list())
+            return OPEN + container("0", "-1", GW_NAME, 5) + CLOSE, 1, 1
+        udn       = DB.primary_udn()
+        n_artists = len(DB.all_artists(udn)) if udn else 0
+        n_albums  = len(DB.all_albums(udn))  if udn else 0
+        n_genres  = len(DB.all_genres(udn))  if udn else 0
+        n_favs    = len(DB.album_fav_list())
+        n_pls     = len(DB.pl_list())
         items  = [
+            container("artists",   "0", "Artists",            n_artists),
+            container("albums",    "0", "Albums",             n_albums),
+            container("genres",    "0", "Genres",             n_genres),
             container("favalbums", "0", "⭐ Favourite Albums", n_favs),
             container("playlists", "0", "Playlists",          n_pls),
         ]
-        return OPEN + "".join(items) + CLOSE, 2, 2
+        return OPEN + "".join(items) + CLOSE, 5, 5
+
+    # ── Full-library tree (Artists / Albums / Genres) ──────────────
+    # Backed by LibraryDB on the primary library udn (the LocalFs backend).
+    # Each list paginates via StartingIndex/RequestedCount; album rows carry
+    # album_key so a LocalFs folder-album (incl. Various-Artists comps)
+    # resolves correctly through album_tracks.
+    if obj_id == "artists":
+        udn   = DB.primary_udn()
+        rows  = DB.all_artists(udn) if udn else []
+        total = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("artists", "0", "Artists", total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = [container("gartist:" + _b64e(r["artist"]), "artists",
+                           r["artist"], r.get("album_count", 0))
+                 for r in page if r.get("artist")]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("gartist:"):
+        artist = _b64d(obj_id[len("gartist:"):])
+        udn    = DB.primary_udn()
+        rows   = DB.artist_albums(udn, artist) if udn else []
+        total  = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "artists",
+                                     artist or "(artist)", total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = [album_container(r, obj_id) for r in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id == "albums":
+        udn   = DB.primary_udn()
+        rows  = DB.all_albums(udn) if udn else []
+        total = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("albums", "0", "Albums", total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = [album_container(r, "albums") for r in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("galbum:"):
+        artist, album, album_key = _decode_lib_album_id(obj_id)
+        udn    = DB.primary_udn()
+        tracks = DB.album_tracks(udn, artist, album, album_key=album_key) if udn else []
+        total  = len(tracks)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "albums",
+                                     album or "(album)", total) + CLOSE, 1, 1)
+        page  = tracks[start:start + count] if count else tracks[start:]
+        items = [track_item(t, obj_id) for t in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id == "genres":
+        udn   = DB.primary_udn()
+        rows  = DB.all_genres(udn) if udn else []
+        total = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("genres", "0", "Genres", total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = [container("ggenre:" + _b64e(r["genre"]), "genres",
+                           r["genre"], r.get("album_count", 0))
+                 for r in page if r.get("genre")]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("ggenre:"):
+        genre = _b64d(obj_id[len("ggenre:"):])
+        udn   = DB.primary_udn()
+        rows  = DB.genre_albums(udn, genre) if udn else []
+        total = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "genres",
+                                     genre or "(genre)", total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = [album_container(r, obj_id) for r in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
 
     if obj_id == "playlists":
         pls   = DB.pl_list()
@@ -244,6 +340,41 @@ def _gw_browse(obj_id: str, browse_flag: str,
 # can contain any unicode character (incl. quotes, ampersands, NULs).
 # Base64-urlsafe of "artist\x00album" is unambiguous and round-trips
 # cleanly through XML escaping.
+
+def _b64e(s: str) -> str:
+    """URL-safe base64 of a single string (artist / genre names) for use in a
+    UPnP ObjectID — round-trips arbitrary unicode through SOAP/XML."""
+    return base64.urlsafe_b64encode(s.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _b64d(s: str) -> str:
+    s += "=" * (-len(s) % 4)
+    try:
+        return base64.urlsafe_b64decode(s).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
+def _encode_lib_album_id(artist: str, album: str, album_key: str = "") -> str:
+    """galbum:* ObjectID for a full-library album (distinct from favalbum:* —
+    a galbum resolves via the primary library udn, not the favourites row)."""
+    raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
+    return "galbum:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_lib_album_id(obj_id: str) -> tuple:
+    """Return (artist, album, album_key) from a galbum:* id; ('', '', '') on junk."""
+    payload = obj_id[len("galbum:"):]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(payload).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ("", "", "")
+    parts = raw.split("\x00")
+    return (parts[0] if len(parts) > 0 else "",
+            parts[1] if len(parts) > 1 else "",
+            parts[2] if len(parts) > 2 else "")
+
 
 def _encode_album_id(artist: str, album: str, album_key: str = "") -> str:
     # NUL-delimited (artist, album, album_key). album_key (LocalFs folder

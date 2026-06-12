@@ -5,8 +5,11 @@ of the album-favourites feature.
 
 Naim Uniti (and any other UPnP control point) browses the gateway as
 a MediaServer. The contract:
-  * Root container "0" lists two children: "⭐ Favourite Albums" and
-    "Playlists" (in that order — fav albums first per user spec).
+  * Root container "0" lists five children: "Artists", "Albums", "Genres"
+    (the full library), then "⭐ Favourite Albums" and "Playlists".
+  * Browsing "artists"/"albums"/"genres" pages the library via LibraryDB on
+    DB.primary_udn(); album containers (galbum:*) resolve their tracks with
+    the LocalFs album_key so folder-albums work.
   * Browsing "favalbums" returns one container per favourited album.
   * Browsing a "favalbum:..." container returns the album's tracks
     (resolved against the udn stored on the favourite row).
@@ -96,17 +99,18 @@ class TestBrowse(unittest.TestCase):
         self.db._pool.close()
         os.unlink(self.tmp.name)
 
-    def test_root_lists_favalbums_first(self):
+    def test_root_lists_library_then_favalbums_then_playlists(self):
         xml, n_ret, total = api_upnp._gw_browse(
             "0", "BrowseDirectChildren", 0, 0)
-        self.assertEqual((n_ret, total), (2, 2))
-        # First container is favalbums; second is playlists.
-        first_idx  = xml.find('id="favalbums"')
-        second_idx = xml.find('id="playlists"')
-        self.assertGreater(first_idx, 0,
-                           f"favalbums container missing in: {xml!r}")
-        self.assertGreater(second_idx, first_idx,
-                           "Playlists must come AFTER Favourite Albums")
+        # Root now exposes the full library (Artists/Albums/Genres) plus the
+        # Favourite Albums + Playlists convenience trees — 5 containers.
+        self.assertEqual((n_ret, total), (5, 5))
+        for cid in ("artists", "albums", "genres", "favalbums", "playlists"):
+            self.assertIn(f'id="{cid}"', xml, f"missing root container {cid}")
+        # Library tree comes before the favourites/playlists trees; favalbums
+        # still precedes playlists (preserves the prior relative order).
+        self.assertLess(xml.find('id="artists"'), xml.find('id="favalbums"'))
+        self.assertLess(xml.find('id="favalbums"'), xml.find('id="playlists"'))
         self.assertIn("⭐ Favourite Albums", xml)
 
     def test_favalbums_lists_each_favourite(self):
@@ -190,6 +194,135 @@ class TestBrowseByAlbumKey(unittest.TestCase):
         self.assertEqual((n_ret, total), (2, 2))
         self.assertIn("Song A", xml)
         self.assertIn("Song B", xml)
+
+
+class TestLibAlbumIdCodec(unittest.TestCase):
+    """galbum:* / gartist / ggenre id round-trips (full-library tree)."""
+
+    def test_galbum_round_trip(self):
+        a, b, k = "Sigur Rós", "( ) & 'x' / y", "VA/Comp 2024/CD1"
+        oid = api_upnp._encode_lib_album_id(a, b, k)
+        self.assertTrue(oid.startswith("galbum:"))
+        self.assertEqual(api_upnp._decode_lib_album_id(oid), (a, b, k))
+
+    def test_galbum_garbled_returns_empty(self):
+        self.assertEqual(api_upnp._decode_lib_album_id("galbum:!!!"), ("", "", ""))
+
+    def test_b64_round_trip(self):
+        for s in ("Pink Floyd", "AC/DC & Co", "Sigur Rós", ""):
+            self.assertEqual(api_upnp._b64d(api_upnp._b64e(s)), s)
+
+    def test_b64_garbled_returns_empty(self):
+        self.assertEqual(api_upnp._b64d("!!!not-base64!!!"), "")
+
+
+class TestFullLibraryBrowse(unittest.TestCase):
+    """The gateway-as-MediaServer exposes the whole library (Artists / Albums /
+    Genres) to the Naim, backed by LibraryDB on the primary (LocalFs) udn."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+        self.udn = "uuid:localfs-lib"
+        self.db.upsert_tracks(self.udn, [
+            {"id": "a1", "url": "http://h/a1", "title": "Alpha One",
+             "artist": "Alice", "album": "Alpha", "album_key": "Alice/Alpha",
+             "genre": "Rock", "file_path": "/m/Alice/Alpha/01.flac",
+             "mime": "audio/flac", "duration": "0:03:00"},
+            {"id": "a2", "url": "http://h/a2", "title": "Alpha Two",
+             "artist": "Alice", "album": "Alpha", "album_key": "Alice/Alpha",
+             "genre": "Rock", "file_path": "/m/Alice/Alpha/02.flac",
+             "mime": "audio/flac", "duration": "0:03:30"},
+            {"id": "b1", "url": "http://h/b1", "title": "Beta One",
+             "artist": "Bob", "album": "Beta", "album_key": "Bob/Beta",
+             "genre": "Jazz", "file_path": "/m/Bob/Beta/01.flac",
+             "mime": "audio/flac", "duration": "0:04:00"},
+        ])
+        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self.db._pool.close()
+        os.unlink(self.tmp.name)
+
+    def test_primary_udn_picks_the_library(self):
+        self.assertEqual(self.db.primary_udn(), self.udn)
+
+    def test_artists_lists_all(self):
+        xml, n_ret, total = api_upnp._gw_browse(
+            "artists", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn("gartist:" + api_upnp._b64e("Alice"), xml)
+        self.assertIn("gartist:" + api_upnp._b64e("Bob"), xml)
+        self.assertIn("<dc:title>Alice</dc:title>", xml)
+
+    def test_artist_albums(self):
+        oid = "gartist:" + api_upnp._b64e("Alice")
+        xml, n_ret, total = api_upnp._gw_browse(
+            oid, "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (1, 1))
+        gid = api_upnp._encode_lib_album_id("Alice", "Alpha", "Alice/Alpha")
+        self.assertIn(f'id="{gid}"', xml)
+
+    def test_albums_lists_all(self):
+        xml, n_ret, total = api_upnp._gw_browse(
+            "albums", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn("Alpha — Alice", xml)
+        self.assertIn("Beta — Bob", xml)
+
+    def test_album_tracks_have_res_urls(self):
+        gid = api_upnp._encode_lib_album_id("Alice", "Alpha", "Alice/Alpha")
+        xml, n_ret, total = api_upnp._gw_browse(
+            gid, "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertEqual(xml.count("<item "), 2)
+        self.assertIn("object.item.audioItem.musicTrack", xml)
+        self.assertIn("http://h/a1", xml)
+        self.assertIn("http://h/a2", xml)
+        self.assertIn("<res ", xml)
+
+    def test_genres_lists_all(self):
+        xml, n_ret, total = api_upnp._gw_browse(
+            "genres", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn("ggenre:" + api_upnp._b64e("Rock"), xml)
+        self.assertIn("ggenre:" + api_upnp._b64e("Jazz"), xml)
+
+    def test_genre_albums(self):
+        oid = "ggenre:" + api_upnp._b64e("Rock")
+        xml, n_ret, total = api_upnp._gw_browse(
+            oid, "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n_ret, total), (1, 1))
+        self.assertIn("Alpha — Alice", xml)
+
+    def test_albums_pagination(self):
+        # Page 1: first album only.
+        xml1, n1, total1 = api_upnp._gw_browse(
+            "albums", "BrowseDirectChildren", 0, 1)
+        self.assertEqual((n1, total1), (1, 2))
+        # Page 2: the second.
+        xml2, n2, total2 = api_upnp._gw_browse(
+            "albums", "BrowseDirectChildren", 1, 1)
+        self.assertEqual((n2, total2), (1, 2))
+        self.assertNotEqual(xml1, xml2)
+
+    def test_browse_metadata_for_artists(self):
+        xml, n_ret, total = api_upnp._gw_browse(
+            "artists", "BrowseMetadata", 0, 0)
+        self.assertEqual((n_ret, total), (1, 1))
+        self.assertIn('id="artists"', xml)
+        self.assertIn('parentID="0"', xml)
+
+    def test_unknown_ids_return_empty(self):
+        for oid in ("gartist:" + api_upnp._b64e("Nobody"),
+                    api_upnp._encode_lib_album_id("X", "Y", "Z/none"),
+                    "ggenre:" + api_upnp._b64e("Polka")):
+            xml, n_ret, total = api_upnp._gw_browse(
+                oid, "BrowseDirectChildren", 0, 0)
+            self.assertEqual((n_ret, total), (0, 0), oid)
 
 
 if __name__ == "__main__":
