@@ -376,6 +376,24 @@ class TestFullLibraryBrowse(unittest.TestCase):
             self.assertEqual((n_ret, total), (0, 0), oid)
 
 
+class TestContentDirectorySCPD(unittest.TestCase):
+    """The ContentDirectory SCPD must be valid UPnP — action/argument/state
+    names in <name> tags (a stray <n> made NaimUPnP reject the service and
+    never browse). Regression guard for that 2026-06-12 incident."""
+
+    def test_scpd_uses_name_not_n_and_is_well_formed(self):
+        import xml.etree.ElementTree as ET
+        scpd = api_upnp._gw_cd_desc_xml()
+        self.assertNotIn("<n>", scpd, "SCPD must use <name>, not <n>")
+        self.assertIn("<name>Browse</name>", scpd)
+        root = ET.fromstring(scpd)              # must be well-formed XML
+        NS = "{urn:schemas-upnp-org:service-1-0}"
+        names = [e.text for e in root.iter(NS + "name")]
+        # The Browse action + its key arguments must be discoverable by name.
+        for n in ("Browse", "ObjectID", "BrowseFlag", "Result", "TotalMatches"):
+            self.assertIn(n, names, n)
+
+
 class TestMSearchResponder(unittest.TestCase):
     """The gateway answers SSDP M-SEARCH so the Naim's ACTIVE discovery finds
     'DLNA Gateway (IINA)' (not only via the passive 60s NOTIFY)."""
