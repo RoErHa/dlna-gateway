@@ -403,30 +403,52 @@ async def art(url: str = ""):
 _GW_XML = 'text/xml; charset="utf-8"'
 
 
+def _peer(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
 @app.get("/gw/device.xml", include_in_schema=False)
-async def gw_device_xml():
+async def gw_device_xml(request: Request):
     import dlna_gateway
+    log.info("GW /gw/device.xml fetched by %s (ua=%s)", _peer(request),
+             request.headers.get("user-agent", "")[:80])
     lan_ip = await run_in_threadpool(dlna_gateway.get_lan_ip)
     return Response(api_upnp._gw_device_xml(lan_ip, PLAIN_PORT).encode(),
                     media_type=_GW_XML)
 
 
 @app.get("/gw/cd/desc.xml", include_in_schema=False)
-async def gw_cd_desc():
+async def gw_cd_desc(request: Request):
+    log.info("GW /gw/cd/desc.xml fetched by %s", _peer(request))
     return Response(api_upnp._gw_cd_desc_xml().encode(), media_type=_GW_XML)
 
 
 @app.api_route("/gw/cd/events", methods=["GET", "SUBSCRIBE"],
                include_in_schema=False)
-async def gw_cd_events():
+async def gw_cd_events(request: Request):
+    log.info("GW /gw/cd/events %s by %s", request.method, _peer(request))
     return Response(status_code=200)            # stub — no GENA eventing
 
 
 @app.post("/gw/cd/control", include_in_schema=False)
 async def gw_cd_control(request: Request):
     body = await request.body()
+    # TEMP diagnostic: log exactly what a control point (the Naim) asks —
+    # SOAPACTION (Browse vs Search) + the ObjectID/ContainerID it targets.
+    import re as _re
+    txt = body.decode("utf-8", "replace")
+    action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1].strip('"')
+              or "?")
+    oid = _re.search(r"<(?:ObjectID|ContainerID)>([^<]*)</", txt)
+    flag = _re.search(r"<BrowseFlag>([^<]*)</", txt)
+    log.info("GW /gw/cd/control from %s: action=%s id=%r flag=%s",
+             _peer(request), action, oid.group(1) if oid else None,
+             flag.group(1) if flag else None)
     status, ctype, payload = await run_in_threadpool(
         api_upnp.cd_control_soap, body)
+    if status != 200:
+        log.warning("GW /gw/cd/control → %s for action=%s body=%s",
+                    status, action, txt[:300])
     return Response(payload, status_code=status, media_type=ctype)
 
 
