@@ -966,11 +966,31 @@ GET /api/album_favourites/remove?artist=X&album=Y
 
 ### UPnP exposure (Naim)
 
-`api_upnp._gw_browse` exposes "⭐ Favourite Albums" as the **first**
-top-level container under root (above the existing "Playlists"). One
-level deeper: a container per favourited album titled
-`"<album> — <artist>"`. One more level deeper: the album's tracks,
-resolved against `album_fav_list()[i]['udn']` via `DB.album_tracks`.
+`api_upnp._gw_browse` exposes the gateway as a MediaServer the Naim browses
+directly (no PWA). **Root container "0" lists five children:** `Artists`,
+`Albums`, `Genres` (the **full library** — added 2026-06-12, since AssetUPnP's
+decommission left nothing for the Naim to browse the whole library over UPnP),
+then `⭐ Favourite Albums` and `Playlists`.
+
+**Full-library tree** — backed by `LibraryDB` on `DB.primary_udn()` (the udn
+owning the most tracks = the LocalFs backend):
+- `artists` → `gartist:<b64(artist)>` → that artist's albums.
+- `albums` → all albums A–Z.
+- `galbum:<b64(artist\x00album\x00album_key)>` → the album's tracks as
+  `musicTrack` items whose `<res>` is the `/localfs/stream` URL the Naim plays.
+- `genres` → `ggenre:<b64(genre)>` → that genre's albums.
+- Every list **paginates** via `StartingIndex`/`RequestedCount` (the slice is
+  applied to the full `LibraryDB` result — fine at this library size; a future
+  optimisation would push `LIMIT/OFFSET` into the queries). Album ids carry the
+  LocalFs `album_key` so folder-albums (incl. Various-Artists comps) resolve.
+  Codecs: `_b64e`/`_b64d` (single value) + `_encode/_decode_lib_album_id`
+  (`galbum:*`, distinct from the favourites `favalbum:*` codec); garbled ids →
+  empty container, never 500. Album-container titles: `"album — artist"`, else
+  whichever side is non-blank, else `"(album)"` (no dangling dash).
+
+**Favourites tree** — `⭐ Favourite Albums`: one container per favourited album
+titled `"<album> — <artist>"`. One level deeper: the album's tracks, resolved
+against `album_fav_list()[i]['udn']` via `DB.album_tracks`.
 
 ObjectID encoding for individual albums:
 `favalbum:{base64-urlsafe(artist + "\x00" + album + "\x00" + album_key)}`
