@@ -1014,6 +1014,19 @@ class TestStaticServing(unittest.TestCase):
         self.assertIn("no-store", r.headers.get("Cache-Control", ""))
 
 
+class _FakeReq:
+    """Minimal stand-in for a Starlette Request for the native /gw routes
+    (they read .client.host, .headers, .method and await .body())."""
+    def __init__(self, body=b"", method="POST", headers=None):
+        self._body = body
+        self.method = method
+        self.headers = headers or {}
+        self.client = types.SimpleNamespace(host="1.2.3.4")
+
+    async def body(self):
+        return self._body
+
+
 class TestGwDeviceAsgi(unittest.TestCase):
     """Cleanup C: the /gw/* UPnP device surface served NATIVELY by the ASGI app
     on the plain port (was a separate dlna_server on :8770). The SOAP reuses
@@ -1028,7 +1041,7 @@ class TestGwDeviceAsgi(unittest.TestCase):
     def test_device_xml_urlbase_is_plain_port(self):
         with mock.patch.object(dlna_gateway, "get_lan_ip",
                                return_value="10.0.0.5"):
-            r = asyncio.run(dlna_asgi.gw_device_xml())
+            r = asyncio.run(dlna_asgi.gw_device_xml(_FakeReq(method="GET")))
         self.assertEqual(r.status_code, 200)
         self.assertIn("xml", r.media_type)
         body = bytes(r.body).decode()
@@ -1039,12 +1052,12 @@ class TestGwDeviceAsgi(unittest.TestCase):
         self.assertIn("ContentDirectory", body)
 
     def test_cd_desc_xml_is_scpd(self):
-        r = asyncio.run(dlna_asgi.gw_cd_desc())
+        r = asyncio.run(dlna_asgi.gw_cd_desc(_FakeReq(method="GET")))
         self.assertEqual(r.status_code, 200)
         self.assertIn(b"Browse", bytes(r.body))
 
     def test_cd_events_stub_200(self):
-        r = asyncio.run(dlna_asgi.gw_cd_events())
+        r = asyncio.run(dlna_asgi.gw_cd_events(_FakeReq(method="GET")))
         self.assertEqual(r.status_code, 200)
 
     def test_cd_control_browse_wraps_result(self):
@@ -1056,13 +1069,12 @@ class TestGwDeviceAsgi(unittest.TestCase):
                 b'<StartingIndex>0</StartingIndex><RequestedCount>0'
                 b'</RequestedCount></u:Browse></s:Body></s:Envelope>')
 
-        class _Req:
-            async def body(self_inner):
-                return soap
-
+        req = _FakeReq(body=soap, headers={
+            "soapaction": '"urn:schemas-upnp-org:service:'
+                          'ContentDirectory:1#Browse"'})
         with mock.patch.object(api_upnp, "_gw_browse",
                                return_value=("<container id='x'/>", 1, 1)) as m:
-            r = asyncio.run(dlna_asgi.gw_cd_control(_Req()))
+            r = asyncio.run(dlna_asgi.gw_cd_control(req))
         m.assert_called_once()
         self.assertEqual(r.status_code, 200)
         self.assertIn("xml", r.media_type)
