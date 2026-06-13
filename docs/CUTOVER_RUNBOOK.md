@@ -1,5 +1,13 @@
 # 2.0 Cutover Runbook
 
+> **✅ CUTOVER COMPLETE (2026-06-09) — historical record.** The 2.0 ASGI gateway
+> is the live daily driver (`v2.0.0`); this is how it was done, kept for
+> reference/rollback. **One decision below is now superseded:** the `/gw/*`
+> device tier no longer runs on a separate `:8770` server — **Cleanup C
+> (2026-06-12) folded `/gw/*` into the ASGI app on the plain `:8765` bind** and
+> retired `dlna_server.py` + the `:8770`/`GATEWAY_PORT` plumbing. The current
+> architecture lives in `CLAUDE.md` + `docs/ARCHITECTURE.PDF`.
+
 The ordered, reversible procedure to make the **2.0 ASGI gateway** the live
 daily driver, taking over 1.x's identity so the Naim, CarPlay/Amperfy, Subsonic
 and the PWA keep their existing connections. Companion: **`CUTOVER_LAUNCHD.md`**
@@ -16,7 +24,7 @@ and the PWA keep their existing connections. Companion: **`CUTOVER_LAUNCHD.md`**
 
 | | choice |
 |---|---|
-| **Identity** | 2.x **adopts 1.x's** ports + UDN: gateway `:8765` (plain) + `:8443` (TLS), LocalFs `:8200`, `GW_UDN=uuid:dlna-gateway-iina-8765`, name "DLNA Gateway (IINA)". `/gw/*` device tier on plain `:8770` (re-advertised via SSDP). |
+| **Identity** | 2.x **adopts 1.x's** ports + UDN: gateway `:8765` (plain) + `:8443` (TLS), LocalFs `:8200`, `GW_UDN=uuid:dlna-gateway-iina-8765`, name "DLNA Gateway (IINA)". `/gw/*` device tier was on plain `:8770` at cutover; **Cleanup C folded it into `:8765`** (`:8770` retired). |
 | **User data copied** | `album_art` · `radio_favourites` · `play_counts` · `lyrics` · `metadata_overrides` (via `tools/cutover_copy_userdata.py`). |
 | **Started fresh on 2.x** | `playlists` / `playlist_tracks` (= ⭐ track favourites) · `album_favourites`. |
 

@@ -36,25 +36,19 @@ stay un-encrypted for UPnP renderers that can't do HTTPS. See
   lyrics (via lrclib), album art (sibling → MusicBrainz / Cover Art
   Archive fallback). For RoHaLocalFS, albums group by folder (one
   folder = one album).
-- **Metadata enrichment — two paths.**
-  - **beets, tag-in-place (recommended).** `tools/beets_enrich.py` wraps a
-    [beets](https://beets.io/) import that writes clean tags + MBIDs
-    **into your files** (MusicBrainz + AcoustID), in place — never moving
-    or copying them. The gateway's indexer reads those enriched tags on
-    the next rebuild, so beets is a single upstream source of truth.
-    `tools/post_beets_reindex.py` does the follow-up in one shot (clear
-    stale overrides, then reindex).
-  - **In-process AcoustID worker (alternative).** A background worker
-    fingerprints tracks via Chromaprint and resolves them to MusicBrainz
-    through AcoustID, fixing mistagged / untagged tracks. SQLite-only — it
-    fills `metadata_overrides`, never rewrites on-disk file tags. Progress
-    shows in the PWA index bar; a **🔎 Enrich** button kicks a pass on
-    demand. Needs `ACOUSTID_API_KEY` (else dormant).
-  - **Pick one.** Don't run both against the same library at once: they
-    collide. beets wins by writing the files; the AcoustID worker's
-    overrides would re-mask beets' tags (LocalFs track URLs are
-    path-stable). `post_beets_reindex.py` guards this — it refuses to
-    clear overrides while `ACOUSTID_API_KEY` is set.
+- **Metadata enrichment — beets, tag-in-place.** `tools/beets_enrich.py`
+  wraps a [beets](https://beets.io/) import that writes clean tags + MBIDs
+  **into your files** (MusicBrainz + AcoustID), in place — never moving or
+  copying them. The gateway's indexer reads those enriched tags on the next
+  rebuild, so beets is the **single** upstream source of truth.
+  `tools/post_beets_reindex.py` does the follow-up in one shot (clear stale
+  overrides, then reindex). *(The old in-process AcoustID worker was an
+  alternative path; it was removed in 2.0 — it did the same fingerprint →
+  MusicBrainz job and collided with beets, which is the better tagger.)*
+- **Browsable by your renderer (DLNA Media Server).** The gateway also
+  announces *itself* as a full DLNA Media Server, so a UPnP renderer like the
+  Naim can browse your whole library — Artists / Albums (#-A-Z) / Genres /
+  Playlists / Favourite Albums — and play directly, no PWA needed.
 - **Internet radio ("📡 Stations").** Search the radio-browser.info
   catalogue, favourite up to 25 stations, play with ICY now-playing
   metadata in a dedicated radio screen.
@@ -80,7 +74,8 @@ Hard requirements:
 
 - Python 3.9+
 - (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
-  on macOS) — only needed for the AcoustID metadata-enrichment worker.
+  on macOS) — used by the beets enrichment tool (`tools/beets_enrich.py`,
+  via pyacoustid) for fingerprint matching.
 - A music source: either network access to a UPnP MediaServer on your
   LAN, **or** a readable music folder via RoHaLocalFS (set
   `LOCALFS_MUSIC_ROOT` — see "Serving your own files" below).
@@ -211,12 +206,10 @@ to `.env` and edit. Variables:
 - `TAILSCALE_CERT_HOST` — only needed if you use `renew-cert.sh`
   for automated Tailscale cert renewal. Your tailnet hostname,
   e.g. `mymachine.tailXXXXX.ts.net`.
-- `ACOUSTID_API_KEY` — only needed for the AcoustID metadata-
-  enrichment worker. **Must be an application key**, not a user key:
-  register a free application at
-  [acoustid.org/applications](https://acoustid.org/applications). The
-  user-account key from `/api-key` is for *submitting* fingerprints
-  and will be rejected on lookup with `HTTP 400 invalid API key`.
+- `ACOUSTID_API_KEY` — **no longer used by the gateway** (the in-process
+  AcoustID worker was removed in 2.0; beets manages its own AcoustID lookups).
+  Harmless if still present in `.env`. beets' fingerprint matching is configured
+  in beets, not here.
 
 Values set in the process environment (launchd plist, systemd
 `EnvironmentFile`, shell `export`) override `.env`. **`.env` requires
