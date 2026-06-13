@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+⚠️  OBSOLETE ON 2.0 — KEPT FOR HISTORY, DO NOT RUN. This recovers
+metadata_overrides orphaned by an AssetUPnP rescan, matching by AssetUPnP URL
+d-ids (the `…/d<id>-co<hash>…` shape). AssetUPnP is decommissioned and the live
+RoHaLocalFS URLs are path-stable (no co-hash rotation), so there is nothing for
+it to repair — it cannot do anything useful in the current configuration.
+
 relink_orphan_overrides.py — recover orphan metadata_overrides rows
 after an AssetUPnP rescan rotated co-hashes.
 

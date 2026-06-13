@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+⚠️  OBSOLETE ON 2.0 — KEPT FOR HISTORY, DO NOT RUN. This was the one-time
+migration that repointed AssetUPnP-era playlists onto RoHaLocalFS at the 2.0
+cutover; it already ran (2026-05-31). AssetUPnP is decommissioned and LocalFs is
+the only backend now, so there are no dead UPnP playlist URLs left to relink —
+it cannot do anything useful in the current configuration.
+
 tools/relink_playlists_to_localfs.py — repoint playlists at LocalFs after
 AssetUPnP (or any UPnP server) is decommissioned.
 

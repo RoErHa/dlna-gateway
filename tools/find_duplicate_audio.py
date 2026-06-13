@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+⚠️  OBSOLETE ON 2.0 — KEPT FOR HISTORY, DO NOT RUN. This maps each track URL to
+a file on disk by HTTP-HEAD-ing the AssetUPnP-served URL for its Content-Length.
+AssetUPnP is decommissioned, so those URLs are dead and the URL→path mapping
+can't be built — it cannot work in the current configuration. (A LocalFs-native
+duplicate finder would resolve the path straight from library.db / file_path
+instead.)
+
 find_duplicate_audio.py — locate duplicate audio FILES on disk.
 
 A "duplicate" here is two-or-more physical audio files on SAMDATA that
