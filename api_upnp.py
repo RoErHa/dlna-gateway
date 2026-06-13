@@ -879,10 +879,10 @@ def gw_event_initial_notify(callback: str, sid: str, props: dict):
             "NT": "upnp:event", "NTS": "upnp:propchange",
             "SID": sid, "SEQ": "0"})
         resp = conn.getresponse()
-        log.info("GW event initial NOTIFY → %s : HTTP %s", callback, resp.status)
+        log.debug("GW event initial NOTIFY → %s : HTTP %s", callback, resp.status)
         conn.close()
     except Exception as e:
-        log.info("GW event initial NOTIFY to %s FAILED: %s", callback, e)
+        log.debug("GW event initial NOTIFY to %s failed: %s", callback, e)
 
 
 def _gw_msearch_response(st: str, usn: str, location: str) -> bytes:
