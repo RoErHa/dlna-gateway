@@ -417,12 +417,15 @@ def list_pages():
         ("P/g20", "api_browse.py", "Browse / search / radio-shuffle API."),
         ("P/g21", "api_playback.py",
          "Playback, /stream route, /art proxy, /api/client_log, state, "
-         "indexer + AcoustID management."),
+         "indexer management."),
         ("P/g22", "api_playlists.py", "Playlist CRUD endpoints."),
         ("P/g23", "api_upnp.py",
-         "UPnP service descriptors + ContentDirectory SOAP exposing the "
-         "gateway's own playlists + favourites (so the Naim can browse it "
-         "as a MediaServer)."),
+         "The gateway-as-MediaServer: a COMPLETE DLNA Media Server the Naim/LG "
+         "browse. device.xml (MediaServer + X_DLNADOC + icons + ContentDirectory "
+         "AND ConnectionManager), both SCPDs, ContentDirectory#Browse over the "
+         "full library + the pre-browse handshake actions, ConnectionManager "
+         "#GetProtocolInfo, GENA SUBSCRIBE + initial NOTIFY, SSDP announce + "
+         "M-SEARCH responder."),
         ("P/g24", "api_subsonic.py",
          "Subsonic-compatible /rest/* API (browse, playlists, favourites→"
          "starred, stream, cover, scrobble, internet radio) for CarPlay "
@@ -515,12 +518,10 @@ def list_pages():
          "move:no before any write. <b>--write-config --quiet --timid "
          "--album --revisit --reindex --gateway --dry-run -y</b>."),
         ("T/a14", "post_beets_reindex.py",
-         "The post-beets step: drop AcoustID metadata_overrides (LocalFs URLs "
-         "are path-stable, so old acoustid rows would re-mask beets' fresh "
-         "tags) then reindex LocalFs. Refuses to clear while "
-         "ACOUSTID_API_KEY is set. <b>--apply --dry-run --no-clean "
-         "--no-reindex --no-backup --ignore-acoustid-key --udn --gateway --db "
-         "-y</b>."),
+         "The post-beets step: drop the historical AcoustID metadata_overrides "
+         "(LocalFs URLs are path-stable, so old acoustid rows would re-mask "
+         "beets' fresh tags) then reindex LocalFs. <b>--apply --dry-run "
+         "--no-clean --no-reindex --no-backup --udn --gateway --db -y</b>."),
     ]
     for c, f, p in tools:
         tool_rows.append([C(c), P(f), P(p)])
@@ -782,11 +783,6 @@ def list_pages():
         ("--no-clean", "Skip clearing overrides (reindex only)."),
         ("--no-reindex", "Skip the reindex (clean only)."),
         ("--no-backup", "Skip the library.db backup before deleting."),
-        ("--ignore-acoustid-key", "Proceed even if ACOUSTID_API_KEY is set. "
-         "By default the tool REFUSES to clear while the worker is live — "
-         "the 120s startup scan would re-fingerprint every now-bare track and "
-         "re-create the overrides, re-masking beets (Option A keeps the key "
-         "unset)."),
         ("--udn UDN", "Server UDN to reindex (default: auto-pick "
          "uuid:localfs-*)."),
         ("--gateway URL", "Gateway base URL (default http://127.0.0.1:8765)."),

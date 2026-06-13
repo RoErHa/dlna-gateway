@@ -126,7 +126,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `api_browse.py` | Browse/search API endpoints |
 | `api_playback.py` | Playback, stream proxy route, `/art`, `/api/client_log`, state, indexer management |
 | `api_playlists.py` | Playlist CRUD endpoints |
-| `api_upnp.py` | UPnP service descriptors + SOAP ContentDirectory (for Naim Uniti browsing gateway playlists) |
+| `api_upnp.py` | The gateway-as-MediaServer: a **complete DLNA Media Server** the Naim/LG browse. Device descriptor (`MediaServer:1` + `X_DLNADOC` + icons + ContentDirectory **and** ConnectionManager), both service SCPDs, SOAP `ContentDirectory#Browse` over the full library (`_gw_browse`) + the pre-browse handshake actions, `ConnectionManager#GetProtocolInfo` etc., GENA SUBSCRIBE + initial NOTIFY, and SSDP announce + **M-SEARCH responder**. See "UPnP exposure (Naim)". |
 
 ### Key Module-Level Singletons
 
@@ -971,6 +971,43 @@ directly (no PWA). **Root container "0" lists five children:** `Artists`,
 `Albums`, `Genres` (the **full library** — added 2026-06-12, since AssetUPnP's
 decommission left nothing for the Naim to browse the whole library over UPnP),
 then `⭐ Favourite Albums` and `Playlists`.
+
+**DLNA Media Server surface — what makes strict clients browse it (hard-won
+2026-06-13).** Browsing only works if the gateway is a *complete, spec-correct*
+DLNA DMS. The Naim (control point UA `dLeyna/0.6.0 GUPnP/1.0.2`) and the LG WebOS
+TV both refused to browse until every one of these was right — diagnose via the
+`GW /gw/…` lines in `gateway.log` (at `debug`; run with `GATEWAY_DEBUG=1`), which
+show exactly what a client requests, in order:
+- **`device.xml`** (`_gw_device_xml`): `MediaServer:1` device + `friendlyName`
+  + `UDN` + **`<dlna:X_DLNADOC>DMS-1.50`** + an **`<iconList>`** (192/512 PNG,
+  served by the ASGI app — TVs won't list an icon-less server) + a `serviceList`
+  with **BOTH** `ContentDirectory:1` **and** `ConnectionManager:1`
+  (ConnectionManager is MANDATORY — its absence was why both clients quit).
+- **ContentDirectory SCPD** (`/gw/cd/desc.xml`, `_gw_cd_desc_xml`): MUST use
+  `<name>` tags (a stray `<n>` made clients fail to parse the service). Advertises
+  `Browse` + the pre-browse handshake actions. `cd_control_soap` dispatches:
+  `Browse` + `GetSearchCapabilities` / `GetSortCapabilities` /
+  `GetSortExtensionCapabilities` / `GetSystemUpdateID` / `GetFeatureList` /
+  `Search` — all returning empty-but-valid 200 (a client runs the handshake
+  BEFORE it will browse; 400s there made it give up).
+- **ConnectionManager** (`/gw/cm/desc.xml` + `/gw/cm/control`, `cm_control_soap`):
+  `GetProtocolInfo` (Source = the audio `protocolInfo` we serve, `_GW_SOURCE_
+  PROTOCOLS`), `GetCurrentConnectionIDs` (`0`), `GetCurrentConnectionInfo`.
+- **GENA eventing** (`/gw/cd/events` + `/gw/cm/events`): a `SUBSCRIBE` MUST return
+  a valid `SID` + `TIMEOUT` **and** then push the initial NOTIFY to the client's
+  CALLBACK (`gw_event_subscribe` / `gw_event_initial_notify`). The NOTIFY is fired
+  on a **daemon `threading.Thread`, NOT `asyncio.create_task`** — an un-referenced
+  task is GC'd before it runs, the NOTIFY never sends, and GUPnP/dLeyna then
+  re-SUBSCRIBEs forever and never browses (the final bug; commit `90afef7`).
+- **Discovery** (`dlna_gateway.start_background_services`): `gw_ssdp_announcer`
+  (NOTIFY alive every 60 s) **plus** `gw_ssdp_responder` — answers SSDP
+  `M-SEARCH` so a control point's *active* search finds the server, not only a
+  passively-caught NOTIFY.
+
+All four `/gw/*` route groups are native in `dlna_asgi.py` (Cleanup C) on the
+plain `:8765` bind. Regression-guarded by `tests/test_upnp_album_favourites.py`
+(`TestContentDirectorySCPD`, `TestContentDirectoryActions`, `TestConnectionManager`,
+`TestGenaEvents`, `TestMSearchResponder`).
 
 **Full-library tree** — backed by `LibraryDB` on `DB.primary_udn()` (the udn
 owning the most tracks = the LocalFs backend):

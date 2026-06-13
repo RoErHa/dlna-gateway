@@ -1,11 +1,21 @@
 # DLNA Gateway 2.0 — Requirements & Roadmap
 
-Status: **proposal / backlog.** Nothing here is committed to a release date.
-This is the running list of "big improvements to come" for a 2.0 transport
-+ architecture refresh, gathered while shipping the 1.x responsiveness work
-(SW caching, HTTP/1.1 keep-alive, the album-key browse index). The
-**headline item is fronting the gateway with `tailscale serve`** to gain
-HTTP/2 + free TLS; everything else is bundled so a 2.0 is worth the churn.
+> **✅ 2.0 SHIPPED — this is the historical pre-build PROPOSAL (kept for
+> rationale), not the as-built doc.** The 2.0 transport refresh is done and live
+> (cutover 2026-06-08/09; tag `v2.0.0`). **What shipped differs from the headline
+> below:** TLS + HTTP/2 are **app-owned via Hypercorn + FastAPI
+> (`dlna_asgi.py`)**, NOT `tailscale serve` (tried and dropped — broken on this
+> mini's Tailscale `:443`). For the as-built picture see **`CLAUDE.md`** (living
+> reference), **`docs/BUILDING_2.0.md`** (build log + checklist), and
+> **`docs/CUTOVER_RUNBOOK.md`**. Everything below is the original proposal.
+
+Status: **proposal / backlog (HISTORICAL).** Nothing here was committed to a
+release date. This was the running list of "big improvements to come" for a 2.0
+transport + architecture refresh, gathered while shipping the 1.x responsiveness
+work (SW caching, HTTP/1.1 keep-alive, the album-key browse index). The
+**headline item was fronting the gateway with `tailscale serve`** to gain
+HTTP/2 + free TLS — superseded by app-owned Hypercorn TLS; everything else was
+bundled so a 2.0 was worth the churn.
 
 See `CLAUDE.md → "HTTP/2 · HTTP/3 · TLS — current state and the 2.0
 roadmap"` for the protocol-level detail this document summarises, and
