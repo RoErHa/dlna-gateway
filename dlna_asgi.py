@@ -411,8 +411,8 @@ def _peer(request: Request) -> str:
 @app.get("/gw/device.xml", include_in_schema=False)
 async def gw_device_xml(request: Request):
     import dlna_gateway
-    log.info("GW /gw/device.xml fetched by %s (ua=%s)", _peer(request),
-             request.headers.get("user-agent", "")[:80])
+    log.debug("GW /gw/device.xml fetched by %s (ua=%s)", _peer(request),
+              request.headers.get("user-agent", "")[:80])
     lan_ip = await run_in_threadpool(dlna_gateway.get_lan_ip)
     return Response(api_upnp._gw_device_xml(lan_ip, PLAIN_PORT).encode(),
                     media_type=_GW_XML)
@@ -420,14 +420,14 @@ async def gw_device_xml(request: Request):
 
 @app.get("/gw/cd/desc.xml", include_in_schema=False)
 async def gw_cd_desc(request: Request):
-    log.info("GW /gw/cd/desc.xml fetched by %s", _peer(request))
+    log.debug("GW /gw/cd/desc.xml fetched by %s", _peer(request))
     return Response(api_upnp._gw_cd_desc_xml().encode(), media_type=_GW_XML)
 
 
 async def _gw_event_route(request: Request, label: str, props: dict):
     """Shared GENA handler for /gw/cd/events + /gw/cm/events: a valid SUBSCRIBE
     (SID + TIMEOUT) then the initial NOTIFY — strict GUPnP/dLeyna needs both."""
-    log.info("GW %s %s by %s", label, request.method, _peer(request))
+    log.debug("GW %s %s by %s", label, request.method, _peer(request))
     if request.method == "SUBSCRIBE":
         hdrs, callback, sid = await run_in_threadpool(
             api_upnp.gw_event_subscribe, dict(request.headers))
@@ -451,19 +451,17 @@ async def gw_cd_events(request: Request):
 
 @app.get("/gw/cm/desc.xml", include_in_schema=False)
 async def gw_cm_desc(request: Request):
-    log.info("GW /gw/cm/desc.xml fetched by %s", _peer(request))
+    log.debug("GW /gw/cm/desc.xml fetched by %s", _peer(request))
     return Response(api_upnp._gw_cm_desc_xml().encode(), media_type=_GW_XML)
 
 
 @app.post("/gw/cm/control", include_in_schema=False)
 async def gw_cm_control(request: Request):
     body = await request.body()
-    import re as _re
-    action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1].strip('"')
-              or "?")
-    log.info("GW /gw/cm/control from %s: action=%s", _peer(request), action)
     status, ctype, payload = await run_in_threadpool(api_upnp.cm_control_soap, body)
     if status != 200:
+        action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1]
+                  .strip('"') or "?")
         log.warning("GW /gw/cm/control → %s for action=%s", status, action)
     return Response(payload, status_code=status, media_type=ctype)
 
@@ -479,22 +477,12 @@ async def gw_cm_events(request: Request):
 @app.post("/gw/cd/control", include_in_schema=False)
 async def gw_cd_control(request: Request):
     body = await request.body()
-    # TEMP diagnostic: log exactly what a control point (the Naim) asks —
-    # SOAPACTION (Browse vs Search) + the ObjectID/ContainerID it targets.
-    import re as _re
-    txt = body.decode("utf-8", "replace")
-    action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1].strip('"')
-              or "?")
-    oid = _re.search(r"<(?:ObjectID|ContainerID)>([^<]*)</", txt)
-    flag = _re.search(r"<BrowseFlag>([^<]*)</", txt)
-    log.info("GW /gw/cd/control from %s: action=%s id=%r flag=%s",
-             _peer(request), action, oid.group(1) if oid else None,
-             flag.group(1) if flag else None)
     status, ctype, payload = await run_in_threadpool(
         api_upnp.cd_control_soap, body)
     if status != 200:
-        log.warning("GW /gw/cd/control → %s for action=%s body=%s",
-                    status, action, txt[:300])
+        action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1]
+                  .strip('"') or "?")
+        log.warning("GW /gw/cd/control → %s for action=%s", status, action)
     return Response(payload, status_code=status, media_type=ctype)
 
 
