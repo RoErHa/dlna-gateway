@@ -168,6 +168,43 @@ def extract_poster(path: str, out_path: str, when: str = "00:00:03",
 
 # ── on-demand transcode (Phase V3) ────────────────────────────────
 
+HLS_SEG = 6.0    # segment length (s) — playlist + segment cmd must agree
+
+
+def hls_playlist(duration, seg: float = HLS_SEG) -> str:
+    """A VOD HLS playlist computed from the clip duration (no transcoding) —
+    served instantly so the player knows the full timeline and can seek. Each
+    segment is transcoded on demand when requested. Pure → unit-testable."""
+    import math
+    dur = max(float(duration or 0), 0.0)
+    n = max(1, math.ceil(dur / seg)) if dur else 1
+    out = ["#EXTM3U", "#EXT-X-VERSION:3",
+           f"#EXT-X-TARGETDURATION:{int(math.ceil(seg))}",
+           "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD"]
+    for i in range(n):
+        d = seg if (i < n - 1) else (round(dur - seg * (n - 1), 3) or seg)
+        out.append(f"#EXTINF:{d:.3f},")
+        out.append(f"seg{i}.ts")
+    out.append("#EXT-X-ENDLIST")
+    return "\n".join(out) + "\n"
+
+
+def hls_segment_cmd(path: str, start: float, dur: float = HLS_SEG,
+                    ffmpeg: str = None) -> list:
+    """argv to transcode ONE segment [start, start+dur) → H.264/AAC MPEG-TS on
+    stdout. `-output_ts_offset start` keeps each independently-encoded segment's
+    timestamps on the global timeline so hls.js stitches + seeks cleanly."""
+    exe = ffmpeg or find_ffmpeg() or "ffmpeg"
+    return [
+        exe, "-v", "error", "-ss", str(start), "-t", str(dur), "-i", path,
+        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
+        "-level", "4.1", "-crf", "23",
+        "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "192k",
+        "-f", "mpegts", "-muxdelay", "0", "-output_ts_offset", str(start),
+        "pipe:1",
+    ]
+
+
 def transcode_cmd(path: str, ffmpeg: str = None) -> list:
     """argv to transcode `path` → fragmented H.264/AAC MP4 on stdout (pipe:1) —
     the universal-playback target for the capability-aware fallback."""

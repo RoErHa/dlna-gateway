@@ -157,6 +157,36 @@ class TestCmdBuilders(unittest.TestCase):
         with mock.patch.object(ff, "find_ffmpeg", return_value=None):
             self.assertFalse(ff.extract_poster("/x.mov", "/tmp/p.jpg"))
 
+    def test_hls_segment_cmd(self):
+        cmd = ff.hls_segment_cmd("/m/clip.mkv", 12.0, 6.0, ffmpeg="/ff")
+        joined = " ".join(cmd)
+        self.assertIn("-ss 12.0", joined)
+        self.assertIn("-t 6.0", joined)
+        self.assertIn("libx264", cmd)
+        self.assertIn("mpegts", cmd)
+        self.assertIn("-output_ts_offset 12.0", joined)
+        self.assertIn("pipe:1", cmd)
+
+
+class TestHlsPlaylist(unittest.TestCase):
+    def test_segment_count_and_markers(self):
+        pl = ff.hls_playlist(20.0, seg=6.0)   # ceil(20/6) = 4 segments
+        self.assertTrue(pl.startswith("#EXTM3U"))
+        self.assertIn("#EXT-X-PLAYLIST-TYPE:VOD", pl)
+        self.assertEqual(pl.count("seg"), 4)
+        for i in range(4):
+            self.assertIn(f"seg{i}.ts", pl)
+        self.assertIn("#EXT-X-ENDLIST", pl)
+
+    def test_last_segment_duration(self):
+        pl = ff.hls_playlist(15.0, seg=6.0)   # 6 + 6 + 3
+        self.assertIn("#EXTINF:3.000,", pl)
+
+    def test_zero_duration_one_segment(self):
+        pl = ff.hls_playlist(0)
+        self.assertEqual(pl.count("seg"), 1)
+        self.assertIn("#EXT-X-ENDLIST", pl)
+
 
 class TestDisplayTitle(unittest.TestCase):
     def test_embedded_title_wins(self):

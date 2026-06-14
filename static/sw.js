@@ -18,6 +18,7 @@ const SHELL = [
   '/',
   '/static/app.css',
   '/static/app.js',
+  '/static/vendor/hls.min.js',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png'

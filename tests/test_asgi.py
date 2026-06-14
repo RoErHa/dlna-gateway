@@ -1179,6 +1179,37 @@ class TestVideoApi(unittest.TestCase):
             r = asyncio.run(dlna_asgi.video_transcode("v1"))
         self.assertEqual(r.status_code, 503)
 
+    def test_payload_has_hls_url(self):
+        v = asyncio.run(dlna_asgi.video_meta(id="v1"))
+        self.assertEqual(v["hlsUrl"], "/video_hls/v1/index.m3u8")
+
+    def test_hls_playlist(self):
+        import dlna_ffmpeg
+        with mock.patch.object(dlna_ffmpeg, "find_ffmpeg", return_value="/ff"):
+            r = asyncio.run(dlna_asgi.video_hls("v1", "index.m3u8"))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("mpegurl", r.media_type)
+        body = bytes(r.body).decode()
+        self.assertIn("#EXTM3U", body)
+        self.assertIn("seg0.ts", body)
+        self.assertIn("#EXT-X-ENDLIST", body)
+
+    def test_hls_unknown_404(self):
+        r = asyncio.run(dlna_asgi.video_hls("nope", "index.m3u8"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_hls_503_without_ffmpeg(self):
+        import dlna_ffmpeg
+        with mock.patch.object(dlna_ffmpeg, "find_ffmpeg", return_value=None):
+            r = asyncio.run(dlna_asgi.video_hls("v1", "index.m3u8"))
+        self.assertEqual(r.status_code, 503)
+
+    def test_hls_bad_segment_404(self):
+        import dlna_ffmpeg
+        with mock.patch.object(dlna_ffmpeg, "find_ffmpeg", return_value="/ff"):
+            r = asyncio.run(dlna_asgi.video_hls("v1", "notaseg.ts"))
+        self.assertEqual(r.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

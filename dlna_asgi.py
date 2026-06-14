@@ -414,6 +414,7 @@ def _video_payload(v: dict) -> dict:
         "location_name": v.get("location_name"),
         "playUrl": f"/video/{v['id']}",
         "transcodeUrl": f"/video_transcode/{v['id']}",
+        "hlsUrl": f"/video_hls/{v['id']}/index.m3u8",
         "posterUrl": (f"/video_poster?id={v['id']}" if v.get("poster") else ""),
     }
 
@@ -484,6 +485,52 @@ async def video_transcode(vid: str):
     return StreamingResponse(_pump(), media_type="video/mp4",
                              headers={"Cache-Control": "no-store",
                                       "Connection": "close"})
+
+
+@app.get("/video_hls/{vid}/{seg}", include_in_schema=False)
+async def video_hls(vid: str, seg: str):
+    """SEEKABLE transcode via on-demand HLS (V3+). `index.m3u8` = a VOD playlist
+    computed from the duration (instant, no transcode); `segN.ts` = that ~6s
+    segment transcoded to H.264/AAC MPEG-TS on demand → the player fetches only
+    the segment for the seek target. ffmpeg absent → 503."""
+    import dlna_ffmpeg
+    import re as _re
+    v = await run_in_threadpool(DB.video_by_id, vid)
+    if not v or not v.get("file_path") or not os.path.isfile(v["file_path"]):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not dlna_ffmpeg.find_ffmpeg():
+        return JSONResponse({"error": "ffmpeg not available"}, status_code=503)
+
+    if seg == "index.m3u8":
+        pl = dlna_ffmpeg.hls_playlist(v.get("duration") or 0)
+        return Response(pl, media_type="application/vnd.apple.mpegurl",
+                        headers={"Cache-Control": "no-store"})
+
+    m = _re.fullmatch(r"seg(\d+)\.ts", seg)
+    if not m:
+        return JSONResponse({"error": "bad segment"}, status_code=404)
+    start = int(m.group(1)) * dlna_ffmpeg.HLS_SEG
+    cmd = dlna_ffmpeg.hls_segment_cmd(v["file_path"], start)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+
+    async def _pump():
+        try:
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+
+    return StreamingResponse(_pump(), media_type="video/mp2t",
+                             headers={"Cache-Control": "no-store"})
 
 
 # ── Gateway-as-MediaServer UPnP surface (/gw/*) ────────────────────────

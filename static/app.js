@@ -1286,30 +1286,63 @@ function renderVideos(vids){
   });
 }
 
+let _curVid=null;
 function playVideo(v){
   const modal=$("video-modal"), player=$("video-player");
   if(!modal||!player) return;
+  _curVid=v;
   $("video-modal-title").textContent="📹 "+(v.title||"Video");
-  player.dataset.transcodeUrl=v.transcodeUrl||"";
   player.dataset.triedTranscode="0";
-  // Containers NO browser <video> supports → go straight to the same-origin
-  // transcode (canPlayType is useless — Chromium says "maybe" for everything,
-  // incl. MKV it can't play). For mp4/mov/webm, play native first (Safari does
-  // HEVC; H.264 plays everywhere) and let the 'error' handler below fall back
-  // to transcode when the codec can't be decoded (HEVC on Chrome/FF).
-  const FORCE_TRANSCODE=["video/x-matroska","video/x-msvideo","video/mp2t"];
-  if(FORCE_TRANSCODE.includes((v.mime||"").toLowerCase()) && v.transcodeUrl){
-    player.dataset.triedTranscode="1";
-    player.src=v.transcodeUrl;
-  } else {
-    player.src=v.playUrl;
-  }
   modal.classList.add("open");
-  player.play().catch(()=>{});      // autoplay best-effort
+  // Containers NO browser <video> supports → transcode immediately (canPlayType
+  // is useless — Chromium says "maybe" even for MKV). For mp4/mov/webm, play
+  // native first (Safari does HEVC; H.264 plays everywhere); the 'error' handler
+  // below falls back to the (seekable) transcode for codecs it can't decode.
+  const FORCE_TRANSCODE=["video/x-matroska","video/x-msvideo","video/mp2t"];
+  if(FORCE_TRANSCODE.includes((v.mime||"").toLowerCase())){
+    player.dataset.triedTranscode="1";
+    playTranscoded(v);
+  } else {
+    _detachHls();
+    player.dataset.mode="native";
+    player.src=v.playUrl;
+    player.play().catch(()=>{});
+  }
+}
+
+// Seekable transcode via on-demand HLS: Safari plays the .m3u8 natively;
+// Chrome/FF use hls.js (MSE). Each ~6s segment is transcoded on demand, so
+// seeking just fetches that segment. Falls back to the progressive (non-
+// seekable) /video_transcode stream if HLS is unavailable.
+function playTranscoded(v){
+  const player=$("video-player");
+  _detachHls();
+  if(v.hlsUrl && player.canPlayType("application/vnd.apple.mpegurl")){
+    player.dataset.mode="native-hls";
+    player.src=v.hlsUrl;
+    player.play().catch(()=>{});
+  } else if(v.hlsUrl && window.Hls && window.Hls.isSupported()){
+    player.dataset.mode="hls";
+    const hls=new Hls({enableWorker:true});
+    player._hls=hls;
+    hls.loadSource(v.hlsUrl);
+    hls.attachMedia(player);
+    hls.on(Hls.Events.MANIFEST_PARSED, ()=>player.play().catch(()=>{}));
+  } else if(v.transcodeUrl){
+    player.dataset.mode="progressive";   // plays, but not seekable
+    player.src=v.transcodeUrl;
+    player.play().catch(()=>{});
+  }
+}
+
+function _detachHls(){
+  const player=$("video-player");
+  if(player && player._hls){ try{ player._hls.destroy(); }catch{} player._hls=null; }
 }
 
 function closeVideo(){
   const modal=$("video-modal"), player=$("video-player");
+  _detachHls();
   if(player){ player.pause(); player.removeAttribute("src"); player.load(); }
   if(modal) modal.classList.remove("open");
 }
@@ -2249,10 +2282,9 @@ $("video-modal").addEventListener("click", e=>{ if(e.target===$("video-modal")) 
 // → fall back once to the same-origin transcode stream (H.264/AAC).
 $("video-player").addEventListener("error", ()=>{
   const p=$("video-player");
-  if(p.dataset.transcodeUrl && p.dataset.triedTranscode!=="1"){
+  if(_curVid && p.dataset.triedTranscode!=="1"){
     p.dataset.triedTranscode="1";
-    p.src=p.dataset.transcodeUrl;
-    p.play().catch(()=>{});
+    playTranscoded(_curVid);
     toast("Converting for your browser…");
   }
 });
