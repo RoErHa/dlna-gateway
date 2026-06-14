@@ -34,6 +34,15 @@ fallback.
 6. **Naim/`/gw` untouched** — videos are NOT exposed in the gateway-as-Media­
    Server ContentDirectory (audio-only for the Naim). A video-capable DMS for
    TVs that browse the gateway is an optional later add (V5+), not in scope here.
+7. **Separate video root** — videos live in their OWN folder,
+   **`/Volumes/SAMDATA/GWMovies`**, distinct from the music root
+   `/Volumes/SAMDATA/Music` (`LOCALFS_MUSIC_ROOT`). New config var
+   **`LOCALFS_VIDEO_ROOT`** (env) / `localfs.video_root` (config.json), default
+   **unset = video disabled** (mirrors how `LOCALFS_MUSIC_ROOT` gates audio).
+   The video scan walks this root ONLY — fully independent of the music scan, so
+   there's no extension-filtering against the music tree and the two never mix.
+   Videos get their own synthetic udn (`uuid:localfs-movies`) to keep them
+   cleanly separable from the audio LocalFs source.
 
 ### Video extensions
 `.mp4 .m4v .mov .mkv .webm .avi .3gp .m2ts .mts` (phone footage is `.mov`
@@ -46,9 +55,37 @@ audio indexing — keep that; video indexing is a separate pass.
 - **Android** → usually H.264/AAC `.mp4` → plays natively everywhere.
 - Transcode target: **H.264 (High/Main) + AAC in fragmented MP4** — universal.
 
+### Metadata + display title
+Extract per video (via `ffprobe`, with graceful fallback when absent):
+- **date + time (capture):** `format.tags.creation_time` (ISO 8601). iPhone/
+  Android set this. Fallback: file mtime.
+- **duration:** `format.duration`.
+- **location:** GPS from `format.tags.location` / the Apple QuickTime
+  `com.apple.quicktime.location.ISO6709` tag — these are **coordinates** (e.g.
+  `+52.3676+004.9041/`), NOT a place name. Store the raw coords in `location`.
+  A human place name (`location_name`, e.g. "Amsterdam") needs **optional
+  reverse-geocoding** (online, e.g. Nominatim) — treat it like the other
+  optional/online lookups (album art / MusicBrainz): nice-to-have, cached,
+  degrades to coords-or-nothing when unavailable/offline.
+- **title:** `format.tags.title` if present (rare on phone footage).
+
+**Display title rule:** use the embedded `title` if present; otherwise build
+**`<location>_<YYYYMMDD>_<HHMM>.<ext>`** from the above —
+`<location>` = `location_name` if geocoded, else the raw coords, else omit the
+`<location>_` prefix; `<YYYYMMDD>_<HHMM>` from capture time (or mtime);
+`<ext>` = the file extension. Examples: `Amsterdam_20260614_1430.mov`,
+`20260614_1430.mp4` (no location). Compute the fallback once at index time and
+store it in `videos.title` so browse/sort/search are simple.
+
 ---
 
 ## Phase V0 — deps + scaffolding
+- **Config:** add `LOCALFS_VIDEO_ROOT` (env) / `localfs.video_root`
+  (config.json) → `/Volumes/SAMDATA/GWMovies`. Unset = video disabled. Wire it
+  in `dlna_config.py` + the LocalFs wiring (`dlna_localfs_wiring.py`) alongside
+  `LOCALFS_MUSIC_ROOT`; add it to the LaunchAgent plist when enabling. (The two
+  roots are independent; a missing/unmounted GWMovies just disables video, like
+  an unmounted music drive disables audio.)
 - Add `ffprobe`/`ffmpeg` discovery helper (mirror `fpcalc` finding in the
   enrichment tools: explicit Homebrew paths + `PATH`, since launchd has a minimal
   PATH). One module, e.g. `dlna_ffmpeg.py` with `find_ffmpeg()` / `find_ffprobe()`
@@ -60,23 +97,36 @@ audio indexing — keep that; video indexing is a separate pass.
 ## Phase V1 — index videos (backend, TEST-FIRST)
 - **Schema** (`dlna_library.py`): new `videos` table —
   `id TEXT PK, udn, url, title, file_path, folder, duration, width, height,
-   vcodec, acodec, container, mime, size, mtime, created, poster, added_at`.
-  Migration in `_init_schema` (idempotent). Run `tools/regen_schema.py` +
-  `tests/test_schema_sync.py` gate.
+   vcodec, acodec, container, mime, size, mtime, created, location,
+   location_name, poster, added_at`. `created` = capture date/time (ISO),
+   `location` = raw GPS coords (ISO6709), `location_name` = geocoded place
+   (nullable), `title` = embedded title OR the constructed
+   `<location>_<YYYYMMDD>_<HHMM>.<ext>` fallback. Migration in `_init_schema`
+   (idempotent). Run `tools/regen_schema.py` + `tests/test_schema_sync.py` gate.
 - **Extractor** (`dlna_ffmpeg.probe`): ffprobe `-show_format -show_streams
-  -print_format json` → duration/width/height/vcodec(`hevc`/`h264`)/acodec/
-  container/creation_time. No-ffprobe fallback: filename title + mtime, codecs
-  `unknown`.
+  -print_format json` → duration / width / height / vcodec(`hevc`/`h264`) /
+  acodec / container / **creation_time** / **location (ISO6709 GPS)** /
+  **embedded title**. Then compute the **display title** (embedded, else
+  `<location>_<YYYYMMDD>_<HHMM>.<ext>`). No-ffprobe fallback: title from
+  filename, `created` from mtime, codecs `unknown`, location empty.
+- **Reverse-geocode (optional):** `location_name` from the GPS coords via an
+  online lookup (Nominatim), rate-limited + cached like the art/MusicBrainz
+  fetchers; skipped when offline/disabled → title uses coords or omits location.
 - **Poster**: `ffmpeg -ss <10%> -frames:v 1` → JPEG into the poster cache; skip
   if ffmpeg absent (UI shows a generic film icon).
-- **Scan**: extend the LocalFs scan (`dlna_providers/localfs.py`) to also walk
-  video extensions into `videos` (same mtime/size cache so re-scan is cheap).
-  Keep audio + video passes independent.
+- **Scan**: a SEPARATE pass that walks **`LOCALFS_VIDEO_ROOT`
+  (`/Volumes/SAMDATA/GWMovies`)** only — its own scanner (own mtime/size cache,
+  own `uuid:localfs-movies` udn), fully independent of the music scan over
+  `LOCALFS_MUSIC_ROOT`. Reuse the LocalFs walk/cache helpers but point them at
+  the video root; no extension-filtering against the music tree.
 - **DB methods**: `upsert_videos(udn, rows)`, `all_videos(udn)` (newest-first /
   by folder), `video_by_id(id)`, `clear_videos(udn)`.
 - **Tests** (`tests/test_video_index.py`): probe-JSON parse (h264/hevc/garbled/
-  no-ffprobe), `videos` round-trip + migration idempotent, scan finds video +
-  skips audio, schema-sync gate.
+  no-ffprobe) incl. creation_time / duration / ISO6709 location; **display-title
+  construction** (embedded title wins; else `<location>_YYYYMMDD_HHMM.ext`; coords
+  fallback; no-location omits the prefix; no-creation_time → mtime); `videos`
+  round-trip + migration idempotent; scan finds video + skips audio; schema-sync
+  gate.
 
 ## Phase V2 — serve + native browser playback (TEST-FIRST backend, then UI)
 - **Serve** (`dlna_localfs_server.py`): `GET /localfs/video/<id>` — resolve via
