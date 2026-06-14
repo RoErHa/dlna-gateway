@@ -396,6 +396,59 @@ async def art(url: str = ""):
                              "Access-Control-Allow-Origin": "*"})
 
 
+# ── Video (PWA, SAME-ORIGIN) ───────────────────────────────────────────
+# The PWA <video> can't use the :8200 /localfs/video URL — over HTTPS that's
+# mixed content (blocked) + cross-origin. Serve video + posters from THIS app
+# (same origin). FileResponse handles Range automatically (seek/scrub). The LG
+# TV keeps using :8200 /localfs/video directly (not a browser).
+_VIDEO_UDN = "uuid:localfs-movies"
+
+
+def _video_payload(v: dict) -> dict:
+    return {
+        "id": v["id"], "title": v.get("title"), "folder": v.get("folder"),
+        "duration": v.get("duration"), "width": v.get("width"),
+        "height": v.get("height"), "vcodec": v.get("vcodec"),
+        "acodec": v.get("acodec"), "container": v.get("container"),
+        "mime": v.get("mime"), "created": v.get("created"),
+        "location_name": v.get("location_name"),
+        "playUrl": f"/video/{v['id']}",
+        "posterUrl": (f"/video_poster?id={v['id']}" if v.get("poster") else ""),
+    }
+
+
+@app.get("/api/videos")
+async def videos() -> list:
+    rows = await run_in_threadpool(DB.all_videos, _VIDEO_UDN)
+    return [_video_payload(v) for v in rows]
+
+
+@app.get("/api/video_meta")
+async def video_meta(id: str = ""):
+    v = await run_in_threadpool(DB.video_by_id, id) if id else None
+    if not v:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return _video_payload(v)
+
+
+@app.get("/video/{vid}", include_in_schema=False)
+async def video_file(vid: str):
+    v = await run_in_threadpool(DB.video_by_id, vid)
+    if not v or not v.get("file_path") or not os.path.isfile(v["file_path"]):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(v["file_path"], media_type=(v.get("mime") or "video/mp4"))
+
+
+@app.get("/video_poster", include_in_schema=False)
+async def video_poster(id: str = ""):
+    import dlna_ffmpeg
+    p = os.path.join(dlna_ffmpeg.POSTER_DIR, f"{os.path.basename(id)}.jpg")
+    if not id or not os.path.isfile(p):
+        return JSONResponse({"error": "no poster"}, status_code=404)
+    return FileResponse(p, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 # ── Gateway-as-MediaServer UPnP surface (/gw/*) ────────────────────────
 # Cleanup C: the Naim browses these over plain HTTP on PLAIN_PORT (:8765). They
 # reuse api_upnp's pure helpers, so the SOAP/descriptors are byte-identical to
