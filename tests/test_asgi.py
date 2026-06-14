@@ -1093,5 +1093,78 @@ class TestGwDeviceAsgi(unittest.TestCase):
         self.assertIn(b"<TotalMatches>1</TotalMatches>", body)
 
 
+class TestVideoApi(unittest.TestCase):
+    """V2-PWA same-origin video API: /api/videos, /api/video_meta, /video/<id>
+    (FileResponse + Range), /video_poster."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from dlna_library import LibraryDB
+        cls.vdir = tempfile.mkdtemp()
+        cls.fp = os.path.join(cls.vdir, "clip.mp4")
+        open(cls.fp, "wb").write(b"video-bytes")
+        cls.posters = tempfile.mkdtemp()
+        open(os.path.join(cls.posters, "v1.jpg"), "wb").write(b"\xff\xd8jpeg")
+        fd, cls.db_path = tempfile.mkstemp(suffix=".db"); os.close(fd)
+        cls.db = LibraryDB(cls.db_path)
+        cls.db.upsert_videos("uuid:localfs-movies", [{
+            "id": "v1", "udn": "uuid:localfs-movies",
+            "url": "http://h:8200/localfs/video/v1", "title": "Holiday",
+            "file_path": cls.fp, "folder": "2026", "duration": 65.0,
+            "width": 1920, "height": 1080, "vcodec": "h264", "acodec": "aac",
+            "container": "mp4", "mime": "video/mp4", "size": 11, "mtime": 1.0,
+            "created": "2026-06-14T14:30:00Z", "location": None,
+            "location_name": "Amsterdam", "poster": "v1"}])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.db._pool.close(); os.unlink(cls.db_path)
+
+    def setUp(self):
+        import dlna_ffmpeg
+        self._patches = [
+            mock.patch.object(dlna_asgi, "DB", self.db),
+            mock.patch.object(dlna_ffmpeg, "POSTER_DIR", self.posters),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+
+    def test_api_videos_shape(self):
+        rows = asyncio.run(dlna_asgi.videos())
+        self.assertEqual(len(rows), 1)
+        v = rows[0]
+        self.assertEqual(v["playUrl"], "/video/v1")
+        self.assertEqual(v["posterUrl"], "/video_poster?id=v1")
+        self.assertEqual(v["title"], "Holiday")
+        self.assertEqual(v["location_name"], "Amsterdam")
+
+    def test_video_meta(self):
+        v = asyncio.run(dlna_asgi.video_meta(id="v1"))
+        self.assertEqual(v["id"], "v1")
+        r = asyncio.run(dlna_asgi.video_meta(id="nope"))
+        self.assertEqual(r.status_code, 404)
+        r = asyncio.run(dlna_asgi.video_meta(id=""))
+        self.assertEqual(r.status_code, 404)
+
+    def test_video_file_serves_and_404(self):
+        r = asyncio.run(dlna_asgi.video_file("v1"))
+        self.assertEqual(r.path, self.fp)            # FileResponse (Range-capable)
+        self.assertEqual(r.media_type, "video/mp4")
+        r404 = asyncio.run(dlna_asgi.video_file("nope"))
+        self.assertEqual(r404.status_code, 404)
+
+    def test_video_poster_serves_and_404(self):
+        r = asyncio.run(dlna_asgi.video_poster(id="v1"))
+        self.assertTrue(r.path.endswith("v1.jpg"))
+        self.assertEqual(r.media_type, "image/jpeg")
+        r404 = asyncio.run(dlna_asgi.video_poster(id="missing"))
+        self.assertEqual(r404.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
