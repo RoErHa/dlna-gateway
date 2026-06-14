@@ -354,6 +354,49 @@ class LibraryDB:
                     first_seen  TEXT DEFAULT (datetime('now')),
                     last_seen   TEXT DEFAULT (datetime('now'))
                 );
+
+                -- Video library (V1) — SEPARATE from audio `tracks`. Populated
+                -- by the scan over LOCALFS_VIDEO_ROOT (/Volumes/SAMDATA/GWMovies)
+                -- under its own udn (uuid:localfs-movies). id = sha1(rel_path)[:16]
+                -- (path-stable). Deliberately kept out of the audio browse + the
+                -- Naim's UPnP tree. `title` = embedded title or the constructed
+                -- <place>_YYYYMMDD_HHMM.ext; `location` = raw GPS (ISO6709),
+                -- `location_name` = geocoded place; `created` = capture time
+                -- (or mtime fallback); `poster` = extracted-frame id (nullable).
+                CREATE TABLE IF NOT EXISTS videos (
+                    id            TEXT PRIMARY KEY,
+                    udn           TEXT NOT NULL,
+                    url           TEXT NOT NULL,
+                    title         TEXT NOT NULL,
+                    file_path     TEXT NOT NULL,
+                    folder        TEXT DEFAULT '',
+                    duration      REAL,
+                    width         INTEGER,
+                    height        INTEGER,
+                    vcodec        TEXT,
+                    acodec        TEXT,
+                    container     TEXT,
+                    mime          TEXT,
+                    size          INTEGER,
+                    mtime         REAL,
+                    created       TEXT,
+                    location      TEXT,
+                    location_name TEXT,
+                    poster        TEXT,
+                    added_at      INTEGER NOT NULL
+                );
+
+                -- Reverse-geocode cache: GPS coords -> place name, keyed by
+                -- ROUNDED coords (~111 m at 3 dp) so each place is fetched from
+                -- Nominatim once, ever. Sticky like album_art: place='' means
+                -- "looked up, no name" (don't re-query). Survives clear/rebuild.
+                CREATE TABLE IF NOT EXISTS geocode_cache (
+                    lat_key    REAL NOT NULL,
+                    lon_key    REAL NOT NULL,
+                    place      TEXT,
+                    fetched_at INTEGER NOT NULL,
+                    PRIMARY KEY (lat_key, lon_key)
+                );
             """)
         # Migrations: add new columns to existing DBs (safe no-ops if present)
         for col_sql in [
@@ -980,6 +1023,73 @@ class LibraryDB:
             conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
 
         log.info("FTS5 rebuild complete")
+
+    # ── Video library (V1) ────────────────────────────────────────
+    # Separate from `tracks` — populated by the GWMovies scan, never mixed
+    # into the audio browse / the Naim's UPnP tree.
+    _VIDEO_COLS = ("id", "udn", "url", "title", "file_path", "folder",
+                   "duration", "width", "height", "vcodec", "acodec",
+                   "container", "mime", "size", "mtime", "created",
+                   "location", "location_name", "poster")
+
+    def upsert_videos(self, udn: str, rows: list) -> int:
+        """Insert/replace video rows (keyed by id). Returns rows written."""
+        if not rows:
+            return 0
+        cols = self._VIDEO_COLS
+        placeholders = ", ".join("?" * len(cols))
+        sql = (f"INSERT OR REPLACE INTO videos ({', '.join(cols)}, added_at) "
+               f"VALUES ({placeholders}, strftime('%s','now'))")
+        n = 0
+        with self._pool.write() as conn:
+            for r in rows:
+                r = {**r, "udn": r.get("udn", udn)}
+                conn.execute(sql, [r.get(c) for c in cols])
+                n += 1
+        return n
+
+    def all_videos(self, udn: str) -> list:
+        """All videos for a udn, newest capture first."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM videos WHERE udn=? "
+                "ORDER BY created DESC, title COLLATE NOCASE", (udn,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def video_by_id(self, vid: str):
+        with self._pool.read() as conn:
+            r = conn.execute("SELECT * FROM videos WHERE id=?", (vid,)).fetchone()
+        return dict(r) if r else None
+
+    def clear_videos(self, udn: str) -> int:
+        """Wipe the video index for this udn (force-rescan). Returns rows removed."""
+        with self._pool.write() as conn:
+            cur = conn.execute("DELETE FROM videos WHERE udn=?", (udn,))
+        log.info(f"Video index cleared for {udn} ({cur.rowcount} rows)")
+        return cur.rowcount
+
+    # ── Reverse-geocode cache (V1) ────────────────────────────────
+    @staticmethod
+    def _geo_key(lat, lon):
+        return (round(float(lat), 3), round(float(lon), 3))   # ~111 m at 3 dp
+
+    def geocode_get(self, lat, lon):
+        """(place, True) if cached (place may be '' = looked-up-no-name);
+        (None, False) on a miss. Lets the geocoder skip a re-query forever."""
+        la, lo = self._geo_key(lat, lon)
+        with self._pool.read() as conn:
+            r = conn.execute(
+                "SELECT place FROM geocode_cache WHERE lat_key=? AND lon_key=?",
+                (la, lo)).fetchone()
+        return ((r["place"] or "", True) if r is not None else (None, False))
+
+    def geocode_put(self, lat, lon, place):
+        la, lo = self._geo_key(lat, lon)
+        with self._pool.write() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO geocode_cache"
+                "(lat_key, lon_key, place, fetched_at) "
+                "VALUES (?, ?, ?, strftime('%s','now'))", (la, lo, place or ""))
 
     # ── FTS5 search ───────────────────────────────────────────────
 

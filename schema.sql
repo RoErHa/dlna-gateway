@@ -126,5 +126,34 @@ CREATE TABLE device_roles (
                     first_seen  TEXT DEFAULT (datetime('now')),
                     last_seen   TEXT DEFAULT (datetime('now'))
                 );
+CREATE TABLE videos (
+                    id            TEXT PRIMARY KEY,
+                    udn           TEXT NOT NULL,
+                    url           TEXT NOT NULL,
+                    title         TEXT NOT NULL,
+                    file_path     TEXT NOT NULL,
+                    folder        TEXT DEFAULT '',
+                    duration      REAL,
+                    width         INTEGER,
+                    height        INTEGER,
+                    vcodec        TEXT,
+                    acodec        TEXT,
+                    container     TEXT,
+                    mime          TEXT,
+                    size          INTEGER,
+                    mtime         REAL,
+                    created       TEXT,
+                    location      TEXT,
+                    location_name TEXT,
+                    poster        TEXT,
+                    added_at      INTEGER NOT NULL
+                );
+CREATE TABLE geocode_cache (
+                    lat_key    REAL NOT NULL,
+                    lon_key    REAL NOT NULL,
+                    place      TEXT,
+                    fetched_at INTEGER NOT NULL,
+                    PRIMARY KEY (lat_key, lon_key)
+                );
 CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url);
 CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key);
