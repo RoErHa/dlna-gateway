@@ -78,6 +78,12 @@
         <key>LOCALFS_PORT</key>
         <string>8200</string>
 
+        <!-- Video library (separate root). Enables the GWMovies scan + the
+             "📹 Videos" folder in the gateway server (for the LG TV / PWA;
+             served from the same :8200). Unset = video disabled. -->
+        <key>LOCALFS_VIDEO_ROOT</key>
+        <string>/Volumes/SAMDATA/GWMovies</string>
+
         <!-- /gw/* (UPnP for the Naim) + the SSDP advert are served by the app
              on the plain :8765 bind (GATEWAY_PLAIN_PORT defaults to 8765) — no
              separate device port. GATEWAY_PORT was retired in Cleanup C. -->
