@@ -376,6 +376,71 @@ class TestFullLibraryBrowse(unittest.TestCase):
             self.assertEqual((n_ret, total), (0, 0), oid)
 
 
+class TestVideoBrowse(unittest.TestCase):
+    """Videos are exposed as a '📹 Videos' folder in the same gateway server so
+    a TV (LG) can browse + play them; only present when videos exist."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db = LibraryDB(self.tmp.name)
+        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self.db._pool.close()
+        os.unlink(self.tmp.name)
+
+    def _seed(self):
+        self.db.upsert_videos("uuid:localfs-movies", [{
+            "id": "v1", "udn": "uuid:localfs-movies",
+            "url": "http://h:8200/localfs/video/v1", "title": "Holiday",
+            "file_path": "/m/v1.mp4", "folder": "2026", "duration": 65.0,
+            "width": 1920, "height": 1080, "vcodec": "h264", "acodec": "aac",
+            "container": "mp4", "mime": "video/mp4", "size": 9000,
+            "mtime": 1.0, "created": "2026-06-14T14:30:00Z",
+            "location": None, "location_name": None, "poster": "v1",
+        }])
+
+    def test_no_videos_folder_when_empty(self):
+        xml, n, t = api_upnp._gw_browse("0", "BrowseDirectChildren", 0, 50)
+        self.assertNotIn("📹 Videos", xml)
+        self.assertNotIn('id="videos"', xml)
+
+    def test_videos_folder_appears_when_present(self):
+        self._seed()
+        xml, n, t = api_upnp._gw_browse("0", "BrowseDirectChildren", 0, 50)
+        self.assertIn('id="videos"', xml)
+        self.assertIn("📹 Videos", xml)
+
+    def test_browse_videos_lists_items(self):
+        self._seed()
+        xml, n, t = api_upnp._gw_browse("videos", "BrowseDirectChildren", 0, 50)
+        self.assertEqual((n, t), (1, 1))
+        self.assertIn('id="vid:v1"', xml)
+        self.assertIn("object.item.videoItem.movie", xml)
+        self.assertIn("http://h:8200/localfs/video/v1", xml)
+        self.assertIn('resolution="1920x1080"', xml)
+        self.assertIn('duration="0:01:05"', xml)            # 65 s
+        self.assertIn("/localfs/poster/v1", xml)            # albumArtURI
+
+    def test_browse_single_video_metadata(self):
+        self._seed()
+        xml, n, t = api_upnp._gw_browse("vid:v1", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n, t), (1, 1))
+        self.assertIn("Holiday", xml)
+
+    def test_unknown_video_empty(self):
+        xml, n, t = api_upnp._gw_browse("vid:nope", "BrowseDirectChildren", 0, 0)
+        self.assertEqual((n, t), (0, 0))
+
+    def test_fmt_duration(self):
+        self.assertEqual(api_upnp._fmt_duration(65), "0:01:05")
+        self.assertEqual(api_upnp._fmt_duration(3661), "1:01:01")
+        self.assertEqual(api_upnp._fmt_duration(None), "")
+
+
 class TestContentDirectorySCPD(unittest.TestCase):
     """The ContentDirectory SCPD must be valid UPnP — action/argument/state
     names in <name> tags (a stray <n> made NaimUPnP reject the service and

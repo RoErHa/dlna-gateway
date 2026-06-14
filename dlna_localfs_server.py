@@ -56,6 +56,7 @@ _CHUNK = 64 * 1024
 _STREAM_PREFIX = "/localfs/stream/"
 _ART_PREFIX = "/localfs/art/"
 _VIDEO_PREFIX = "/localfs/video/"
+_POSTER_PREFIX = "/localfs/poster/"
 # Cap embedded-art responses — covers are KB-to-low-MB; anything past
 # this is almost certainly not a cover and we refuse rather than buffer.
 _ART_MAX_BYTES = 12 * 1024 * 1024
@@ -167,6 +168,8 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith(_ART_PREFIX):
             self._serve_art(send_body=True)
+        elif self.path.startswith(_POSTER_PREFIX):
+            self._serve_poster(send_body=True)
         elif self.path.startswith(_VIDEO_PREFIX):
             self._serve(send_body=True, prefix=_VIDEO_PREFIX,
                         resolver=self._resolve_video)
@@ -176,6 +179,8 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         if self.path.startswith(_ART_PREFIX):
             self._serve_art(send_body=False)
+        elif self.path.startswith(_POSTER_PREFIX):
+            self._serve_poster(send_body=False)
         elif self.path.startswith(_VIDEO_PREFIX):
             self._serve(send_body=False, prefix=_VIDEO_PREFIX,
                         resolver=self._resolve_video)
@@ -342,6 +347,29 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
         if not row or not row[0]:
             return ("", "")
         return (row[0], row[1] or _FALLBACK_MIME)
+
+    def _serve_poster(self, *, send_body: bool):
+        """GET/HEAD /localfs/poster/<id> → the extracted poster JPEG from
+        dlna_ffmpeg.POSTER_DIR. 404 when there's no poster for that id."""
+        import dlna_ffmpeg
+        vid = unquote(self.path[len(_POSTER_PREFIX):]).split("?", 1)[0]
+        path = os.path.join(dlna_ffmpeg.POSTER_DIR, f"{os.path.basename(vid)}.jpg")
+        if not vid or not os.path.isfile(path):
+            self.send_error(404, "No poster")
+            return
+        try:
+            data = open(path, "rb").read()
+        except OSError:
+            self.send_error(404, "No poster")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if send_body:
+            self.wfile.write(data)
 
     def _resolve_video(self, vid: str) -> tuple[str, str]:
         """video id → (file_path, mime) from the `videos` table. Empty on miss."""

@@ -169,6 +169,23 @@ def _gw_cd_desc_xml() -> str:
     )
 
 
+# Video library udn (mirrors dlna_localfs_wiring.VIDEO_UDN). Videos are exposed
+# as a "📹 Videos" folder so a TV (LG) can browse + play them; the Naim sees the
+# folder but is audio-only, so the user just doesn't open it.
+_VIDEO_UDN = "uuid:localfs-movies"
+
+
+def _fmt_duration(sec) -> str:
+    """Seconds → UPnP res 'H:MM:SS' (empty when unknown)."""
+    try:
+        sec = int(float(sec))
+    except (TypeError, ValueError):
+        return ""
+    h, rem = divmod(max(sec, 0), 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}"
+
+
 # ── ContentDirectory Browse ───────────────────────────────────────
 
 def _gw_browse(obj_id: str, browse_flag: str,
@@ -214,6 +231,32 @@ def _gw_browse(obj_id: str, browse_flag: str,
             title = album or (artist if show_artist else "") or "(album)"
         return container(cid, parent, title, r.get("track_count", 0))
 
+    def video_item(v, parent_id):
+        url   = _xml_esc(v.get("url", ""))
+        title = _xml_esc(v.get("title", ""))
+        mime  = v.get("mime") or "video/mp4"
+        dur   = _fmt_duration(v.get("duration"))
+        attrs = [f'protocolInfo="http-get:*:{_xml_esc(mime)}:'
+                 'DLNA.ORG_OP=01;'
+                 'DLNA.ORG_FLAGS=01700000000000000000000000000000"']
+        if v.get("width") and v.get("height"):
+            attrs.append(f'resolution="{v["width"]}x{v["height"]}"')
+        if v.get("size"):
+            attrs.append(f'size="{v["size"]}"')
+        if dur:
+            attrs.append(f'duration="{dur}"')
+        art = ""
+        if v.get("poster"):
+            poster_url = v.get("url", "").replace("/localfs/video/",
+                                                  "/localfs/poster/")
+            art = f'<upnp:albumArtURI>{_xml_esc(poster_url)}</upnp:albumArtURI>'
+        return (f'<item id="vid:{_xml_esc(v.get("id", ""))}" '
+                f'parentID="{_xml_esc(parent_id)}" restricted="1">'
+                f'<dc:title>{title}</dc:title>{art}'
+                f'<upnp:class>object.item.videoItem.movie</upnp:class>'
+                f'<res {" ".join(attrs)}>{url}</res>'
+                f'</item>')
+
     OPEN  = ('<?xml version="1.0" encoding="UTF-8"?>'
              '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
              'xmlns:dc="http://purl.org/dc/elements/1.1/" '
@@ -221,8 +264,10 @@ def _gw_browse(obj_id: str, browse_flag: str,
     CLOSE = '</DIDL-Lite>'
 
     if obj_id == "0":
+        n_videos = len(DB.all_videos(_VIDEO_UDN))
         if browse_flag == "BrowseMetadata":
-            return OPEN + container("0", "-1", GW_NAME, 5) + CLOSE, 1, 1
+            return (OPEN + container("0", "-1", GW_NAME,
+                                     5 + (1 if n_videos else 0)) + CLOSE, 1, 1)
         udn       = DB.primary_udn()
         n_artists = len(_lib_artists(udn))   if udn else 0
         n_albums  = len(_album_letters(udn)) if udn else 0   # # of letter buckets
@@ -236,7 +281,12 @@ def _gw_browse(obj_id: str, browse_flag: str,
             container("favalbums", "0", "⭐ Favourite Albums", n_favs),
             container("playlists", "0", "Playlists",          n_pls),
         ]
-        return OPEN + "".join(items) + CLOSE, 5, 5
+        # Videos folder — only when there ARE videos (so it never clutters the
+        # Naim's view unless GWMovies is enabled + populated).
+        if n_videos:
+            items.append(container("videos", "0", "\U0001F4F9 Videos", n_videos))
+        n = len(items)
+        return OPEN + "".join(items) + CLOSE, n, n
 
     # ── Full-library tree (Artists / Albums / Genres) ──────────────
     # Backed by LibraryDB on the primary library udn (the LocalFs backend).
@@ -327,6 +377,22 @@ def _gw_browse(obj_id: str, browse_flag: str,
         page  = rows[start:start + count] if count else rows[start:]
         items = [album_container(r, obj_id) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id == "videos":
+        vids  = DB.all_videos(_VIDEO_UDN)
+        total = len(vids)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("videos", "0", "\U0001F4F9 Videos", total)
+                    + CLOSE, 1, 1)
+        page  = vids[start:start + count] if count else vids[start:]
+        items = [video_item(v, "videos") for v in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("vid:"):
+        v = DB.video_by_id(obj_id[len("vid:"):])
+        if not v:
+            return OPEN + CLOSE, 0, 0
+        return OPEN + video_item(v, "videos") + CLOSE, 1, 1
 
     if obj_id == "playlists":
         pls   = DB.pl_list()
