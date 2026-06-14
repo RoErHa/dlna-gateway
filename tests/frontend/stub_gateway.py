@@ -223,6 +223,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/static/app.js":
             self._send_static(STATIC_DIR / "app.js", "application/javascript")
             return
+        if path == "/static/vendor/hls.min.js":
+            self._send_static(STATIC_DIR / "vendor" / "hls.min.js",
+                              "application/javascript")
+            return
         if path == "/static/app.css":
             self._send_static(STATIC_DIR / "app.css", "text/css")
             return
