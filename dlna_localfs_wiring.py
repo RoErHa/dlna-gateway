@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 log = logging.getLogger("dlna.localfs.wiring")
@@ -146,17 +147,31 @@ def maybe_start_localfs(get_lan_ip):
                      name="localfs-initial-scan").start()
 
     # Video scan over GWMovies (separate udn, served from the same :8200).
+    # PERIODIC + incremental so new clips appear without a restart: an initial
+    # scan at boot, then every VIDEO_SCAN_INTERVAL_SEC (default 300s = 5 min).
+    # Each pass skips unchanged files (mtime,size) and prunes removed ones, so a
+    # steady library is near-free and new clips are geocoded once (cached). Only
+    # logs at INFO when something changed (or the first pass) to keep gateway.log
+    # quiet.
     if vpath:
+        interval = max(30, int(os.environ.get("VIDEO_SCAN_INTERVAL_SEC", "300")))
+
         def _video_scan():
-            try:
-                import dlna_video_index
-                stats = dlna_video_index.scan_videos(
-                    str(vpath), VIDEO_UDN, DB, base_url)
-                log.info(f"Video initial scan complete: {stats}")
-            except Exception as e:                            # noqa: BLE001
-                log.exception(f"Video initial scan failed: {e}")
+            import dlna_video_index
+            first = True
+            while True:
+                try:
+                    stats = dlna_video_index.scan_videos(
+                        str(vpath), VIDEO_UDN, DB, base_url)
+                    if first or stats.get("added") or stats.get("pruned"):
+                        log.info(f"Video scan: {stats}")
+                    first = False
+                except Exception as e:                        # noqa: BLE001
+                    log.exception(f"Video scan failed: {e}")
+                time.sleep(interval)
+
         threading.Thread(target=_video_scan, daemon=True,
-                         name="video-initial-scan").start()
+                         name="video-scan").start()
 
 
 __all__ = ["maybe_start_localfs", "video_root", "VIDEO_UDN"]

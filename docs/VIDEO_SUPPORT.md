@@ -123,7 +123,10 @@ store it in `videos.title` so browse/sort/search are simple.
   (`/Volumes/SAMDATA/GWMovies`)** only — its own scanner (own mtime/size cache,
   own `uuid:localfs-movies` udn), fully independent of the music scan over
   `LOCALFS_MUSIC_ROOT`. Reuse the LocalFs walk/cache helpers but point them at
-  the video root; no extension-filtering against the music tree.
+  the video root; no extension-filtering against the music tree. **Runs
+  PERIODICALLY**: an initial scan at boot, then every `VIDEO_SCAN_INTERVAL_SEC`
+  (default 300 s) — incremental (skips unchanged, prunes removed) so new clips
+  appear without a restart and a steady library is near-free.
 - **DB methods**: `upsert_videos(udn, rows)`, `all_videos(udn)` (newest-first /
   by folder), `video_by_id(id)`, `clear_videos(udn)`.
 - **Tests** (`tests/test_video_index.py`): probe-JSON parse (h264/hevc/garbled/
