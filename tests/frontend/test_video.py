@@ -22,7 +22,8 @@ def _vid(vid, title, **kw):
          "width": 1920, "height": 1080, "vcodec": "h264", "acodec": "aac",
          "container": "mp4", "mime": "video/mp4",
          "created": "2026-06-14T14:30:00Z", "location_name": "Amsterdam",
-         "playUrl": f"/video/{vid}", "posterUrl": f"/video_poster?id={vid}"}
+         "playUrl": f"/video/{vid}", "transcodeUrl": f"/video_transcode/{vid}",
+         "posterUrl": f"/video_poster?id={vid}"}
     d.update(kw)
     return d
 
@@ -68,6 +69,27 @@ def test_click_plays_same_origin_video(app, gateway):
     app.wait_for_selector("#video-modal.open", timeout=2000)
     src = app.locator("#video-player").get_attribute("src")
     assert src and src.endswith("/video/v1"), src   # same-origin, not :8200
+
+
+def test_unplayable_container_uses_transcode(app, gateway):
+    # An MKV (video/x-matroska) can't play in chromium → src must be the
+    # same-origin transcode stream, not the native /video URL.
+    gateway.videos = [_vid("mkv1", "Concert", mime="video/x-matroska",
+                           container="matroska", vcodec="hevc", acodec="eac3")]
+    _open_videos(app)
+    app.locator(".video-row").first.click()
+    app.wait_for_selector("#video-modal.open", timeout=2000)
+    src = app.locator("#video-player").get_attribute("src")
+    assert src and src.endswith("/video_transcode/mkv1"), src
+
+
+def test_playable_mp4_uses_native(app, gateway):
+    gateway.videos = [_vid("v1", "Holiday")]   # video/mp4 (H.264)
+    _open_videos(app)
+    app.locator(".video-row").first.click()
+    app.wait_for_selector("#video-modal.open", timeout=2000)
+    src = app.locator("#video-player").get_attribute("src")
+    assert src and src.endswith("/video/v1"), src   # native, not transcode
 
 
 def test_close_video_clears_player(app, gateway):

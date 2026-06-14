@@ -413,6 +413,7 @@ def _video_payload(v: dict) -> dict:
         "mime": v.get("mime"), "created": v.get("created"),
         "location_name": v.get("location_name"),
         "playUrl": f"/video/{v['id']}",
+        "transcodeUrl": f"/video_transcode/{v['id']}",
         "posterUrl": (f"/video_poster?id={v['id']}" if v.get("poster") else ""),
     }
 
@@ -447,6 +448,42 @@ async def video_poster(id: str = ""):
         return JSONResponse({"error": "no poster"}, status_code=404)
     return FileResponse(p, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/video_transcode/{vid}", include_in_schema=False)
+async def video_transcode(vid: str):
+    """On-demand transcode → H.264/AAC fragmented MP4, streamed (V3). The PWA
+    falls back here for clips the browser can't decode natively (HEVC / MKV /
+    E-AC3). ffmpeg absent → 503 (native-only still works). Progressive (no
+    Range/seek yet — HLS is the future upgrade)."""
+    import dlna_ffmpeg
+    v = await run_in_threadpool(DB.video_by_id, vid)
+    if not v or not v.get("file_path") or not os.path.isfile(v["file_path"]):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not dlna_ffmpeg.find_ffmpeg():
+        return JSONResponse({"error": "ffmpeg not available"}, status_code=503)
+    cmd = dlna_ffmpeg.transcode_cmd(v["file_path"])
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+
+    async def _pump():
+        try:
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if proc.returncode is None:        # client disconnected / done
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+
+    return StreamingResponse(_pump(), media_type="video/mp4",
+                             headers={"Cache-Control": "no-store",
+                                      "Connection": "close"})
 
 
 # ── Gateway-as-MediaServer UPnP surface (/gw/*) ────────────────────────

@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v11';  // v11: 📹 Videos PWA section + <video> player
+const APP_CACHE = 'dlna-gw-app-v12';  // v12: video transcode fallback (HEVC/MKV in browser)
 const ART_CACHE = 'dlna-gw-art-v2';   // v2: evict stale blanks cached during gateway-down / pre-heal windows
 const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
 
