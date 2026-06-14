@@ -37,6 +37,23 @@ from pathlib import Path
 
 log = logging.getLogger("dlna.localfs.wiring")
 
+# Synthetic udn for the video library — kept distinct from the audio LocalFs
+# source so videos never mix into the music browse / the Naim's UPnP tree.
+VIDEO_UDN = "uuid:localfs-movies"
+
+
+def video_root() -> str:
+    """Configured VIDEO root for the video feature (Phase V1+): env
+    `LOCALFS_VIDEO_ROOT`, else `localfs.video_root` in config.json. Returns ''
+    when unset = video disabled. Separate from the music root
+    (`LOCALFS_MUSIC_ROOT` / `localfs.root`); the two are fully independent."""
+    root = os.environ.get("LOCALFS_VIDEO_ROOT", "").strip()
+    if not root:
+        from dlna_config import load_config
+        root = ((load_config().get("localfs") or {})
+                .get("video_root", "") or "").strip()
+    return root
+
 
 def maybe_start_localfs(get_lan_ip):
     """Caller passes the gateway's own `get_lan_ip` function so this
