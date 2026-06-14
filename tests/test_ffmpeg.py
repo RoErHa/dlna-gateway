@@ -146,6 +146,7 @@ class TestCmdBuilders(unittest.TestCase):
         self.assertIn("pipe:1", cmd)
         joined = " ".join(cmd)
         self.assertIn("frag_keyframe", joined)
+        self.assertIn("-pix_fmt yuv420p", joined)   # 8-bit (10-bit HEVC sources)
 
     def test_poster_cmd(self):
         cmd = ff.poster_cmd("/m/clip.mov", "/tmp/p.jpg", "00:00:05", "/ff")
@@ -166,6 +167,8 @@ class TestCmdBuilders(unittest.TestCase):
         self.assertIn("mpegts", cmd)
         self.assertIn("-output_ts_offset 12.0", joined)
         self.assertIn("pipe:1", cmd)
+        # 8-bit downconvert — source may be 10-bit HEVC (else libx264 High fails)
+        self.assertIn("-pix_fmt yuv420p", joined)
 
 
 class TestHlsPlaylist(unittest.TestCase):
