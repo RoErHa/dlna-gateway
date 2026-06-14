@@ -1068,6 +1068,19 @@ class LibraryDB:
         log.info(f"Video index cleared for {udn} ({cur.rowcount} rows)")
         return cur.rowcount
 
+    def prune_videos(self, udn: str, keep_ids) -> int:
+        """Delete this udn's video rows whose id is NOT in keep_ids — drops
+        rows for files removed from disk after an incremental scan. Returns
+        the number removed."""
+        keep = set(keep_ids)
+        with self._pool.write() as conn:
+            rows = conn.execute(
+                "SELECT id FROM videos WHERE udn=?", (udn,)).fetchall()
+            gone = [r["id"] for r in rows if r["id"] not in keep]
+            for vid in gone:
+                conn.execute("DELETE FROM videos WHERE id=?", (vid,))
+        return len(gone)
+
     # ── Reverse-geocode cache (V1) ────────────────────────────────
     @staticmethod
     def _geo_key(lat, lon):
