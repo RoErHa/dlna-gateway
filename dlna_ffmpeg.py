@@ -1,0 +1,209 @@
+"""
+dlna_ffmpeg.py — optional ffmpeg/ffprobe helpers for the video feature (V0).
+
+ffmpeg + ffprobe are OPTIONAL external binaries (same posture as `fpcalc`):
+  • probe()           — read a video's metadata (duration / dims / codecs /
+                        container / capture time / GPS / title) via ffprobe.
+  • extract_poster()  — grab a single poster frame via ffmpeg.
+  • transcode_cmd()   — build the on-demand H.264/AAC transcode argv (Phase V3).
+  • build_display_title() / parse_iso6709() — pure helpers for the
+                        "<place>_YYYYMMDD_HHMM.ext" fallback title.
+
+When the binaries are absent everything degrades gracefully (probe → None,
+extract_poster → False) so the gateway stays audio-first and video simply
+doesn't light up. launchd has a minimal PATH, so binary discovery also checks
+the usual Homebrew locations explicitly.
+
+See docs/VIDEO_SUPPORT.md (Phases V0/V1/V3).
+"""
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+
+log = logging.getLogger("dlna.ffmpeg")
+
+# Homebrew + common locations — launchd-spawned processes get a minimal PATH,
+# so shutil.which alone isn't enough (same reason the enrichment tools do this).
+_EXTRA_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
+
+# On-disk poster-frame cache (mirrors dlna_art_cache). Posters are written in
+# Phase V1; the dir is gitignored. Env-overridable.
+POSTER_DIR = os.environ.get("VIDEO_POSTER_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "video_posters")
+
+
+def _find(name: str):
+    """Locate an executable by name → absolute path, or None."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _EXTRA_BIN_DIRS:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def find_ffprobe():
+    return _find("ffprobe")
+
+
+def find_ffmpeg():
+    return _find("ffmpeg")
+
+
+# ── numeric / format helpers ──────────────────────────────────────
+
+def _to_float(v):
+    try:
+        return round(float(v), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _container(format_name, path=""):
+    """A short container token from ffprobe's format_name (e.g.
+    'mov,mp4,m4a,3gp,3g2,mj2' → 'mov') or the file extension as fallback."""
+    if format_name:
+        return str(format_name).split(",")[0].strip() or None
+    ext = os.path.splitext(path or "")[1].lstrip(".").lower()
+    return ext or None
+
+
+# ── GPS (ISO 6709) ────────────────────────────────────────────────
+# Phone videos carry location as ISO 6709, e.g. '+52.3676+004.9041/' or
+# '+52.3676-004.9041+012.3/' (lat, lon, optional altitude).
+_ISO6709_RE = re.compile(r"([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)")
+
+
+def parse_iso6709(s):
+    """ISO 6709 string → (lat, lon) floats, or None. Altitude is ignored."""
+    if not s:
+        return None
+    m = _ISO6709_RE.search(str(s))
+    if not m:
+        return None
+    try:
+        return (float(m.group(1)), float(m.group(2)))
+    except ValueError:
+        return None
+
+
+# ── ffprobe ───────────────────────────────────────────────────────
+
+def _parse_probe(data: dict, path: str = "") -> dict:
+    """Normalise a parsed ffprobe JSON document → our metadata dict. Pure."""
+    fmt     = data.get("format") or {}
+    streams = data.get("streams") or []
+    v = next((s for s in streams if s.get("codec_type") == "video"), {})
+    a = next((s for s in streams if s.get("codec_type") == "audio"), {})
+    tags = {str(k).lower(): val for k, val in (fmt.get("tags") or {}).items()}
+    return {
+        "duration":  _to_float(fmt.get("duration") or v.get("duration")),
+        "width":     _to_int(v.get("width")),
+        "height":    _to_int(v.get("height")),
+        "vcodec":    (v.get("codec_name") or "").lower() or None,
+        "acodec":    (a.get("codec_name") or "").lower() or None,
+        "container": _container(fmt.get("format_name"), path),
+        "created":   tags.get("creation_time") or None,
+        "location":  (tags.get("location")
+                      or tags.get("com.apple.quicktime.location.iso6709")
+                      or None),
+        "title":     tags.get("title") or None,
+    }
+
+
+def probe(path: str, ffprobe: str = None):
+    """Probe a video file → metadata dict, or None when ffprobe is unavailable
+    or the probe fails (callers fall back to filename/mtime)."""
+    exe = ffprobe or find_ffprobe()
+    if not exe:
+        return None
+    try:
+        r = subprocess.run(
+            [exe, "-v", "quiet", "-print_format", "json",
+             "-show_format", "-show_streams", path],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return None
+        return _parse_probe(json.loads(r.stdout), path)
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        log.debug("ffprobe failed for %s: %s", path, e)
+        return None
+
+
+# ── poster frame ──────────────────────────────────────────────────
+
+def poster_cmd(path: str, out_path: str, when: str = "00:00:03",
+               ffmpeg: str = "ffmpeg") -> list:
+    """argv to grab one JPEG poster frame at `when` (seek before input = fast)."""
+    return [ffmpeg, "-v", "error", "-ss", str(when), "-i", path,
+            "-frames:v", "1", "-q:v", "3", "-y", out_path]
+
+
+def extract_poster(path: str, out_path: str, when: str = "00:00:03",
+                   ffmpeg: str = None) -> bool:
+    """Extract a poster frame → True on success, False if ffmpeg missing/fails."""
+    exe = ffmpeg or find_ffmpeg()
+    if not exe:
+        return False
+    try:
+        r = subprocess.run(poster_cmd(path, out_path, when, exe),
+                           capture_output=True, timeout=30)
+        return r.returncode == 0 and os.path.isfile(out_path)
+    except (subprocess.SubprocessError, OSError) as e:
+        log.debug("poster extract failed for %s: %s", path, e)
+        return False
+
+
+# ── on-demand transcode (Phase V3) ────────────────────────────────
+
+def transcode_cmd(path: str, ffmpeg: str = None) -> list:
+    """argv to transcode `path` → fragmented H.264/AAC MP4 on stdout (pipe:1) —
+    the universal-playback target for the capability-aware fallback."""
+    exe = ffmpeg or find_ffmpeg() or "ffmpeg"
+    return [
+        exe, "-v", "error", "-i", path,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "pipe:1",
+    ]
+
+
+# ── display title ─────────────────────────────────────────────────
+
+def _fmt_dt(created) -> str:
+    """ISO-ish timestamp → 'YYYYMMDD_HHMM', or '' if unparseable."""
+    if not created:
+        return ""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})", str(created))
+    if not m:
+        return ""
+    y, mo, d, h, mi = m.groups()
+    return f"{y}{mo}{d}_{h}{mi}"
+
+
+def build_display_title(embedded_title, created, location_name, coords,
+                        ext: str) -> str:
+    """The video's display title: the embedded title if present, otherwise
+    `<location>_<YYYYMMDD>_<HHMM>.<ext>` — location = geocoded place name, else
+    raw coords, else omitted; date/time from capture time (caller passes mtime
+    as a fallback `created`); falls back to 'video' when nothing is known."""
+    if embedded_title and str(embedded_title).strip():
+        return str(embedded_title).strip()
+    loc = (location_name or coords or "").strip()
+    dt  = _fmt_dt(created)
+    stem = "_".join(p for p in (loc, dt) if p) or "video"
+    ext = (ext or "").lstrip(".").lower()
+    return f"{stem}.{ext}" if ext else stem
