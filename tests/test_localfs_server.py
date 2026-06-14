@@ -449,5 +449,73 @@ class TestArtRoute(unittest.TestCase):
         self.assertEqual(r.status, 404)
 
 
+class TestDlnaHeadersForVideo(unittest.TestCase):
+    def test_video_has_no_pn_but_has_op_flags(self):
+        h = _dlna_headers_for_mime("video/mp4")
+        cf = h["contentFeatures.dlna.org"]
+        self.assertNotIn("DLNA.ORG_PN=", cf)     # no wrong codec PN
+        self.assertIn("DLNA.ORG_OP=01", cf)       # Range advertised
+        self.assertEqual(h["transferMode.dlna.org"], "Streaming")
+
+
+class TestVideoServeEndToEnd(unittest.TestCase):
+    """GET /localfs/video/<id> serves bytes from the `videos` table with the
+    same Range machinery as audio (used by the LG TV / PWA video player)."""
+
+    @classmethod
+    def setUpClass(cls):
+        body = bytes((i % 256) for i in range(4096))
+        cls.vdir = tempfile.mkdtemp(prefix="gwmovies-")
+        fp = Path(cls.vdir) / "clip.mp4"
+        fp.write_bytes(body)
+        db_fd, cls.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(db_fd)
+        db = LibraryDB(db_file=cls.db_path)
+        cls.vid = "vid0001"
+        db.upsert_videos("uuid:localfs-movies", [{
+            "id": cls.vid, "udn": "uuid:localfs-movies",
+            "url": f"http://h/localfs/video/{cls.vid}", "title": "Clip",
+            "file_path": str(fp), "folder": "", "duration": 1.0,
+            "width": 1920, "height": 1080, "vcodec": "h264", "acodec": "aac",
+            "container": "mp4", "mime": "video/mp4", "size": len(body),
+            "mtime": 1.0, "created": "2026-06-14T14:30:00Z",
+            "location": None, "location_name": None, "poster": None,
+        }])
+        db._pool.close()
+        cls.srv = start_server(cls.db_path, port=0, host="127.0.0.1",
+                               allowed_roots=(cls.vdir,))
+        cls.host, cls.port = cls.srv.server_address
+        cls.body = body
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown(); cls.srv.server_close()
+
+    def _conn(self):
+        return http.client.HTTPConnection(self.host, self.port, timeout=5)
+
+    def test_full_get(self):
+        c = self._conn(); c.request("GET", f"/localfs/video/{self.vid}")
+        r = c.getresponse(); data = r.read(); c.close()
+        self.assertEqual(r.status, 200)
+        self.assertEqual(data, self.body)
+        self.assertEqual(r.getheader("Content-Type"), "video/mp4")
+        self.assertIn("DLNA.ORG_OP=01", r.getheader("contentFeatures.dlna.org"))
+
+    def test_range(self):
+        c = self._conn()
+        c.request("GET", f"/localfs/video/{self.vid}", headers={"Range": "bytes=0-1023"})
+        r = c.getresponse(); data = r.read(); c.close()
+        self.assertEqual(r.status, 206)
+        self.assertEqual(len(data), 1024)
+        self.assertEqual(r.getheader("Content-Range"),
+                         f"bytes 0-1023/{len(self.body)}")
+
+    def test_unknown_video_404(self):
+        c = self._conn(); c.request("GET", "/localfs/video/deadbeef")
+        r = c.getresponse(); r.read(); c.close()
+        self.assertEqual(r.status, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

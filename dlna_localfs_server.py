@@ -55,6 +55,7 @@ log = logging.getLogger("dlna.localfs.server")
 _CHUNK = 64 * 1024
 _STREAM_PREFIX = "/localfs/stream/"
 _ART_PREFIX = "/localfs/art/"
+_VIDEO_PREFIX = "/localfs/video/"
 # Cap embedded-art responses — covers are KB-to-low-MB; anything past
 # this is almost certainly not a cover and we refuse rather than buffer.
 _ART_MAX_BYTES = 12 * 1024 * 1024
@@ -75,6 +76,14 @@ def _dlna_headers_for_mime(mime: str) -> dict:
     DLNA.ORG_OP=01 → Range requests supported (the half we care about).
     DLNA.ORG_FLAGS → streaming + background transfer eligible."""
     mime = (mime or "").lower()
+    # Video: emit OP/FLAGS but NO DLNA.ORG_PN — a wrong codec-specific PN makes
+    # strict renderers reject; lenient ones (LG webOS) play fine without it.
+    if mime.startswith("video/"):
+        return {
+            "contentFeatures.dlna.org": ("DLNA.ORG_OP=01;"
+                "DLNA.ORG_FLAGS=01700000000000000000000000000000"),
+            "transferMode.dlna.org": "Streaming",
+        }
     pn = "MP3"
     if mime.startswith("audio/flac")  or mime == "audio/x-flac":
         pn = "FLAC"
@@ -158,27 +167,34 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith(_ART_PREFIX):
             self._serve_art(send_body=True)
+        elif self.path.startswith(_VIDEO_PREFIX):
+            self._serve(send_body=True, prefix=_VIDEO_PREFIX,
+                        resolver=self._resolve_video)
         else:
             self._serve(send_body=True)
 
     def do_HEAD(self):
         if self.path.startswith(_ART_PREFIX):
             self._serve_art(send_body=False)
+        elif self.path.startswith(_VIDEO_PREFIX):
+            self._serve(send_body=False, prefix=_VIDEO_PREFIX,
+                        resolver=self._resolve_video)
         else:
             self._serve(send_body=False)
 
     # ── Core serve logic ─────────────────────────────────────────
 
-    def _serve(self, *, send_body: bool):
-        if not self.path.startswith(_STREAM_PREFIX):
+    def _serve(self, *, send_body: bool, prefix: str = _STREAM_PREFIX,
+               resolver=None):
+        if not self.path.startswith(prefix):
             self.send_error(404, "Not found")
             return
-        track_id = unquote(self.path[len(_STREAM_PREFIX):]).split("?", 1)[0]
+        track_id = unquote(self.path[len(prefix):]).split("?", 1)[0]
         if not track_id:
-            self.send_error(404, "Missing track id")
+            self.send_error(404, "Missing id")
             return
 
-        file_path, mime = self._resolve(track_id)
+        file_path, mime = (resolver or self._resolve)(track_id)
         if not file_path:
             self.send_error(404, f"Unknown track id: {track_id}")
             return
@@ -322,6 +338,21 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
             conn.close()
         except sqlite3.Error as e:
             log.warning(f"DB lookup failed for {track_id}: {e}")
+            return ("", "")
+        if not row or not row[0]:
+            return ("", "")
+        return (row[0], row[1] or _FALLBACK_MIME)
+
+    def _resolve_video(self, vid: str) -> tuple[str, str]:
+        """video id → (file_path, mime) from the `videos` table. Empty on miss."""
+        try:
+            conn = sqlite3.connect(self.library_db_path)
+            row = conn.execute(
+                "SELECT file_path, mime FROM videos WHERE id=? LIMIT 1",
+                (vid,)).fetchone()
+            conn.close()
+        except sqlite3.Error as e:
+            log.warning(f"video DB lookup failed for {vid}: {e}")
             return ("", "")
         if not row or not row[0]:
             return ("", "")
