@@ -1206,6 +1206,13 @@ async function showPlaylists(){
   favRadio.innerHTML=`<div class="pl-item-name">📡 Radio Stations</div><div class="pl-item-count">internet radio</div>`;
   favRadio.addEventListener("click",showRadioStations);
   list.appendChild(favRadio);
+  // Synthetic row: videos ("📹 Videos") — the GWMovies library.
+  const vidRow=document.createElement("div");
+  vidRow.id="videos-pl-item";
+  vidRow.className="pl-item";
+  vidRow.innerHTML=`<div class="pl-item-name">📹 Videos</div><div class="pl-item-count">movies</div>`;
+  vidRow.addEventListener("click",showVideos);
+  list.appendChild(vidRow);
   if(!playlists.length){
     const msg=document.createElement("div");
     msg.className="msg";msg.style.padding="12px 20px 20px";
@@ -1226,6 +1233,73 @@ async function showPlaylists(){
 // were removed 2026-06-01 — their (artist, album) entries didn't survive
 // the LocalFs folder-album migration. The ⭐ star on the album header
 // still toggles favourites; UPnP/Subsonic still expose them.)
+
+// ── Videos ("📹 Videos") ──────────────────────────────────────────
+// Browse the GWMovies library + play in a <video> modal. Uses the SAME-ORIGIN
+// /video/<id> (mixed-content-safe over HTTPS); the LG TV uses DLNA instead.
+function _vidDur(sec){
+  sec=parseInt(sec||0,10); if(!sec||sec<0) return "";
+  const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), s=sec%60;
+  return h?`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`
+          :`${m}:${String(s).padStart(2,"0")}`;
+}
+
+async function showVideos(){
+  curPlId="__videos__";
+  $("pl-panel-title").textContent="📹 Videos";
+  $("pl-back-btn").style.display="";
+  $("pl-list").style.display="none";
+  $("pl-tracks").classList.add("visible");
+  $("pl-actions").innerHTML="";
+  $("pl-tracks").innerHTML=`<div id="video-list" style="padding:6px"></div>`;
+  let vids=[];
+  const r=await api("/api/videos");
+  if(r&&r.ok){ try{ vids=await r.json(); }catch{} }
+  renderVideos(vids);
+}
+
+function renderVideos(vids){
+  const box=$("video-list"); if(!box) return;
+  if(!vids||!vids.length){
+    box.innerHTML=`<div class="msg" style="padding:16px">No videos found.</div>`;
+    return;
+  }
+  box.innerHTML="";
+  vids.forEach(v=>{
+    const row=document.createElement("div");
+    row.className="video-row"; row.dataset.id=v.id;
+    row.style.cssText="display:flex;gap:10px;align-items:center;padding:8px;"
+      +"border-bottom:1px solid var(--border);cursor:pointer";
+    const thumb=v.posterUrl
+      ? `<img src="${esc(v.posterUrl)}" loading="lazy" style="width:96px;height:54px;`
+        +`object-fit:cover;background:#000;border-radius:4px;flex:none">`
+      : `<div style="width:96px;height:54px;display:flex;align-items:center;`
+        +`justify-content:center;background:var(--raised);border-radius:4px;flex:none">📹</div>`;
+    const sub=[v.folder,_vidDur(v.duration),
+               (v.width&&v.height?`${v.width}×${v.height}`:"")].filter(Boolean).join(" · ");
+    row.innerHTML=`${thumb}<div style="min-width:0">`
+      +`<div style="font-size:13px;color:var(--ink);overflow:hidden;`
+      +`text-overflow:ellipsis;white-space:nowrap">${esc(v.title||"")}</div>`
+      +`<div style="font-size:11px;color:var(--ink-dim)">${esc(sub)}</div></div>`;
+    row.addEventListener("click",()=>playVideo(v));
+    box.appendChild(row);
+  });
+}
+
+function playVideo(v){
+  const modal=$("video-modal"), player=$("video-player");
+  if(!modal||!player) return;
+  $("video-modal-title").textContent="📹 "+(v.title||"Video");
+  player.src=v.playUrl;
+  modal.classList.add("open");
+  player.play().catch(()=>{});      // autoplay best-effort
+}
+
+function closeVideo(){
+  const modal=$("video-modal"), player=$("video-player");
+  if(player){ player.pause(); player.removeAttribute("src"); player.load(); }
+  if(modal) modal.classList.remove("open");
+}
 
 // ── Internet radio ("📡 Stations") ───────────────────────────────
 const RADIO_GENRES=["Prog","Prog-rock","Jazz","Pop","Rock","Classical"];
@@ -2156,6 +2230,8 @@ $("lyrics-close").addEventListener("click", ()=>$("lyrics-modal").classList.remo
 $("lyrics-modal").addEventListener("click", e=>{
   if(e.target===$("lyrics-modal")) $("lyrics-modal").classList.remove("open");
 });
+$("video-close").addEventListener("click", closeVideo);
+$("video-modal").addEventListener("click", e=>{ if(e.target===$("video-modal")) closeVideo(); });
 
 // Initialise output selector on first load
 rebuildOutputSel(null);

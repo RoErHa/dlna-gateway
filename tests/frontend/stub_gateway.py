@@ -74,6 +74,7 @@ class StubGateway:
         self.radio_fav_full: bool = False      # force /add to 409
         self.icy_title: str = ""               # /api/radio/nowplaying
         self.sse_events: list[dict] = []       # frames /api/events emits on connect
+        self.videos: list[dict] = []           # GET /api/videos (V2-PWA)
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -269,6 +270,9 @@ class _Handler(BaseHTTPRequestHandler):
         # API endpoints
         if path == "/api/version":
             self._send_json({"version": "test"})
+            return
+        if path == "/api/videos":
+            self._send_json(gw.videos)
             return
         if path == "/api/servers":
             self._send_json(gw.servers)
