@@ -1165,6 +1165,20 @@ class TestVideoApi(unittest.TestCase):
         r404 = asyncio.run(dlna_asgi.video_poster(id="missing"))
         self.assertEqual(r404.status_code, 404)
 
+    def test_payload_has_transcode_url(self):
+        v = asyncio.run(dlna_asgi.video_meta(id="v1"))
+        self.assertEqual(v["transcodeUrl"], "/video_transcode/v1")
+
+    def test_transcode_404_unknown(self):
+        r = asyncio.run(dlna_asgi.video_transcode("nope"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_transcode_503_without_ffmpeg(self):
+        import dlna_ffmpeg
+        with mock.patch.object(dlna_ffmpeg, "find_ffmpeg", return_value=None):
+            r = asyncio.run(dlna_asgi.video_transcode("v1"))
+        self.assertEqual(r.status_code, 503)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

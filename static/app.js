@@ -1290,7 +1290,20 @@ function playVideo(v){
   const modal=$("video-modal"), player=$("video-player");
   if(!modal||!player) return;
   $("video-modal-title").textContent="📹 "+(v.title||"Video");
-  player.src=v.playUrl;
+  player.dataset.transcodeUrl=v.transcodeUrl||"";
+  player.dataset.triedTranscode="0";
+  // Containers NO browser <video> supports → go straight to the same-origin
+  // transcode (canPlayType is useless — Chromium says "maybe" for everything,
+  // incl. MKV it can't play). For mp4/mov/webm, play native first (Safari does
+  // HEVC; H.264 plays everywhere) and let the 'error' handler below fall back
+  // to transcode when the codec can't be decoded (HEVC on Chrome/FF).
+  const FORCE_TRANSCODE=["video/x-matroska","video/x-msvideo","video/mp2t"];
+  if(FORCE_TRANSCODE.includes((v.mime||"").toLowerCase()) && v.transcodeUrl){
+    player.dataset.triedTranscode="1";
+    player.src=v.transcodeUrl;
+  } else {
+    player.src=v.playUrl;
+  }
   modal.classList.add("open");
   player.play().catch(()=>{});      // autoplay best-effort
 }
@@ -2232,6 +2245,17 @@ $("lyrics-modal").addEventListener("click", e=>{
 });
 $("video-close").addEventListener("click", closeVideo);
 $("video-modal").addEventListener("click", e=>{ if(e.target===$("video-modal")) closeVideo(); });
+// Native playback failed (e.g. HEVC in Chrome/FF that canPlayType mis-claimed)
+// → fall back once to the same-origin transcode stream (H.264/AAC).
+$("video-player").addEventListener("error", ()=>{
+  const p=$("video-player");
+  if(p.dataset.transcodeUrl && p.dataset.triedTranscode!=="1"){
+    p.dataset.triedTranscode="1";
+    p.src=p.dataset.transcodeUrl;
+    p.play().catch(()=>{});
+    toast("Converting for your browser…");
+  }
+});
 
 // Initialise output selector on first load
 rebuildOutputSel(null);
