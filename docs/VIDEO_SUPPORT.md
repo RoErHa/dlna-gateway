@@ -63,10 +63,13 @@ Extract per video (via `ffprobe`, with graceful fallback when absent):
 - **location:** GPS from `format.tags.location` / the Apple QuickTime
   `com.apple.quicktime.location.ISO6709` tag — these are **coordinates** (e.g.
   `+52.3676+004.9041/`), NOT a place name. Store the raw coords in `location`.
-  A human place name (`location_name`, e.g. "Amsterdam") needs **optional
-  reverse-geocoding** (online, e.g. Nominatim) — treat it like the other
-  optional/online lookups (album art / MusicBrainz): nice-to-have, cached,
-  degrades to coords-or-nothing when unavailable/offline.
+  **ALWAYS reverse-geocode to a place name (`location_name`, e.g. "Amsterdam")
+  when online** — not optional. Use an online geocoder (Nominatim/OSM:
+  free, no key) with the same discipline as the MusicBrainz/art fetchers — a
+  contact User-Agent, ~1 req/sec rate limit, and a persistent cache (a
+  `geocode_cache` table keyed by rounded coords, sticky like
+  `album_art`/`song_year_cache`) so each place is fetched once, ever. Only when
+  genuinely offline / the lookup fails does it degrade to coords-or-nothing.
 - **title:** `format.tags.title` if present (rare on phone footage).
 
 **Display title rule:** use the embedded `title` if present; otherwise build
@@ -109,9 +112,11 @@ store it in `videos.title` so browse/sort/search are simple.
   **embedded title**. Then compute the **display title** (embedded, else
   `<location>_<YYYYMMDD>_<HHMM>.<ext>`). No-ffprobe fallback: title from
   filename, `created` from mtime, codecs `unknown`, location empty.
-- **Reverse-geocode (optional):** `location_name` from the GPS coords via an
-  online lookup (Nominatim), rate-limited + cached like the art/MusicBrainz
-  fetchers; skipped when offline/disabled → title uses coords or omits location.
+- **Reverse-geocode (always when online):** resolve `location_name` from the GPS
+  coords via Nominatim — contact UA + ~1 req/sec + a persistent `geocode_cache`
+  (keyed by rounded coords, one fetch per place ever). Run it at index time so
+  the constructed title gets the place name. Only an offline/failed lookup falls
+  back to coords (or omits location).
 - **Poster**: `ffmpeg -ss <10%> -frames:v 1` → JPEG into the poster cache; skip
   if ffmpeg absent (UI shows a generic film icon).
 - **Scan**: a SEPARATE pass that walks **`LOCALFS_VIDEO_ROOT`
@@ -125,8 +130,13 @@ store it in `videos.title` so browse/sort/search are simple.
   no-ffprobe) incl. creation_time / duration / ISO6709 location; **display-title
   construction** (embedded title wins; else `<location>_YYYYMMDD_HHMM.ext`; coords
   fallback; no-location omits the prefix; no-creation_time → mtime); `videos`
-  round-trip + migration idempotent; scan finds video + skips audio; schema-sync
-  gate.
+  round-trip + migration idempotent; scan finds video + skips audio;
+  **reverse-geocode cache** (mocked Nominatim: hit cached once, sticky, offline
+  → coords); schema-sync gate.
+
+> **New outbound host:** Nominatim/OSM (`nominatim.openstreetmap.org`) for
+> reverse-geocoding — add it to CLAUDE.md's "External services" table at V5 docs,
+> with the contact-UA + 1 req/sec usage-policy note.
 
 ## Phase V2 — serve + native browser playback (TEST-FIRST backend, then UI)
 - **Serve** (`dlna_localfs_server.py`): `GET /localfs/video/<id>` — resolve via
