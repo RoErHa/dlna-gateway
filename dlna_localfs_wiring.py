@@ -99,9 +99,22 @@ def maybe_start_localfs(get_lan_ip):
     log.info(f"LocalFs enabled: root={root_env} port={port} "
              f"base_url={base_url}")
 
+    # Video root (separate from music). Its files are served by THIS same
+    # LocalFs server (/localfs/video/<id>), so it must be in allowed_roots.
+    vroot = video_root()
+    vpath = Path(vroot).expanduser() if vroot else None
+    roots = [str(root_path.resolve())]
+    if vpath and vpath.exists():
+        roots.append(str(vpath.resolve()))
+        log.info(f"Video enabled: root={vroot} udn={VIDEO_UDN}")
+    elif vroot:
+        log.warning(f"Video root not found: {vroot} — video disabled "
+                    "(is the volume mounted?)")
+        vpath = None
+
     try:
         start_server(DB_FILE, port=port, host="0.0.0.0",
-                     allowed_roots=(str(root_path.resolve()),))
+                     allowed_roots=tuple(roots))
     except OSError as e:
         log.error(f"LocalFs file server failed to bind :{port}: {e} — "
                   "is the port in use? Set $LOCALFS_PORT to override.")
@@ -132,5 +145,18 @@ def maybe_start_localfs(get_lan_ip):
     threading.Thread(target=_initial_scan, daemon=True,
                      name="localfs-initial-scan").start()
 
+    # Video scan over GWMovies (separate udn, served from the same :8200).
+    if vpath:
+        def _video_scan():
+            try:
+                import dlna_video_index
+                stats = dlna_video_index.scan_videos(
+                    str(vpath), VIDEO_UDN, DB, base_url)
+                log.info(f"Video initial scan complete: {stats}")
+            except Exception as e:                            # noqa: BLE001
+                log.exception(f"Video initial scan failed: {e}")
+        threading.Thread(target=_video_scan, daemon=True,
+                         name="video-initial-scan").start()
 
-__all__ = ["maybe_start_localfs"]
+
+__all__ = ["maybe_start_localfs", "video_root", "VIDEO_UDN"]
