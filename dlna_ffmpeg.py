@@ -197,8 +197,10 @@ def hls_segment_cmd(path: str, start: float, dur: float = HLS_SEG,
     exe = ffmpeg or find_ffmpeg() or "ffmpeg"
     return [
         exe, "-v", "error", "-ss", str(start), "-t", str(dur), "-i", path,
+        # 8-bit 4:2:0 — source may be 10-bit HEVC (x265); H.264 High is 8-bit
+        # only and 10-bit H.264 isn't broadly browser-playable anyway.
         "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
-        "-level", "4.1", "-crf", "23",
+        "-level", "4.1", "-crf", "23", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "192k",
         "-f", "mpegts", "-muxdelay", "0", "-output_ts_offset", str(start),
         "pipe:1",
@@ -212,6 +214,7 @@ def transcode_cmd(path: str, ffmpeg: str = None) -> list:
     return [
         exe, "-v", "error", "-i", path,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-pix_fmt", "yuv420p",     # 8-bit — source may be 10-bit HEVC
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         "-f", "mp4", "pipe:1",
