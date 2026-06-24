@@ -27,6 +27,8 @@ import logging
 import os
 import struct
 import threading
+import time
+import urllib.parse
 import zlib
 from typing import Optional
 
@@ -98,6 +100,19 @@ async def _lifespan(app: FastAPI):
     # updates to /api/events subscribers (R2). Unconditional — the web tier
     # serves SSE regardless of GATEWAY_NO_SERVICES.
     loop = asyncio.get_running_loop()
+    # Raise the shared threadpool ceiling. Starlette's run_in_threadpool draws
+    # from anyio's default limiter (40 tokens) — and EVERY blocking op shares it:
+    # browse/DB queries, /art fetches, the legacy bridge, AND each byte-relay
+    # read of every audio stream. Under a few concurrent iOS streams + browsing
+    # + art loads the 40 slots saturate, new requests queue, and the audio
+    # element's next Range request stalls long enough that iOS aborts the load
+    # (the "stops after one track" / code-4 NETWORK_NO_SOURCE regression). 256
+    # tokens is well under the raised FD limit and removes the serialization.
+    try:
+        import anyio.to_thread
+        anyio.to_thread.current_default_thread_limiter().total_tokens = 256
+    except Exception:                                   # noqa: BLE001
+        log.warning("could not raise threadpool limit; staying at anyio default")
     EVENTS.bind_loop(loop)
     loop.set_exception_handler(_loop_exception_handler)
     started = False
@@ -644,14 +659,40 @@ async def _audio_relay_response(url: str, range_hdr: str):
         resp.getheader("Content-Type") or "")
     status = resp.status
 
+    # Observability lost in the 2.0 native rewrite: log a START/END pair per
+    # relay (parity with dlna_stream_proxy.proxy_stream) so stream failures are
+    # greppable in gateway.log again. host/path keeps it terse; reason on END is
+    # eof (upstream done), client_closed (browser/Hypercorn dropped), or error:T.
+    try:
+        _pr = urllib.parse.urlsplit(url)
+        _tag = f"{_pr.hostname}{_pr.path}"
+    except Exception:                                   # noqa: BLE001
+        _tag = url[:80]
+    log.info(f"stream ▶ START {_tag} ({status})")
+    _t0 = time.monotonic()
+
     async def _relay():
+        # 256 KB reads (vs 64 KB) quarter the threadpool round-trips per stream,
+        # so a long audio relay acquires/releases the shared limiter far less and
+        # competes less with browse/art for it.
+        sent = 0
+        reason = "eof"
         try:
             while True:
-                chunk = await run_in_threadpool(resp.read, 65_536)
+                chunk = await run_in_threadpool(resp.read, 262_144)
                 if not chunk:
                     break
+                sent += len(chunk)
                 yield chunk
+        except asyncio.CancelledError:
+            reason = "client_closed"
+            raise
+        except Exception as e:                          # noqa: BLE001
+            reason = f"error:{type(e).__name__}"
+            raise
         finally:
+            log.info(f"stream ■ END   {_tag} sent={sent} "
+                     f"in {time.monotonic()-_t0:.1f}s reason={reason}")
             try:
                 conn.close()
             except Exception:
