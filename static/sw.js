@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v13';  // v13: network-first HTML nav (evict broken-shell pin) + version bump
+const APP_CACHE = 'dlna-gw-app-v14';  // v14: network-first for shell ASSETS too (app.js/css) — a poisoned cache can't pin the app
 const ART_CACHE = 'dlna-gw-art-v2';   // v2: evict stale blanks cached during gateway-down / pre-heal windows
 const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
 
@@ -124,16 +124,22 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // App shell & static assets — stale-while-revalidate
+  // App shell & static assets (app.js / app.css / icons / manifest) —
+  // NETWORK-FIRST. Same rationale as the navigation document above: a
+  // poisoned/broken cached app.js used to pin the whole app blank with no way
+  // to recover by refresh (2026-06-27). An online load must always get the
+  // fresh asset; the cache is the OFFLINE fallback only. (Data SWR for the
+  // CACHEABLE_API allowlist and cache-first /art above are unchanged — those
+  // can't blank the app, and that's where the real speed win is.)
   event.respondWith(
-    caches.open(APP_CACHE).then(cache =>
-      cache.match(event.request).then(cached => {
-        const network = fetch(event.request).then(resp => {
-          if (resp.ok) cache.put(event.request, resp.clone());
-          return resp;
-        }).catch(() => cached);
-        return cached || network;
+    fetch(event.request)
+      .then(resp => {
+        if (resp.ok) {
+          const copy = resp.clone();
+          caches.open(APP_CACHE).then(c => c.put(event.request, copy));
+        }
+        return resp;
       })
-    )
+      .catch(() => caches.open(APP_CACHE).then(c => c.match(event.request)))
   );
 });

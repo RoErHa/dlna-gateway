@@ -136,6 +136,46 @@ def test_sw_navigation_is_network_first(app):
         f"network document not returned; got: {body[:160]!r}")
 
 
+def test_poisoned_shell_cache_still_renders(app):
+    """OUTCOME test (not code-shape). The real 2026-06-27 outage was a broken
+    APP_CACHE pinning the app blank: 'full UI, no content', unrecoverable by
+    refresh. This poisons BOTH the '/' document AND /static/app.js in the live
+    cache, reloads, and asserts the app still BOOTS WITH CONTENT — i.e. an
+    online load must never be held hostage by a bad cached shell asset. The
+    earlier network-first fix only covered '/', so a poisoned app.js still
+    blanked the app; this guards the asset path too."""
+    app.wait_for_function(
+        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
+        " .then(r => r && r.active && r.active.state === 'activated')",
+        timeout=8000,
+    )
+    # Poison the two critical shell entries with broken bodies.
+    app.evaluate("""
+      caches.keys()
+        .then(names => names.find(n => n.startsWith('dlna-gw-app-')))
+        .then(name => caches.open(name))
+        .then(c => Promise.all([
+          c.put('/', new Response(
+            '<!doctype html><html><body>POISONED-DOC</body></html>',
+            {headers: {'Content-Type': 'text/html'}})),
+          c.put('/static/app.js', new Response(
+            'throw new Error("POISONED-JS");',
+            {headers: {'Content-Type': 'application/javascript'}})),
+        ]))
+    """)
+    # Reload: the SW must serve the FRESH shell + JS, not the poison.
+    app.reload()
+    # The app is booted iff refreshServers() populated the source picker —
+    # which only happens if the real app.js executed.
+    app.wait_for_function(
+        "document.getElementById('source-sel') && "
+        "!document.getElementById('source-sel').textContent.includes('Scanning')",
+        timeout=6000,
+    )
+    body = app.inner_text("body")
+    assert "POISONED" not in body, "SW served a poisoned shell asset"
+
+
 def test_sw_does_not_intercept_api_calls(app, gateway):
     """sw.js explicitly excludes /api/* — verify a fresh /api/servers call
     actually hits the network (not a stale cache). Matters because a
