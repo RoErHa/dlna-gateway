@@ -224,7 +224,8 @@ etc.).
 `static/index.html` + `static/app.js` (PWA, ~71K lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
 
 **Service Worker cache tiers (`static/sw.js`).** Three caches: `APP_CACHE`
-(app shell, stale-while-revalidate), `ART_CACHE` (`/art`, cache-first), and
+(app shell — **network-first** as of 2026-06-27, was stale-while-revalidate),
+`ART_CACHE` (`/art`, cache-first), and
 `API_CACHE` (2026-06-02) — a **stale-while-revalidate** cache for the
 `CACHEABLE_API` allowlist of STABLE browse GETs (`/api/browse_letter`,
 `album_tracks`, `artist_albums`/`artist_tracks`, `albums`, `search`,
@@ -237,6 +238,24 @@ on the allowlist — `/api/state`, `/servers`, `/renderers`, `/index/status`,
 is never stale. Bump `API_CACHE`'s version to force-evict if its shape
 changes. Measured server cost that this hides: the folder-grouped
 `/api/browse_letter` albums query is ~150 ms; cached → ~0.
+
+**Why the app shell is network-first (2026-06-27).** It was
+stale-while-revalidate, which served the cached `/` document AND
+`/static/app.js` cached-first. A once-broken/truncated cached `app.js`
+then pinned the app blank on every load ("full UI, no content",
+unrecoverable by refresh). The shell (document + assets) is now
+**network-first**: an online load always gets the fresh HTML/JS/CSS;
+the cache is the **offline fallback only**. `install` also calls
+`self.skipWaiting()` **unconditionally** (was gated behind
+`cache.addAll(SHELL)` — a single failing shell entry left the new worker
+stuck in `waiting` forever, so updates never activated) and `activate`
+calls `clients.claim()`, so a new worker takes over on refresh going
+forward. Caveat: a client already wedged on the *pre-fix* worker does
+**not** self-heal — it needs a one-time "clear site data" (iOS PWA:
+delete + re-add the home-screen icon). Guarded by
+`tests/frontend/test_pwa.py::test_poisoned_shell_cache_still_renders`
+(poison the live cache → reload → app must still render) and
+`test_sw_navigation_is_network_first`.
 
 **Source picker (`#source-sel`).** When more than one MediaServer is in `SERVERS` (e.g. AssetUPnP + LocalFs coexisting), the header carries a `SRC` dropdown next to the `OUT` (renderer) picker. `selectSource(udn)` swaps the active `curServer`, resets browse navigation, and reloads the library (or re-runs the active search). `refreshServers()` populates it via `rebuildSourceSel()` (💾 icon for `uuid:localfs-*`, 🗄 otherwise) and `updateDiscStatus()` keeps the header disc-dot tracking the active source. Regression-guarded by `tests/frontend/test_source_picker.py`.
 
