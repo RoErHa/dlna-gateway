@@ -108,6 +108,34 @@ def test_sw_caches_app_shell(app):
             f"shell entry {must_have!r} not in cache; cached={cached}")
 
 
+def test_sw_navigation_is_network_first(app):
+    """Regression (2026-06-27): a broken/empty cached '/' document pinned the
+    app blank on every load because the HTML shell was served
+    stale-while-revalidate (cached-first). The navigation must be
+    NETWORK-FIRST: when online, a poisoned cache entry for '/' must be ignored
+    in favour of the fresh network document, so a bad cache can't trap the user
+    with "full UI, no content"."""
+    app.wait_for_function(
+        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
+        " .then(r => r && r.active && r.active.state === 'activated')",
+        timeout=8000,
+    )
+    # Poison the app-shell cache entry for '/' with a broken document.
+    app.evaluate("""
+      caches.keys()
+        .then(names => names.find(n => n.startsWith('dlna-gw-app-')))
+        .then(name => caches.open(name))
+        .then(c => c.put('/', new Response('<html>POISONED-STALE</html>',
+              {headers: {'Content-Type': 'text/html'}})))
+    """)
+    # Fetch '/' through the SW. Network-first must return the real document.
+    body = app.evaluate("fetch('/').then(r => r.text())")
+    assert "POISONED-STALE" not in body, (
+        "SW served the poisoned cached '/' — navigation is not network-first")
+    assert "app.js" in body and "DLNA Gateway" in body, (
+        f"network document not returned; got: {body[:160]!r}")
+
+
 def test_sw_does_not_intercept_api_calls(app, gateway):
     """sw.js explicitly excludes /api/* — verify a fresh /api/servers call
     actually hits the network (not a stale cache). Matters because a

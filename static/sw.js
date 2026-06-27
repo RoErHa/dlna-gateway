@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v12';  // v12: video transcode fallback (HEVC/MKV in browser)
+const APP_CACHE = 'dlna-gw-app-v13';  // v13: network-first HTML nav (evict broken-shell pin) + version bump
 const ART_CACHE = 'dlna-gw-art-v2';   // v2: evict stale blanks cached during gateway-down / pre-heal windows
 const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
 
@@ -75,6 +75,28 @@ self.addEventListener('fetch', event => {
       url.pathname.startsWith('/stream') ||
       url.pathname.startsWith('/cd/') ||
       event.request.method !== 'GET') {
+    return;
+  }
+
+  // HTML navigation (the document) — NETWORK-FIRST. The shell used to be
+  // served stale-while-revalidate (cached-first), so a once-broken/empty
+  // cached '/' pinned the app blank on every load ("full UI, no content",
+  // 2026-06-27). Network-first means an online load always gets the fresh
+  // document; the cache is only a fallback when the network is unreachable
+  // (offline). app.js/app.css stay versioned via APP_CACHE below.
+  if (event.request.mode === 'navigate' || url.pathname === '/') {
+    event.respondWith(
+      fetch(event.request)
+        .then(resp => {
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(APP_CACHE).then(c => c.put(event.request, copy));
+          }
+          return resp;
+        })
+        .catch(() => caches.open(APP_CACHE).then(c => c.match(event.request))
+                       .then(cached => cached || caches.match('/')))
+    );
     return;
   }
 
