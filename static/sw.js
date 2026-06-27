@@ -26,10 +26,17 @@ const SHELL = [
 
 // ── Install: pre-cache app shell ────────────────────────────────
 self.addEventListener('install', event => {
+  // skipWaiting() UNCONDITIONALLY and first. Previously it was chained AFTER
+  // cache.addAll(SHELL) — and addAll is atomic, so a single failing shell
+  // entry rejected the chain, skipWaiting() never ran, and the new worker sat
+  // in 'waiting' forever (a waiting SW only activates once ALL old tabs close).
+  // A plain refresh then never updated; only "clear site data" fixed it
+  // (2026-06-27). Precache is now best-effort and can never block activation.
+  self.skipWaiting();
   event.waitUntil(
     caches.open(APP_CACHE)
       .then(cache => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
+      .catch(() => {})   // best-effort — a missing shell entry must not wedge the SW
   );
 });
 
