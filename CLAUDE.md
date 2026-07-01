@@ -63,7 +63,19 @@ xcrun simctl boot "iPhone 15"                   # boot a sim (see boot cmds belo
 # Layer 3 — chaos simulator (live gateway, randomized + adversarial):
 python3 tests/chaos.py --iterations 500 --workers 4
 python3 tests/chaos.py --seed 42 --quiet    # reproduce a past failure
+
+# Layer 3b — /stream concurrency load test (live gateway, opt-in):
+python3 tests/load_stream.py --concurrency 40 --count 80
+python3 tests/load_stream.py --gateway https://127.0.0.1:8443 --insecure --max-p95 8
 ```
+
+`tests/load_stream.py` guards the **threadpool-starvation regression** (the 2.0
+"stops after one track" origin bug): it fires N concurrent full `/stream` pulls
+at the live gateway (real track URLs from `library.db`) and asserts **zero
+failures + an optional p95 threshold** (`--max-p95`). Live-gateway + opt-in like
+`chaos.py` (NOT in `run_all.py`). Prints p50/p95/max + throughput so before/after
+runs compare directly. The fix it guards: the shared threadpool limiter raised
+40 → 256 (`dlna_asgi.py`) so audio relays don't starve behind browse/art.
 
 ### Frontend test architecture (`tests/frontend/`)
 
