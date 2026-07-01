@@ -61,8 +61,15 @@ find_python() {
 
 # ── Check if existing venv is healthy ────────────────────────────────────────
 venv_healthy() {
-    # Returns 0 (true) only if the venv python actually executes without error
-    [ -f "$VENV_PY" ] && "$VENV_PY" -c "import sys" 2>/dev/null
+    # Healthy only if the venv python runs AND a COMPILED third-party dep
+    # imports. The compiled import (fastapi → pydantic_core, a Rust ext) is an
+    # ABI canary: a Homebrew python MINOR upgrade (e.g. 3.14→3.15) can leave
+    # the interpreter runnable while breaking C/Rust extensions — `import sys`
+    # alone misses that, so the venv is rebuilt after such an upgrade. Patch
+    # upgrades (3.14.5→3.14.6) keep the ABI, so this stays true and the venv is
+    # reused with no needless rebuild. (A venv missing fastapi is also treated
+    # as unhealthy → rebuilt + requirements reinstalled, which is correct.)
+    [ -f "$VENV_PY" ] && "$VENV_PY" -c "import sys, fastapi" 2>/dev/null
 }
 
 # ── Create / update venv ──────────────────────────────────────────────────────
