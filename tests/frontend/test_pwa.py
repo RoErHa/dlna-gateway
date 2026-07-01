@@ -176,6 +176,71 @@ def test_poisoned_shell_cache_still_renders(app):
     assert "POISONED" not in body, "SW served a poisoned shell asset"
 
 
+def test_sw_update_rolls_out_from_broken_worker(page, stub):
+    """OUTCOME test for the SW UPGRADE path (the part that was only asserted
+    before). Start a client wedged on a faithful copy of the PRE-FIX broken
+    worker (stale-while-revalidate shell + skipWaiting gated behind addAll),
+    poison its cache (the exact 2026-06-27 outage), then DEPLOY the real fixed
+    worker and let the client update itself. With NO storage clear the new
+    worker must activate, evict the old poisoned cache, and render real content.
+
+    Proves the code upgrade path is clean. NB: runs on Chromium — it does NOT
+    cover iOS/WebKit, which empirically does not perform the update check on its
+    own (hence a pre-fix-wedged iPhone still needs a one-time 'clear site
+    data'). That gap is a platform limitation, not a code defect."""
+    import pathlib
+    new_sw = pathlib.Path("static/sw.js").read_text()
+    assert "dlna-gw-app-v14" in new_sw, "expected current cache version in sw.js"
+    old_sw = """
+const APP_CACHE='dlna-gw-app-vOLD';
+const SHELL=['/','/static/app.css','/static/app.js','/static/vendor/hls.min.js','/manifest.json','/icon-192.png','/icon-512.png'];
+self.addEventListener('install',e=>e.waitUntil(caches.open(APP_CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
+self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch',e=>{
+  const u=new URL(e.request.url);
+  if(u.pathname.startsWith('/api/')||u.pathname.startsWith('/stream')||e.request.method!=='GET')return;
+  e.respondWith(caches.open(APP_CACHE).then(c=>c.match(e.request).then(cached=>{
+    const net=fetch(e.request).then(r=>{if(r.ok)c.put(e.request,r.clone());return r;}).catch(()=>cached);
+    return cached||net;
+  })));
+});
+"""
+    serve = {"sw": old_sw}
+    page.route("**/sw.js", lambda r: r.fulfill(
+        status=200, body=serve["sw"], content_type="application/javascript",
+        headers={"Cache-Control": "no-store"}))
+
+    # 1) Wedge the client on the broken worker.
+    page.goto(stub.base_url + "/", wait_until="domcontentloaded")
+    page.wait_for_function(
+        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
+        ".then(r => r && r.active && r.active.state === 'activated')", timeout=8000)
+
+    # 2) Poison the old shell cache (the outage condition).
+    page.evaluate("""caches.open('dlna-gw-app-vOLD').then(c => Promise.all([
+        c.put('/', new Response('<html><body>POISON-DOC</body></html>',
+              {headers:{'Content-Type':'text/html'}})),
+        c.put('/static/app.js', new Response('throw new Error("POISON-JS")',
+              {headers:{'Content-Type':'application/javascript'}}))]))""")
+
+    # 3) Deploy the fixed worker; the client updates itself — NO storage clear.
+    serve["sw"] = new_sw
+    page.evaluate("navigator.serviceWorker.getRegistration().then(r => r.update())")
+    page.wait_for_function(
+        "caches.keys().then(ks =>"
+        " ks.includes('dlna-gw-app-v14') && !ks.includes('dlna-gw-app-vOLD'))",
+        timeout=8000)
+
+    # 4) Reload (still no clear) — the app must boot with real content.
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_function(
+        "document.getElementById('source-sel') && "
+        "!document.getElementById('source-sel').textContent.includes('Scanning')",
+        timeout=8000)
+    body = page.inner_text("body")
+    assert "POISON" not in body, "new worker served the poisoned old-cache shell"
+
+
 def test_sw_does_not_intercept_api_calls(app, gateway):
     """sw.js explicitly excludes /api/* — verify a fresh /api/servers call
     actually hits the network (not a stale cache). Matters because a
