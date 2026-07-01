@@ -18,7 +18,7 @@ RUN
   python3 tests/load_stream.py                                  # defaults: c=40 n=80
   python3 tests/load_stream.py --concurrency 60 --count 120
   python3 tests/load_stream.py --gateway https://127.0.0.1:8443 --insecure
-  python3 tests/load_stream.py --max-p95 6.0                    # fail if p95 exceeds
+  python3 tests/load_stream.py --max-p95 0                      # disable the p95 gate (tailnet)
 
 Exit 0 = all requests succeeded AND p95 <= --max-p95 (if set). Non-zero = a
 failure/timeout occurred, or p95 exceeded the threshold. Prints full stats so
@@ -26,15 +26,18 @@ before/after runs are directly comparable.
 
 WHICH ENVIRONMENT TO RUN AGAINST (this measures whatever bottleneck dominates):
   • Loopback / LAN → the THREADPOOL is the bottleneck. This is where the test
-    guards the regression: a p95 blowup here == threadpool starvation. Set
-    --max-p95 here (loopback :8765 p95 was ~1.7s @c40; :8443 h2 ~5.7s @c60).
+    guards the regression: a p95 blowup here == threadpool starvation. The
+    default --max-p95 6.0 is tuned here: 5 loopback runs @c40/n=80 measured p95
+    2.0–3.9s (max-per-run up to ~5.1s), so 6s clears the normal noise band with
+    headroom while still catching pathological starvation (the old 40-token
+    limiter produced 8–12s+). Bump it if your disk/CPU is slower.
   • Tailnet (…ts.net:8443) → BANDWIDTH dominates and MASKS the threadpool
     signal. It's throughput-bound: N full-file pulls saturate the WireGuard
-    link (~86 MB/s on this mini → p95 ~32s @c40/n=80, but 0 failures). Useful
-    as a real-world data point, but do NOT set a tight --max-p95 there — a
-    loopback threshold would false-fail purely on tunnel bandwidth. Note this
-    downloads FULL tracks at high concurrency (worst case); real playback is
-    progressive + low-concurrency, so tailnet playback latency is far lower.
+    link (~86 MB/s on this mini → p95 ~32s @c40/n=80, but 0 failures). Pass
+    --max-p95 0 to DISABLE the gate there — the loopback default would
+    false-fail purely on tunnel bandwidth. Note this downloads FULL tracks at
+    high concurrency (worst case); real playback is progressive +
+    low-concurrency, so tailnet playback latency is far lower.
 """
 from __future__ import annotations
 
@@ -89,8 +92,10 @@ def main() -> int:
     ap.add_argument("--count", type=int, default=80)
     ap.add_argument("--timeout", type=float, default=30.0,
                     help="per-request timeout (s); a stalled stream = failure")
-    ap.add_argument("--max-p95", type=float, default=None,
-                    help="fail if p95 latency exceeds this many seconds")
+    ap.add_argument("--max-p95", type=float, default=6.0,
+                    help="fail if p95 latency exceeds this many seconds "
+                         "(default 6.0, tuned for loopback/LAN; pass 0 to "
+                         "disable — e.g. for bandwidth-bound tailnet runs)")
     ap.add_argument("--insecure", action="store_true",
                     help="skip TLS verify (for the self-signed :8443 bind)")
     args = ap.parse_args()
@@ -139,7 +144,7 @@ def main() -> int:
     if bad:
         print(f"✗ {len(bad)} request(s) failed under load")
         failed = True
-    if args.max_p95 is not None and p95 > args.max_p95:
+    if args.max_p95 and args.max_p95 > 0 and p95 > args.max_p95:
         print(f"✗ p95 {p95:.2f}s exceeds --max-p95 {args.max_p95:.2f}s")
         failed = True
     print("FAIL" if failed else "PASS")
