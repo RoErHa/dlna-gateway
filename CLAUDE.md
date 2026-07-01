@@ -50,6 +50,10 @@ python3 -m unittest tests.test_player tests.test_api_playback -v
 # Layer 2 — Playwright UI suite (~75s, no live gateway needed):
 .venv/bin/pytest tests/frontend -v
 .venv/bin/pytest tests/frontend -k transport --headed   # visible browser, single panel
+.venv/bin/pytest tests/frontend --browser webkit        # engine parity (Playwright WebKit, NOT real Safari)
+
+# Layer 2b — real-Safari smoke (opt-in; opens real Safari, not CI-able):
+.venv/bin/python tests/frontend/safari_smoke.py
 
 # Layer 3 — chaos simulator (live gateway, randomized + adversarial):
 python3 tests/chaos.py --iterations 500 --workers 4
@@ -71,6 +75,30 @@ of the form *"clicking X must POST {body} to /api/Y"* are one-liners:
 `gateway.wait_for_request("/api/Y", method="POST", match=lambda r: ...)`.
 Call `gateway.clear_requests()` before the user action so stale init
 calls don't false-match.
+
+### Real-Safari smoke layer (`tests/frontend/safari_smoke.py`)
+
+The Playwright suite runs **Chromium** by default (and optionally its bundled
+**WebKit** via `--browser webkit` — which is desktop WebCore/JSC, *not* real
+Safari and *not* iOS: it caught the video `native` vs `native-hls` codec
+divergence, but not the SW/PWA/autoplay class). `safari_smoke.py` fills the next
+rung: an **opt-in Selenium/safaridriver script that drives the actual Safari on
+this Mac**, whose real WebKit Service-Worker lifecycle is closer to iOS than
+Chromium's. It boots the same `StubServer` and runs three checks — app boots +
+renders, SW reaches `activated`, and **poison-recovery** (poison the app-shell
+cache → reload → the app must still render, i.e. network-first on real WebKit —
+the exact 2026-06-27 outage condition; see the SW cache-tiers note above).
+
+Deliberately **NOT** in `run_all.py`: safaridriver has no headless mode (a real
+Safari window opens), allows only one session, and needs one-time enablement.
+Setup: `.venv/bin/pip install selenium` (optional dev dep, not in
+`requirements.txt` — same as pytest/playwright) · `safaridriver --enable` ·
+Safari → Settings → Advanced → "Show features for web developers" → Develop →
+"Allow Remote Automation". Run: `.venv/bin/python tests/frontend/safari_smoke.py`
+(exit 0 = pass). **Honest scope:** desktop Safari ≠ iOS Safari — no
+standalone-PWA mode, autoplay/audio-session policy, or WKWebView networking, so
+the "Mobile / PWA testing checklist" (real device) stays the iOS gate; this
+covers the Safari engine + SW class only.
 
 `chaos.py` hard-fails if it sees any 5xx, `/tmp/dlna-gateway.err` grows (= silent thread death), or a snapshot takes >5s. Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string `ValueError` that was killing the renderer-queue daemon thread invisibly.
 
