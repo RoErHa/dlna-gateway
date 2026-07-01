@@ -288,6 +288,32 @@ Persistent user data (playlists, favourites, play counts, lyrics,
 radio favourites) survives a `clear()` / rebuild-index. See `schema.sql`
 (committed) for the full schema.
 
+## Testing
+
+```bash
+python tests/run_all.py             # backend: grep + live + unit (needs a running gateway)
+python tests/run_all.py --offline   # file-level checks only, no server
+python tests/run_all.py --frontend  # backend + the Playwright UI suite
+```
+
+The suite runs in layers of increasing fidelity:
+
+- **Backend unit tests** (`tests/test_*.py`) — no network, sub-second.
+- **Playwright UI suite** (`tests/frontend/`) — boots a Python stub gateway and
+  drives the real `static/` files; runs on **Chromium** by default and on
+  **WebKit** via `--browser webkit` (engine parity).
+- **Opt-in real-browser smoke layers** (not in CI — they open real browsers /
+  simulators): `safari_smoke.py` (real desktop Safari), `ios_sim_smoke.py`
+  (real Mobile Safari in the iOS Simulator via Appium), and
+  `ios_permission_smoke.py` (an applesimutils permission-automation demo).
+- **Chaos simulator** (`tests/chaos.py`) — randomized/adversarial load against a
+  live gateway.
+
+Real-device iOS behaviour (standalone home-screen PWA, autoplay, lock-screen
+audio) isn't automatable and is covered by the manual checklist in
+[CLAUDE.md](CLAUDE.md) — which also has the full setup + commands for the opt-in
+smoke layers.
+
 ## Architecture
 
 A one-page coloured diagram of the whole 2.0 system (every program,
