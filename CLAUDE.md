@@ -55,6 +55,11 @@ python3 -m unittest tests.test_player tests.test_api_playback -v
 # Layer 2b — real-Safari smoke (opt-in; opens real Safari, not CI-able):
 .venv/bin/python tests/frontend/safari_smoke.py
 
+# Layer 2c — iOS-Simulator smoke (opt-in; needs Appium + a booted sim):
+appium >/tmp/appium.log 2>&1 &                 # start Appium server (:4723)
+xcrun simctl boot "iPhone 15"                   # boot a sim (see boot cmds below)
+.venv/bin/python tests/frontend/ios_sim_smoke.py
+
 # Layer 3 — chaos simulator (live gateway, randomized + adversarial):
 python3 tests/chaos.py --iterations 500 --workers 4
 python3 tests/chaos.py --seed 42 --quiet    # reproduce a past failure
@@ -99,6 +104,50 @@ Safari → Settings → Advanced → "Show features for web developers" → Deve
 standalone-PWA mode, autoplay/audio-session policy, or WKWebView networking, so
 the "Mobile / PWA testing checklist" (real device) stays the iOS gate; this
 covers the Safari engine + SW class only.
+
+### iOS-Simulator smoke layer (`tests/frontend/ios_sim_smoke.py`)
+
+The highest-fidelity **automated** iOS rung: drives real **Mobile Safari in an
+iOS Simulator** via Appium/XCUITest, so it exercises the genuine iOS
+Service-Worker lifecycle (the class behind the 2026-06-27 outage) that even
+desktop Safari only approximates. Same three checks as `safari_smoke.py` (boot +
+render, SW `activated`, and **poison-recovery** — poison the app-shell cache →
+reload → app must still render, network-first on Mobile Safari). Verified
+passing on iOS 26.5 / iPhone 15. Also opt-in, NOT in `run_all.py` (needs a
+booted Simulator + a running Appium server; slow first-run WebDriverAgent
+build). Default device `iPhone 15`; override with `IOS_DEVICE` / `IOS_VERSION` /
+`APPIUM_URL`. **Same honest scope caveat as above** — even the Simulator can't
+script standalone home-screen PWA mode, autoplay/audio-session, or WKWebView
+networking; the real-device checklist stays the final iOS gate.
+
+One-time setup:
+```bash
+xcodebuild -downloadPlatform iOS                 # iOS Simulator runtime (~8.5 GB)
+npm install -g appium && appium driver install xcuitest
+.venv/bin/pip install Appium-Python-Client        # optional dev dep, not in requirements.txt
+```
+
+Appium server (start / stop):
+```bash
+appium >/tmp/appium.log 2>&1 &                    # start (listens on :4723)
+curl -s http://127.0.0.1:4723/status              # health check ({"ready":true})
+pkill -f "node.*appium"                           # stop
+```
+
+Simulator devices (create-once already done for 15/16/17; boot / shutdown):
+```bash
+# create (only if a device is missing):
+xcrun simctl create "iPhone 16" \
+  com.apple.CoreSimulator.SimDeviceType.iPhone-16 \
+  com.apple.CoreSimulator.SimRuntime.iOS-26-5
+xcrun simctl boot "iPhone 15"                     # boot (also "iPhone 16" / "iPhone 17")
+xcrun simctl boot "iPhone 16"
+xcrun simctl boot "iPhone 17"
+xcrun simctl list devices | grep Booted           # what's running
+xcrun simctl shutdown "iPhone 15"                 # stop one (or: shutdown all)
+xcrun simctl shutdown all
+open -a Simulator                                 # optional: show the sim window
+```
 
 `chaos.py` hard-fails if it sees any 5xx, `/tmp/dlna-gateway.err` grows (= silent thread death), or a snapshot takes >5s. Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string `ValueError` that was killing the renderer-queue daemon thread invisibly.
 
