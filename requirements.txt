@@ -34,3 +34,22 @@ watchdog>=4.0
 # See docs/BUILDING_2.0_SIDE_BY_SIDE.md → Phase 2.
 fastapi>=0.110.0
 hypercorn>=0.16.0
+
+# ── beets enrichment toolchain (NOT pip deps of this venv) ────
+# beets (tools/beets_enrich.py) runs in its OWN Homebrew keg venv, not
+# this one — install it with brew, NOT pip (`pip3 install beets` gets
+# wiped by every Homebrew python upgrade; that killed the 2026-06 install):
+#
+#   brew install chromaprint beets
+#
+# The formula ships WITHOUT two plugin deps the enrichment workflow
+# needs (musicbrainzngs for the MB metadata source, pyacoustid for
+# chroma fingerprinting). Install them into the keg's venv — and
+# RE-RUN THIS after any `brew upgrade beets` (keg is replaced):
+#
+#   BEETS_KEG=$(brew --prefix beets)/libexec
+#   $BEETS_KEG/bin/python -m pip install --prefix $BEETS_KEG \
+#       musicbrainzngs pyacoustid
+#
+# tools/beets_enrich.py checks both at start and prints this exact fix
+# if they're missing.

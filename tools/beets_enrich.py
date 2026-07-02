@@ -20,9 +20,15 @@ library.db. It does NOT reimplement beets.
 
 Typical flow:
 
-    # 0. one-time deps
-    brew install chromaprint            # fpcalc for the chroma plugin
-    pip3 install beets pyacoustid musicbrainzngs
+    # 0. one-time deps (see requirements.txt → "beets enrichment toolchain")
+    brew install chromaprint beets      # fpcalc + beets (keg-venv'd, survives
+                                        # Homebrew python upgrades — a plain
+                                        # `pip3 install beets` gets WIPED by them)
+    # the formula ships WITHOUT these two plugin deps; put them in the keg
+    # (re-run after any `brew upgrade beets`):
+    BEETS_KEG=$(brew --prefix beets)/libexec
+    $BEETS_KEG/bin/python -m pip install --prefix $BEETS_KEG \
+        musicbrainzngs pyacoustid
 
     # 1. write the prog-tuned, tag-in-place config (backs up any existing)
     python3 tools/beets_enrich.py --write-config
@@ -45,6 +51,24 @@ Typical flow:
 
     # show what WOULD run, plus the safety report, without invoking beets
     python3 tools/beets_enrich.py --dry-run
+
+Quiet mode says just "Skipping." on an untagged album? Two known causes,
+diagnose with `beet -v import -q <dir>`:
+
+  * `chroma: acoustid album candidates: 0` — the fingerprint lookups use
+    beets' SHARED bundled AcoustID key, which gets rate-limited (error
+    code 14); every lookup then fails silently and beets falls back to
+    text-matching whatever tags exist (garbage on a bare rip → skip).
+  * The release genuinely isn't on MusicBrainz — check first:
+    https://musicbrainz.org/search
+
+Proven fix for bare/untagged files (2026-07-02, Nena "Best of the Best
+Gold"): find the release on MB, pre-tag minimal TEXT tags with mutagen
+(artist, the exact MB album title, title = filename stem), then re-run
+`--quiet --revisit` — the text search matches without fingerprints and
+beets writes the full canonical tags (umlauts, tracknumbers, MBIDs).
+After tagging, a gateway restart is enough: the boot-time LocalFs rescan
+picks up new/changed files incrementally (no force rebuild needed).
 """
 import argparse
 import json
@@ -420,8 +444,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     beet = find_binary("beet", BEET_FALLBACKS)
     if not beet:
         print("error: `beet` not found. Install it:\n"
-              "    brew install chromaprint\n"
-              "    pip3 install beets pyacoustid musicbrainzngs", file=sys.stderr)
+              "    brew install chromaprint beets\n"
+              "    # then add the plugin deps the formula omits "
+              "(redo after `brew upgrade beets`):\n"
+              "    BEETS_KEG=$(brew --prefix beets)/libexec\n"
+              "    $BEETS_KEG/bin/python -m pip install --prefix $BEETS_KEG "
+              "musicbrainzngs pyacoustid\n"
+              "    (avoid `pip3 install beets` — Homebrew python upgrades "
+              "wipe it)", file=sys.stderr)
         return 2
 
     if not cfg_path.exists():
@@ -465,12 +495,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     # …and the plugin needs the musicbrainzngs package in beets' OWN env.
+    # The Homebrew keg venv has no pip script (--without-pip), so use
+    # `python -m pip --prefix <venv>` — lands in the keg's site-packages,
+    # not the global one. Re-needed after any `brew upgrade beets`.
     bpy = beet_python(beet)
     if bpy and not module_importable(bpy, "musicbrainzngs"):
-        pip = os.path.join(os.path.dirname(bpy), "pip")
+        prefix = os.path.dirname(os.path.dirname(bpy))
         print("error: the musicbrainz plugin needs the `musicbrainzngs` "
               "package, which isn't installed in beets' environment.\n"
-              f"    install it:  {pip} install musicbrainzngs", file=sys.stderr)
+              f"    install it:  {bpy} -m pip install --prefix {prefix} "
+              "musicbrainzngs pyacoustid", file=sys.stderr)
         return 2
 
     target = Path(args.album).expanduser() if args.album \
