@@ -100,9 +100,10 @@ def build_diagram():
     tile(d, 18, 540, 178, 92, "P/c1  PWA front-end", [
         "static/: index.html, app.js,",
         "app.css, sw.js, manifest.json",
-        "Service Worker caches:",
-        "APP / ART / API (SWR)",
-        "MediaSession, offline shell",
+        "SW: APP shell network-first,",
+        "ART cache-first, API SWR",
+        "MediaSession, offline shell,",
+        "video player (hls.js vendored)",
     ], BLUE)
     tile(d, 18, 398, 178, 110, "P/c2  Subsonic client", [
         "Amperfy / substreamer /",
@@ -124,36 +125,45 @@ def build_diagram():
         "P/g27 dlna_asgi (FastAPI)  P/g28 dlna_asgi_bridge (legacy shim)  "
         "P/g30 dlna_events (SSE /api/events)",
     ], INK)
-    tile(d, ix, 518, iw, 56, "API handlers  (/api/*  /rest/*  /gw/*)", [
+    tile(d, ix, 524, iw, 50, "API handlers  (/api/*  /rest/*  /gw/*)", [
         "P/g20 api_browse   P/g21 api_playback   P/g22 api_playlists",
-        "P/g23 api_upnp (gateway-as-MediaServer)   P/g24 api_subsonic   "
-        "P/g25 api_radio",
+        "P/g23 api_upnp (gateway-as-MediaServer, incl. Videos folder)   "
+        "P/g24 api_subsonic   P/g25 api_radio",
     ], INK)
-    tile(d, ix, 458, iw, 54, "Playback & control", [
+    tile(d, ix, 470, iw, 48, "Playback & control", [
         "P/g15 dlna_player  (RendererQueue / QUEUES per UDN)",
         "P/g14 dlna_avtransport (AVTransport+RenderingControl SOAP)   "
         "P/g16 dlna_stream_proxy (/stream)",
     ], GREEN)
-    tile(d, ix, 406, iw, 46, "Discovery", [
+    tile(d, ix, 426, iw, 38, "Discovery", [
         "P/g4 dlna_discovery (SSDP, heartbeat, subnet scan)   "
         "P/g5 dlna_registry   P/g6 dlna_devices",
     ], GREEN)
-    tile(d, ix, 324, iw, 76, "Library & index", [
-        "P/g7 dlna_library (LibraryDB: tracks/FTS5/playlists/overrides…)",
+    tile(d, ix, 352, iw, 68, "Library & index", [
+        "P/g7 dlna_library (LibraryDB: tracks/FTS5/playlists/overrides/videos…)",
         "P/g8 db_pool (SQLite WAL pool)   P/g9 dlna_indexer (crawler)",
         "P/g10 dlna_providers/ (seam: upnp, localfs, mock)   "
         "P/g13 dlna_content (ContentDirectory SOAP)",
         "DATA → SQLite library.db   ·   config.json · gateway.log",
     ], GREY)
-    tile(d, ix, 266, iw, 52, "LocalFs serving  (RoHaLocalFS)", [
-        "P/g11 dlna_localfs_server  (bit-perfect file server :8200,",
-        "Range/206, DLNA headers, /localfs/stream + /localfs/art)   "
+    tile(d, ix, 300, iw, 46, "LocalFs serving  (RoHaLocalFS)", [
+        "P/g11 dlna_localfs_server — bit-perfect file server :8200 "
+        "(Range/206, DLNA headers)",
+        "/localfs/stream + /localfs/art + /localfs/video   "
         "P/g12 dlna_localfs_wiring",
     ], GREEN)
-    tile(d, ix, 196, iw, 64, "Background fetchers  (event-driven, TLS out)", [
-        "P/g17 dlna_art_fetcher (MusicBrainz + Cover Art Archive)",
-        "P/g29 dlna_art_cache (on-disk cover bytes)",
-        "P/g19 dlna_lyrics (lrclib)   ·   P/g26 dlna_config (logging/config)",
+    tile(d, ix, 246, iw, 48, "Video  (GWMovies — V0–V3)", [
+        "P/g31 dlna_video_index (5-min incremental scan → videos table)   "
+        "P/g32 dlna_ffmpeg (probe/poster/",
+        "HLS transcode)   PWA: /api/videos + /video/<id> + /video_hls "
+        "(hls.js)   LG: /gw Videos folder",
+    ], GREEN)
+    tile(d, ix, 184, iw, 56, "Background fetchers  (event-driven, TLS out)", [
+        "P/g17 dlna_art_fetcher (MusicBrainz + Cover Art Archive)   "
+        "P/g29 dlna_art_cache (disk bytes)",
+        "P/g19 dlna_lyrics (lrclib)   P/g33 dlna_geocode (Nominatim place "
+        "names, sticky cache)",
+        "P/g26 dlna_config (logging/config)",
     ], RED)
 
     # ── LAN DEVICES (green) ──────────────────────────────────────────
@@ -168,42 +178,47 @@ def build_diagram():
         "also browses gateway playlists",
         "  (UPnP control point)",
     ], GREEN)
-    tile(d, dx + 10, 416, 226, 100, "D/2  UPnP MediaServer", [
+    tile(d, dx + 10, 440, 226, 80, "D/2  UPnP MediaServer", [
         "MinimServer / generic UPnP",
         "(AssetUPnP — decommissioned)",
         "via P/g10 UpnpProvider +",
         "P/g13 ContentDirectory SOAP",
-        "kept for any non-LocalFs source",
     ], GREEN)
-    tile(d, dx + 10, 312, 226, 92, "D/3  Music files", [
-        "/Volumes/SAMDATA/Music",
+    tile(d, dx + 10, 376, 226, 56, "D/5  LG TV  (webOS)", [
+        "DLNA control point + player",
+        "browses /gw (incl. Videos),",
+        "pulls bytes from :8200",
+    ], GREEN)
+    tile(d, dx + 10, 284, 226, 84, "D/3  Media files", [
+        "/Volumes/SAMDATA/Music +",
+        "/Volumes/SAMDATA/GWMovies",
         "(external drive, read-only)",
-        "indexed by P/g9, tags read by",
-        "P/g10 localfs, bytes served by",
-        "P/g11 localfs_server",
+        "audio: P/g9-11 index + serve",
+        "video: P/g31 scan, :8200 serve",
     ], GREEN)
-    tile(d, dx + 10, 226, 226, 74, "D/4  fpcalc  (local binary)", [
-        "Chromaprint CLI (brew)",
-        "fingerprints files for beets (T/a13)",
-        "(local process — internal)",
+    tile(d, dx + 10, 202, 226, 74, "D/4  Local binaries", [
+        "fpcalc — beets fingerprints (T/a13)",
+        "ffmpeg/ffprobe — video probe/",
+        "poster/HLS transcode (P/g32)",
     ], GREY)
 
     # ── EXTERNAL services (red) ──────────────────────────────────────
     ex = 974
-    cluster(d, ex, 348, 142, 300, "EXTERNAL  (TLS out)", RED, RED_L)
+    cluster(d, ex, 306, 142, 342, "EXTERNAL  (TLS out)", RED, RED_L)
     exb = [
         ("E/x1  musicbrainz.org", "release-group MBID, year"),
         ("E/x2  coverartarchive", "front-cover presence"),
         ("E/x3  lrclib.net", "on-demand lyrics"),
         ("E/x4  radio-browser", "station catalogue"),
         ("E/x5  api.acoustid.org", "beets tool only (T/a13)"),
+        ("E/x6  nominatim (OSM)", "GPS → place, video titles"),
     ]
     ey = 568
     for code, desc in exb:
         box(d, ex + 9, ey, 124, 42, GW_TILE, RED, rx=4, sw=0.9)
         txt(d, ex + 14, ey + 30, code, size=7.2, bold=True, color=RED)
         txt(d, ex + 14, ey + 19, desc, size=6.4, color=INK)
-        ey -= 50
+        ey -= 48
 
     # ── TOOLS (grey) ─────────────────────────────────────────────────
     cluster(d, 8, 8, 700, 164, "MAINTENANCE TOOLS  (tools/*.py — operate "
@@ -240,7 +255,7 @@ def build_diagram():
         jy -= 32
 
     # ── LEGEND ───────────────────────────────────────────────────────
-    lx, ly, lw, lh = 974, 8, 142, 332
+    lx, ly, lw, lh = 974, 8, 142, 290
     box(d, lx, ly, lw, lh, white, INK, rx=6, sw=1.3)
     txt(d, lx + 8, ly + lh - 14, "LEGEND — stream colours", size=8.2,
         bold=True, color=INK)
@@ -274,31 +289,33 @@ def build_diagram():
     txt(d, 150, 654, "(Tailscale / LAN)", size=6.0, color=BLUE)
     # FROM: Naim browses gateway playlists (blue dashed, control-point)
     arrow(d, 718, 545, 706, 540, BLUE, 1.4, dash=[3, 2])
+    # FROM: LG TV browses the /gw MediaServer incl. Videos (blue dashed)
+    arrow(d, 718, 404, 706, 398, BLUE, 1.4, dash=[3, 2])
 
     # TO: gateway playback → Naim control (green)
     arrow(d, 706, 484, 718, 575, GREEN, 1.9)
     txt(d, 600, 492, "AVTransport SOAP", size=6.3, color=GREEN, bold=True)
     txt(d, 600, 484, "(control · volume)", size=6.0, color=GREEN)
-    # TO: Naim pulls bytes from :8200 (green)
-    arrow(d, 718, 555, 706, 296, GREEN, 1.9)
-    txt(d, 600, 276, "HTTP Range → audio bytes", size=6.3, color=GREEN, bold=True)
-    txt(d, 600, 268, ":8200 (bit-perfect)", size=6.0, color=GREEN)
+    # TO: Naim/LG pull bytes from :8200 (green)
+    arrow(d, 718, 555, 706, 335, GREEN, 1.9)
+    txt(d, 582, 322, "HTTP Range → media bytes", size=6.3, color=GREEN, bold=True)
+    txt(d, 582, 314, ":8200 (bit-perfect)", size=6.0, color=GREEN)
     # TO: providers/content ↔ UPnP MediaServer (green)
-    arrow(d, 706, 360, 718, 460, GREEN, 1.6, dash=[4, 2])
-    txt(d, 598, 372, "ContentDirectory SOAP", size=6.0, color=GREEN)
-    # TO: localfs/library ↔ music files (green)
-    arrow(d, 706, 292, 718, 356, GREEN, 1.7)
-    txt(d, 640, 318, "read / serve", size=6.0, color=GREEN)
+    arrow(d, 706, 386, 718, 468, GREEN, 1.6, dash=[4, 2])
+    txt(d, 598, 396, "ContentDirectory SOAP", size=6.0, color=GREEN)
+    # TO: localfs/library ↔ media files (green)
+    arrow(d, 706, 308, 718, 320, GREEN, 1.7)
+    txt(d, 636, 296, "read / serve", size=6.0, color=GREEN)
 
     # EXTERNAL: fetchers → external services (red)
     arrow(d, 706, 222, 974, 430, RED, 2.0)
     txt(d, 620, 208, "TLS lookups →", size=6.4, color=RED, bold=True)
 
-    # INTERNAL: fpcalc → acoustid (grey)
-    arrow(d, 718, 250, 706, 220, GREY, 1.4)
+    # INTERNAL: local binaries → fetchers/video (grey)
+    arrow(d, 718, 220, 706, 210, GREY, 1.4)
     # INTERNAL: tools → gateway DB (grey)
-    arrow(d, 360, 172, 360, 322, GREY, 1.5, dash=[4, 2])
-    txt(d, 600, 392, "T/* write library.db", size=6.2, color=GREY)
+    arrow(d, 360, 172, 360, 348, GREY, 1.5, dash=[4, 2])
+    txt(d, 600, 358, "T/* write library.db", size=6.2, color=GREY)
     # INTERNAL: jobs → gateway (grey, launchctl kickstart — see J/1)
     arrow(d, 770, 172, 706, 200, GREY, 1.5, dash=[4, 2])
 
@@ -353,8 +370,11 @@ def list_pages():
     progs = [
         ("P/c1", "static/index.html, app.js, app.css, sw.js, manifest.json",
          "PWA front-end. Browse/playback UI, MediaSession lock-screen, "
-         "Service-Worker caches (APP shell SWR, ART cache-first, API "
-         "stale-while-revalidate), offline shell."),
+         "Service-Worker caches (APP shell network-first since 2026-06-27 — "
+         "cache is the offline fallback only, ART cache-first, API "
+         "stale-while-revalidate), offline shell. Videos section with a "
+         "same-origin &lt;video&gt; player + vendored hls.js for the "
+         "on-demand HLS transcode."),
         ("P/c2", "(3rd-party iOS app — Amperfy / substreamer / play:Sub)",
          "Subsonic client for CarPlay over Tailscale. Talks /rest/* to the "
          "gateway; never to the music server directly."),
@@ -376,8 +396,9 @@ def list_pages():
          "classification."),
         ("P/g7", "dlna_library.py",
          "LibraryDB — SQLite index, FTS5 search, playlists, album_art, "
-         "play_counts, lyrics, metadata_overrides, favourites, radio. "
-         "Composition root for DB-owning singletons + fetchers."),
+         "play_counts, lyrics, metadata_overrides, favourites, radio, "
+         "videos + geocode_cache. Composition root for DB-owning "
+         "singletons + fetchers."),
         ("P/g8", "db_pool.py",
          "SQLite connection pool — WAL, thread-local conns, write "
          "serialization."),
@@ -390,11 +411,14 @@ def list_pages():
          "backend (mutagen, content-hashed ids, watchdog)."),
         ("P/g11", "dlna_localfs_server.py",
          "RoHaLocalFS bit-perfect file server (:8200). Range-aware (206/416), "
-         "DLNA-headered, /localfs/stream/<id> + /localfs/art/<id>. "
+         "DLNA-headered, /localfs/stream/<id> + /localfs/art/<id> + "
+         "/localfs/video/<id> (the LG plays videos from here). "
          "Path-traversal defended."),
         ("P/g12", "dlna_localfs_wiring.py",
          "Boot-time wiring of the LocalFs provider (maybe_start_localfs); "
-         "gated on LOCALFS_MUSIC_ROOT / config."),
+         "gated on LOCALFS_MUSIC_ROOT / config. Also starts the GWMovies "
+         "video scan (P/g31, VIDEO_UDN) when LOCALFS_VIDEO_ROOT / "
+         "localfs.video_root is set — incremental, re-run every 5 min."),
         ("P/g13", "dlna_content.py",
          "UPnP ContentDirectory SOAP client (cd_browse/cd_search). Reached "
          "only via P/g10 upnp.py."),
@@ -425,7 +449,9 @@ def list_pages():
          "AND ConnectionManager), both SCPDs, ContentDirectory#Browse over the "
          "full library + the pre-browse handshake actions, ConnectionManager "
          "#GetProtocolInfo, GENA SUBSCRIBE + initial NOTIFY, SSDP announce + "
-         "M-SEARCH responder."),
+         "M-SEARCH responder. Root also lists a Videos folder (only when "
+         "videos exist) so the LG TV browses + plays GWMovies natively "
+         "(HEVC/MKV incl.)."),
         ("P/g24", "api_subsonic.py",
          "Subsonic-compatible /rest/* API (browse, playlists, favourites→"
          "starred, stream, cover, scrobble, internet radio) for CarPlay "
@@ -440,11 +466,13 @@ def list_pages():
          "2.0 — THE server (Hypercorn owns the whole edge). FastAPI app: "
          "TLS+HTTP/2 on :8443 via ALPN, plain :8765; owns the tailscale cert. "
          "Native routes for the read API, /art, /stream + /radio_stream relays, "
-         "static/PWA, the Subsonic byte methods, and the Naim-facing /gw/* UPnP "
-         "surface (device.xml/desc.xml/events/control on the plain :8765 bind — "
-         "Cleanup C folded it in here, retiring the separate device server). "
-         "Remaining legacy handlers run via the bridge. Lifespan boots P/g1 "
-         "services. docs_url off (no CDN call)."),
+         "static/PWA, the Subsonic byte methods, the video surface (/api/videos, "
+         "/video/&lt;id&gt;, /video_poster, /video_transcode, /video_hls — "
+         "same-origin so the PWA's &lt;video&gt; works over HTTPS), and the "
+         "Naim/LG-facing /gw/* UPnP surface (device.xml/desc.xml/events/control "
+         "on the plain :8765 bind — Cleanup C folded it in here, retiring the "
+         "separate device server). Remaining legacy handlers run via the "
+         "bridge. Lifespan boots P/g1 services. docs_url off (no CDN call)."),
         ("P/g28", "dlna_asgi_bridge.py",
          "Shim that runs the legacy (h, params) handlers unchanged inside the "
          "ASGI app (a fake `h` captures _json/_html/_xml/send_error; runs in a "
@@ -461,6 +489,24 @@ def list_pages():
          "GET /api/events (SSE). Publishers: RendererQueue state, index status "
          "transitions, discovery changes. The PWA opens an EventSource as a "
          "polling accelerator (fallback intact)."),
+        ("P/g31", "dlna_video_index.py",
+         "GWMovies scanner (V1) → the videos table. Stable id = "
+         "sha1(rel_path); metadata via P/g32 probe (filename/mtime fallback "
+         "when ffprobe absent); place name via P/g33; poster frame extracted "
+         "per video. Incremental (mtime,size) + prunes gone files; "
+         "force=True rebuilds."),
+        ("P/g32", "dlna_ffmpeg.py",
+         "Optional ffmpeg/ffprobe helpers (V0/V3, same posture as fpcalc — "
+         "absent binaries degrade gracefully). probe() metadata/GPS/capture "
+         "time, extract_poster(), transcode_cmd() for the on-demand "
+         "H.264/AAC HLS transcode (-pix_fmt yuv420p so 10-bit HEVC plays), "
+         "build_display_title() for the '&lt;place&gt;_YYYYMMDD_HHMM' "
+         "fallback title."),
+        ("P/g33", "dlna_geocode.py",
+         "Reverse-geocode GPS → place name via Nominatim/OSM (E/x6), "
+         "cache-first in geocode_cache. UA + 1.1 s rate limit per OSM "
+         "policy; failures NOT cached (retry later), definitive no-name "
+         "cached sticky as ''."),
     ]
     for c, f, r in progs:
         prog_rows.append([C(c), P(f), P(r)])
@@ -540,11 +586,19 @@ def list_pages():
         ("D/2", "UPnP MediaServer", "MinimServer / generic UPnP (AssetUPnP "
          "decommissioned). Browsed via P/g10 UpnpProvider + P/g13 "
          "ContentDirectory SOAP. Kept for any non-LocalFs source.", GREEN),
-        ("D/3", "Music files", "/Volumes/SAMDATA/Music (external drive, "
-         "read-only). Indexed by P/g9; tags read by localfs provider; bytes "
-         "served by P/g11.", GREEN),
-        ("D/4", "fpcalc", "Chromaprint CLI binary (brew). Local fingerprinter "
-         "for the beets tool (T/a13). Internal/local — not network.", GREY),
+        ("D/3", "Media files", "/Volumes/SAMDATA/Music + "
+         "/Volumes/SAMDATA/GWMovies (external drive, read-only). Audio: "
+         "indexed by P/g9, tags read by localfs provider, bytes served by "
+         "P/g11. Video: scanned by P/g31, served by P/g11 "
+         "(/localfs/video).", GREEN),
+        ("D/4", "fpcalc · ffmpeg/ffprobe", "Local CLI binaries (brew). "
+         "fpcalc fingerprints for the beets tool (T/a13); ffmpeg/ffprobe "
+         "probe metadata, extract posters and run the on-demand HLS "
+         "transcode (P/g32). Internal/local — not network.", GREY),
+        ("D/5", "LG TV (webOS)", "DLNA control point + player. Browses the "
+         "gateway's /gw MediaServer (incl. the Videos folder) and pulls "
+         "bytes from :8200. Plays HEVC/MKV natively — the PWA transcode "
+         "path is browser-only.", GREEN),
         ("E/x1", "musicbrainz.org", "GET /ws/2/release-group — MBID + original "
          "year. UA + 1.1 s rate limit required.", RED),
         ("E/x2", "coverartarchive.org", "HEAD /release-group/{mbid}/front-500 "
@@ -556,6 +610,9 @@ def list_pages():
         ("E/x5", "api.acoustid.org", "fingerprint → MusicBrainz metadata — used "
          "ONLY by the beets tool (T/a13) now; the in-process AcoustID worker "
          "was removed in 2.0.", RED),
+        ("E/x6", "nominatim.openstreetmap.org", "GET /reverse — GPS → place "
+         "name for video display titles (P/g33). UA + 1.1 s rate limit per "
+         "OSM policy; sticky cache in geocode_cache.", RED),
         ("J/1", "com.roha.dlna-gateway", "LaunchAgent that runs the gateway. "
          "Restart: launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway.",
          GREY),
@@ -590,6 +647,12 @@ def list_pages():
          ".venv/bin/pytest tests/frontend -v"),
         ("Chaos (live)", "python3 tests/chaos.py --iterations N --workers M "
          "[--seed S] [--quiet] [--base https://host:8443]"),
+        ("Load (live)", "python3 tests/load_stream.py --concurrency 40 "
+         "--count 80 [--gateway https://127.0.0.1:8443 --insecure] "
+         "[--max-p95 6]   (threadpool-starvation guard)"),
+        ("Safari / iOS smoke", ".venv/bin/python tests/frontend/"
+         "safari_smoke.py   ·   ios_sim_smoke.py (Appium :4723 + a booted "
+         "Simulator)   — opt-in, not in run_all.py"),
         ("Schema gate (T/a1)", "python3 tools/regen_schema.py [--check]"),
         ("Module self-tests", "python dlna_discovery.py | dlna_content.py "
          "<url> | dlna_library.py | db_pool.py | dlna_player.py"),
@@ -604,12 +667,14 @@ def list_pages():
     story.append(make_table(cmd_rows, [150, 910], INK))
     story.append(Spacer(1, 8))
     story.append(P("Ports (2.0): 8443 HTTPS — Hypercorn TLS + HTTP/2 (ALPN), "
-                   "tailscale cert · 8765 plain HTTP · 8200 RoHaLocalFS file "
-                   "server · 8770 device-tier /gw/* (plain, for the Naim; "
-                   "SSDP advert points here) · 26125 (legacy AssetUPnP, "
-                   "decommissioned). The HTTP/2 + app-owned-TLS roadmap is now "
-                   "DONE — Hypercorn terminates TLS/h2 natively. Cutover: "
-                   "docs/CUTOVER_RUNBOOK.md + CUTOVER_LAUNCHD.md.", note))
+                   "tailscale cert · 8765 plain HTTP, incl. the Naim/LG-facing "
+                   "/gw/* UPnP surface (Cleanup C folded the old :8770 device "
+                   "tier into this bind; SSDP advert points here) · 8200 "
+                   "RoHaLocalFS file server (audio + /localfs/video) · 26125 "
+                   "(legacy AssetUPnP, decommissioned). The HTTP/2 + "
+                   "app-owned-TLS roadmap is now DONE — Hypercorn terminates "
+                   "TLS/h2 natively. Cutover: docs/CUTOVER_RUNBOOK.md + "
+                   "CUTOVER_LAUNCHD.md.", note))
 
     # ---- Tool options reference (per tool, every flag explained) ----
     story.append(PageBreak())
