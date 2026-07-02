@@ -801,6 +801,7 @@ External CLI binaries — optional per feature:
 | Binary | Used by | Install |
 |---|---|---|
 | `fpcalc` (Chromaprint) | the **beets** enrichment tool (`tools/beets_enrich.py` via pyacoustid) — the in-process AcoustID worker was removed in 2.0 | `brew install chromaprint` |
+| `beet` (beets) | metadata enrichment batch (`tools/beets_enrich.py`) | `brew install beets` — NOT pip (Homebrew python upgrades wipe a pip install); then add `musicbrainzngs` + `pyacoustid` to the keg venv — see `requirements.txt` → "beets enrichment toolchain" |
 
 Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
 
@@ -2386,8 +2387,30 @@ exit 0 — the failure mode that wasted two multi-hour runs on 2026-06-03).
 The tool guards this: it aborts before running if the config's `plugins:`
 line lacks `musicbrainz`, or if `musicbrainzngs` isn't importable in
 beets' own environment (probed via the `beet` console-script shebang),
-each with the exact fix. One-time deps:
-`brew install chromaprint && pip3 install beets pyacoustid musicbrainzngs`.
+each with the exact fix. One-time deps (2026-07-02 — **install beets via
+Homebrew, NOT pip**; a `pip3 install beets` gets wiped by every Homebrew
+python upgrade, which is how the 2026-06 install died):
+
+```bash
+brew install chromaprint beets
+# the formula ships WITHOUT these two plugin deps; put them in the keg
+# venv — and RE-RUN this after any `brew upgrade beets`:
+BEETS_KEG=$(brew --prefix beets)/libexec
+$BEETS_KEG/bin/python -m pip install --prefix $BEETS_KEG musicbrainzngs pyacoustid
+```
+
+(Same block lives in `requirements.txt` → "beets enrichment toolchain".
+The tool's start-up guards print these exact fixes when either is missing.)
+
+**Quiet mode says just "Skipping." on an untagged album?** Two known
+causes, diagnosable with `beet -v import -q <dir>`: (1) `chroma: acoustid
+album candidates: 0` — beets' fingerprint lookups use a SHARED bundled
+AcoustID key that gets rate-limited (error 14), every lookup fails
+silently, and text-matching bare tags yields garbage; (2) the release
+isn't on MusicBrainz at all. Proven fix for bare files (Nena, 2026-07-02):
+pre-tag minimal TEXT tags with mutagen (artist, exact MB album title,
+title = filename stem), then re-run `--quiet --revisit` — the MB text
+search matches without fingerprints and beets writes full canonical tags.
 
 #### Flags
 
@@ -2407,8 +2430,9 @@ each with the exact fix. One-time deps:
 
 #### Safety
 
-- Hard-fails fast if `beet` isn't installed (`brew install chromaprint` +
-  `pip3 install beets pyacoustid`) or the config is missing/not in-place.
+- Hard-fails fast if `beet` isn't installed (`brew install chromaprint
+  beets` + the keg plugin deps — see the one-time-deps block above) or the
+  config is missing/not in-place.
 - Refuses to run if the music drive isn't mounted (external SAMDATA).
 - Confirms before any in-place write (with the backup warning) unless `-y`.
 - Warns when DSD (`.dsf`/`.dff`) files are under the target or when fpcalc
@@ -2418,8 +2442,8 @@ each with the exact fix. One-time deps:
 #### Usage
 
 ```bash
-# one-time deps
-brew install chromaprint && pip3 install beets pyacoustid
+# one-time deps (brew, NOT pip — see the block above for the keg plugin deps)
+brew install chromaprint beets
 # write the tag-in-place config, then interactive review, then bulk
 python3 tools/beets_enrich.py --write-config
 python3 tools/beets_enrich.py                 # interactive (prompts per album)
@@ -2648,6 +2672,25 @@ If `SUBSONIC_PASSWORD` is unset the API returns 503 on every call —
 deliberate, prevents accidental auth-disabled exposure. Auth is a
 defence-in-depth layer; the primary access control is Tailscale (the
 gateway is not exposed to the public internet).
+
+### Observability (2026-07-02)
+
+Every `/rest/*` request logs **one INFO line** in `gateway.log` (added
+after an undiagnosable "Amperfy flaky in the car" afternoon — Subsonic
+traffic was previously visible only at `debug`):
+
+```
+Subsonic getAlbum client='amperfy' ip=100.x.y.z → 200 in 12ms   # bridged JSON/XML methods
+Subsonic stream id=tr:… client='amperfy' ip=100.x.y.z           # byte methods
+Subsonic ping client='…' ip=… → refused                         # auth-gate refusals
+```
+
+The shared audio-relay `stream ▶ START` / `■ END` lines also carry
+`client=<peer-ip>`. **A `100.x` ip = tailnet (CarPlay/Amperfy or remote
+PWA); `192.168.x` = LAN.** Diagnosis shortcut: `grep Subsonic gateway.log`
+— if it's EMPTY during a flaky window, the requests never reached the
+gateway (phone-side Tailscale/cellular), not a gateway problem. Heads-up:
+`getCoverArt` logs per cover, so a client's first art sync is chatty.
 
 ### What's intentionally NOT implemented
 
