@@ -28,9 +28,9 @@
         <string>--insecure-bind</string>
         <string>0.0.0.0:8765</string>
         <string>--certfile</string>
-        <string>/Users/ronhamersma/dlna-gateway/ronsmacmini.tail5be6ad.ts.net.crt</string>
+        <string>/Users/ronhamersma/dlna-gateway-2.0/ronsmacmini.tail5be6ad.ts.net.crt</string>
         <string>--keyfile</string>
-        <string>/Users/ronhamersma/dlna-gateway/ronsmacmini.tail5be6ad.ts.net.key</string>
+        <string>/Users/ronhamersma/dlna-gateway-2.0/ronsmacmini.tail5be6ad.ts.net.key</string>
     </array>
 
     <key>RunAtLoad</key>
