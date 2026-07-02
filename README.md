@@ -76,6 +76,11 @@ Hard requirements:
 - (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
   on macOS) — used by the beets enrichment tool (`tools/beets_enrich.py`,
   via pyacoustid) for fingerprint matching.
+- (Optional) [beets](https://beets.io/) for the enrichment tool — install
+  via `brew install beets`, **not** pip (Homebrew Python upgrades wipe a
+  pip install). The formula omits two plugin packages the workflow needs
+  (`musicbrainzngs`, `pyacoustid`); see the "beets enrichment toolchain"
+  block in `requirements.txt` for the keg-venv install command.
 - A music source: either network access to a UPnP MediaServer on your
   LAN, **or** a readable music folder via RoHaLocalFS (set
   `LOCALFS_MUSIC_ROOT` — see "Serving your own files" below).
