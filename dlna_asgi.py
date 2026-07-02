@@ -557,7 +557,8 @@ _GW_XML = 'text/xml; charset="utf-8"'
 
 
 def _peer(request: Request) -> str:
-    return request.client.host if request.client else "?"
+    client = getattr(request, "client", None)
+    return client.host if client else "?"
 
 
 @app.get("/gw/device.xml", include_in_schema=False)
@@ -638,12 +639,14 @@ async def gw_cd_control(request: Request):
     return Response(payload, status_code=status, media_type=ctype)
 
 
-async def _audio_relay_response(url: str, range_hdr: str):
+async def _audio_relay_response(url: str, range_hdr: str, client: str = "?"):
     """Open `url` (forwarding `range_hdr`) and return a StreamingResponse that
     relays the (200/206) body same-origin, or a 502 JSONResponse if the
     upstream is unreachable. Shared by /stream and Subsonic /rest/stream. Each
     blocking upstream read runs in a threadpool; the generator closes the
-    upstream when the client disconnects (Hypercorn closes it)."""
+    upstream when the client disconnects (Hypercorn closes it). `client` is
+    the requesting peer's IP — a 100.x address means tailnet (CarPlay/Amperfy
+    or remote PWA), a 192.168.x one means LAN."""
     conn, resp = await run_in_threadpool(
         dlna_stream_proxy.open_stream_upstream, url, range_hdr)
     if resp is None:
@@ -668,7 +671,7 @@ async def _audio_relay_response(url: str, range_hdr: str):
         _tag = f"{_pr.hostname}{_pr.path}"
     except Exception:                                   # noqa: BLE001
         _tag = url[:80]
-    log.info(f"stream ▶ START {_tag} ({status})")
+    log.info(f"stream ▶ START {_tag} ({status}) client={client}")
     _t0 = time.monotonic()
 
     async def _relay():
@@ -692,7 +695,8 @@ async def _audio_relay_response(url: str, range_hdr: str):
             raise
         finally:
             log.info(f"stream ■ END   {_tag} sent={sent} "
-                     f"in {time.monotonic()-_t0:.1f}s reason={reason}")
+                     f"in {time.monotonic()-_t0:.1f}s reason={reason} "
+                     f"client={client}")
             try:
                 conn.close()
             except Exception:
@@ -708,7 +712,8 @@ async def stream(request: Request, url: str = ""):
     and streams the (200 or 206) response back same-origin."""
     if not url:
         return JSONResponse({"error": "Missing url"}, status_code=400)
-    return await _audio_relay_response(url, request.headers.get("range", ""))
+    return await _audio_relay_response(url, request.headers.get("range", ""),
+                                       client=_peer(request))
 
 
 @app.get("/radio_stream", include_in_schema=False)
@@ -826,13 +831,22 @@ async def subsonic(request: Request, rest_path: str):
     query = request.url.query
     body = await request.body() if request.method == "POST" else b""
     method = api_subsonic._method_from_path("/rest/" + rest_path).lower()
+    # One INFO line per /rest request (method, client app, peer IP, and for
+    # the bridged methods status + duration) — Amperfy/CarPlay traffic is
+    # otherwise invisible at the default log level, which made the 2026-07-02
+    # "flaky in the car" afternoon undiagnosable from gateway.log.
+    _params = api_subsonic._parse_params(query, body)
+    _client = _params.get("c", "?")
+    _ip = _peer(request)
 
     if method in _SUBSONIC_BYTE_METHODS:
         gate = _subsonic_auth_gate(query, body)
         if gate is not None:
+            log.info(f"Subsonic {method} client={_client!r} ip={_ip} → refused")
             return gate
-        params = api_subsonic._parse_params(query, body)
+        params = _params
         sid = params.get("id", "")
+        log.info(f"Subsonic {method} id={sid[:48]} client={_client!r} ip={_ip}")
         if method == "getcoverart":
             # Try every candidate art URL for the id (folder albums have one
             # per track; some files lack embedded art) and serve the first that
@@ -850,12 +864,16 @@ async def subsonic(request: Request, rest_path: str):
             return _subsonic_fail_response(
                 query, body, api_subsonic.ERR_NOT_FOUND,
                 f"Unknown track id: {sid}")
-        return await _audio_relay_response(url, request.headers.get("range", ""))
+        return await _audio_relay_response(url, request.headers.get("range", ""),
+                                           client=_ip)
 
     # JSON/XML method → bridge api_subsonic.handle() over the capture handler.
+    _t0 = time.monotonic()
     code, resp_body, ctype = await run_in_threadpool(
         run_subsonic_sync, request.method, "/rest/" + rest_path, query, body,
         headers=request.headers)
+    log.info(f"Subsonic {method} client={_client!r} ip={_ip} "
+             f"→ {code} in {(time.monotonic()-_t0)*1000:.0f}ms")
     return Response(content=resp_body, status_code=code, media_type=ctype)
 
 
