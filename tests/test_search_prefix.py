@@ -87,6 +87,19 @@ class TestSearchPrefix(unittest.TestCase):
         res = self.db.search(UDN, "   ")
         self.assertEqual(res["tracks"], [])
 
+    def test_punctuation_only_terms_are_ignored(self):
+        # '1973 - Uriah Heep - Live' style queries carry bare '-' tokens;
+        # a punctuation-only term tokenizes to nothing in FTS5 and would
+        # AND-blank the whole query. They must be dropped.
+        self.assertIn("Essential Classical Chillout",
+                      self._albums("essential - chillout"))
+        self.assertIn("Essential Classical Chillout",
+                      self._albums("essential & chil"))
+
+    def test_punctuation_only_query_matches_nothing(self):
+        res = self.db.search(UDN, "- & /")
+        self.assertEqual(res["tracks"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

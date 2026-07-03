@@ -1131,7 +1131,10 @@ class LibraryDB:
         # Chillout". The old single-quoted-phrase form made any partial
         # final word match NOTHING, which read as missing content in
         # clients that search per keystroke (Amperfy, the PWA box).
-        terms = [t.replace('"', '""') for t in query.split()]
+        # Punctuation-only tokens ("-", "&", "/") tokenize to nothing in
+        # FTS5 and would AND-blank the whole query — drop them.
+        terms = [t.replace('"', '""') for t in query.split()
+                 if any(c.isalnum() for c in t)]
         if not terms:
             return {"tracks": [], "albums": [], "artists": []}
         fts_q = " ".join(f'"{t}"' for t in terms[:-1]) + \
