@@ -140,7 +140,8 @@ def build_diagram():
         "P/g5 dlna_registry   P/g6 dlna_devices",
     ], GREEN)
     tile(d, ix, 352, iw, 68, "Library & index", [
-        "P/g7 dlna_library (LibraryDB: tracks/FTS5/playlists/overrides/videos…)",
+        "P/g7 dlna_library (LibraryDB: tracks/FTS5 w/ auto-heal + type-ahead/"
+        "playlists/overrides/videos…)",
         "P/g8 db_pool (SQLite WAL pool)   P/g9 dlna_indexer (crawler)",
         "P/g10 dlna_providers/ (seam: upnp, localfs, mock)   "
         "P/g13 dlna_content (ContentDirectory SOAP)",

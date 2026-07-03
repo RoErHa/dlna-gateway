@@ -67,6 +67,10 @@ python3 tests/chaos.py --seed 42 --quiet    # reproduce a past failure
 # Layer 3b — /stream concurrency load test (live gateway, opt-in):
 python3 tests/load_stream.py --concurrency 40 --count 80
 python3 tests/load_stream.py --gateway https://127.0.0.1:8443 --insecure --max-p95 8
+
+# Layer 3c — Subsonic completeness/performance/art verification (live, opt-in):
+python3 tests/subsonic_verify.py
+python3 tests/subsonic_verify.py --seed 42 --reps 5 --art-sample 40
 ```
 
 `tests/load_stream.py` guards the **threadpool-starvation regression** (the 2.0
@@ -76,6 +80,17 @@ failures + an optional p95 threshold** (`--max-p95`). Live-gateway + opt-in like
 `chaos.py` (NOT in `run_all.py`). Prints p50/p95/max + throughput so before/after
 runs compare directly. The fix it guards: the shared threadpool limiter raised
 40 → 256 (`dlna_asgi.py`) so audio relays don't starve behind browse/art.
+
+`tests/subsonic_verify.py` (2026-07-03) measures the **Subsonic/Amperfy
+surface** against `library.db` ground truth (the same LibraryDB methods the
+API wraps): completeness (getArtists / paginated getAlbumList2 / per-album
+song counts), per-endpoint latency percentiles, and cover-art health
+(status/MIME/bytes over a random album sample, distinguishing "no art in
+DB" from real fetch failures). Credentials from `.env`. Run it whenever a
+Subsonic client "feels flaky" — its first run pinned four real defects
+(no type-ahead prefix search, punctuation terms AND-blanking queries, the
+5 MB art cap, search3 ids missing `album_key`). Live + opt-in like
+`chaos.py` (NOT in `run_all.py`). Exit 0 = clean.
 
 ### Frontend test architecture (`tests/frontend/`)
 
@@ -250,6 +265,19 @@ tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, f
   metadata_overrides.year (the MusicBrainz original year) over this
   edition year — see "Year display" subsection.
 tracks_fts — FTS5 virtual table over (title, artist, album)
+  Search semantics (2026-07-03): every whitespace term must match
+  (implicit AND) and the LAST term matches as a prefix — type-ahead
+  per keystroke works (Amperfy / the PWA box). Punctuation-only
+  tokens ("-", "&") are dropped (they'd AND-blank the query).
+  KNOWN LIMITATION: folder-derived album display names are NOT in
+  FTS (it indexes raw tags) — an album whose folder name differs
+  from its tag name is searchable only by the tag name.
+  AUTO-HEAL (2026-07-03): the recurring shadow-table corruption
+  ("database disk image is malformed", 6× since Apr 2026, tripped by
+  mass DELETE/INSERT trigger traffic) self-heals on every mass-write
+  path — LibraryDB.run_with_fts_heal (repair_fts + one retry) wraps
+  clear(), upsert_tracks(), the LocalFs rescan finalize txn, and the
+  Indexer crawl. Guarded by tests/test_fts_heal.py.
 metadata_overrides(url, artist, album, title, genre, year, updated_at, source)
   source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
   year is the MUSICBRAINZ original release year (release-group's
@@ -380,7 +408,10 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 
 iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PWA rewrites every track art URL to `/art?url=<external>` so the lock-screen fetch is same-origin. Service Worker cache-firsts these (art rarely changes).
 
-- Hard-caps at 5 MB per image to prevent memory abuse.
+- Hard-caps at 12 MB per image to prevent memory abuse (raised from 5 MB
+  2026-07-03 — real embedded covers exceed 5 MB and the cap made
+  getCoverArt 404 deterministically for every candidate of such an
+  album; 12 MB matches `dlna_localfs_server`'s embedded-art cap).
 - Validates Content-Type starts with `image/` — an upstream HTML 404 page won't poison the SW cache.
 - 10-second timeout; slow upstream fails fast.
 - The handler is in `api_playback.art()` routed at `/art` in `dlna_asgi.py`.
@@ -2000,6 +2031,37 @@ markers, metadata + path columns).
 python3 -m unittest tools.test_find_duplicate_audio -v
 ```
 
+### `tools/compilation_playlists.py`
+
+Creates playlists for **scattered compilation albums** — an album TAG
+("2 meter sessies Volume 1", "Billboard Top 100 of 1970") shared by
+tracks that live in many different folders (one per contributing
+artist). Folder-based album grouping can't reunite them, so they're
+invisible as albums; this exposes each as a playlist named after the
+tag, tracks ordered artist → title.
+
+Selection (defaults tuned on the real library, 2026-07-03): ≥`--min-tracks`
+(5) tracks share the exact album tag, by ≥`--min-artists` (3) distinct
+artists, and **no single folder holds ≥`--max-per-folder` (5) of them**.
+The artist floor excludes single-artist albums (Supertramp "Paris"); the
+per-folder ceiling excludes generic-title collisions ("Greatest Hits" =
+20 different artists' separate albums). Existing playlists are skipped by
+case-insensitive name, so re-running after new rips only adds what's new
+— safe as a post-rip habit. DRY-RUN by default; `--apply` mutates.
+
+```bash
+python3 tools/compilation_playlists.py               # preview
+python3 tools/compilation_playlists.py --apply       # create
+python3 tools/compilation_playlists.py --min-tracks 8
+python3 -m unittest tools.test_compilation_playlists -v   # 10 tests
+```
+
+First real run (2026-07-03) created 13 playlists (the 2 meter sessies
+family, Essential Classical Chillout, Toen Was Het Stil Op Straat,
+Cohen Covered, …); the 3 Billboard candidates already existed. Side
+fix: `pl_get` now orders by `added_at, id` — `added_at` alone has
+second resolution, so bulk adds tied and returned in arbitrary order.
+
 ### `tools/relink_orphan_overrides.py`
 
 Recovers orphan `metadata_overrides` rows after an AssetUPnP rescan
@@ -2479,10 +2541,22 @@ new tags, and this tool does both in the right order:
    the old `source='acoustid'` override straight back on top of beets'
    fresh tags and masks them. Deleting the acoustid rows lets the file
    tags show through.
-2. **Reindex LocalFs** (`POST /api/index/rebuild?udn=…` →
-   `INDEXER.start(srv, force=True)` = `clear(udn)` + full re-crawl). mutagen
-   re-reads every file (beets changed mtime+size, so the scan cache doesn't
-   skip them).
+2. **Reindex LocalFs** (`POST /api/index/rebuild?udn=…` → for LocalFs this
+   dispatches to `provider.rescan(force=True)`, which re-reads every file's
+   tags but does **NOT clear** the tracks table first).
+
+   > **⚠ CAVEAT (observed 2026-07-03): a rescan — incremental OR force —
+   > cannot update the metadata of EXISTING-URL rows.** `upsert_tracks` is
+   > `INSERT OR IGNORE` (the URL-unique index swallows the fresh row) plus a
+   > genre/art-only UPDATE keyed on the OLD identity — so in-place retagging
+   > (beets!) is invisible to any rescan. The reliable flow after retagging:
+   > `sqlite3 library.db "DELETE FROM tracks WHERE udn='uuid:localfs-…'"`
+   > then `GET /api/index/rebuild?udn=…` — the clear+re-crawl rebuilds every
+   > row from file tags (the FTS trip a mass DELETE can cause is auto-healed
+   > since `run_with_fts_heal`). Note the rescan stats then mislabel the
+   > reinserts as `changed` (the localfs_files cache wasn't cleared) —
+   > harmless. A proper in-code fix (update title/artist/album/year on
+   > changed rows, or make rebuild clear first) is on the next-session list.
 
 **Manual-override safety (the core invariant, regression-guarded):** ONLY
 `source='acoustid'` rows are deleted. `source='manual'` (user edits + the
@@ -2640,7 +2714,13 @@ byte-identical to the pre-A3b 2-field form (no client/cache churn);
 `_album_id_decode` returns `(artist, album, album_key)` and tolerates
 legacy 2-field ids with `album_key=''`. `_so_song` carries the track's
 `album_key` (added to `album_tracks` / `search` output) so track→album
-navigation lands on the folder album.
+navigation lands on the folder album. **search3's album entries carry
+`album_key` too** (fixed 2026-07-03 — `_search3` used to rebuild the album
+dicts without it, so tapping a search result resolved `getAlbum` by
+`(artist, album)` only: wrong/partial track list for folder-grouped
+compilations; found live by `tests/subsonic_verify.py`). Search results
+show the RAW tag album name while browse shows the folder-derived display
+name — match by id/`album_key`, not by name.
 
 ### Authentication
 
