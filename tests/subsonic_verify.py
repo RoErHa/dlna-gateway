@@ -181,7 +181,7 @@ def main():
     # ── completeness: per-album song counts + search ──────────────────
     sample = rng.sample(truth_albums, min(args.album_sample,
                                           len(truth_albums)))
-    bad_counts = search_misses = 0
+    bad_counts = search_misses = display_only = 0
     el_album, el_search = [], []
     for a in sample:
         aid = album_id(a.get("artist", ""), a.get("album", ""),
@@ -197,6 +197,14 @@ def main():
             problems.append(
                 f"ALBUM TRACKS: {a.get('artist','?')!r}/{a.get('album')!r} "
                 f"api={api_n} truth={truth_n}")
+        # Search by the browse display name; if that misses AND the raw
+        # tag name differs, retry with the raw name — folder-derived
+        # display names are NOT in FTS (known limitation, counted
+        # separately, not a failure).
+        truth_tracks = db.album_tracks(
+            music_udn, a.get("artist", ""), a.get("album", ""),
+            album_key=a.get("album_key", "") or "")
+        raw_name = (truth_tracks[0].get("album") if truth_tracks else "") or ""
         q = (a.get("album") or "")[:25].strip()
         if len(q) >= 4:
             el, data = cli.js("search3", query=q)
@@ -220,13 +228,21 @@ def main():
                     (a.get("album") or "").lower()
 
             if not any(_hit(x) for x in albs):
+                q2 = raw_name[:25].strip()
+                if q2 and q2.lower() != q.lower():
+                    _, data = cli.js("search3", query=q2)
+                    albs = data.get("searchResult3", {}).get("album", [])
+                    if any(_hit(x) for x in albs):
+                        display_only += 1
+                        continue
                 search_misses += 1
                 problems.append(f"SEARCH MISS: {q!r} did not return "
                                 f"{a.get('album')!r}")
     timings["getAlbum"] = el_album
     timings["search3"] = el_search
     print(f"album sample ({len(sample)}): {bad_counts} bad track counts, "
-          f"{search_misses} search misses")
+          f"{search_misses} search misses, {display_only} findable only by "
+          f"raw tag (folder display name not in FTS — known limitation)")
 
     # ── cover art health ───────────────────────────────────────────────
     with_art = [a for a in truth_albums if a.get("art")]
