@@ -909,7 +909,12 @@ class LibraryDB:
                 album_key=t.get("album_key", ""),
             )
         rows_raw = [_make_row(t) for t in tracks if t.get("url")]
+        # Mass INSERTs fire the FTS triggers; heal-and-retry on the
+        # recurring shadow-table corruption. Body is retry-safe
+        # (INSERT OR IGNORE / UPDATE OR IGNORE throughout).
+        return self.run_with_fts_heal(self._upsert_tracks_body, udn, rows_raw)
 
+    def _upsert_tracks_body(self, udn: str, rows_raw: list) -> int:
         with self._pool.write() as conn:
             # Build the (d_id, _norm_title(title)) dedup set: existing
             # rows for this UDN + within-batch tracking. Non-AssetUPnP
@@ -1003,13 +1008,21 @@ class LibraryDB:
         """
         Wipe track index for this UDN. Playlists untouched.
         Forces FTS5 rebuild so shadow tables are clean.
+
+        The mass DELETE fires the FTS delete triggers row-by-row — on a
+        corrupted tracks_fts that raises "database disk image is
+        malformed" before the rebuild line is ever reached (the 5th/6th
+        real-world occurrences, 2026-07-03). Routed through
+        run_with_fts_heal so the corruption self-heals.
         """
+        self.run_with_fts_heal(self._clear_body, udn)
+        log.info(f"Track index cleared for {udn}")
+
+    def _clear_body(self, udn: str):
         with self._pool.write() as conn:
             conn.execute("DELETE FROM tracks WHERE udn=?", (udn,))
             conn.execute("DELETE FROM index_meta WHERE udn=?", (udn,))
             conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
-
-        log.info(f"Track index cleared for {udn}")
 
     def mark_indexed(self, udn: str):
         with self._pool.write() as conn:
@@ -2139,6 +2152,33 @@ class LibraryDB:
                          "VALUES('rebuild')")
         log.warning("LibraryDB.repair_fts: tracks_fts dropped, recreated, "
                     "and rebuilt from tracks")
+
+    def run_with_fts_heal(self, body_fn, *args, **kwargs):
+        """Run ``body_fn(*args, **kwargs)``; if it raises a
+        ``sqlite3.DatabaseError`` whose message contains "malformed" (the
+        FTS5 shadow-table corruption symptom — see ``repair_fts``), repair
+        the FTS index and retry the body ONCE. Any other exception, or a
+        malformed error on the retry, is re-raised — never loops.
+
+        This is the single heal implementation: ``clear`` and
+        ``upsert_tracks`` route their bodies through it (mass DELETEs /
+        INSERTs fire the FTS triggers straight into the corrupt index —
+        the 5th and 6th occurrences, 2026-07-03, were exactly that), the
+        Indexer wraps its crawl with it, and the LocalFs provider wraps
+        its rescan write-transaction. The body must be idempotent /
+        retry-safe (all current callers are: DELETE, INSERT OR IGNORE,
+        INSERT OR REPLACE).
+        """
+        for attempt in (1, 2):
+            try:
+                return body_fn(*args, **kwargs)
+            except sqlite3.DatabaseError as e:
+                if attempt == 1 and "malformed" in str(e).lower():
+                    log.warning(f"LibraryDB: FTS index malformed ({e}) — "
+                                f"rebuilding tracks_fts and retrying once")
+                    self.repair_fts()
+                    continue
+                raise
 
     def radio_fav_update(self, station_uuid: str, *, name: str = None,
                          stream_url: str = None,

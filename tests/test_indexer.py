@@ -29,6 +29,14 @@ from dlna_indexer import Indexer
 
 def _make_indexer():
     lib = MagicMock()
+    # The heal logic moved to LibraryDB (2026-07-03); the Indexer wrapper
+    # delegates to it. Bind the REAL implementation onto the mock library
+    # (repair_fts stays a MagicMock) so these scenarios still exercise the
+    # actual heal-and-retry semantics end-to-end through the Indexer.
+    import types
+    from dlna_library import LibraryDB
+    lib.run_with_fts_heal = types.MethodType(
+        LibraryDB.run_with_fts_heal, lib)
     return Indexer(lib), lib
 
 
