@@ -659,6 +659,18 @@ class TestAlbumKey(unittest.TestCase):
         self.assertEqual(len(songs), 2)
         self.assertEqual({s["title"] for s in songs}, {"Song A", "Song B"})
 
+    def test_search3_album_id_carries_album_key(self):
+        """search3's album entries must carry the folder key in their id —
+        without it, tapping a search result resolves getAlbum by
+        (artist, album) only and a folder-grouped compilation comes back
+        wrong/partial (found live 2026-07-03 by tests/subsonic_verify.py)."""
+        _, body = _call("search3", {"query": "Song A"}, db=self.db)
+        albums = body["searchResult3"].get("album", [])
+        self.assertTrue(albums, "search3 should return the album")
+        decoded = [api_subsonic._album_id_decode(a["id"]) for a in albums]
+        self.assertIn("VA/Comp", [d[2] for d in decoded if d],
+                      f"no album id carried album_key: {decoded}")
+
     def test_star_and_starred2_round_trip_by_key(self):
         aid = api_subsonic._album_id("Various Artists", "Comp", "VA/Comp")
         _call("star", {"id": aid}, db=self.db)

@@ -202,8 +202,24 @@ def main():
             el, data = cli.js("search3", query=q)
             el_search.append(el)
             albs = data.get("searchResult3", {}).get("album", [])
-            if not any((x.get("name") or "").lower() ==
-                       (a.get("album") or "").lower() for x in albs):
+            # Match by folder identity (album_key inside the id) when set —
+            # search results carry the raw tag name while browse uses the
+            # folder-derived display name, so name equality is too strict.
+            ak = a.get("album_key") or ""
+
+            def _hit(x):
+                if ak:
+                    try:
+                        b = (x.get("id") or "")[3:]
+                        b += "=" * (-len(b) % 4)      # API strips padding
+                        raw = base64.urlsafe_b64decode(b.encode()).decode()
+                        return raw.split("\x00")[2:3] == [ak]
+                    except Exception:                     # noqa: BLE001
+                        return False
+                return (x.get("name") or "").lower() == \
+                    (a.get("album") or "").lower()
+
+            if not any(_hit(x) for x in albs):
                 search_misses += 1
                 problems.append(f"SEARCH MISS: {q!r} did not return "
                                 f"{a.get('album')!r}")

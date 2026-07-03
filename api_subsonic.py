@@ -561,6 +561,7 @@ def _search3(h, params):
                                "album_count": r.get("album_count", 0)})
                    for r in res.get("artists", [])],
         "album":  [_so_album({"artist": r["artist"], "album": r["album"],
+                              "album_key": r.get("album_key", ""),
                               "track_count": r.get("track_count", 0)})
                    for r in res.get("albums", [])],
         "song":   [_so_song(t) for t in res.get("tracks", [])],
