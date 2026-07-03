@@ -1891,7 +1891,7 @@ class LibraryDB:
             tracks = conn.execute(
                 """SELECT url, title, artist, album, duration, art
                    FROM playlist_tracks WHERE pl_id=?
-                   ORDER BY added_at""", (pl_id,)).fetchall()
+                   ORDER BY added_at, id""", (pl_id,)).fetchall()
         return {"id": pl["id"], "name": pl["name"],
                 "tracks": [dict(t) for t in tracks]}
 

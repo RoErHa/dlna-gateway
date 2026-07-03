@@ -2000,6 +2000,37 @@ markers, metadata + path columns).
 python3 -m unittest tools.test_find_duplicate_audio -v
 ```
 
+### `tools/compilation_playlists.py`
+
+Creates playlists for **scattered compilation albums** — an album TAG
+("2 meter sessies Volume 1", "Billboard Top 100 of 1970") shared by
+tracks that live in many different folders (one per contributing
+artist). Folder-based album grouping can't reunite them, so they're
+invisible as albums; this exposes each as a playlist named after the
+tag, tracks ordered artist → title.
+
+Selection (defaults tuned on the real library, 2026-07-03): ≥`--min-tracks`
+(5) tracks share the exact album tag, by ≥`--min-artists` (3) distinct
+artists, and **no single folder holds ≥`--max-per-folder` (5) of them**.
+The artist floor excludes single-artist albums (Supertramp "Paris"); the
+per-folder ceiling excludes generic-title collisions ("Greatest Hits" =
+20 different artists' separate albums). Existing playlists are skipped by
+case-insensitive name, so re-running after new rips only adds what's new
+— safe as a post-rip habit. DRY-RUN by default; `--apply` mutates.
+
+```bash
+python3 tools/compilation_playlists.py               # preview
+python3 tools/compilation_playlists.py --apply       # create
+python3 tools/compilation_playlists.py --min-tracks 8
+python3 -m unittest tools.test_compilation_playlists -v   # 10 tests
+```
+
+First real run (2026-07-03) created 13 playlists (the 2 meter sessies
+family, Essential Classical Chillout, Toen Was Het Stil Op Straat,
+Cohen Covered, …); the 3 Billboard candidates already existed. Side
+fix: `pl_get` now orders by `added_at, id` — `added_at` alone has
+second resolution, so bulk adds tied and returned in arbitrary order.
+
 ### `tools/relink_orphan_overrides.py`
 
 Recovers orphan `metadata_overrides` rows after an AssetUPnP rescan
