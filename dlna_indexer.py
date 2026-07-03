@@ -14,7 +14,6 @@ The `INDEXER` singleton is created in dlna_library (composition root)
 and re-exported from there for backward compat.
 """
 import logging
-import sqlite3
 import threading
 from typing import Optional
 
@@ -108,16 +107,9 @@ class Indexer:
         in the wild (Apr 2026 ×2, May 2026) was a single FTS-corruption
         event that one repair always cleared.
         """
-        for attempt in (1, 2):
-            try:
-                return body_fn(*args, **kwargs)
-            except sqlite3.DatabaseError as e:
-                if attempt == 1 and "malformed" in str(e).lower():
-                    log.warning(f"Indexer: FTS index malformed ({e}) — "
-                                f"rebuilding tracks_fts and retrying once")
-                    self.library.repair_fts()
-                    continue
-                raise
+        # Single heal implementation lives in LibraryDB (2026-07-03) —
+        # shared with clear()/upsert_tracks() and the LocalFs rescan.
+        return self.library.run_with_fts_heal(body_fn, *args, **kwargs)
 
     def _run(self, server, force: bool):
         udn = server.udn

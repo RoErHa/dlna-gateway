@@ -430,6 +430,16 @@ class LocalFsProvider:
         # the same write-pool connection.
         if new_rows:
             self._library.upsert_tracks(self.udn, new_rows)
+        # The removed-paths DELETE below fires the FTS delete triggers —
+        # heal-and-retry on the recurring shadow-table corruption (see
+        # LibraryDB.run_with_fts_heal). Retry-safe: REPLACE/DELETE/UPDATE.
+        self._library.run_with_fts_heal(
+            self._rescan_finalize, cache_writes, removed_paths)
+        stats["elapsed_sec"] = round(time.time() - t0, 2)
+        log.info(f"LocalFs rescan complete: {stats}")
+        return stats
+
+    def _rescan_finalize(self, cache_writes, removed_paths):
         with self._library._pool.write() as conn:
             if cache_writes:
                 conn.executemany(
@@ -514,10 +524,6 @@ class LocalFsProvider:
                 conn.executemany(
                     "UPDATE tracks SET album_key=? WHERE id=?", ak_writes)
                 log.info(f"LocalFs backfilled {len(ak_writes)} album_key(s)")
-
-        stats["elapsed_sec"] = round(time.time() - t0, 2)
-        log.info(f"LocalFs rescan complete: {stats}")
-        return stats
 
     # ── LibraryProvider Protocol — high-level surface ────────────
     # Wired through LibraryDB so the existing browse layer works
