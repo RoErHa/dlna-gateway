@@ -1125,8 +1125,20 @@ class LibraryDB:
         Browse-side dedup is applied: lower-quality 16-bit duplicates of
         a 24-bit track are hidden. See `_dedup_clause` docstring.
         """
-        safe  = query.replace('"', '""')
-        fts_q = f'"{safe}"'
+        # Type-ahead semantics (2026-07-03): each whitespace-separated
+        # term must match (FTS5 implicit AND) and the LAST term matches
+        # as a prefix — "essential chil" finds "Essential Classical
+        # Chillout". The old single-quoted-phrase form made any partial
+        # final word match NOTHING, which read as missing content in
+        # clients that search per keystroke (Amperfy, the PWA box).
+        # Punctuation-only tokens ("-", "&", "/") tokenize to nothing in
+        # FTS5 and would AND-blank the whole query — drop them.
+        terms = [t.replace('"', '""') for t in query.split()
+                 if any(c.isalnum() for c in t)]
+        if not terms:
+            return {"tracks": [], "albums": [], "artists": []}
+        fts_q = " ".join(f'"{t}"' for t in terms[:-1]) + \
+                (" " if len(terms) > 1 else "") + f'"{terms[-1]}"*'
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
 

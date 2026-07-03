@@ -128,7 +128,11 @@ def stream(h, params):
 
 # Cap art payload at 5MB — real album art is <1MB; this just prevents a
 # malicious/broken upstream from making the gateway allocate arbitrary memory.
-_ART_MAX_BYTES   = 5 * 1024 * 1024
+# 12 MB — aligned with dlna_localfs_server's embedded-art cap (2026-07-03).
+# The old 5 MB cap silently 404'd every album whose embedded cover was
+# bigger (e.g. a real 5.25 MB cover made getCoverArt fail deterministically
+# for all 12 candidates of one album while each URL served fine directly).
+_ART_MAX_BYTES   = 12 * 1024 * 1024
 _ART_MIN_BYTES   = 64            # below this it isn't a real cover (junk/empty 200)
 _ART_TIMEOUT     = 10
 _ART_MAX_REDIRECTS = 4           # coverartarchive front-500 → archive.org CDN
