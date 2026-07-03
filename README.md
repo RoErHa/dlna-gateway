@@ -32,10 +32,12 @@ stay un-encrypted for UPnP renderers that can't do HTTPS. See
   - **Browser audio** — `<audio>` element + a per-tab `/stream`
     Range-proxy. Works on any device with a browser.
 - **PWA web UI.** Letter-indexed browse (artists / albums / tracks /
-  genres / decades), FTS5 search, playlists, album-level favourites,
-  lyrics (via lrclib), album art (sibling → MusicBrainz / Cover Art
-  Archive fallback). For RoHaLocalFS, albums group by folder (one
-  folder = one album).
+  genres / decades), FTS5 search (type-ahead: the last word matches as
+  a prefix), playlists, album-level favourites, lyrics (via lrclib),
+  album art (sibling → MusicBrainz / Cover Art Archive fallback). For
+  RoHaLocalFS, albums group by folder (one folder = one album);
+  compilations whose tracks are scattered across per-artist folders can
+  be surfaced as playlists with `tools/compilation_playlists.py`.
 - **Metadata enrichment — beets, tag-in-place.** `tools/beets_enrich.py`
   wraps a [beets](https://beets.io/) import that writes clean tags + MBIDs
   **into your files** (MusicBrainz + AcoustID), in place — never moving or
@@ -313,6 +315,10 @@ The suite runs in layers of increasing fidelity:
   `ios_permission_smoke.py` (an applesimutils permission-automation demo).
 - **Chaos simulator** (`tests/chaos.py`) — randomized/adversarial load against a
   live gateway.
+- **Live verification tools** (opt-in, against a running gateway):
+  `tests/load_stream.py` (streaming concurrency/latency) and
+  `tests/subsonic_verify.py` (Subsonic API completeness, per-endpoint
+  latency percentiles, and cover-art health vs the library DB).
 
 Real-device iOS behaviour (standalone home-screen PWA, autoplay, lock-screen
 audio) isn't automatable and is covered by the manual checklist in
