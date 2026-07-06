@@ -2031,6 +2031,32 @@ markers, metadata + path columns).
 python3 -m unittest tools.test_find_duplicate_audio -v
 ```
 
+### `tools/immich_import.py`
+
+Copies **new videos from Immich's originals** (`library/` + `upload/` on
+the Immich data volume; `encoded-video/` transcodes never touched) into
+the gateway video root (`/Volumes/SAMDATA/GWMovies`). The gateway does
+the rest automatically: the 5-minute periodic scan picks new files up,
+reverse-geocodes their GPS and titles them `<location>_<YYYYMMDD>_<HHMM>`
+(see `docs/VIDEO_SUPPORT.md`) — filenames are preserved because titles
+come from metadata, not names.
+
+Dedup is by **content hash** (BLAKE2b), remembered in
+`<dest>/.immich-import.db`: files already in GWMovies (any name, any
+origin) are registered on first run and never re-copied; processed
+sources are skipped by (path, size, mtime) without re-reading. Re-running
+after new phone uploads only copies what's new — safe as a habit. A name
+collision with different content gets a ` (2)` suffix. DRY-RUN by
+default (`--apply` copies; the hash cache is warmed even in dry-run so
+the apply is fast). `--min-seconds 10` skips Live-Photo motion clips;
+`--limit N` stops early.
+
+```bash
+python3 tools/immich_import.py               # preview
+python3 tools/immich_import.py --apply       # copy new videos
+python3 -m unittest tools.test_immich_import -v   # 12 tests
+```
+
 ### `tools/compilation_playlists.py`
 
 Creates playlists for **scattered compilation albums** — an album TAG
