@@ -145,6 +145,7 @@ CREATE TABLE videos (
                     created       TEXT,
                     location      TEXT,
                     location_name TEXT,
+                    country       TEXT,
                     poster        TEXT,
                     added_at      INTEGER NOT NULL
                 );

@@ -22,6 +22,7 @@ def _vid(vid, title, **kw):
          "width": 1920, "height": 1080, "vcodec": "h264", "acodec": "aac",
          "container": "mp4", "mime": "video/mp4",
          "created": "2026-06-14T14:30:00Z", "location_name": "Amsterdam",
+         "country": "NL",
          "playUrl": f"/video/{vid}", "transcodeUrl": f"/video_transcode/{vid}",
          "hlsUrl": f"/video_hls/{vid}/index.m3u8",
          "posterUrl": f"/video_poster?id={vid}"}
@@ -159,31 +160,39 @@ def test_default_date_mode_groups_by_month_newest_first(app, gateway):
     assert "New" in rows[0] and "Old" in rows[-1]
 
 
-def test_location_mode_groups_alpha_no_location_last(app, gateway):
+def test_location_mode_groups_country_then_location(app, gateway):
+    """2026-07-06 v2: location mode = COUNTRY blocks (A-Z, specials last),
+    location sub-blocks inside, newest-first within a location."""
     gateway.videos = [
-        _vid("v1", "U-clip", location_name="Utrecht",
+        _vid("v1", "U-clip", location_name="Utrecht", country="NL",
              created="2026-06-10T09:52:44Z"),
-        _vid("v2", "A-clip", location_name="Amsterdam",
+        _vid("v2", "A-clip", location_name="Amsterdam", country="NL",
              created="2026-05-01T08:00:00Z"),
-        _vid("v3", "Nowhere", location_name="",
+        _vid("v3", "F-clip", location_name="Faro", country="PT",
+             created="2026-03-01T08:00:00Z"),
+        _vid("v4", "Lost", location_name="Atlantis", country="",
+             created="2026-02-01T08:00:00Z"),
+        _vid("v5", "Nowhere", location_name="", country="",
              created="2026-04-01T08:00:00Z"),
     ]
     _open_videos(app)
     app.locator("#video-sort-loc").click()
     app.wait_for_function(
-        "document.querySelectorAll('.video-group').length === 3",
+        "document.querySelectorAll('.video-group').length === 4",
         timeout=2000)
     groups = app.locator(".video-group").all_inner_texts()
-    assert groups == ["Amsterdam", "Utrecht", "(no location)"], groups
+    assert groups == ["NL", "PT", "(no country)", "(no location)"], groups
+    subs = app.locator(".video-subgroup").all_inner_texts()
+    assert subs == ["Amsterdam", "Utrecht", "Faro", "Atlantis"], subs
     rows = app.locator(".video-row").all_inner_texts()
     assert "A-clip" in rows[0] and "Nowhere" in rows[-1]
 
 
 def test_sort_toggle_back_to_date(app, gateway):
     gateway.videos = [
-        _vid("v1", "One", location_name="Utrecht",
+        _vid("v1", "One", location_name="Utrecht", country="NL",
              created="2026-06-10T09:52:44Z"),
-        _vid("v2", "Two", location_name="Amsterdam",
+        _vid("v2", "Two", location_name="Amsterdam", country="NL",
              created="2021-08-16T14:48:35Z"),
     ]
     _open_videos(app)

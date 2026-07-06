@@ -382,6 +382,7 @@ class LibraryDB:
                     created       TEXT,
                     location      TEXT,
                     location_name TEXT,
+                    country       TEXT,
                     poster        TEXT,
                     added_at      INTEGER NOT NULL
                 );
@@ -433,6 +434,10 @@ class LibraryDB:
             # row (the geocoder upgrades it with ONE re-fetch on next use);
             # '' = fetched, no country (sticky).
             "ALTER TABLE geocode_cache ADD COLUMN country TEXT",
+            # 2026-07-06 v2: country on the video row itself so the By
+            # location browse can group country → location (titles alone
+            # are too fragile to group by). Backfilled from geocode_cache.
+            "ALTER TABLE videos ADD COLUMN country TEXT",
         ]:
             try:
                 with self._pool.write() as conn:
@@ -1049,7 +1054,7 @@ class LibraryDB:
     _VIDEO_COLS = ("id", "udn", "url", "title", "file_path", "folder",
                    "duration", "width", "height", "vcodec", "acodec",
                    "container", "mime", "size", "mtime", "created",
-                   "location", "location_name", "poster")
+                   "location", "location_name", "country", "poster")
 
     def upsert_videos(self, udn: str, rows: list) -> int:
         """Insert/replace video rows (keyed by id). Returns rows written."""
@@ -1111,6 +1116,43 @@ class LibraryDB:
                 "SELECT * FROM videos WHERE udn=? AND substr(created,1,7)=? "
                 "ORDER BY created DESC, title COLLATE NOCASE",
                 (udn, month)).fetchall()
+        return [dict(r) for r in rows]
+
+    def video_countries(self, udn: str) -> list:
+        """[{country, count}] A-Z by ISO code; '' (located, country unknown)
+        counts only videos that HAVE a location — GPS-less videos belong to
+        the top-level "(no location)" bucket instead."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(country, '') AS country, COUNT(*) AS count "
+                "FROM videos WHERE udn=? "
+                "AND COALESCE(location_name, '') != '' "
+                "GROUP BY COALESCE(country, '') "
+                "ORDER BY (COALESCE(country, '') = ''), country",
+                (udn,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def video_locations_for_country(self, udn: str, country: str) -> list:
+        """One country's locations ('' = located, country unknown), A-Z."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT location_name, COUNT(*) AS count FROM videos "
+                "WHERE udn=? AND COALESCE(country, '')=? "
+                "AND COALESCE(location_name, '') != '' "
+                "GROUP BY location_name "
+                "ORDER BY location_name COLLATE NOCASE",
+                (udn, country)).fetchall()
+        return [dict(r) for r in rows]
+
+    def videos_by_country_location(self, udn: str, country: str,
+                                   location_name: str) -> list:
+        """One (country, location)'s videos, newest capture first."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM videos WHERE udn=? "
+                "AND COALESCE(country, '')=? AND location_name=? "
+                "ORDER BY created DESC, title COLLATE NOCASE",
+                (udn, country, location_name)).fetchall()
         return [dict(r) for r in rows]
 
     def video_locations(self, udn: str) -> list:

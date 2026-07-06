@@ -427,6 +427,7 @@ def _video_payload(v: dict) -> dict:
         "acodec": v.get("acodec"), "container": v.get("container"),
         "mime": v.get("mime"), "created": v.get("created"),
         "location_name": v.get("location_name"),
+        "country": v.get("country"),
         "playUrl": f"/video/{v['id']}",
         "transcodeUrl": f"/video_transcode/{v['id']}",
         "hlsUrl": f"/video_hls/{v['id']}/index.m3u8",
