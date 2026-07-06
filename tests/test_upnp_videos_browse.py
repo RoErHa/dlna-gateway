@@ -41,6 +41,10 @@ VIDS = [
     ("v3", "Amsterdam_20260501_0800.mov", "2026-05-01T08:00:00.000000Z", "Amsterdam"),
     ("v4", "Amsterdam_20210816_1448.mov", "2021-08-16T14:48:35.000000Z", "Amsterdam"),
     ("v5", "20210101_0000.mp4", "2021-01-01T00:00:00.000000Z", ""),
+    # live data has NULL (not '') for un-geocoded videos — must land in the
+    # same "(no location)" bucket, sorted last (the 2026-07-06 live bug:
+    # NULL sorted FIRST and the bucket resolved empty)
+    ("v6", "20210102_0000.mp4", "2021-01-02T00:00:00.000000Z", None),
 ]
 
 
@@ -91,12 +95,12 @@ class TestVideosRoot(_Base):
 
     def test_vidall_is_the_flat_list(self):
         xml, n_ret, total = self.browse("vidall")
-        self.assertEqual((n_ret, total), (5, 5))
+        self.assertEqual((n_ret, total), (6, 6))
         self.assertIn('id="vid:v1"', xml)
 
     def test_vidall_pages(self):
         xml, n_ret, total = self.browse("vidall", start=1, count=2)
-        self.assertEqual((n_ret, total), (2, 5))
+        self.assertEqual((n_ret, total), (2, 6))
 
 
 class TestByDate(_Base):
@@ -107,7 +111,7 @@ class TestByDate(_Base):
         self.assertIn('id="viddate:2021"', xml)
         self.assertLess(xml.find("2026"), xml.find("2021"))
         self.assertIn('childCount="3"', xml)   # 2026 has 3 videos
-        self.assertIn('childCount="2"', xml)   # 2021 has 2
+        self.assertIn('childCount="3"', xml)   # 2021 has 3
 
     def test_year_lists_months_newest_first(self):
         xml, n_ret, total = self.browse("viddate:2026")
@@ -143,9 +147,11 @@ class TestByLocation(_Base):
         self.assertLess(xml.find('id="vid:v3"'), xml.find('id="vid:v4"'))
 
     def test_no_location_bucket_resolves(self):
+        # '' and NULL location_name both land here
         xml, n_ret, total = self.browse(_loc_id(""))
-        self.assertEqual((n_ret, total), (1, 1))
+        self.assertEqual((n_ret, total), (2, 2))
         self.assertIn('id="vid:v5"', xml)
+        self.assertIn('id="vid:v6"', xml)
 
     def test_garbled_location_id_is_empty_not_500(self):
         xml, n_ret, total = self.browse("vidloc:!!!not-base64!!!")

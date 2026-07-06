@@ -1109,20 +1109,27 @@ class LibraryDB:
 
     def video_locations(self, udn: str) -> list:
         """[{location_name, count}] A-Z case-insensitive; the no-location
-        bucket (location_name='') sorts LAST when present."""
+        bucket sorts LAST when present. Un-geocoded videos carry NULL in
+        live data ('' in some tests) — COALESCE folds both into one ''
+        bucket (a bare `= ''` comparison is NULL for NULL rows, which made
+        the bucket sort FIRST and resolve empty; live bug 2026-07-06)."""
         with self._pool.read() as conn:
             rows = conn.execute(
-                "SELECT location_name, COUNT(*) AS count FROM videos "
-                "WHERE udn=? GROUP BY location_name "
-                "ORDER BY (location_name = ''), location_name COLLATE NOCASE",
+                "SELECT COALESCE(location_name, '') AS location_name, "
+                "COUNT(*) AS count FROM videos "
+                "WHERE udn=? GROUP BY COALESCE(location_name, '') "
+                "ORDER BY (COALESCE(location_name, '') = ''), "
+                "location_name COLLATE NOCASE",
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def videos_by_location(self, udn: str, location_name: str) -> list:
-        """One location's videos (''=no location), newest capture first."""
+        """One location's videos (''=no location, matches NULL too),
+        newest capture first."""
         with self._pool.read() as conn:
             rows = conn.execute(
-                "SELECT * FROM videos WHERE udn=? AND location_name=? "
+                "SELECT * FROM videos "
+                "WHERE udn=? AND COALESCE(location_name, '')=? "
                 "ORDER BY created DESC, title COLLATE NOCASE",
                 (udn, location_name)).fetchall()
         return [dict(r) for r in rows]
