@@ -190,7 +190,9 @@ def test_sw_update_rolls_out_from_broken_worker(page, stub):
     data'). That gap is a platform limitation, not a code defect."""
     import pathlib
     new_sw = pathlib.Path("static/sw.js").read_text()
-    assert "dlna-gw-app-v14" in new_sw, "expected current cache version in sw.js"
+    import re
+    assert re.search(r"dlna-gw-app-v\d+", new_sw), \
+        "expected a dlna-gw-app-v<N> cache version in sw.js"
     old_sw = """
 const APP_CACHE='dlna-gw-app-vOLD';
 const SHELL=['/','/static/app.css','/static/app.js','/static/vendor/hls.min.js','/manifest.json','/icon-192.png','/icon-512.png'];

@@ -378,21 +378,104 @@ def _gw_browse(obj_id: str, browse_flag: str,
         items = [album_container(r, obj_id) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
 
+    # ── Videos tree (2026-07-06) ─────────────────────────────────────
+    # The flat ~3,000-item list was unbrowsable with a TV remote. "videos"
+    # now holds three sub-containers: date drill-down (year → month),
+    # location A-Z (geocoded location_name; "(no location)" bucket last),
+    # and the old flat list under "vidall".
     if obj_id == "videos":
+        if browse_flag == "BrowseMetadata":
+            n = len(DB.all_videos(_VIDEO_UDN))
+            return (OPEN + container("videos", "0", "\U0001F4F9 Videos", n)
+                    + CLOSE, 1, 1)
+        years = DB.video_years(_VIDEO_UDN)
+        locs  = DB.video_locations(_VIDEO_UDN)
+        n     = len(DB.all_videos(_VIDEO_UDN))
+        kids = [
+            container("viddates", "videos", "\U0001F4C5 By date", len(years)),
+            container("vidlocs", "videos", "\U0001F4CD By location", len(locs)),
+            container("vidall", "videos", "\U0001F39E All videos", n),
+        ]
+        return OPEN + "".join(kids) + CLOSE, len(kids), len(kids)
+
+    if obj_id == "vidall":
         vids  = DB.all_videos(_VIDEO_UDN)
         total = len(vids)
         if browse_flag == "BrowseMetadata":
-            return (OPEN + container("videos", "0", "\U0001F4F9 Videos", total)
+            return (OPEN + container("vidall", "videos",
+                                     "\U0001F39E All videos", total)
                     + CLOSE, 1, 1)
         page  = vids[start:start + count] if count else vids[start:]
-        items = [video_item(v, "videos") for v in page]
+        items = [video_item(v, "vidall") for v in page]
         return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id == "viddates":
+        years = DB.video_years(_VIDEO_UDN)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("viddates", "videos",
+                                     "\U0001F4C5 By date", len(years))
+                    + CLOSE, 1, 1)
+        page  = years[start:start + count] if count else years[start:]
+        items = [container(f"viddate:{y['year']}", "viddates",
+                           y["year"], y["count"]) for y in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(years)
+
+    if obj_id.startswith("viddate:"):
+        key = obj_id[len("viddate:"):]
+        if len(key) == 4:                       # a year → its months
+            months = DB.video_months(_VIDEO_UDN, key)
+            if browse_flag == "BrowseMetadata":
+                return (OPEN + container(obj_id, "viddates", key,
+                                         len(months)) + CLOSE, 1, 1)
+            page  = months[start:start + count] if count else months[start:]
+            items = [container(f"viddate:{m['month']}", obj_id,
+                               m["month"], m["count"]) for m in page]
+            return OPEN + "".join(items) + CLOSE, len(items), len(months)
+        vids = DB.videos_by_month(_VIDEO_UDN, key)    # 'YYYY-MM' → items
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, f"viddate:{key[:4]}", key,
+                                     len(vids)) + CLOSE, 1, 1)
+        page  = vids[start:start + count] if count else vids[start:]
+        items = [video_item(v, obj_id) for v in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
+
+    if obj_id == "vidlocs":
+        locs = DB.video_locations(_VIDEO_UDN)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("vidlocs", "videos",
+                                     "\U0001F4CD By location", len(locs))
+                    + CLOSE, 1, 1)
+        page  = locs[start:start + count] if count else locs[start:]
+        # The no-location bucket gets the SENTINEL id "vidloc-none" —
+        # _b64d maps garbled base64 to "", so "" can't double as a key.
+        items = [container("vidloc-none" if not r["location_name"]
+                           else "vidloc:" + _b64e(r["location_name"]),
+                           "vidlocs",
+                           r["location_name"] or "(no location)",
+                           r["count"]) for r in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(locs)
+
+    if obj_id == "vidloc-none" or obj_id.startswith("vidloc:"):
+        if obj_id == "vidloc-none":
+            loc = ""
+        else:
+            loc = _b64d(obj_id[len("vidloc:"):])
+            if not loc:
+                return OPEN + CLOSE, 0, 0   # garbled id → empty, never 500
+        vids = DB.videos_by_location(_VIDEO_UDN, loc)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "vidlocs",
+                                     loc or "(no location)", len(vids))
+                    + CLOSE, 1, 1)
+        page  = vids[start:start + count] if count else vids[start:]
+        items = [video_item(v, obj_id) for v in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
 
     if obj_id.startswith("vid:"):
         v = DB.video_by_id(obj_id[len("vid:"):])
         if not v:
             return OPEN + CLOSE, 0, 0
-        return OPEN + video_item(v, "videos") + CLOSE, 1, 1
+        return OPEN + video_item(v, "vidall") + CLOSE, 1, 1
 
     if obj_id == "playlists":
         pls   = DB.pl_list()

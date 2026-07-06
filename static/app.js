@@ -1244,6 +1244,20 @@ function _vidDur(sec){
           :`${m}:${String(s).padStart(2,"0")}`;
 }
 
+// Videos browse state (2026-07-06): filter box + date/location sort with
+// group headers — the video equivalent of the audio letter-bar browse.
+let _vidsAll=[], _vidSort="date", _vidQuery="";
+
+function _setVidSortUI(){
+  const on ="background:var(--raised);color:var(--ink);border:1px solid var(--border);"
+           +"border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-weight:600";
+  const off="background:transparent;color:var(--ink-dim);border:1px solid var(--border);"
+           +"border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer";
+  const d=$("video-sort-date"), l=$("video-sort-loc");
+  if(d) d.style.cssText=_vidSort==="date"?on:off;
+  if(l) l.style.cssText=_vidSort==="loc"?on:off;
+}
+
 async function showVideos(){
   curPlId="__videos__";
   $("pl-panel-title").textContent="📹 Videos";
@@ -1251,21 +1265,73 @@ async function showVideos(){
   $("pl-list").style.display="none";
   $("pl-tracks").classList.add("visible");
   $("pl-actions").innerHTML="";
-  $("pl-tracks").innerHTML=`<div id="video-list" style="padding:6px"></div>`;
+  $("pl-tracks").innerHTML=
+    `<div id="video-controls" style="display:flex;gap:6px;padding:6px 6px 0;align-items:center">
+       <input id="video-search" type="search" placeholder="🔍 Filter…"
+              style="flex:1;min-width:0;background:var(--raised);color:var(--ink);
+                     border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px">
+       <button id="video-sort-date">📅 Date</button>
+       <button id="video-sort-loc">📍 Location</button>
+     </div>
+     <div id="video-list" style="padding:6px"></div>`;
+  _vidSort="date"; _vidQuery="";
+  $("video-search").addEventListener("input",e=>{
+    _vidQuery=(e.target.value||"").trim().toLowerCase(); renderVideos();
+  });
+  $("video-sort-date").addEventListener("click",()=>{
+    _vidSort="date"; _setVidSortUI(); renderVideos();
+  });
+  $("video-sort-loc").addEventListener("click",()=>{
+    _vidSort="loc"; _setVidSortUI(); renderVideos();
+  });
+  _setVidSortUI();
   let vids=[];
   const r=await api("/api/videos");
   if(r&&r.ok){ try{ vids=await r.json(); }catch{} }
-  renderVideos(vids);
+  _vidsAll=vids||[];
+  renderVideos();
 }
 
-function renderVideos(vids){
+function renderVideos(vidsArg){
+  if(vidsArg) _vidsAll=vidsArg;
   const box=$("video-list"); if(!box) return;
+  let vids=_vidsAll;
+  if(_vidQuery){
+    vids=vids.filter(v=>
+      (v.title||"").toLowerCase().includes(_vidQuery)||
+      (v.location_name||"").toLowerCase().includes(_vidQuery)||
+      (v.folder||"").toLowerCase().includes(_vidQuery));
+  }
   if(!vids||!vids.length){
     box.innerHTML=`<div class="msg" style="padding:16px">No videos found.</div>`;
     return;
   }
+  const sorted=[...vids];
+  if(_vidSort==="loc"){
+    sorted.sort((a,b)=>{
+      const la=a.location_name||"", lb=b.location_name||"";
+      if((la==="")!==(lb==="")) return la===""?1:-1;   // (no location) last
+      const c=la.localeCompare(lb,undefined,{sensitivity:"base"});
+      if(c) return c;
+      return (b.created||"").localeCompare(a.created||"");   // newest within
+    });
+  } else {
+    sorted.sort((a,b)=>(b.created||"").localeCompare(a.created||""));
+  }
   box.innerHTML="";
-  vids.forEach(v=>{
+  let lastGroup=null;
+  sorted.forEach(v=>{
+    const g=_vidSort==="loc" ? (v.location_name||"(no location)")
+                             : ((v.created||"").slice(0,7)||"(no date)");
+    if(g!==lastGroup){
+      lastGroup=g;
+      const hdr=document.createElement("div");
+      hdr.className="video-group";
+      hdr.style.cssText="padding:10px 4px 4px;font-size:12px;font-weight:600;"
+        +"color:var(--accent,#d90);border-bottom:1px solid var(--border)";
+      hdr.textContent=g;
+      box.appendChild(hdr);
+    }
     const row=document.createElement("div");
     row.className="video-row"; row.dataset.id=v.id;
     row.style.cssText="display:flex;gap:10px;align-items:center;padding:8px;"

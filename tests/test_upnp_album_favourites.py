@@ -414,9 +414,19 @@ class TestVideoBrowse(unittest.TestCase):
         self.assertIn('id="videos"', xml)
         self.assertIn("📹 Videos", xml)
 
-    def test_browse_videos_lists_items(self):
+    def test_browse_videos_lists_sub_containers(self):
+        # 2026-07-06: "videos" holds the date/location/all sub-containers;
+        # the flat item list moved to "vidall" (tests/test_upnp_videos_browse
+        # covers the whole tree).
         self._seed()
         xml, n, t = api_upnp._gw_browse("videos", "BrowseDirectChildren", 0, 50)
+        self.assertEqual((n, t), (3, 3))
+        for cid in ("viddates", "vidlocs", "vidall"):
+            self.assertIn(f'id="{cid}"', xml)
+
+    def test_browse_vidall_lists_items(self):
+        self._seed()
+        xml, n, t = api_upnp._gw_browse("vidall", "BrowseDirectChildren", 0, 50)
         self.assertEqual((n, t), (1, 1))
         self.assertIn('id="vid:v1"', xml)
         self.assertIn("object.item.videoItem.movie", xml)
