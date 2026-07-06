@@ -1074,6 +1074,66 @@ class LibraryDB:
             r = conn.execute("SELECT * FROM videos WHERE id=?", (vid,)).fetchone()
         return dict(r) if r else None
 
+    # ── video date/location browse (DLNA sub-containers for the LG) ──
+    # `created` is an ISO timestamp string, so substr() gives the year
+    # (1,4) and month (1,7) buckets directly. Videos without a created
+    # date are absent from the date tree (still reachable via location
+    # + the flat list).
+
+    def video_years(self, udn: str) -> list:
+        """[{year, count}] newest first."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT substr(created,1,4) AS year, COUNT(*) AS count "
+                "FROM videos WHERE udn=? AND created != '' "
+                "GROUP BY year ORDER BY year DESC", (udn,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def video_months(self, udn: str, year: str) -> list:
+        """[{month: 'YYYY-MM', count}] newest first, within one year."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT substr(created,1,7) AS month, COUNT(*) AS count "
+                "FROM videos WHERE udn=? AND substr(created,1,4)=? "
+                "GROUP BY month ORDER BY month DESC", (udn, year)).fetchall()
+        return [dict(r) for r in rows]
+
+    def videos_by_month(self, udn: str, month: str) -> list:
+        """One month's videos ('YYYY-MM'), newest capture first."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM videos WHERE udn=? AND substr(created,1,7)=? "
+                "ORDER BY created DESC, title COLLATE NOCASE",
+                (udn, month)).fetchall()
+        return [dict(r) for r in rows]
+
+    def video_locations(self, udn: str) -> list:
+        """[{location_name, count}] A-Z case-insensitive; the no-location
+        bucket sorts LAST when present. Un-geocoded videos carry NULL in
+        live data ('' in some tests) — COALESCE folds both into one ''
+        bucket (a bare `= ''` comparison is NULL for NULL rows, which made
+        the bucket sort FIRST and resolve empty; live bug 2026-07-06)."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(location_name, '') AS location_name, "
+                "COUNT(*) AS count FROM videos "
+                "WHERE udn=? GROUP BY COALESCE(location_name, '') "
+                "ORDER BY (COALESCE(location_name, '') = ''), "
+                "location_name COLLATE NOCASE",
+                (udn,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def videos_by_location(self, udn: str, location_name: str) -> list:
+        """One location's videos (''=no location, matches NULL too),
+        newest capture first."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM videos "
+                "WHERE udn=? AND COALESCE(location_name, '')=? "
+                "ORDER BY created DESC, title COLLATE NOCASE",
+                (udn, location_name)).fetchall()
+        return [dict(r) for r in rows]
+
     def clear_videos(self, udn: str) -> int:
         """Wipe the video index for this udn (force-rescan). Returns rows removed."""
         with self._pool.write() as conn:
