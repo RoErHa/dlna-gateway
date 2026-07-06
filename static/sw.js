@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v15';  // v15: Videos search + date/location browse
+const APP_CACHE = 'dlna-gw-app-v16';  // v16: Videos location browse groups country → location
 const ART_CACHE = 'dlna-gw-art-v2';   // v2: evict stale blanks cached during gateway-down / pre-heal windows
 const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
 

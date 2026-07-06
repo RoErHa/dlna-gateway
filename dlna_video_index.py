@@ -102,6 +102,7 @@ def build_row(path: Path, rel: str, vid: str, udn: str, base_url: str, st,
         "created": created,
         "location": meta.get("location"),
         "location_name": (location_name or None),
+        "country": (country or None),
         "poster": poster,
     }
 

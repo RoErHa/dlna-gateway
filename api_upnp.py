@@ -440,20 +440,56 @@ def _gw_browse(obj_id: str, browse_flag: str,
         return OPEN + "".join(items) + CLOSE, len(items), len(vids)
 
     if obj_id == "vidlocs":
-        locs = DB.video_locations(_VIDEO_UDN)
+        # 2026-07-06 v2: COUNTRY blocks first (A-Z by ISO code), then
+        # "(no country)" for located-but-unknown-country videos, then the
+        # "(no location)" bucket for GPS-less videos — each country drills
+        # down to its locations (country_location, like the titles).
+        countries = DB.video_countries(_VIDEO_UDN)
+        no_loc = [r for r in DB.video_locations(_VIDEO_UDN)
+                  if not r["location_name"]]
+        entries = []
+        for c in countries:
+            entries.append(("vidcountry-none" if not c["country"]
+                            else f"vidcountry:{c['country']}",
+                            c["country"] or "(no country)", c["count"]))
+        for r in no_loc:
+            entries.append(("vidloc-none", "(no location)", r["count"]))
         if browse_flag == "BrowseMetadata":
             return (OPEN + container("vidlocs", "videos",
-                                     "\U0001F4CD By location", len(locs))
+                                     "\U0001F4CD By location", len(entries))
+                    + CLOSE, 1, 1)
+        page  = entries[start:start + count] if count else entries[start:]
+        items = [container(cid, "vidlocs", title, n)
+                 for cid, title, n in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(entries)
+
+    if obj_id == "vidcountry-none" or obj_id.startswith("vidcountry:"):
+        cc = ("" if obj_id == "vidcountry-none"
+              else obj_id[len("vidcountry:"):])
+        locs = DB.video_locations_for_country(_VIDEO_UDN, cc)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "vidlocs",
+                                     cc or "(no country)", len(locs))
                     + CLOSE, 1, 1)
         page  = locs[start:start + count] if count else locs[start:]
-        # The no-location bucket gets the SENTINEL id "vidloc-none" —
-        # _b64d maps garbled base64 to "", so "" can't double as a key.
-        items = [container("vidloc-none" if not r["location_name"]
-                           else "vidloc:" + _b64e(r["location_name"]),
-                           "vidlocs",
-                           r["location_name"] or "(no location)",
-                           r["count"]) for r in page]
+        items = [container(
+            "vidcloc:" + _b64e(cc + "\x00" + r["location_name"]), obj_id,
+            r["location_name"], r["count"]) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), len(locs)
+
+    if obj_id.startswith("vidcloc:"):
+        raw = _b64d(obj_id[len("vidcloc:"):])
+        if "\x00" not in raw:
+            return OPEN + CLOSE, 0, 0   # garbled id → empty, never 500
+        cc, loc = raw.split("\x00", 1)
+        vids = DB.videos_by_country_location(_VIDEO_UDN, cc, loc)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "vidcountry-none" if not cc
+                                     else f"vidcountry:{cc}", loc,
+                                     len(vids)) + CLOSE, 1, 1)
+        page  = vids[start:start + count] if count else vids[start:]
+        items = [video_item(v, obj_id) for v in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
 
     if obj_id == "vidloc-none" or obj_id.startswith("vidloc:"):
         if obj_id == "vidloc-none":

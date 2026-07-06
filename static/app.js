@@ -1306,12 +1306,20 @@ function renderVideos(vidsArg){
     box.innerHTML=`<div class="msg" style="padding:16px">No videos found.</div>`;
     return;
   }
+  // location mode (2026-07-06 v2): country_location_date_time order —
+  // COUNTRY blocks (A-Z, "(no country)" then "(no location)" last),
+  // location sub-blocks inside, newest-first within a location.
+  const _cKey=v=>{
+    if(!(v.location_name||"")) return "￿￿";   // (no location) last
+    return (v.country||"") || "￿";                 // (no country) 2nd-last
+  };
   const sorted=[...vids];
   if(_vidSort==="loc"){
     sorted.sort((a,b)=>{
-      const la=a.location_name||"", lb=b.location_name||"";
-      if((la==="")!==(lb==="")) return la===""?1:-1;   // (no location) last
-      const c=la.localeCompare(lb,undefined,{sensitivity:"base"});
+      const ca=_cKey(a), cb=_cKey(b);
+      if(ca!==cb) return ca<cb?-1:1;
+      const c=(a.location_name||"").localeCompare(
+        b.location_name||"",undefined,{sensitivity:"base"});
       if(c) return c;
       return (b.created||"").localeCompare(a.created||"");   // newest within
     });
@@ -1319,18 +1327,33 @@ function renderVideos(vidsArg){
     sorted.sort((a,b)=>(b.created||"").localeCompare(a.created||""));
   }
   box.innerHTML="";
-  let lastGroup=null;
+  let lastGroup=null, lastSub=null;
   sorted.forEach(v=>{
-    const g=_vidSort==="loc" ? (v.location_name||"(no location)")
-                             : ((v.created||"").slice(0,7)||"(no date)");
+    let g, subHdr=null;
+    if(_vidSort==="loc"){
+      const hasLoc=!!(v.location_name||"");
+      g = !hasLoc ? "(no location)" : ((v.country||"")||"(no country)");
+      subHdr = hasLoc ? v.location_name : null;
+    } else {
+      g = (v.created||"").slice(0,7)||"(no date)";
+    }
     if(g!==lastGroup){
-      lastGroup=g;
+      lastGroup=g; lastSub=null;
       const hdr=document.createElement("div");
       hdr.className="video-group";
-      hdr.style.cssText="padding:10px 4px 4px;font-size:12px;font-weight:600;"
+      hdr.style.cssText="padding:12px 4px 4px;font-size:13px;font-weight:700;"
         +"color:var(--accent,#d90);border-bottom:1px solid var(--border)";
       hdr.textContent=g;
       box.appendChild(hdr);
+    }
+    if(subHdr!==null&&subHdr!==lastSub){
+      lastSub=subHdr;
+      const sh=document.createElement("div");
+      sh.className="video-subgroup";
+      sh.style.cssText="padding:8px 4px 2px 14px;font-size:12px;"
+        +"font-weight:600;color:var(--ink-dim)";
+      sh.textContent=subHdr;
+      box.appendChild(sh);
     }
     const row=document.createElement("div");
     row.className="video-row"; row.dataset.id=v.id;
