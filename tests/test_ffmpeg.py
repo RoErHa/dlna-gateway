@@ -204,6 +204,25 @@ class TestDisplayTitle(unittest.TestCase):
                                    "Amsterdam", None, ".mov"),
             "Amsterdam_20260614_1430.mov")
 
+    def test_country_prefix(self):
+        # 2026-07-06: country_location_date_time (ISO code, uppercase)
+        self.assertEqual(
+            ff.build_display_title(None, "2026-06-14T14:30:00Z",
+                                   "Amsterdam", None, ".mov", country="NL"),
+            "NL_Amsterdam_20260614_1430.mov")
+
+    def test_country_without_place(self):
+        self.assertEqual(
+            ff.build_display_title(None, "2026-06-14T14:30:00Z",
+                                   None, None, "mp4", country="NL"),
+            "NL_20260614_1430.mp4")
+
+    def test_country_never_prefixes_embedded_title(self):
+        self.assertEqual(
+            ff.build_display_title("Birthday", "2026-06-14T14:30:00Z",
+                                   "Amsterdam", None, "mov", country="NL"),
+            "Birthday")
+
     def test_no_location_uses_datetime(self):
         self.assertEqual(
             ff.build_display_title("", "2026-06-14T14:30:00Z", None, None, "mp4"),

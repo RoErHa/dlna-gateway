@@ -394,6 +394,7 @@ class LibraryDB:
                     lat_key    REAL NOT NULL,
                     lon_key    REAL NOT NULL,
                     place      TEXT,
+                    country    TEXT,
                     fetched_at INTEGER NOT NULL,
                     PRIMARY KEY (lat_key, lon_key)
                 );
@@ -427,6 +428,11 @@ class LibraryDB:
             # its folder rather than by (artist, album). Empty for UPnP
             # rows (no file_path) and root-level loose files.
             "ALTER TABLE tracks ADD COLUMN album_key TEXT DEFAULT ''",
+            # 2026-07-06: video titles are country_location_date_time — the
+            # geocode cache learns the ISO country code. NULL = pre-migration
+            # row (the geocoder upgrades it with ONE re-fetch on next use);
+            # '' = fetched, no country (sticky).
+            "ALTER TABLE geocode_cache ADD COLUMN country TEXT",
         ]:
             try:
                 with self._pool.write() as conn:
@@ -1160,22 +1166,27 @@ class LibraryDB:
         return (round(float(lat), 3), round(float(lon), 3))   # ~111 m at 3 dp
 
     def geocode_get(self, lat, lon):
-        """(place, True) if cached (place may be '' = looked-up-no-name);
-        (None, False) on a miss. Lets the geocoder skip a re-query forever."""
+        """(place, country, True) if cached (place/country may be '' =
+        looked-up-no-value); country is None on a pre-country legacy row
+        (the geocoder upgrades it with one re-fetch). (None, None, False)
+        on a miss."""
         la, lo = self._geo_key(lat, lon)
         with self._pool.read() as conn:
             r = conn.execute(
-                "SELECT place FROM geocode_cache WHERE lat_key=? AND lon_key=?",
-                (la, lo)).fetchone()
-        return ((r["place"] or "", True) if r is not None else (None, False))
+                "SELECT place, country FROM geocode_cache "
+                "WHERE lat_key=? AND lon_key=?", (la, lo)).fetchone()
+        if r is None:
+            return (None, None, False)
+        return (r["place"] or "", r["country"], True)
 
-    def geocode_put(self, lat, lon, place):
+    def geocode_put(self, lat, lon, place, country=None):
         la, lo = self._geo_key(lat, lon)
         with self._pool.write() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO geocode_cache"
-                "(lat_key, lon_key, place, fetched_at) "
-                "VALUES (?, ?, ?, strftime('%s','now'))", (la, lo, place or ""))
+                "(lat_key, lon_key, place, country, fetched_at) "
+                "VALUES (?, ?, ?, ?, strftime('%s','now'))",
+                (la, lo, place or "", country))
 
     # ── FTS5 search ───────────────────────────────────────────────
 

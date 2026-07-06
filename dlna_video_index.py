@@ -58,15 +58,19 @@ def build_row(path: Path, rel: str, vid: str, udn: str, base_url: str, st,
     # Reverse-geocode the GPS, if present + online.
     coords = ff.parse_iso6709(meta.get("location"))
     location_name = None
+    country = ""
     if coords and geocode:
         try:
-            location_name = dlna_geocode.place_for(db, coords[0], coords[1])
+            got = dlna_geocode.place_for(db, coords[0], coords[1])
+            if got is not None:
+                location_name, country = got
         except Exception as e:                       # noqa: BLE001
             log.debug("geocode error for %s: %s", rel, e)
     coords_str = (f"{coords[0]:.4f},{coords[1]:.4f}" if coords else None)
 
     title = ff.build_display_title(
-        meta.get("title"), created, location_name or None, coords_str, ext)
+        meta.get("title"), created, location_name or None, coords_str, ext,
+        country=country)
 
     # Poster frame (best-effort). Seek a few seconds in, but not past the end
     # of short clips (a 1.4s clip seeking to 3s yields no frame).

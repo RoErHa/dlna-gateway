@@ -235,15 +235,17 @@ def _fmt_dt(created) -> str:
 
 
 def build_display_title(embedded_title, created, location_name, coords,
-                        ext: str) -> str:
+                        ext: str, country: str = "") -> str:
     """The video's display title: the embedded title if present, otherwise
-    `<location>_<YYYYMMDD>_<HHMM>.<ext>` — location = geocoded place name, else
-    raw coords, else omitted; date/time from capture time (caller passes mtime
+    `<country>_<location>_<YYYYMMDD>_<HHMM>.<ext>` — country = ISO code
+    (uppercase, 2026-07-06), location = geocoded place name, else raw
+    coords, else omitted; date/time from capture time (caller passes mtime
     as a fallback `created`); falls back to 'video' when nothing is known."""
     if embedded_title and str(embedded_title).strip():
         return str(embedded_title).strip()
+    cc  = (country or "").strip()
     loc = (location_name or coords or "").strip()
     dt  = _fmt_dt(created)
-    stem = "_".join(p for p in (loc, dt) if p) or "video"
+    stem = "_".join(p for p in (cc, loc, dt) if p) or "video"
     ext = (ext or "").lstrip(".").lower()
     return f"{stem}.{ext}" if ext else stem

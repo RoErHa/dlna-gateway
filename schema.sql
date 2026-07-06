@@ -152,6 +152,7 @@ CREATE TABLE geocode_cache (
                     lat_key    REAL NOT NULL,
                     lon_key    REAL NOT NULL,
                     place      TEXT,
+                    country    TEXT,
                     fetched_at INTEGER NOT NULL,
                     PRIMARY KEY (lat_key, lon_key)
                 );
