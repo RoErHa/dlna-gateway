@@ -90,25 +90,39 @@ class TestGeocodeCache(unittest.TestCase):
         os.unlink(self.tmp.name)
 
     def test_miss_then_hit(self):
-        self.assertEqual(self.db.geocode_get(52.3676, 4.9041), (None, False))
-        self.db.geocode_put(52.3676, 4.9041, "Amsterdam")
-        self.assertEqual(self.db.geocode_get(52.3676, 4.9041), ("Amsterdam", True))
+        self.assertEqual(self.db.geocode_get(52.3676, 4.9041),
+                         (None, None, False))
+        self.db.geocode_put(52.3676, 4.9041, "Amsterdam", "NL")
+        self.assertEqual(self.db.geocode_get(52.3676, 4.9041),
+                         ("Amsterdam", "NL", True))
 
     def test_sticky_negative(self):
         # A looked-up-but-no-name result is cached as '' and counts as a HIT.
-        self.db.geocode_put(10.0, 20.0, "")
-        self.assertEqual(self.db.geocode_get(10.0, 20.0), ("", True))
+        self.db.geocode_put(10.0, 20.0, "", "")
+        self.assertEqual(self.db.geocode_get(10.0, 20.0), ("", "", True))
+
+    def test_legacy_rows_gain_country_column_as_null(self):
+        """Migration: a pre-country geocode_cache row reads back with
+        country=None (the upgrade-me marker)."""
+        with self.db._pool.write() as conn:
+            conn.execute(
+                "INSERT INTO geocode_cache (lat_key, lon_key, place, "
+                "fetched_at) VALUES (?, ?, 'Old Town', 1)",
+                self.db._geo_key(1.0, 1.0))
+        self.assertEqual(self.db.geocode_get(1.0, 1.0),
+                         ("Old Town", None, True))
 
     def test_rounding_collapses_nearby_coords(self):
-        self.db.geocode_put(52.36761, 4.90412, "Amsterdam")
+        self.db.geocode_put(52.36761, 4.90412, "Amsterdam", "NL")
         # within ~1 m → same rounded key (3 dp)
         self.assertEqual(self.db.geocode_get(52.36759, 4.90408),
-                         ("Amsterdam", True))
+                         ("Amsterdam", "NL", True))
 
     def test_survives_audio_clear(self):
         self.db.geocode_put(1.0, 2.0, "Somewhere")
         self.db.clear(UDN)
-        self.assertEqual(self.db.geocode_get(1.0, 2.0), ("Somewhere", True))
+        self.assertEqual(self.db.geocode_get(1.0, 2.0),
+                         ("Somewhere", None, True))
 
 
 if __name__ == "__main__":

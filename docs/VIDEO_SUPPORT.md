@@ -72,12 +72,16 @@ Extract per video (via `ffprobe`, with graceful fallback when absent):
   genuinely offline / the lookup fails does it degrade to coords-or-nothing.
 - **title:** `format.tags.title` if present (rare on phone footage).
 
-**Display title rule:** use the embedded `title` if present; otherwise build
-**`<location>_<YYYYMMDD>_<HHMM>.<ext>`** from the above —
-`<location>` = `location_name` if geocoded, else the raw coords, else omit the
-`<location>_` prefix; `<YYYYMMDD>_<HHMM>` from capture time (or mtime);
-`<ext>` = the file extension. Examples: `Amsterdam_20260614_1430.mov`,
-`20260614_1430.mp4` (no location). Compute the fallback once at index time and
+**Display title rule (country added 2026-07-06):** use the embedded `title`
+if present; otherwise build
+**`<country>_<location>_<YYYYMMDD>_<HHMM>.<ext>`** from the above —
+`<country>` = the ISO country code, uppercase, from the same Nominatim
+response (`geocode_cache.country`; pre-country cache rows are upgraded with
+one re-fetch on next use); `<location>` = `location_name` if geocoded, else
+the raw coords, else omit; `<YYYYMMDD>_<HHMM>` from capture time (or mtime);
+`<ext>` = the file extension. Examples: `NL_Amsterdam_20260614_1430.mov`,
+`PT_São Vicente_20250729_1106.mov`, `20260614_1430.mp4` (no GPS).
+Compute the fallback once at index time and
 store it in `videos.title` so browse/sort/search are simple.
 
 ---

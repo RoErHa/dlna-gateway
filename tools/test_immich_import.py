@@ -133,3 +133,32 @@ class TestCache(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRetryShort(_Base):
+    def test_retry_short_reevaluates_only_short(self):
+        self.put("upload/clip.mov", b"SHORTCLIP")
+        self.put("upload/long.mp4", b"LONGVIDEO")
+        # first run: 10s cutoff marks clip.mov short, imports long.mp4
+        import importlib
+        importlib.reload(immich_import)
+        immich_import.video_duration = lambda p: (
+            2.5 if "clip" in str(p) else 60.0)
+        try:
+            main2 = immich_import.main
+            main2(["--source", str(self.source), "--dest", str(self.dest),
+                   "--apply", "--min-seconds", "10"])
+            self.assertFalse((self.dest / "clip.mov").exists())
+            # second run at 6s WITHOUT --retry-short: clip stays skipped
+            immich_import.video_duration = lambda p: 8.0
+            main2(["--source", str(self.source), "--dest", str(self.dest),
+                   "--apply", "--min-seconds", "6"])
+            self.assertFalse((self.dest / "clip.mov").exists())
+            # with --retry-short: the 8s clip now imports; long.mp4 is NOT
+            # re-copied (it was 'imported', not 'short')
+            main2(["--source", str(self.source), "--dest", str(self.dest),
+                   "--apply", "--min-seconds", "6", "--retry-short"])
+            self.assertTrue((self.dest / "clip.mov").exists())
+            self.assertEqual(len(list(self.dest.glob("long*.mp4"))), 1)
+        finally:
+            importlib.reload(immich_import)

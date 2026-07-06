@@ -41,10 +41,18 @@ def _place_from_nominatim(data) -> str:
     return dn.split(",")[0].strip()
 
 
+def _country_from_nominatim(data) -> str:
+    """ISO country code (uppercase, e.g. 'NL') from a Nominatim reverse
+    response, '' when absent — video titles are country_location_date_time
+    (2026-07-06)."""
+    addr = (data or {}).get("address") or {}
+    return str(addr.get("country_code") or "").upper()
+
+
 def reverse_geocode(lat, lon, timeout: float = 8.0):
-    """One rate-limited Nominatim lookup. Returns a place name, '' (definitive
-    no-name), or None on a network/HTTP failure (transient — caller shouldn't
-    cache it)."""
+    """One rate-limited Nominatim lookup. Returns (place, country) — either
+    may be '' (definitive no-value) — or None on a network/HTTP failure
+    (transient — caller shouldn't cache it)."""
     params = urllib.parse.urlencode({
         "lat": f"{float(lat):.5f}", "lon": f"{float(lon):.5f}",
         "format": "jsonv2", "zoom": "14", "addressdetails": "1"})
@@ -61,19 +69,27 @@ def reverse_geocode(lat, lon, timeout: float = 8.0):
     except Exception as e:                        # noqa: BLE001 (transient)
         log.debug("geocode failed (%s,%s): %s", lat, lon, e)
         return None
-    return _place_from_nominatim(data)
+    return _place_from_nominatim(data), _country_from_nominatim(data)
 
 
 def place_for(db, lat, lon):
-    """Cache-first place name for coords. Checks geocode_cache; on a miss does
-    one Nominatim lookup and stores the result ('' = sticky no-name). Returns
-    the place name, '' (known no-name), or None when offline/failed (NOT cached
-    → retries on a later scan)."""
-    place, hit = db.geocode_get(lat, lon)
-    if hit:
-        return place                              # '' or a name
-    name = reverse_geocode(lat, lon)
-    if name is None:
-        return None                               # transient — don't cache
-    db.geocode_put(lat, lon, name)                # name or '' (sticky)
-    return name
+    """Cache-first (place, country) for coords. Checks geocode_cache; on a
+    miss does one Nominatim lookup and stores the result ('' = sticky
+    no-value). A legacy cache row without country (NULL — pre-2026-07-06)
+    is UPGRADED with one re-fetch; if that fails transiently the cached
+    place is served with country '' and the row stays NULL (retried on a
+    later scan). Returns (place, country) or None when offline/failed on a
+    full miss (NOT cached → retries later)."""
+    place, country, hit = db.geocode_get(lat, lon)
+    if hit and country is not None:
+        return place, country
+    fresh = reverse_geocode(lat, lon)
+    if fresh is None:                             # transient
+        if hit:
+            return place, ""                      # keep serving; retry later
+        return None
+    name, cc = fresh
+    if hit and name == "" and place:
+        name = place       # don't downgrade a known place on the upgrade pass
+    db.geocode_put(lat, lon, name, cc)            # sticky ('' allowed)
+    return name, cc

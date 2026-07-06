@@ -154,6 +154,10 @@ def main(argv=None):
                          "Live-Photo motion clips); default 0 = all")
     ap.add_argument("--limit", type=int, default=0,
                     help="stop after N new imports (0 = no limit)")
+    ap.add_argument("--retry-short", action="store_true",
+                    help="re-evaluate sources previously skipped as short "
+                         "(use after LOWERING --min-seconds — the cache "
+                         "doesn't record which cutoff marked them)")
     args = ap.parse_args(argv)
 
     source, dest = Path(args.source), Path(args.dest)
@@ -163,6 +167,12 @@ def main(argv=None):
         print(f"FATAL: dest not mounted: {dest}"); return 2
 
     cache = Cache(dest / ".immich-import.db")
+    if args.retry_short:
+        with cache.conn:
+            n = cache.conn.execute(
+                "DELETE FROM src_seen WHERE status='short'").rowcount
+        print(f"--retry-short: {n} previously-short source(s) will be "
+              f"re-evaluated")
 
     # 1. Register everything already in the video root (incremental —
     #    only new/changed files get hashed).
