@@ -100,6 +100,31 @@ class TestImport(_Base):
         self.assertEqual((self.dest / "a (2).mp4").read_bytes(), b"NEW")
         self.assertEqual((self.dest / "a.mp4").read_bytes(), b"OLD")
 
+    def test_deleted_dest_content_stays_skipped_by_default(self):
+        # "seen once, never re-copy": deleting a clip from GWMovies must
+        # not make the next run bring it back
+        (self.dest / "old.mp4").write_bytes(b"GONE")
+        self.run_tool("--apply")                 # registers old.mp4
+        (self.dest / "old.mp4").unlink()
+        self.put("upload/copy.mp4", b"GONE")
+        self.run_tool("--apply")
+        self.assertFalse((self.dest / "copy.mp4").exists())
+
+    def test_reimport_deleted_brings_content_back(self):
+        (self.dest / "old.mp4").write_bytes(b"GONE")
+        self.put("upload/copy.mp4", b"GONE")
+        self.run_tool("--apply")                 # dup → skipped, recorded
+        self.assertFalse((self.dest / "copy.mp4").exists())
+        (self.dest / "old.mp4").unlink()
+        self.run_tool("--apply", "--reimport-deleted")
+        self.assertEqual((self.dest / "copy.mp4").read_bytes(), b"GONE")
+
+    def test_reimport_deleted_does_not_recopy_present_content(self):
+        (self.dest / "keep.mp4").write_bytes(b"KEEP")
+        self.put("upload/twin.mp4", b"KEEP")
+        self.run_tool("--apply", "--reimport-deleted")
+        self.assertFalse((self.dest / "twin.mp4").exists())
+
     def test_min_seconds_skips_short_clips(self):
         self.put("upload/clip.mov", b"SHORT")
         immich_import.video_duration = lambda p: 2.5

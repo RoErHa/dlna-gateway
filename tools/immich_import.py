@@ -163,6 +163,11 @@ def main(argv=None):
                     help="re-evaluate sources previously skipped as short "
                          "(use after LOWERING --min-seconds — the cache "
                          "doesn't record which cutoff marked them)")
+    ap.add_argument("--reimport-deleted", action="store_true",
+                    help="dedup against files PRESENT in dest now, not "
+                         "everything ever seen — content once in dest but "
+                         "since deleted gets copied again (default keeps "
+                         "deliberately-deleted clips gone forever)")
     args = ap.parse_args(argv)
 
     source, dest = Path(args.source), Path(args.dest)
@@ -178,15 +183,27 @@ def main(argv=None):
                 "DELETE FROM src_seen WHERE status='short'").rowcount
         print(f"--retry-short: {n} previously-short source(s) will be "
               f"re-evaluated")
+    if args.reimport_deleted:
+        # stale 'duplicate' verdicts must be re-evaluated too — they were
+        # decided against the everything-ever-seen hash set
+        with cache.conn:
+            n = cache.conn.execute(
+                "DELETE FROM src_seen WHERE status='duplicate'").rowcount
+        print(f"--reimport-deleted: {n} previously-duplicate source(s) "
+              f"will be re-evaluated against files present now")
 
     # 1. Register everything already in the video root (incremental —
     #    only new/changed files get hashed).
     dest_files = [p for p in dest.rglob("*")
                   if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
     print(f"registering {len(dest_files)} existing files in {dest} …")
+    present = set()
     for p in dest_files:
-        cache.register_dest(p)
-    have = cache.dest_hashes()
+        present.add(cache.register_dest(p))
+    # Default dedup set = every content hash EVER seen in dest, so clips
+    # the user deleted from the video root never come back on a re-run.
+    # --reimport-deleted narrows it to what's physically present now.
+    have = present if args.reimport_deleted else cache.dest_hashes()
 
     # 2. Walk Immich originals.
     stats = {"new": 0, "dup": 0, "seen": 0, "short": 0}
