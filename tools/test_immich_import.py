@@ -52,6 +52,21 @@ class TestDiscovery(_Base):
         self.put("library/.hidden/x.mp4", b"x")
         self.assertEqual(list(iter_source_videos(self.source)), [])
 
+    def test_empty_subdirs_walks_source_root(self):
+        # --subdirs '' → a plain folder tree (e.g. the PHOTOS-ALL external
+        # library), not Immich's library/upload storage layout
+        self.put("2019/trip/a.MOV", b"a")
+        self.put("b.mp4", b"b")
+        found = {p.name for p in iter_source_videos(self.source,
+                                                    subdirs=("",))}
+        self.assertEqual(found, {"a.MOV", "b.mp4"})
+
+    def test_subdirs_flag_import(self):
+        self.put("2019/a.mp4", b"AAAA")
+        self.run_tool("--subdirs", "", "--apply")
+        self.assertEqual([p.name for p in self.dest.glob("*.mp4")],
+                         ["a.mp4"])
+
 
 class TestImport(_Base):
     def test_dry_run_copies_nothing(self):

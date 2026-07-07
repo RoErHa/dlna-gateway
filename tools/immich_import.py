@@ -121,7 +121,7 @@ class Cache:
 
 def iter_source_videos(source: Path, subdirs=SOURCE_SUBDIRS):
     for sub in subdirs:
-        base = source / sub
+        base = (source / sub) if sub else source   # '' = the source root
         if not base.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(base):
@@ -147,6 +147,11 @@ def main(argv=None):
                     "(dry-run by default).")
     ap.add_argument("--source", default=DEFAULT_SOURCE)
     ap.add_argument("--dest", default=DEFAULT_DEST)
+    ap.add_argument("--subdirs", default=",".join(SOURCE_SUBDIRS),
+                    help="comma list of source subdirs to walk (default "
+                         "'library,upload' = Immich's originals); pass '' "
+                         "to walk the source root itself (a plain folder "
+                         "tree like an external library)")
     ap.add_argument("--apply", action="store_true",
                     help="actually copy (default: preview only)")
     ap.add_argument("--min-seconds", type=float, default=0,
@@ -186,7 +191,9 @@ def main(argv=None):
     # 2. Walk Immich originals.
     stats = {"new": 0, "dup": 0, "seen": 0, "short": 0}
     t0 = time.monotonic()
-    for src in iter_source_videos(source):
+    subdirs = tuple(s.strip() for s in args.subdirs.split(",")) \
+        if args.subdirs else ("",)
+    for src in iter_source_videos(source, subdirs=subdirs):
         prior = cache.src_status(src)
         if prior is not None:
             stats["seen"] += 1
