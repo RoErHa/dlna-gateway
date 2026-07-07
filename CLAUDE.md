@@ -230,6 +230,8 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `api_browse.py` | Browse/search API endpoints |
 | `api_playback.py` | Playback, stream proxy route, `/art`, `/api/client_log`, state, indexer management |
 | `api_playlists.py` | Playlist CRUD endpoints |
+| `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
+| `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
 | `api_upnp.py` | The gateway-as-MediaServer: a **complete DLNA Media Server** the Naim/LG browse. Device descriptor (`MediaServer:1` + `X_DLNADOC` + icons + ContentDirectory **and** ConnectionManager), both service SCPDs, SOAP `ContentDirectory#Browse` over the full library (`_gw_browse`) + the pre-browse handshake actions, `ConnectionManager#GetProtocolInfo` etc., GENA SUBSCRIBE + initial NOTIFY, and SSDP announce + **M-SEARCH responder**. See "UPnP exposure (Naim)". |
 
 ### Key Module-Level Singletons
@@ -293,6 +295,21 @@ album_art(artist, album, art_url, source, updated_at)
 play_counts(url, count, last_played)
   PRIMARY KEY (url)
   Incremented by LibraryDB.radio_tracks(); persists across rebuild-index.
+videos(id, udn, url, title, file_path, ..., created, location,
+       location_name, country, poster, ...)
+  id = sha1(rel_path)[:16], udn = uuid:localfs-movies. Populated by
+  dlna_video_index.scan_videos (5-min periodic). See docs/VIDEO_SUPPORT.md.
+video_location_overrides(video_id, location_name, country, source, updated_at)
+  source ∈ {'inferred_same_day', 'inferred_window', 'inferred_country',
+  'manual'} — locations for GPS-less videos, written by
+  tools/infer_video_locations.py. Survives clear_videos (the scanner
+  would wipe them otherwise); RE-APPLIED at the end of every video scan
+  (dlna_video_index.apply_location_overrides). 'manual' beats inferred;
+  a row NEVER overwrites a real-GPS video; embedded titles never rewritten.
+video_people(video_id, person, person_id, updated_at)
+  PRIMARY KEY (video_id, person) — Immich person tags, synced by
+  tools/immich_people_sync.py (per-person REPLACE semantics). Survives
+  clear_videos. Feeds the "👤 By person" DLNA container + PWA grouping.
 ```
 
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
@@ -486,75 +503,10 @@ launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 > **Everything below this line is the pre-2.0 (1.x stdlib) state, kept for
 > historical context — it no longer describes what runs.**
 
-> **TL;DR.** Today the gateway serves **HTTP/1.1 over TLS, with keep-alive
-> (2026-06-02)**. It does **not** speak HTTP/2 or HTTP/3, and *can't*
-> without a different server or a reverse proxy in front — Python's stdlib
-> `http.server` is HTTP/1.1-only. The keep-alive + Service-Worker caching
-> + the album-key index capture most of the realistic latency win for a
-> single-user Tailscale setup. HTTP/2/3 is a **dlna-gateway 2.0** candidate
-> (front the gateway with a proxy), not a quick flag.
-
-**What we run now.** `dlna_server.GatewayHandler(BaseHTTPRequestHandler)`
-on `ThreadingMixIn` + `HTTPServer`, the HTTPS variant `ssl`-wrapping the
-socket (`TLSThreadedHTTPServer`). As of 2026-06-02 `protocol_version =
-"HTTP/1.1"` + `timeout = 15` enable **keep-alive** (one TCP+TLS connection
-reused for many requests, with a 15 s idle timeout that frees the daemon
-thread). Prerequisite satisfied: every response path sets `Content-Length`
-(the `_json`/`_html`/`_xml`/`_serve_static`/`/art` helpers) **or** sends
-`Connection: close` (the `/stream` + `/radio_stream` byte relays, the
-HTTPS redirect) — so an HTTP/1.1 client always knows where a response ends.
-
-**Why TLS alone does NOT give HTTP/2.**
-- **HTTP/2** needs (a) **ALPN** in the TLS handshake (client + server
-  negotiate `h2` vs `http/1.1`) and (b) a wholly different binary
-  framing/multiplexing layer (streams, HPACK header compression).
-  `ssl`-wrapping a socket gives encrypted **HTTP/1.1**, nothing more —
-  stdlib implements none of the h2 protocol. There is no
-  `protocol_version = "HTTP/2"`.
-- **HTTP/3** is further still: it runs over **QUIC (UDP)**, not TCP, with
-  TLS 1.3 built in. Stdlib has no QUIC at all.
-
-**What HTTP/2 would actually buy us (and what it wouldn't).** Keep-alive
-already removes the per-request handshake for *sequential* traffic (the
-polling loop, drilling through browse). HTTP/2's extra benefit is
-**multiplexing** — many concurrent requests over one connection without
-opening ~6 parallel HTTP/1.1 connections. The one place that shows up here
-is the **cold first load of a thumbnail-heavy browse page** (~20 uncached
-`/art` images fetched at once). But the SW `ART_CACHE` (cache-first) means
-repeat loads don't refetch, and `API_CACHE` makes repeat browse instant —
-so the marginal h2 gain is modest for this single-user workload. h2 header
-compression (HPACK) is negligible at our request volume. **Net: real but
-secondary** to the keep-alive + SW-cache + index work already done.
-
-**Options to add HTTP/2/3 (all via a reverse proxy — the gateway stays
-HTTP/1.1 on localhost; no rewrite of the request handler):**
-
-| Option | h2 | h3 | What it changes | Notes |
-|---|---|---|---|---|
-| **`tailscale serve`** | ✅ (Go `net/http` does h2 over TLS by default) | ⚠️ verify (Go std server doesn't do h3 by default) | Tailscale terminates TLS with the tailnet cert and proxies to `http://127.0.0.1:<port>`. **Could subsume the gateway's entire HTTPS + cert-renewal machinery** (`renew-cert.sh`, the LaunchAgent, `_warn_if_cert_expiring_soon`). | **Cleanest for this deployment** — already on Tailscale; least new infrastructure. Bind the gateway to localhost; drop its own TLS. |
-| **Caddy** | ✅ | ✅ | Caddy fronts on 443, h2+h3, auto-certs; `reverse_proxy 127.0.0.1:<port>`. | One extra process; most capable; also offloads TLS. |
-| **nginx** | ✅ | ✅ (http3 module) | Same shape as Caddy, more config. | Heavier config; ubiquitous. |
-| **Rewrite to ASGI (Hypercorn/Uvicorn)** | ✅ | ✅ (Hypercorn) | Replace `http.server` with an ASGI app server. | **Big rewrite** — the app is stdlib `BaseHTTPRequestHandler`, not ASGI/WSGI. A 2.0-scale change, only if other reasons (async, websockets) justify it. |
-
-**Caveats / interactions if/when we front it.**
-- The `/stream` + `/gw/` device endpoints are **HTTP-only** (UPnP renderers
-  like the Naim can't do HTTPS) and live on the plain HTTP server with the
-  `_HTTP_ONLY` carve-out + the HTTPS-redirect skip. A front proxy must
-  **not** intercept those — the Naim talks to the gateway directly on the
-  LAN, not through the proxy. Keep the device path untouched.
-- Today the gateway *owns* TLS (auto-detects `*.crt`/`*.key`, warns on
-  expiry, auto-renews). Moving TLS to a proxy means **removing or disabling
-  that machinery** to avoid two cert owners. Decide deliberately.
-- `tailscale serve` only covers tailnet clients — fine, since the gateway
-  is LAN/tailnet-only by design (not public-internet exposed).
-
-**Recommendation (for 2.0).** If/when responsiveness is revisited, front
-the gateway with **`tailscale serve`** for HTTP/2 + free TLS — lowest
-effort, biggest simplification (kills the cert LaunchAgent), and it's the
-natural fit for an already-Tailscale deployment. Treat h3 and Caddy/nginx
-as alternatives if h3 or non-Tailscale access ever matters. **Not worth
-doing piecemeal now** — bundle it into a 2.0 transport refresh. See the
-`project_responsiveness` memory for the measured numbers behind this.
+> *(Historical pre-2.0 detail — the stdlib HTTP/1.1 analysis, the h2/h3*
+> *option matrix, and the reverse-proxy recommendation — stubbed
+> 2026-07-08 to keep CLAUDE.md under 150k. Full text:*
+> *`git show c7e7c42:CLAUDE.md`.)*
 
 ### Mobile / PWA testing checklist
 
@@ -1110,7 +1062,18 @@ GET /api/album_favourites/remove?artist=X&album=Y
 directly (no PWA). **Root container "0" lists five children:** `Artists`,
 `Albums`, `Genres` (the **full library** — added 2026-06-12, since AssetUPnP's
 decommission left nothing for the Naim to browse the whole library over UPnP),
-then `⭐ Favourite Albums` and `Playlists`.
+then `⭐ Favourite Albums` and `Playlists` — plus a sixth, `📹 Videos`, only
+when GWMovies is enabled + populated.
+
+**Videos sub-tree** (for the LG TV; guarded by
+`tests/test_upnp_videos_browse.py`): `videos` → `📅 By date` (year → month),
+`📍 By location` (COUNTRY blocks → locations; **titles show FULL country
+names** via `dlna_countries.py` while ids/sorting/filenames keep the ISO
+code — 2026-07-08), `👤 By person` (Immich person tags via `video_people`;
+container only present when persons exist — 2026-07-07), and `🎞 All videos`.
+Country drill-downs carry a **"(no city)" bucket** for country-only inferred
+locations; the top-level "(no location)" bucket holds videos with NEITHER.
+Garbled ids → empty container, never 500.
 
 **DLNA Media Server surface — what makes strict clients browse it (hard-won
 2026-06-13).** Browsing only works if the gateway is a *complete, spec-correct*
@@ -1683,10 +1646,75 @@ default (`--apply` copies; the hash cache is warmed even in dry-run so
 the apply is fast). `--min-seconds 10` skips Live-Photo motion clips;
 `--limit N` stops early.
 
+**The dedup cache is deliberately STICKY** — `dest_files` keeps every
+content hash EVER seen in dest, so a clip you deleted from GWMovies never
+comes back on a re-run. That stickiness once silently withheld 1,783
+PHOTOS-ALL videos whose content had been in GWMovies before (2026-07-07);
+**`--reimport-deleted`** narrows the dedup set to files PRESENT now (and
+re-evaluates stale 'duplicate' source verdicts) when you DO want deleted
+content back. **`--subdirs ""`** walks the source root as a plain folder
+tree (e.g. Immich's external library, PHOTOS-ALL) instead of the default
+`library,upload` Immich storage layout.
+
 ```bash
 python3 tools/immich_import.py               # preview
 python3 tools/immich_import.py --apply       # copy new videos
-python3 -m unittest tools.test_immich_import -v   # 12 tests
+python3 tools/immich_import.py --source /Volumes/SAMDATA-1TB/PHOTOS-ALL \
+    --subdirs "" --reimport-deleted --apply  # external library, full
+python3 -m unittest tools.test_immich_import -v   # 18 tests
+```
+
+### `tools/infer_video_locations.py`
+
+Infers locations for **GPS-less videos from their temporal neighbors**
+(2026-07-07): a clip shot the same day (or within ±`--window` days,
+default 3) as real-GPS-located clips gets their location. Tiers, strongest
+first: `same_day` unanimous → `±1d` → `±window` → **country-only** (cities
+differ but country agrees — browsable via the "(no city)" bucket).
+Evidence = real-GPS rows ONLY (no chaining off previous inferences).
+Results go to `video_location_overrides` (source=`inferred_*`), which the
+end-of-scan hook re-applies after every rescan; `manual` rows always win.
+`--retry-geocode` also re-asks Nominatim for GPS-but-cached-empty rows
+(evicts the sticky '' cache entry). DRY-RUN by default.
+
+**Device check caveat:** `--no-device-check` was needed on the real
+library — the check (quicktime make/model of video + neighbors must
+match) blocked 92/113 targets because GPS-less videos are almost all
+re-encoded (WhatsApp/exports) with NO device tags at all. First real run
+(user-approved, check off): 64 inferred + 8 geocode retries → located
+videos 1,050 → 1,111. Undo one:
+`DELETE FROM video_location_overrides WHERE video_id='…'`.
+
+```bash
+python3 tools/infer_video_locations.py                     # preview
+python3 tools/infer_video_locations.py --no-device-check --retry-geocode --apply
+python3 -m unittest tools.test_infer_video_locations -v    # 16 tests
+```
+
+### `tools/immich_people_sync.py`
+
+Syncs **Immich's person recognition** onto gateway videos (2026-07-07):
+Immich keeps face/person data in ITS Postgres (never in the files), so
+this pulls named persons over the REST API (`GET /api/people`, then
+`POST /api/search/metadata {personIds, type: VIDEO}`; auth header
+`x-api-key`; `IMMICH_URL` + `IMMICH_API_KEY` from `.env`) into the
+`video_people` table → the "👤 By person" DLNA container + PWA grouping.
+
+Matching, in order: (1) **content checksum** — Immich returns base64
+SHA1; GWMovies files are SHA1'd once (cached in `.immich-import.db`
+table `video_sha1`); (2) **(normalized filename, exact byte size)**
+fallback via a per-asset GET — needed because **Immich's stored checksums
+go stale** when files are metadata-edited in place after indexing (same
+size, different bytes; proven live — checksum-only matched 8/349, the
+fallback took it to 337/349, 20 persons). The importer's ` (N)` collision
+suffix is normalized; ambiguous (name, size) keys are dropped, never
+guessed. Per-person writes are a SYNC (replace, not merge) — re-run after
+new Immich face-tagging, safe as a habit. DRY-RUN by default.
+
+```bash
+.venv/bin/python tools/immich_people_sync.py            # preview
+.venv/bin/python tools/immich_people_sync.py --apply    # sync
+python3 -m unittest tools.test_immich_people_sync -v    # 14 tests
 ```
 
 ### `tools/compilation_playlists.py`
