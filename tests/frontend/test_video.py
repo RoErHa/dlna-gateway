@@ -180,8 +180,11 @@ def test_location_mode_groups_country_then_location(app, gateway):
     app.wait_for_function(
         "document.querySelectorAll('.video-group').length === 4",
         timeout=2000)
+    # country group headers show FULL names (2026-07-08); grouping/
+    # sorting still keys on the ISO code
     groups = app.locator(".video-group").all_inner_texts()
-    assert groups == ["NL", "PT", "(no country)", "(no location)"], groups
+    assert groups == ["Netherlands", "Portugal", "(no country)",
+                      "(no location)"], groups
     subs = app.locator(".video-subgroup").all_inner_texts()
     assert subs == ["Amsterdam", "Utrecht", "Faro", "Atlantis"], subs
     rows = app.locator(".video-row").all_inner_texts()
@@ -206,7 +209,7 @@ def test_location_mode_country_only_gets_no_city_subgroup(app, gateway):
         "document.querySelectorAll('.video-group').length === 2",
         timeout=2000)
     groups = app.locator(".video-group").all_inner_texts()
-    assert groups == ["PT", "(no location)"], groups
+    assert groups == ["Portugal", "(no location)"], groups
     subs = app.locator(".video-subgroup").all_inner_texts()
     assert subs == ["Faro", "(no city)"], subs
     rows = app.locator(".video-row").all_inner_texts()
