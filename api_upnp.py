@@ -388,14 +388,20 @@ def _gw_browse(obj_id: str, browse_flag: str,
             n = len(DB.all_videos(_VIDEO_UDN))
             return (OPEN + container("videos", "0", "\U0001F4F9 Videos", n)
                     + CLOSE, 1, 1)
-        years = DB.video_years(_VIDEO_UDN)
-        locs  = DB.video_locations(_VIDEO_UDN)
-        n     = len(DB.all_videos(_VIDEO_UDN))
+        years  = DB.video_years(_VIDEO_UDN)
+        locs   = DB.video_locations(_VIDEO_UDN)
+        people = DB.video_people_list(_VIDEO_UDN)
+        n      = len(DB.all_videos(_VIDEO_UDN))
         kids = [
             container("viddates", "videos", "\U0001F4C5 By date", len(years)),
             container("vidlocs", "videos", "\U0001F4CD By location", len(locs)),
-            container("vidall", "videos", "\U0001F39E All videos", n),
         ]
+        # "👤 By person" only when the Immich people sync has run — an
+        # always-empty folder would just be noise for non-Immich setups.
+        if people:
+            kids.append(container("vidpeople", "videos",
+                                  "\U0001F464 By person", len(people)))
+        kids.append(container("vidall", "videos", "\U0001F39E All videos", n))
         return OPEN + "".join(kids) + CLOSE, len(kids), len(kids)
 
     if obj_id == "vidall":
@@ -472,9 +478,11 @@ def _gw_browse(obj_id: str, browse_flag: str,
                                      cc or "(no country)", len(locs))
                     + CLOSE, 1, 1)
         page  = locs[start:start + count] if count else locs[start:]
+        # '' location = the "(no city)" bucket — country-only videos
+        # (Plan A inferred country, no specific place).
         items = [container(
             "vidcloc:" + _b64e(cc + "\x00" + r["location_name"]), obj_id,
-            r["location_name"], r["count"]) for r in page]
+            r["location_name"] or "(no city)", r["count"]) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), len(locs)
 
     if obj_id.startswith("vidcloc:"):
@@ -485,8 +493,34 @@ def _gw_browse(obj_id: str, browse_flag: str,
         vids = DB.videos_by_country_location(_VIDEO_UDN, cc, loc)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container(obj_id, "vidcountry-none" if not cc
-                                     else f"vidcountry:{cc}", loc,
+                                     else f"vidcountry:{cc}",
+                                     loc or "(no city)",
                                      len(vids)) + CLOSE, 1, 1)
+        page  = vids[start:start + count] if count else vids[start:]
+        items = [video_item(v, obj_id) for v in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
+
+    if obj_id == "vidpeople":
+        people = DB.video_people_list(_VIDEO_UDN)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("vidpeople", "videos",
+                                     "\U0001F464 By person", len(people))
+                    + CLOSE, 1, 1)
+        page  = people[start:start + count] if count else people[start:]
+        items = [container("vidperson:" + _b64e(p["person"]), "vidpeople",
+                           p["person"], p["count"]) for p in page]
+        return OPEN + "".join(items) + CLOSE, len(items), len(people)
+
+    if obj_id.startswith("vidperson:"):
+        person = _b64d(obj_id[len("vidperson:"):])
+        if not person:
+            return OPEN + CLOSE, 0, 0   # garbled id → empty, never 500
+        vids = DB.videos_by_person(_VIDEO_UDN, person)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "vidpeople", person,
+                                     len(vids)) + CLOSE, 1, 1)
+        if not vids:
+            return OPEN + CLOSE, 0, 0
         page  = vids[start:start + count] if count else vids[start:]
         items = [video_item(v, obj_id) for v in page]
         return OPEN + "".join(items) + CLOSE, len(items), len(vids)

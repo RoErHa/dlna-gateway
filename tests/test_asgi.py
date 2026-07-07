@@ -1169,6 +1169,19 @@ class TestVideoApi(unittest.TestCase):
         v = asyncio.run(dlna_asgi.video_meta(id="v1"))
         self.assertEqual(v["transcodeUrl"], "/video_transcode/v1")
 
+    def test_payload_carries_people(self):
+        # Plan B: Immich person tags ride along for the PWA's 👤 grouping
+        try:
+            self.db.video_people_replace("Anna", "p-1", ["v1"])
+            rows = asyncio.run(dlna_asgi.videos())
+            self.assertEqual(rows[0]["people"], ["Anna"])
+            v = asyncio.run(dlna_asgi.video_meta(id="v1"))
+            self.assertEqual(v["people"], ["Anna"])
+        finally:
+            self.db.video_people_replace("Anna", "p-1", [])
+        rows = asyncio.run(dlna_asgi.videos())
+        self.assertEqual(rows[0]["people"], [])
+
     def test_transcode_404_unknown(self):
         r = asyncio.run(dlna_asgi.video_transcode("nope"))
         self.assertEqual(r.status_code, 404)
