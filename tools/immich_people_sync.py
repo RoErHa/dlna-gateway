@@ -144,34 +144,86 @@ def build_sha1_index(dest: Path, conn) -> dict:
     return idx
 
 
+_SUFFIX_RE = None
+
+
+def _norm_name(name: str) -> str:
+    """Lowercased filename with the importer's ' (N)' collision suffix
+    stripped — 'IMG_9 (2).MOV' matches Immich's 'IMG_9.MOV'."""
+    global _SUFFIX_RE
+    import re
+    if _SUFFIX_RE is None:
+        _SUFFIX_RE = re.compile(r"^(.*) \(\d+\)(\.[^.]+)$")
+    m = _SUFFIX_RE.match(name)
+    if m:
+        name = m.group(1) + m.group(2)
+    return name.lower()
+
+
+def build_name_size_index(dest: Path) -> dict:
+    """{(normalized_name, size): rel_path} — the checksum fallback.
+    Live finding 2026-07-07: Immich's stored SHA1 can differ from the
+    bytes on disk (files metadata-edited in place after indexing; same
+    size, different hash), so checksums alone under-match the external
+    library. Ambiguous keys (two files, same norm name + size) are
+    dropped rather than guessed."""
+    idx, dupes = {}, set()
+    for p in sorted(dest.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in VIDEO_EXTS:
+            continue
+        key = (_norm_name(p.name), p.stat().st_size)
+        if key in idx or key in dupes:
+            idx.pop(key, None)
+            dupes.add(key)
+            continue
+        idx[key] = str(p.relative_to(dest))
+    return idx
+
+
 # ── the sync ──────────────────────────────────────────────────────
 
-def sync_people(db, fetch, people, sha1_index, *, apply=False,
-                udn=VIDEO_UDN, verbose=False) -> dict:
-    """Match every named person's video assets to GWMovies by checksum
-    and (with apply) replace their video_people row sets. Persons sharing
-    a name are merged. Returns {people, matched, unmatched, written}."""
+def sync_people(db, fetch, people, sha1_index, *, name_size_index=None,
+                apply=False, udn=VIDEO_UDN, verbose=False) -> dict:
+    """Match every named person's video assets to GWMovies — by checksum
+    first, then (name, size) via a per-asset GET for the stale-checksum
+    class — and (with apply) replace their video_people row sets. Persons
+    sharing a name are merged. Returns stats."""
     import dlna_video_index
     by_name = {}
-    stats = {"people": 0, "matched": 0, "unmatched": 0, "written": 0}
+    stats = {"people": 0, "matched": 0, "matched_by_name": 0,
+             "unmatched": 0, "written": 0}
     for person in people:
         stats["people"] += 1
         assets = fetch_person_video_assets(fetch, person["id"])
-        vids, missed = set(), 0
+        vids, by_name_n, missed = set(), 0, 0
         for a in assets:
             rel = sha1_index.get(b64_to_hex(a.get("checksum") or ""))
+            if not rel and name_size_index:
+                try:
+                    full = fetch("GET", f"/api/assets/{a.get('id')}")
+                except Exception:                          # noqa: BLE001
+                    full = {}
+                size = ((full.get("exifInfo") or {})
+                        .get("fileSizeInByte"))
+                name = full.get("originalFileName") or ""
+                if name and size:
+                    rel = name_size_index.get((_norm_name(name), size))
+                    if rel:
+                        by_name_n += 1
             if rel:
                 vids.add(dlna_video_index.video_id(rel))
             else:
                 missed += 1
         stats["matched"] += len(vids)
+        stats["matched_by_name"] += by_name_n
         stats["unmatched"] += missed
         entry = by_name.setdefault(person["name"],
                                    {"id": person["id"], "vids": set()})
         entry["vids"] |= vids
         print(f"  {person['name']:<28} {len(assets):3d} video asset(s) → "
               f"{len(vids)} in GWMovies"
-              + (f" ({missed} external/unimported)" if missed else ""))
+              + (f" ({by_name_n} by name+size)" if by_name_n else "")
+              + (f" ({missed} unmatched)" if missed else ""))
     if apply:
         for name, entry in sorted(by_name.items()):
             stats["written"] += db.video_people_replace(
@@ -217,14 +269,16 @@ def main(argv=None):
     t0 = time.monotonic()
     cache = sqlite3.connect(dest / ".immich-import.db")
     index = build_sha1_index(dest, cache)
+    name_size = build_name_size_index(dest)
     print(f"GWMovies SHA1 index: {len(index)} file(s) "
           f"({time.monotonic() - t0:.0f}s)")
 
-    stats = sync_people(db, fetch, people, index, apply=args.apply,
+    stats = sync_people(db, fetch, people, index,
+                        name_size_index=name_size, apply=args.apply,
                         udn=args.udn, verbose=args.verbose)
     print(f"\npersons: {stats['people']} · asset matches: "
-          f"{stats['matched']} · external/unimported: "
-          f"{stats['unmatched']}")
+          f"{stats['matched']} ({stats['matched_by_name']} by name+size) "
+          f"· unmatched: {stats['unmatched']}")
     if args.apply:
         rows = db.video_people_list(args.udn)
         print(f"video_people written: {stats['written']} row(s), "

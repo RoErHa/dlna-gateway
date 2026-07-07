@@ -23,7 +23,7 @@ if PROJECT not in sys.path:
 
 from tools.immich_people_sync import (
     b64_to_hex, fetch_people, fetch_person_video_assets, build_sha1_index,
-    sync_people)
+    build_name_size_index, sync_people)
 from dlna_library import LibraryDB
 import dlna_video_index
 
@@ -134,6 +134,45 @@ class TestSha1Index(unittest.TestCase):
         self.assertIn("cached-value", idx)
 
 
+class TestNameSizeIndex(unittest.TestCase):
+    """Fallback matching (2026-07-07): live data proved Immich's stored
+    checksums can differ from the bytes on disk (files metadata-edited in
+    place after indexing — same size, different SHA1). (normalized name,
+    exact size) is the fallback key; the importer's ' (2)' collision
+    suffix is stripped so a renamed copy still matches."""
+
+    def setUp(self):
+        self.dest = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dest.cleanup()
+
+    def _write(self, name, data):
+        (Path(self.dest.name) / name).write_bytes(data)
+
+    def test_key_is_lowercase_name_plus_size(self):
+        self._write("IMG_1.MOV", b"AAAA")
+        idx = build_name_size_index(Path(self.dest.name))
+        self.assertEqual(idx[("img_1.mov", 4)], "IMG_1.MOV")
+
+    def test_collision_suffix_stripped(self):
+        self._write("IMG_1 (2).MOV", b"AAAA")
+        idx = build_name_size_index(Path(self.dest.name))
+        self.assertEqual(idx[("img_1.mov", 4)], "IMG_1 (2).MOV")
+
+    def test_ambiguous_key_excluded(self):
+        self._write("IMG_1.MOV", b"AAAA")
+        self._write("IMG_1 (2).MOV", b"BBBBB")   # different size → distinct
+        self._write("IMG_1 (3).MOV", b"CCCCCC")
+        idx = build_name_size_index(Path(self.dest.name))
+        self.assertEqual(len(idx), 3)            # all distinct (sizes differ)
+        self._write("IMG_2.MOV", b"XXXX")
+        self._write("IMG_2 (2).MOV", b"YYYY")    # same size, same norm name
+        idx = build_name_size_index(Path(self.dest.name))
+        self.assertNotIn(("img_2.mov", 4), idx)  # ambiguous → dropped
+        self.assertEqual(len(idx), 3)            # IMG_1 variants unaffected
+
+
 class TestSyncPeople(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -196,6 +235,34 @@ class TestSyncPeople(unittest.TestCase):
         self.assertEqual(
             [v["id"] for v in self.db.videos_by_person(UDN, "Anna")],
             [self.vid_b])
+
+    def test_name_size_fallback_when_checksum_stale(self):
+        """Checksum misses fall back to (name, size) via a per-asset GET —
+        the stale-checksum case proven live 2026-07-07."""
+        vid_c = dlna_video_index.video_id("IMG_9 (2).MOV")
+        self.db.upsert_videos(UDN, [{
+            "id": vid_c, "udn": UDN, "url": "http://h/c",
+            "title": "IMG_9 (2).MOV", "file_path": "/gw/IMG_9 (2).MOV",
+            "folder": "", "duration": 1, "width": 1, "height": 1,
+            "vcodec": "h264", "acodec": "aac", "container": "mov",
+            "mime": "video/quicktime", "size": 7, "mtime": 1.0,
+            "created": "2026-06-01T10:00:00Z", "location": None,
+            "location_name": None, "country": None, "poster": None}])
+        self.assets["p2"] = [{"id": "x9", "checksum": _sha1_b64(b"STALE")}]
+        name_size = {("img_9.mov", 7): "IMG_9 (2).MOV"}
+
+        def fetch(method, path, body=None):
+            if method == "GET" and path == "/api/assets/x9":
+                return {"originalFileName": "IMG_9.MOV",
+                        "exifInfo": {"fileSizeInByte": 7}}
+            return self._fetch(method, path, body)
+
+        stats = sync_people(self.db, fetch, self.people, self.sha1_index,
+                            name_size_index=name_size, apply=True)
+        self.assertEqual(
+            [v["id"] for v in self.db.videos_by_person(UDN, "Bob")],
+            [vid_c])
+        self.assertEqual(stats["matched_by_name"], 1)
 
 
 if __name__ == "__main__":
