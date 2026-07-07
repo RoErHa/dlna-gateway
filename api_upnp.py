@@ -27,6 +27,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
+from dlna_countries import country_name
 from dlna_library import DB
 
 log = logging.getLogger("dlna.api.upnp")
@@ -454,10 +455,13 @@ def _gw_browse(obj_id: str, browse_flag: str,
         no_loc = [r for r in DB.video_locations(_VIDEO_UDN)
                   if not r["location_name"]]
         entries = []
+        # selection level shows FULL country names (2026-07-08); the ids
+        # (and titles/filenames elsewhere) keep the ISO code
         for c in countries:
             entries.append(("vidcountry-none" if not c["country"]
                             else f"vidcountry:{c['country']}",
-                            c["country"] or "(no country)", c["count"]))
+                            country_name(c["country"]) or "(no country)",
+                            c["count"]))
         for r in no_loc:
             entries.append(("vidloc-none", "(no location)", r["count"]))
         if browse_flag == "BrowseMetadata":
@@ -475,7 +479,8 @@ def _gw_browse(obj_id: str, browse_flag: str,
         locs = DB.video_locations_for_country(_VIDEO_UDN, cc)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container(obj_id, "vidlocs",
-                                     cc or "(no country)", len(locs))
+                                     country_name(cc) or "(no country)",
+                                     len(locs))
                     + CLOSE, 1, 1)
         page  = locs[start:start + count] if count else locs[start:]
         # '' location = the "(no city)" bucket — country-only videos

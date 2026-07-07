@@ -159,6 +159,10 @@ class TestByLocation(_Base):
         self.assertIn('id="vidloc-none"', xml)
         self.assertIn("(no country)", xml)
         self.assertIn("(no location)", xml)
+        # the country SELECTION level shows full names (2026-07-08);
+        # ids + titles elsewhere keep the ISO code
+        self.assertIn("Netherlands", xml)
+        self.assertIn("Portugal", xml)
         self.assertLess(xml.find('id="vidcountry:NL"'),
                         xml.find('id="vidcountry:PT"'))
         self.assertLess(xml.find('id="vidcountry:PT"'),
@@ -166,6 +170,23 @@ class TestByLocation(_Base):
         self.assertLess(xml.find('id="vidcountry-none"'),
                         xml.find('id="vidloc-none"'))
         self.assertIn('childCount="4"', xml)    # NL has 4 videos
+
+    def test_country_browse_metadata_full_name(self):
+        xml, n_ret, total = self.browse("vidcountry:NL",
+                                        flag="BrowseMetadata")
+        self.assertEqual(n_ret, 1)
+        self.assertIn("Netherlands", xml)
+
+    def test_unknown_code_falls_back_to_code(self):
+        with self.db._pool.write() as conn:
+            conn.execute(
+                "INSERT INTO videos (id, udn, url, title, file_path, "
+                "created, location_name, country, added_at) "
+                "VALUES ('vx', ?, 'http://h/vx', 't', '/m/vx.mov', "
+                "'2020-01-01T00:00:00Z', 'Somewhere', 'XZ', 1)", (UDN,))
+        xml, _n, _t = self.browse("vidlocs")
+        self.assertIn('id="vidcountry:XZ"', xml)
+        self.assertIn(">XZ<", xml)      # no mapping → the code itself
 
     def test_country_lists_locations_alpha(self):
         xml, n_ret, total = self.browse("vidcountry:NL")

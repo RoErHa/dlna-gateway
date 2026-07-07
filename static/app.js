@@ -1248,6 +1248,17 @@ function _vidDur(sec){
 // group headers — the video equivalent of the audio letter-bar browse.
 let _vidsAll=[], _vidSort="date", _vidQuery="";
 
+// ISO code → full country name for the country SELECTION headers only
+// (titles/filenames keep the code). Grouping/sorting still keys on the
+// code, matching the DLNA tree's ordering.
+function _ccName(cc){
+  if(!cc) return "";
+  try{
+    const n=new Intl.DisplayNames(["en"],{type:"region"}).of(cc);
+    return (n&&n!==cc)?n:cc;
+  }catch{ return cc; }
+}
+
 function _setVidSortUI(){
   const on ="background:var(--raised);color:var(--ink);border:1px solid var(--border);"
            +"border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-weight:600";
@@ -1367,7 +1378,7 @@ function renderVideos(vidsArg){
     } else if(_vidSort==="loc"){
       const hasLoc=!!(v.location_name||""), hasCc=!!(v.country||"");
       g = (!hasLoc&&!hasCc) ? "(no location)"
-                            : ((v.country||"")||"(no country)");
+                            : (_ccName(v.country||"")||"(no country)");
       subHdr = hasLoc ? v.location_name : (hasCc ? "(no city)" : null);
     } else {
       g = (v.created||"").slice(0,7)||"(no date)";
