@@ -1308,9 +1308,12 @@ function renderVideos(vidsArg){
   }
   // location mode (2026-07-06 v2): country_location_date_time order —
   // COUNTRY blocks (A-Z, "(no country)" then "(no location)" last),
-  // location sub-blocks inside, newest-first within a location.
+  // location sub-blocks inside, newest-first within a location. A
+  // country-only video (Plan A inferred country, no city) belongs in its
+  // country block under a "(no city)" sub-header, sorted last there.
   const _cKey=v=>{
-    if(!(v.location_name||"")) return "￿￿";   // (no location) last
+    if(!(v.location_name||"") && !(v.country||"")) return "￿￿"; // (no location) last
+    if(!(v.location_name||"")) return v.country;   // country-only → its country
     return (v.country||"") || "￿";                 // (no country) 2nd-last
   };
   const sorted=[...vids];
@@ -1318,8 +1321,9 @@ function renderVideos(vidsArg){
     sorted.sort((a,b)=>{
       const ca=_cKey(a), cb=_cKey(b);
       if(ca!==cb) return ca<cb?-1:1;
-      const c=(a.location_name||"").localeCompare(
-        b.location_name||"",undefined,{sensitivity:"base"});
+      const al=(a.location_name||""), bl=(b.location_name||"");
+      if(!al!==!bl) return al?-1:1;                // "(no city)" last in-country
+      const c=al.localeCompare(bl,undefined,{sensitivity:"base"});
       if(c) return c;
       return (b.created||"").localeCompare(a.created||"");   // newest within
     });
@@ -1331,9 +1335,10 @@ function renderVideos(vidsArg){
   sorted.forEach(v=>{
     let g, subHdr=null;
     if(_vidSort==="loc"){
-      const hasLoc=!!(v.location_name||"");
-      g = !hasLoc ? "(no location)" : ((v.country||"")||"(no country)");
-      subHdr = hasLoc ? v.location_name : null;
+      const hasLoc=!!(v.location_name||""), hasCc=!!(v.country||"");
+      g = (!hasLoc&&!hasCc) ? "(no location)"
+                            : ((v.country||"")||"(no country)");
+      subHdr = hasLoc ? v.location_name : (hasCc ? "(no city)" : null);
     } else {
       g = (v.created||"").slice(0,7)||"(no date)";
     }

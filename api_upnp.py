@@ -472,9 +472,11 @@ def _gw_browse(obj_id: str, browse_flag: str,
                                      cc or "(no country)", len(locs))
                     + CLOSE, 1, 1)
         page  = locs[start:start + count] if count else locs[start:]
+        # '' location = the "(no city)" bucket — country-only videos
+        # (Plan A inferred country, no specific place).
         items = [container(
             "vidcloc:" + _b64e(cc + "\x00" + r["location_name"]), obj_id,
-            r["location_name"], r["count"]) for r in page]
+            r["location_name"] or "(no city)", r["count"]) for r in page]
         return OPEN + "".join(items) + CLOSE, len(items), len(locs)
 
     if obj_id.startswith("vidcloc:"):
@@ -485,7 +487,8 @@ def _gw_browse(obj_id: str, browse_flag: str,
         vids = DB.videos_by_country_location(_VIDEO_UDN, cc, loc)
         if browse_flag == "BrowseMetadata":
             return (OPEN + container(obj_id, "vidcountry-none" if not cc
-                                     else f"vidcountry:{cc}", loc,
+                                     else f"vidcountry:{cc}",
+                                     loc or "(no city)",
                                      len(vids)) + CLOSE, 1, 1)
         page  = vids[start:start + count] if count else vids[start:]
         items = [video_item(v, obj_id) for v in page]

@@ -107,6 +107,49 @@ def build_row(path: Path, rel: str, vid: str, udn: str, base_url: str, st,
     }
 
 
+def apply_location_overrides(db, udn: str) -> int:
+    """Lay `video_location_overrides` rows back onto `videos` (Plan A).
+
+    The scanner derives rows from file metadata, and overridden files have
+    NO GPS — so a force rescan regenerates them bare. Called at the end of
+    every scan_videos pass. Rules:
+      * a row with real GPS (`location` set) is NEVER touched — the
+        override only fills where the file itself is silent;
+      * a constructed title is rebuilt with the override; an embedded
+        title (anything that doesn't match the constructed form) is kept;
+      * idempotent — returns the number of rows actually changed.
+    """
+    changed = 0
+    for ovr in db.video_loc_override_list():
+        v = db.video_by_id(ovr["video_id"])
+        if not v or v.get("udn") != udn:
+            continue
+        if (v.get("location") or "").strip():
+            continue                       # real GPS wins, always
+        new_loc = ovr.get("location_name") or None
+        new_cc = ovr.get("country") or None
+        cur_loc = v.get("location_name") or None
+        cur_cc = v.get("country") or None
+        if (cur_loc, cur_cc) == (new_loc, new_cc):
+            continue
+        ext = os.path.splitext(v.get("file_path") or "")[1]
+        # The title the row would have if constructed from its CURRENT
+        # fields; a match means it's not an embedded title → safe to rebuild.
+        expected = ff.build_display_title(
+            None, v.get("created"), cur_loc, None, ext,
+            country=cur_cc or "")
+        title = v.get("title") or ""
+        if title == expected:
+            title = ff.build_display_title(
+                None, v.get("created"), new_loc, None, ext,
+                country=new_cc or "")
+        db.update_video_location(ovr["video_id"], new_loc, new_cc, title)
+        changed += 1
+    if changed:
+        log.info("video location overrides re-applied: %d row(s)", changed)
+    return changed
+
+
 def scan_videos(root, udn: str, db, base_url: str, *, force: bool = False,
                 poster_dir: str = None, geocode: bool = True,
                 ffprobe: str = None, ffmpeg: str = None) -> dict:
@@ -144,7 +187,9 @@ def scan_videos(root, udn: str, db, base_url: str, *, force: bool = False,
     if batch:
         db.upsert_videos(udn, batch); added += len(batch)
     pruned = db.prune_videos(udn, seen)
-    log.info("video scan %s: %d files, +%d, skip %d, prune %d",
-             root, scanned, added, skipped, pruned)
+    applied = apply_location_overrides(db, udn)
+    log.info("video scan %s: %d files, +%d, skip %d, prune %d, overrides %d",
+             root, scanned, added, skipped, pruned, applied)
     return {"scanned": scanned, "added": added, "skipped": skipped,
-            "pruned": pruned, "missing_root": False}
+            "pruned": pruned, "overrides_applied": applied,
+            "missing_root": False}

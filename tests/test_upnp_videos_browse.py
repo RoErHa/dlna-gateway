@@ -202,6 +202,53 @@ class TestByLocation(_Base):
             self.assertEqual((n_ret, total), (0, 0), oid)
 
 
+class TestNoCityBucket(_Base):
+    """Plan A (2026-07-07): a country-only video (country inferred, no
+    city) lives INSIDE its country block as a "(no city)" bucket — not in
+    the top-level "(no location)" bucket."""
+
+    def setUp(self):
+        super().setUp()
+        with self.db._pool.write() as conn:
+            conn.execute(
+                "INSERT INTO videos (id, udn, url, title, file_path, "
+                "created, location_name, country, added_at) "
+                "VALUES (?,?,?,?,?,?,?,?,1)",
+                ("v9", UDN, "http://h/localfs/video/v9",
+                 "PT_20250702_1100.mov", "/m/v9.mov",
+                 "2025-07-02T11:00:00.000000Z", None, "PT"))
+
+    def test_country_count_includes_country_only(self):
+        xml, n_ret, total = self.browse("vidlocs")
+        # PT block now counts Faro's v7 + country-only v9
+        pt = xml.find('id="vidcountry:PT"')
+        self.assertIn('childCount="2"', xml[pt:pt + 200])
+
+    def test_country_drill_lists_no_city_last(self):
+        xml, n_ret, total = self.browse("vidcountry:PT")
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn(f'id="{_cloc_id("PT", "Faro")}"', xml)
+        self.assertIn(f'id="{_cloc_id("PT", "")}"', xml)
+        self.assertIn("(no city)", xml)
+        self.assertLess(xml.find("Faro"), xml.find("(no city)"))
+
+    def test_no_city_bucket_resolves_to_items(self):
+        xml, n_ret, total = self.browse(_cloc_id("PT", ""))
+        self.assertEqual((n_ret, total), (1, 1))
+        self.assertIn('id="vid:v9"', xml)
+
+    def test_no_city_browse_metadata_titled(self):
+        xml, n_ret, total = self.browse(_cloc_id("PT", ""),
+                                        flag="BrowseMetadata")
+        self.assertEqual(n_ret, 1)
+        self.assertIn("(no city)", xml)
+
+    def test_country_only_absent_from_no_location_bucket(self):
+        xml, n_ret, total = self.browse(_loc_id(""))
+        self.assertEqual((n_ret, total), (2, 2))   # v5 + v6 only
+        self.assertNotIn('id="vid:v9"', xml)
+
+
 class TestMetadataAndPaging(_Base):
     def test_browse_metadata_on_containers(self):
         for oid in ("videos", "viddates", "vidlocs", "vidall",

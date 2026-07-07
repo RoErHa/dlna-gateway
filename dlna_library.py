@@ -399,6 +399,23 @@ class LibraryDB:
                     fetched_at INTEGER NOT NULL,
                     PRIMARY KEY (lat_key, lon_key)
                 );
+
+                -- Inferred/manual locations for GPS-less videos (Plan A,
+                -- 2026-07-07). The scanner derives `videos` rows from file
+                -- metadata and these files have NO GPS, so a force rescan
+                -- would wipe an inferred location — the override is the
+                -- durable copy, re-applied at the end of every video scan
+                -- (dlna_video_index.apply_location_overrides). Keyed by the
+                -- path-stable video id; survives clear_videos like
+                -- album_art / play_counts / lyrics. 'manual' beats any
+                -- 'inferred_*' source. location_name '' = country-only.
+                CREATE TABLE IF NOT EXISTS video_location_overrides (
+                    video_id      TEXT PRIMARY KEY,
+                    location_name TEXT,
+                    country       TEXT,
+                    source        TEXT NOT NULL,
+                    updated_at    INTEGER NOT NULL
+                );
             """)
         # Migrations: add new columns to existing DBs (safe no-ops if present)
         for col_sql in [
@@ -1120,20 +1137,24 @@ class LibraryDB:
 
     def video_countries(self, udn: str) -> list:
         """[{country, count}] A-Z by ISO code; '' (located, country unknown)
-        counts only videos that HAVE a location — GPS-less videos belong to
-        the top-level "(no location)" bucket instead."""
+        counts only located videos. A country-only video (country set,
+        location empty — Plan A inference) counts under its country; videos
+        with NEITHER belong to the top-level "(no location)" bucket."""
         with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT COALESCE(country, '') AS country, COUNT(*) AS count "
                 "FROM videos WHERE udn=? "
-                "AND COALESCE(location_name, '') != '' "
+                "AND (COALESCE(location_name, '') != '' "
+                "     OR COALESCE(country, '') != '') "
                 "GROUP BY COALESCE(country, '') "
                 "ORDER BY (COALESCE(country, '') = ''), country",
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def video_locations_for_country(self, udn: str, country: str) -> list:
-        """One country's locations ('' = located, country unknown), A-Z."""
+        """One country's locations ('' = located, country unknown), A-Z.
+        For a real country a trailing {location_name: '', count} row is the
+        "(no city)" bucket — country-only videos (Plan A inference)."""
         with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT location_name, COUNT(*) AS count FROM videos "
@@ -1142,15 +1163,25 @@ class LibraryDB:
                 "GROUP BY location_name "
                 "ORDER BY location_name COLLATE NOCASE",
                 (udn, country)).fetchall()
-        return [dict(r) for r in rows]
+            out = [dict(r) for r in rows]
+            if country:
+                n = conn.execute(
+                    "SELECT COUNT(*) FROM videos WHERE udn=? AND country=? "
+                    "AND COALESCE(location_name, '')=''",
+                    (udn, country)).fetchone()[0]
+                if n:
+                    out.append({"location_name": "", "count": n})
+        return out
 
     def videos_by_country_location(self, udn: str, country: str,
                                    location_name: str) -> list:
-        """One (country, location)'s videos, newest capture first."""
+        """One (country, location)'s videos, newest capture first.
+        location_name '' = the "(no city)" bucket (matches NULL too)."""
         with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT * FROM videos WHERE udn=? "
-                "AND COALESCE(country, '')=? AND location_name=? "
+                "AND COALESCE(country, '')=? "
+                "AND COALESCE(location_name, '')=? "
                 "ORDER BY created DESC, title COLLATE NOCASE",
                 (udn, country, location_name)).fetchall()
         return [dict(r) for r in rows]
@@ -1160,24 +1191,31 @@ class LibraryDB:
         bucket sorts LAST when present. Un-geocoded videos carry NULL in
         live data ('' in some tests) — COALESCE folds both into one ''
         bucket (a bare `= ''` comparison is NULL for NULL rows, which made
-        the bucket sort FIRST and resolve empty; live bug 2026-07-06)."""
+        the bucket sort FIRST and resolve empty; live bug 2026-07-06).
+        Country-only videos (Plan A inference) live under their country's
+        "(no city)" bucket, so the '' bucket here means NEITHER."""
         with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT COALESCE(location_name, '') AS location_name, "
                 "COUNT(*) AS count FROM videos "
-                "WHERE udn=? GROUP BY COALESCE(location_name, '') "
+                "WHERE udn=? AND NOT (COALESCE(location_name, '')='' "
+                "                     AND COALESCE(country, '') != '') "
+                "GROUP BY COALESCE(location_name, '') "
                 "ORDER BY (COALESCE(location_name, '') = ''), "
                 "location_name COLLATE NOCASE",
                 (udn,)).fetchall()
         return [dict(r) for r in rows]
 
     def videos_by_location(self, udn: str, location_name: str) -> list:
-        """One location's videos (''=no location, matches NULL too),
-        newest capture first."""
+        """One location's videos (''=no location, matches NULL too; excludes
+        country-only videos — those belong to their country's "(no city)"
+        bucket), newest capture first."""
         with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT * FROM videos "
                 "WHERE udn=? AND COALESCE(location_name, '')=? "
+                "AND NOT (COALESCE(location_name, '')='' "
+                "         AND COALESCE(country, '') != '') "
                 "ORDER BY created DESC, title COLLATE NOCASE",
                 (udn, location_name)).fetchall()
         return [dict(r) for r in rows]
@@ -1201,6 +1239,52 @@ class LibraryDB:
             for vid in gone:
                 conn.execute("DELETE FROM videos WHERE id=?", (vid,))
         return len(gone)
+
+    # ── video location overrides (Plan A — inferred/manual locations
+    #    for GPS-less videos; see the table comment in _init_schema) ──
+
+    def video_loc_override_set(self, video_id: str, location_name,
+                               country, source: str) -> bool:
+        """Upsert an override. 'manual' always wins: an inferred write onto
+        an existing manual row is refused (returns False)."""
+        with self._pool.write() as conn:
+            if source != "manual":
+                row = conn.execute(
+                    "SELECT source FROM video_location_overrides "
+                    "WHERE video_id=?", (video_id,)).fetchone()
+                if row and row["source"] == "manual":
+                    return False
+            conn.execute(
+                "INSERT OR REPLACE INTO video_location_overrides "
+                "(video_id, location_name, country, source, updated_at) "
+                "VALUES (?,?,?,?, strftime('%s','now'))",
+                (video_id, location_name or "", country or "", source))
+        return True
+
+    def video_loc_override_remove(self, video_id: str) -> bool:
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                "DELETE FROM video_location_overrides WHERE video_id=?",
+                (video_id,))
+        return cur.rowcount > 0
+
+    def video_loc_override_list(self) -> list:
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM video_location_overrides "
+                "ORDER BY video_id").fetchall()
+        return [dict(r) for r in rows]
+
+    def update_video_location(self, video_id: str, location_name,
+                              country, title: str) -> None:
+        """Write an applied override onto the videos row (location fields +
+        rebuilt title). Caller (dlna_video_index.apply_location_overrides)
+        owns the never-touch-a-real-GPS-row / title rules."""
+        with self._pool.write() as conn:
+            conn.execute(
+                "UPDATE videos SET location_name=?, country=?, title=? "
+                "WHERE id=?",
+                (location_name or None, country or None, title, video_id))
 
     # ── Reverse-geocode cache (V1) ────────────────────────────────
     @staticmethod

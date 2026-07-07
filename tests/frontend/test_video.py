@@ -188,6 +188,32 @@ def test_location_mode_groups_country_then_location(app, gateway):
     assert "A-clip" in rows[0] and "Nowhere" in rows[-1]
 
 
+def test_location_mode_country_only_gets_no_city_subgroup(app, gateway):
+    """Plan A (2026-07-07): a country-only video (inferred country, no
+    city) groups under its COUNTRY block with a "(no city)" sub-header
+    sorted last — not under "(no location)"."""
+    gateway.videos = [
+        _vid("v1", "F-clip", location_name="Faro", country="PT",
+             created="2026-03-01T08:00:00Z"),
+        _vid("v2", "PT-only", location_name="", country="PT",
+             created="2026-06-01T08:00:00Z"),
+        _vid("v3", "Nowhere", location_name="", country="",
+             created="2026-04-01T08:00:00Z"),
+    ]
+    _open_videos(app)
+    app.locator("#video-sort-loc").click()
+    app.wait_for_function(
+        "document.querySelectorAll('.video-group').length === 2",
+        timeout=2000)
+    groups = app.locator(".video-group").all_inner_texts()
+    assert groups == ["PT", "(no location)"], groups
+    subs = app.locator(".video-subgroup").all_inner_texts()
+    assert subs == ["Faro", "(no city)"], subs
+    rows = app.locator(".video-row").all_inner_texts()
+    assert "F-clip" in rows[0] and "PT-only" in rows[1], rows
+    assert "Nowhere" in rows[2], rows
+
+
 def test_sort_toggle_back_to_date(app, gateway):
     gateway.videos = [
         _vid("v1", "One", location_name="Utrecht", country="NL",
