@@ -419,7 +419,7 @@ async def art(url: str = ""):
 _VIDEO_UDN = "uuid:localfs-movies"
 
 
-def _video_payload(v: dict) -> dict:
+def _video_payload(v: dict, people=None) -> dict:
     return {
         "id": v["id"], "title": v.get("title"), "folder": v.get("folder"),
         "duration": v.get("duration"), "width": v.get("width"),
@@ -428,6 +428,7 @@ def _video_payload(v: dict) -> dict:
         "mime": v.get("mime"), "created": v.get("created"),
         "location_name": v.get("location_name"),
         "country": v.get("country"),
+        "people": list(people or []),          # Immich person tags (Plan B)
         "playUrl": f"/video/{v['id']}",
         "transcodeUrl": f"/video_transcode/{v['id']}",
         "hlsUrl": f"/video_hls/{v['id']}/index.m3u8",
@@ -438,7 +439,8 @@ def _video_payload(v: dict) -> dict:
 @app.get("/api/videos")
 async def videos() -> list:
     rows = await run_in_threadpool(DB.all_videos, _VIDEO_UDN)
-    return [_video_payload(v) for v in rows]
+    people = await run_in_threadpool(DB.video_people_map, _VIDEO_UDN)
+    return [_video_payload(v, people.get(v["id"])) for v in rows]
 
 
 @app.get("/api/video_meta")
@@ -446,7 +448,8 @@ async def video_meta(id: str = ""):
     v = await run_in_threadpool(DB.video_by_id, id) if id else None
     if not v:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return _video_payload(v)
+    people = await run_in_threadpool(DB.video_people_map, _VIDEO_UDN)
+    return _video_payload(v, people.get(v["id"]))
 
 
 @app.get("/video/{vid}", include_in_schema=False)

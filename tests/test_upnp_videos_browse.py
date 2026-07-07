@@ -249,6 +249,59 @@ class TestNoCityBucket(_Base):
         self.assertNotIn('id="vid:v9"', xml)
 
 
+class TestByPerson(_Base):
+    """Plan B (2026-07-07): Immich person tags (video_people, synced by
+    tools/immich_people_sync.py) surface as a "👤 By person" container —
+    present only when persons exist (TestVideosRoot proves the 3-child
+    root when there are none)."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.video_people_replace("Anna", "p-1", ["v1", "v3"])
+        self.db.video_people_replace("Bob", "p-2", ["v3"])
+
+    def _person_id(self, name):
+        return ("vidperson:" +
+                base64.urlsafe_b64encode(name.encode()).decode().rstrip("="))
+
+    def test_videos_root_gains_people_container(self):
+        xml, n_ret, total = self.browse("videos")
+        self.assertEqual((n_ret, total), (4, 4))
+        self.assertIn('id="vidpeople"', xml)
+        self.assertIn("By person", xml)
+        # between "By location" and the flat list
+        self.assertLess(xml.find('id="vidlocs"'), xml.find('id="vidpeople"'))
+        self.assertLess(xml.find('id="vidpeople"'), xml.find('id="vidall"'))
+
+    def test_vidpeople_lists_persons_with_counts(self):
+        xml, n_ret, total = self.browse("vidpeople")
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertIn(f'id="{self._person_id("Anna")}"', xml)
+        self.assertIn(f'id="{self._person_id("Bob")}"', xml)
+        anna = xml.find(f'id="{self._person_id("Anna")}"')
+        self.assertIn('childCount="2"', xml[anna:anna + 200])
+        self.assertLess(xml.find("Anna"), xml.find("Bob"))   # A-Z
+
+    def test_person_resolves_items_newest_first(self):
+        xml, n_ret, total = self.browse(self._person_id("Anna"))
+        self.assertEqual((n_ret, total), (2, 2))
+        self.assertLess(xml.find('id="vid:v1"'), xml.find('id="vid:v3"'))
+
+    def test_person_browse_metadata(self):
+        xml, n_ret, total = self.browse(self._person_id("Bob"),
+                                        flag="BrowseMetadata")
+        self.assertEqual(n_ret, 1)
+        self.assertIn("Bob", xml)
+
+    def test_garbled_person_id_empty_not_500(self):
+        xml, n_ret, total = self.browse("vidperson:!!!garbage!!!")
+        self.assertEqual((n_ret, total), (0, 0))
+
+    def test_unknown_person_empty(self):
+        xml, n_ret, total = self.browse(self._person_id("Nobody"))
+        self.assertEqual((n_ret, total), (0, 0))
+
+
 class TestMetadataAndPaging(_Base):
     def test_browse_metadata_on_containers(self):
         for oid in ("videos", "viddates", "vidlocs", "vidall",

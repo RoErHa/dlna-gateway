@@ -214,6 +214,49 @@ def test_location_mode_country_only_gets_no_city_subgroup(app, gateway):
     assert "Nowhere" in rows[2], rows
 
 
+def test_people_sort_groups_by_person(app, gateway):
+    """Plan B: the 👤 People sort groups by Immich person (A-Z), a video
+    with two people appears under both, person-less clips land in a
+    "(no people)" group last."""
+    gateway.videos = [
+        _vid("v1", "Both", people=["Anna", "Bob"],
+             created="2026-06-01T08:00:00Z"),
+        _vid("v2", "Solo", people=["Anna"],
+             created="2026-06-02T08:00:00Z"),
+        _vid("v3", "Empty", people=[],
+             created="2026-06-03T08:00:00Z"),
+    ]
+    _open_videos(app)
+    app.locator("#video-sort-people").click()
+    app.wait_for_function(
+        "document.querySelectorAll('.video-group').length === 3",
+        timeout=2000)
+    groups = app.locator(".video-group").all_inner_texts()
+    assert groups == ["Anna", "Bob", "(no people)"], groups
+    rows = app.locator(".video-row").all_inner_texts()
+    assert len(rows) == 4, rows                     # v1 twice (Anna + Bob)
+    assert "Solo" in rows[0] and "Both" in rows[1], rows   # newest first
+    assert "Both" in rows[2] and "Empty" in rows[3], rows
+
+
+def test_people_button_hidden_without_people(app, gateway):
+    gateway.videos = [_vid("v1", "Clip", people=[])]
+    _open_videos(app)
+    assert app.locator("#video-sort-people").is_hidden()
+
+
+def test_video_search_matches_person(app, gateway):
+    gateway.videos = [
+        _vid("v1", "Clip One", people=["Anna"]),
+        _vid("v2", "Clip Two", people=["Bob"]),
+    ]
+    _open_videos(app)
+    app.fill("#video-search", "anna")
+    app.wait_for_function(
+        "document.querySelectorAll('.video-row').length === 1", timeout=2000)
+    assert "Clip One" in app.locator("#video-list").inner_text()
+
+
 def test_sort_toggle_back_to_date(app, gateway):
     gateway.videos = [
         _vid("v1", "One", location_name="Utrecht", country="NL",

@@ -416,6 +416,21 @@ class LibraryDB:
                     source        TEXT NOT NULL,
                     updated_at    INTEGER NOT NULL
                 );
+
+                -- Persons recognised by Immich (Plan B, 2026-07-07),
+                -- synced from its REST API by tools/immich_people_sync.py
+                -- (Immich keeps face data in ITS Postgres, never in the
+                -- files — checksum-matched to our videos). person_id =
+                -- the Immich person uuid. Survives clear_videos like
+                -- video_location_overrides; keyed by the path-stable
+                -- video id.
+                CREATE TABLE IF NOT EXISTS video_people (
+                    video_id   TEXT NOT NULL,
+                    person     TEXT NOT NULL,
+                    person_id  TEXT NOT NULL DEFAULT '',
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (video_id, person)
+                );
             """)
         # Migrations: add new columns to existing DBs (safe no-ops if present)
         for col_sql in [
@@ -1285,6 +1300,62 @@ class LibraryDB:
                 "UPDATE videos SET location_name=?, country=?, title=? "
                 "WHERE id=?",
                 (location_name or None, country or None, title, video_id))
+
+    # ── video people (Plan B — Immich person sync; see the table
+    #    comment in _init_schema) ────────────────────────────────────
+
+    def video_people_replace(self, person: str, person_id: str,
+                             video_ids) -> int:
+        """SYNC semantics: replace this person's whole row set (a re-sync
+        drops videos Immich no longer lists). Returns rows inserted."""
+        ids = list(video_ids)
+        with self._pool.write() as conn:
+            conn.execute("DELETE FROM video_people WHERE person=?",
+                         (person,))
+            for vid in ids:
+                conn.execute(
+                    "INSERT OR REPLACE INTO video_people "
+                    "(video_id, person, person_id, updated_at) "
+                    "VALUES (?,?,?, strftime('%s','now'))",
+                    (vid, person, person_id or ""))
+        return len(ids)
+
+    def video_people_list(self, udn: str) -> list:
+        """[{person, count}] A-Z — only counting videos that exist for
+        the udn (a stale person→video link is invisible, not an error)."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT p.person AS person, COUNT(*) AS count "
+                "FROM video_people p JOIN videos v ON v.id = p.video_id "
+                "WHERE v.udn=? GROUP BY p.person "
+                "ORDER BY p.person COLLATE NOCASE", (udn,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def videos_by_person(self, udn: str, person: str) -> list:
+        """One person's videos, newest capture first."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT v.* FROM videos v "
+                "JOIN video_people p ON p.video_id = v.id "
+                "WHERE v.udn=? AND p.person=? "
+                "ORDER BY v.created DESC, v.title COLLATE NOCASE",
+                (udn, person)).fetchall()
+        return [dict(r) for r in rows]
+
+    def video_people_map(self, udn: str) -> dict:
+        """{video_id: [person, …]} (A-Z within a video) — one query for
+        the PWA's /api/videos payload."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT p.video_id AS video_id, p.person AS person "
+                "FROM video_people p JOIN videos v ON v.id = p.video_id "
+                "WHERE v.udn=? "
+                "ORDER BY p.video_id, p.person COLLATE NOCASE",
+                (udn,)).fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault(r["video_id"], []).append(r["person"])
+        return out
 
     # ── Reverse-geocode cache (V1) ────────────────────────────────
     @staticmethod

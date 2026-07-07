@@ -1253,9 +1253,13 @@ function _setVidSortUI(){
            +"border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-weight:600";
   const off="background:transparent;color:var(--ink-dim);border:1px solid var(--border);"
            +"border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer";
-  const d=$("video-sort-date"), l=$("video-sort-loc");
+  const d=$("video-sort-date"), l=$("video-sort-loc"), p=$("video-sort-people");
   if(d) d.style.cssText=_vidSort==="date"?on:off;
   if(l) l.style.cssText=_vidSort==="loc"?on:off;
+  // 👤 only lights up when the Immich people sync has tagged something
+  const havePeople=(_vidsAll||[]).some(v=>(v.people||[]).length);
+  if(p) p.style.cssText=(_vidSort==="people"?on:off)
+                        +(havePeople?"":";display:none");
 }
 
 async function showVideos(){
@@ -1272,6 +1276,7 @@ async function showVideos(){
                      border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px">
        <button id="video-sort-date">📅 Date</button>
        <button id="video-sort-loc">📍 Location</button>
+       <button id="video-sort-people" style="display:none">👤 People</button>
      </div>
      <div id="video-list" style="padding:6px"></div>`;
   _vidSort="date"; _vidQuery="";
@@ -1283,6 +1288,9 @@ async function showVideos(){
   });
   $("video-sort-loc").addEventListener("click",()=>{
     _vidSort="loc"; _setVidSortUI(); renderVideos();
+  });
+  $("video-sort-people").addEventListener("click",()=>{
+    _vidSort="people"; _setVidSortUI(); renderVideos();
   });
   _setVidSortUI();
   let vids=[];
@@ -1300,8 +1308,10 @@ function renderVideos(vidsArg){
     vids=vids.filter(v=>
       (v.title||"").toLowerCase().includes(_vidQuery)||
       (v.location_name||"").toLowerCase().includes(_vidQuery)||
-      (v.folder||"").toLowerCase().includes(_vidQuery));
+      (v.folder||"").toLowerCase().includes(_vidQuery)||
+      (v.people||[]).join(" ").toLowerCase().includes(_vidQuery));
   }
+  _setVidSortUI();   // 👤 visibility depends on the loaded videos
   if(!vids||!vids.length){
     box.innerHTML=`<div class="msg" style="padding:16px">No videos found.</div>`;
     return;
@@ -1316,8 +1326,26 @@ function renderVideos(vidsArg){
     if(!(v.location_name||"")) return v.country;   // country-only → its country
     return (v.country||"") || "￿";                 // (no country) 2nd-last
   };
-  const sorted=[...vids];
-  if(_vidSort==="loc"){
+  // people mode (Plan B): one entry PER (video, person) — a clip with two
+  // people appears under both; person-less clips in "(no people)" last.
+  let sorted=[...vids];
+  if(_vidSort==="people"){
+    const ex=[];
+    vids.forEach(v=>{
+      const ps=(v.people&&v.people.length)?v.people:[null];
+      ps.forEach(p=>ex.push({...v,_pgroup:p}));
+    });
+    ex.sort((a,b)=>{
+      if(a._pgroup!==b._pgroup){
+        if(a._pgroup===null) return 1;
+        if(b._pgroup===null) return -1;
+        const c=a._pgroup.localeCompare(b._pgroup,undefined,{sensitivity:"base"});
+        if(c) return c;
+      }
+      return (b.created||"").localeCompare(a.created||"");   // newest within
+    });
+    sorted=ex;
+  } else if(_vidSort==="loc"){
     sorted.sort((a,b)=>{
       const ca=_cKey(a), cb=_cKey(b);
       if(ca!==cb) return ca<cb?-1:1;
@@ -1334,7 +1362,9 @@ function renderVideos(vidsArg){
   let lastGroup=null, lastSub=null;
   sorted.forEach(v=>{
     let g, subHdr=null;
-    if(_vidSort==="loc"){
+    if(_vidSort==="people"){
+      g = v._pgroup===null ? "(no people)" : v._pgroup;
+    } else if(_vidSort==="loc"){
       const hasLoc=!!(v.location_name||""), hasCc=!!(v.country||"");
       g = (!hasLoc&&!hasCc) ? "(no location)"
                             : ((v.country||"")||"(no country)");

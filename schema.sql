@@ -164,5 +164,12 @@ CREATE TABLE video_location_overrides (
                     source        TEXT NOT NULL,
                     updated_at    INTEGER NOT NULL
                 );
+CREATE TABLE video_people (
+                    video_id   TEXT NOT NULL,
+                    person     TEXT NOT NULL,
+                    person_id  TEXT NOT NULL DEFAULT '',
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (video_id, person)
+                );
 CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url);
 CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key);
