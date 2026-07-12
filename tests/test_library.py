@@ -282,5 +282,135 @@ class TestUpsertMetadataRefresh(unittest.TestCase):
         self.assertEqual(self.db.track_count(self.udn), 2)
 
 
+class TestAlbumKeyUniqueMigration(unittest.TestCase):
+    """_migrate_widen_unique_album_key — the 2026-07-12 completeness fix:
+    two DISTINCT files in different folders with identical tags must both
+    get a tracks row (old wide UNIQUE swallowed the second)."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    OLD_SCHEMA = """
+        CREATE TABLE tracks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            udn         TEXT NOT NULL,
+            obj_id      TEXT,
+            url         TEXT NOT NULL,
+            title       TEXT,
+            artist      TEXT,
+            album       TEXT,
+            duration    TEXT,
+            art         TEXT,
+            mime        TEXT,
+            genre       TEXT DEFAULT '',
+            file_path   TEXT DEFAULT '',
+            bit_depth   INTEGER,
+            sample_rate INTEGER,
+            year        INTEGER,
+            album_key   TEXT DEFAULT '',
+            UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+        );
+        CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url);
+    """
+
+    def _make_old_db(self, n_rows=3):
+        import sqlite3 as s3
+        conn = s3.connect(self._path)
+        conn.executescript(self.OLD_SCHEMA)
+        for i in range(n_rows):
+            conn.execute(
+                "INSERT INTO tracks (udn, obj_id, url, title, artist, album,"
+                " album_key) VALUES (?,?,?,?,?,?,?)",
+                ("uuid:localfs-x", f"o{i}", f"http://x/{i}", f"T{i}", "A",
+                 "Al", f"folder{i}"))
+        conn.commit()
+        conn.close()
+
+    def _tracks_sql(self, db):
+        with db._pool.read() as c:
+            return c.execute("SELECT sql FROM sqlite_master WHERE "
+                             "type='table' AND name='tracks'").fetchone()[0]
+
+    def test_migration_widens_unique_and_preserves_rows(self):
+        self._make_old_db(3)
+        db = LibraryDB(db_file=self._path)
+        sql = self._tracks_sql(db)
+        self.assertIn("album_key", sql[sql.index("UNIQUE"):])
+        self.assertEqual(db.track_count("uuid:localfs-x"), 3)
+        with db._pool.read() as c:
+            triggers = {r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'")}
+            indexes = {r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='tracks'")}
+        self.assertLessEqual({"tracks_ai", "tracks_ad", "tracks_au"}, triggers)
+        self.assertLessEqual({"idx_tracks_udn_url", "idx_tracks_udn_album_key"},
+                             indexes)
+
+    def test_migration_is_idempotent(self):
+        self._make_old_db(2)
+        LibraryDB(db_file=self._path)
+        db2 = LibraryDB(db_file=self._path)   # second init: no-op
+        self.assertEqual(db2.track_count("uuid:localfs-x"), 2)
+
+    def test_same_tags_different_folder_coexist_after_migration(self):
+        """The audit case: identical (artist, album, title, bd, sr) in two
+        folders — deluxe vs standard edition — both rows survive."""
+        self._make_old_db(0)
+        db = LibraryDB(db_file=self._path)
+        rows = [
+            {"id": "a1", "url": "http://x/a1", "title": "Gravity Eyelids",
+             "artist": "Porcupine Tree", "album": "In Absentia",
+             "bit_depth": 24, "sample_rate": 44100,
+             "album_key": "PT/In Absentia (Remastered)"},
+            {"id": "a2", "url": "http://x/a2", "title": "Gravity Eyelids",
+             "artist": "Porcupine Tree", "album": "In Absentia",
+             "bit_depth": 24, "sample_rate": 44100,
+             "album_key": "PT/In Absentia (Deluxe - Remastered)"},
+        ]
+        db.upsert_tracks("uuid:localfs-x", rows)
+        self.assertEqual(db.track_count("uuid:localfs-x"), 2)
+
+    def test_same_tags_same_folder_still_collide(self):
+        self._make_old_db(0)
+        db = LibraryDB(db_file=self._path)
+        rows = [
+            {"id": "b1", "url": "http://x/b1", "title": "Song",
+             "artist": "A", "album": "Al", "bit_depth": 16,
+             "sample_rate": 44100, "album_key": "A/Al"},
+            {"id": "b2", "url": "http://x/b2", "title": "Song",
+             "artist": "A", "album": "Al", "bit_depth": 16,
+             "sample_rate": 44100, "album_key": "A/Al"},
+        ]
+        db.upsert_tracks("uuid:localfs-x", rows)
+        self.assertEqual(db.track_count("uuid:localfs-x"), 1)
+
+    def test_upnp_empty_album_key_semantics_unchanged(self):
+        """UPnP rows have album_key='' — same-tag same-quality rows still
+        collide exactly as before the widening. (AssetUPnP-style URLs so
+        bit_depth/sample_rate parse; NULL bd/sr rows never collided even
+        pre-widening — NULLs are distinct in UNIQUE.)"""
+        self._make_old_db(0)
+        db = LibraryDB(db_file=self._path)
+        rows = [
+            {"id": "c1", "url": "http://u:26125/c2/b16/f44100/d-1-coA.flac",
+             "title": "Song", "artist": "A", "album": "Al"},
+            {"id": "c2", "url": "http://u:26125/c2/b16/f44100/d-2-coB.flac",
+             "title": "Song", "artist": "A", "album": "Al"},
+        ]
+        db.upsert_tracks("uuid:upnp-server", rows)
+        self.assertEqual(db.track_count("uuid:upnp-server"), 1)
+
+    def test_fts_search_works_after_migration(self):
+        self._make_old_db(3)
+        db = LibraryDB(db_file=self._path)
+        hits = db.search("uuid:localfs-x", "T1")
+        self.assertEqual(len(hits["tracks"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

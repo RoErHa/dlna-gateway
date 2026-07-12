@@ -184,6 +184,11 @@ class LibraryDB:
                 -- in the URL, both columns stay NULL; SQLite treats NULLs
                 -- as distinct in UNIQUE, so such tracks don't collide
                 -- with each other either.
+                -- album_key (the LocalFs FOLDER identity) joined the UNIQUE
+                -- 2026-07-12: two DISTINCT files in different folders with
+                -- identical tags (duplicate editions, scene comps sharing
+                -- tag tuples) are both real and both indexable. UPnP rows
+                -- keep album_key='' so their dedup semantics are unchanged.
                 CREATE TABLE IF NOT EXISTS tracks (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     udn         TEXT NOT NULL,
@@ -200,7 +205,8 @@ class LibraryDB:
                     bit_depth   INTEGER,
                     sample_rate INTEGER,
                     year        INTEGER,    -- file-tag year (DIDL-Lite dc:date)
-                    UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+                    album_key   TEXT DEFAULT '',
+                    UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
                 );
                 -- Genre migration: add column if upgrading from older schema
                 
@@ -510,6 +516,11 @@ class LibraryDB:
         # ids and raw metadata).
         with self._pool.write() as conn:
             self._migrate_unique_url(conn)
+        # 2026-07-12: widen the tracks UNIQUE with album_key so distinct
+        # files in different folders with identical tags coexist (the
+        # completeness-audit fix). Table rebuild; drops all FTS triggers.
+        with self._pool.write() as conn:
+            self._migrate_widen_unique_album_key(conn)
         # 2026-07-12: AFTER UPDATE FTS sync trigger. Must run AFTER the
         # table-rebuild migrations above (they only recreate ai/ad; on a
         # legacy DB the trigger doesn't exist yet when they run).
@@ -755,6 +766,114 @@ class LibraryDB:
                     END
             """)
             conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
+
+    _TRACK_COLS = ("id, udn, obj_id, url, title, artist, album, duration, "
+                   "art, mime, genre, file_path, bit_depth, sample_rate, "
+                   "year, album_key")
+
+    def _migrate_widen_unique_album_key(self, conn: sqlite3.Connection):
+        """2026-07-12: widen the tracks UNIQUE to include `album_key`.
+
+        The 2026-07-12 completeness audit found 236 on-disk files with NO
+        tracks row: the old UNIQUE(udn, artist, album, title, bit_depth,
+        sample_rate) swallowed any file whose tag tuple collided with a
+        file in ANOTHER folder — duplicate-edition folders (deluxe vs
+        standard) and scene compilations sharing tag tuples. Those are
+        genuinely distinct files; for LocalFs every physical file deserves
+        a row (per-file URL uniqueness is idx_tracks_udn_url's job, and
+        browse-level dupe hiding is _dedup_clause's job — the UNIQUE was
+        doing display work at the wrong layer). Adding the FOLDER identity
+        to the UNIQUE admits them; UPnP rows carry album_key='' so their
+        collision semantics are byte-identical to before.
+
+        Table-rebuild migration, same shape as _migrate_widen_tracks_unique.
+        Detects by inspecting the UNIQUE clause in sqlite_master (the
+        album_key COLUMN exists on old DBs — only the constraint changes).
+        Recreates idx_tracks_udn_url + idx_tracks_udn_album_key (dropped
+        with the old table) and the ai/ad triggers; tracks_au is left to
+        _migrate_fts_update_trigger, which runs right after and does the
+        FTS rebuild on (re)creating it."""
+        sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='tracks'").fetchone()
+        if not sql_row:
+            return
+        m = re.search(r"UNIQUE\s*\(([^)]*)\)", sql_row[0] or "")
+        if m and "album_key" in m.group(1):
+            return  # already widened (or fresh DB)
+
+        n_old = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+        log.info(f"DB migration: widening tracks UNIQUE with album_key; "
+                 f"rebuilding {n_old:,} row(s)")
+
+        conn.execute("DROP TRIGGER IF EXISTS tracks_ai")
+        conn.execute("DROP TRIGGER IF EXISTS tracks_ad")
+        conn.execute("DROP TRIGGER IF EXISTS tracks_au")
+        conn.execute("ALTER TABLE tracks RENAME TO _tracks_pre_akwiden")
+        conn.execute("""
+            CREATE TABLE tracks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                udn         TEXT NOT NULL,
+                obj_id      TEXT,
+                url         TEXT NOT NULL,
+                title       TEXT,
+                artist      TEXT,
+                album       TEXT,
+                duration    TEXT,
+                art         TEXT,
+                mime        TEXT,
+                genre       TEXT DEFAULT '',
+                file_path   TEXT DEFAULT '',
+                bit_depth   INTEGER,
+                sample_rate INTEGER,
+                year        INTEGER,
+                album_key   TEXT DEFAULT '',
+                UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
+            )
+        """)
+        # Column list built against what the OLD table actually has: a DB
+        # that just went through _migrate_widen_tracks_unique in this same
+        # boot is missing `year` (that rebuild predates the column and
+        # drops it; the ALTER loop re-adds it only on the NEXT boot).
+        old_cols = {r[1] for r in
+                    conn.execute("PRAGMA table_info(_tracks_pre_akwiden)")}
+        # album_key backfills as '' (NULLs are DISTINCT in UNIQUE — a NULL
+        # would exempt those rows from collision checks entirely).
+        select_cols = ", ".join(
+            c if c in old_cols
+            else ("'' AS album_key" if c == "album_key" else f"NULL AS {c}")
+            for c in self._TRACK_COLS.split(", "))
+        conn.execute(
+            f"INSERT OR IGNORE INTO tracks ({self._TRACK_COLS}) "
+            f"SELECT {select_cols} FROM _tracks_pre_akwiden")
+        conn.execute("DROP TABLE _tracks_pre_akwiden")
+        # Indexes were attached to the renamed table — recreate both.
+        # (_migrate_unique_url already no-opped this boot on seeing the old
+        # index, and the album_key index's IF NOT EXISTS runs later; doing
+        # them here keeps this migration self-contained.)
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url)")
+        conn.execute(
+            "CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key)")
+        conn.execute("""
+            CREATE TRIGGER tracks_ai
+                AFTER INSERT ON tracks BEGIN
+                    INSERT INTO tracks_fts(rowid, title, artist, album)
+                    VALUES (new.id, new.title, new.artist, new.album);
+                END
+        """)
+        conn.execute("""
+            CREATE TRIGGER tracks_ad
+                AFTER DELETE ON tracks BEGIN
+                    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                    VALUES ('delete', old.id, old.title, old.artist, old.album);
+                END
+        """)
+        conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
+
+        n_new = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+        log.info(f"DB migration: tracks UNIQUE widened with album_key — "
+                 f"{n_old:,} → {n_new:,} rows, FTS5 rebuilt")
 
     def _migrate_fts_update_trigger(self, conn: sqlite3.Connection):
         """2026-07-12: add `tracks_au`, the AFTER UPDATE FTS sync trigger.
