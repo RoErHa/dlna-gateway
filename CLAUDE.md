@@ -240,6 +240,12 @@ These are shared state across all request handler threads:
 
 - `dlna_discovery.SERVERS` / `RENDERERS` — device registries
 - `dlna_library.DB` / `INDEXER` / `DEVICE_ROLES` — library DB, crawler, device role cache
+  ⚠ `DB = LibraryDB()` is constructed at MODULE IMPORT — merely importing
+  `dlna_library` (tests, tools, a REPL in the repo dir) runs `_init_schema`
+  and ALL pending migrations against the real `library.db`, even while the
+  gateway is live. Safe by design (idempotent migrations, WAL, per-call
+  pool connections) but surprising: a new migration "lands" on the live DB
+  the first time any test imports the module, not at the next restart.
 - `dlna_player.QUEUES` — `QueueRegistry` holding one `RendererQueue` per renderer UDN (lazily created). Replaces the prior single-queue singleton so multiple users/renderers can play concurrently.
 
 ### Database Schema
@@ -253,8 +259,13 @@ fails the suite if it's stale (`tools/regen_schema.py --check` is the
 same gate).
 
 ```
-tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate, year)
-  UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate, year, album_key)
+  UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
+  -- album_key joined the UNIQUE 2026-07-12 (_migrate_widen_unique_album_key):
+  -- two DISTINCT files in different FOLDERS with identical tags (duplicate
+  -- editions, scene comps) both index; UPnP rows keep album_key='' so their
+  -- collision semantics are unchanged. Same-folder same-tag files still
+  -- collide (true tag ambiguities — fix by retagging).
   UNIQUE(udn, url) via idx_tracks_udn_url  -- created by _migrate_unique_url
   bit_depth + sample_rate are parsed from the URL at index time
   (AssetUPnP pattern /b<N>/f<MMMMM>/). They participate in UNIQUE so a
@@ -720,14 +731,18 @@ proven seam — see Open questions below.
 **Library-completeness audit (2026-07-12).** LocalFs serves the same
 music root AssetUPnP did, so file-level completeness is disk vs index:
 26,129 audio files on disk, 25,893 tracks rows → **236 files invisible**
-to the gateway, all swallowed by the wide UNIQUE(udn,artist,album,title,
-bit_depth,sample_rate) at insert time. Of those, 140 have a same-basename
-duplicate indexed from another folder (deluxe-vs-standard edition
-folders — the music is reachable, but the losing folder-album browses
-incomplete) and 96 are DISTINCT files with colliding tags (mostly VA
-"Hi-Res Masters" comps sharing tag tuples, plus untagged junk like
-"18 Track.flac"); fix by beets-retagging those folders — a plain rescan
-now picks retags up. The bigger find: **10,859 of 10,890 manual
+to the gateway, all swallowed by the wide UNIQUE at insert time (140
+duplicate-edition copies in sibling folders + 96 distinct files with
+colliding tags). **RESOLVED same day** by widening the UNIQUE with
+`album_key` (`_migrate_widen_unique_album_key` — a beets-retag attempt
+failed first: chroma fingerprints rate-limited to 0 candidates AND the
+non-standard editions / off-MB scene comps never reach quiet-mode's
+strong-match bar). Post-migration force rescan: 25,893 → 26,051 rows.
+The remaining **78** unindexed files are SAME-folder same-tag collisions
+(alternate takes tagged identically, disc-subfolder folding putting two
+"Jamming"s in one album_key, untagged "NN Track.flac" junk) — genuine
+tag ambiguities; fix by real retagging (interactive `beets --timid`
+session) if ever worth it. The bigger find: **10,859 of 10,890 manual
 `metadata_overrides` are ORPHANED** — 10,810 still key on dead AssetUPnP
 `:26125` URLs (the ~10k `improve_song_years` year corrections + user
 edits) and 49 on the old `:8201` LocalFs port, so the original-year

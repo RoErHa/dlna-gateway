@@ -13,8 +13,9 @@ CREATE TABLE tracks (
                     file_path   TEXT DEFAULT '',
                     bit_depth   INTEGER,
                     sample_rate INTEGER,
-                    year        INTEGER, album_key TEXT DEFAULT '',    -- file-tag year (DIDL-Lite dc:date)
-                    UNIQUE(udn, artist, album, title, bit_depth, sample_rate)
+                    year        INTEGER,    -- file-tag year (DIDL-Lite dc:date)
+                    album_key   TEXT DEFAULT '',
+                    UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
                 );
 CREATE TABLE sqlite_sequence(name,seq);
 CREATE TABLE metadata_overrides (
