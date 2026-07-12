@@ -5,8 +5,8 @@ const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalid
 // GET endpoints that return STABLE browse data (change only on re-index /
 // metadata edits). Cached stale-while-revalidate so repeat navigation is
 // instant over a slow link. Everything NOT listed — /api/state, /servers,
-// /renderers, /index/status, /acoustid/status, /album_favourites (user-
-// mutated), /track_meta, /radio/* — stays network-only (always fresh).
+// /renderers, /index/status, /album_favourites (user-mutated),
+// /track_meta, /radio/* — stays network-only (always fresh).
 const CACHEABLE_API = [
   '/api/browse_letter', '/api/album_tracks', '/api/artist_albums',
   '/api/artist_tracks', '/api/albums', '/api/search', '/api/genres',

@@ -287,7 +287,9 @@ tracks_fts — FTS5 virtual table over (title, artist, album)
 metadata_overrides(url, artist, album, title, genre, year, updated_at, source)
   source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
   year is the MUSICBRAINZ original release year (release-group's
-  first-release-date), captured by AcoustIDFetcher.
+  first-release-date) — captured historically by the AcoustID worker
+  (removed in 2.0); nowadays written by tools/improve_song_years.py /
+  correct_year_drift.py as source='manual'.
 index_meta(udn, indexed_at)
 playlists(id, name, created_at, sort_order)
 playlist_tracks(id, pl_id, url, title, artist, album, duration, art, added_at)
@@ -371,7 +373,7 @@ etc.).
 over a slow tailnet; the background fetch still refreshes the entry (and
 still hits the gateway, so request-assertion tests pass). Everything NOT
 on the allowlist — `/api/state`, `/servers`, `/renderers`, `/index/status`,
-`/acoustid/status`, `/album_favourites` (user-mutated), `/track_meta`,
+`/album_favourites` (user-mutated), `/track_meta`,
 `/radio/*`, `/stream`, POSTs — stays **network-only** so live/mutable data
 is never stale. Bump `API_CACHE`'s version to force-evict if its shape
 changes. Measured server cost that this hides: the folder-grouped
@@ -711,20 +713,34 @@ What shipped:
 - **P5–P6** — ran live alongside AssetUPnP, then decommissioned it;
   playlists/favourites relinked to LocalFs.
 
-Post-migration follow-ups (tracked in project memory, not here): library
-completeness (LocalFs is a SUBSET of what AssetUPnP served — the playlist
-relink lost ~38%), split-folder tidiness (optional), and the non-AssetUPnP
-providers (Plex/Jellyfin) as weekend projects on the proven seam — see
-Open questions below.
+Post-migration follow-ups: split-folder tidiness (optional) and the
+non-AssetUPnP providers (Plex/Jellyfin) as weekend projects on the
+proven seam — see Open questions below.
+
+**Library-completeness audit (2026-07-12).** LocalFs serves the same
+music root AssetUPnP did, so file-level completeness is disk vs index:
+26,129 audio files on disk, 25,893 tracks rows → **236 files invisible**
+to the gateway, all swallowed by the wide UNIQUE(udn,artist,album,title,
+bit_depth,sample_rate) at insert time. Of those, 140 have a same-basename
+duplicate indexed from another folder (deluxe-vs-standard edition
+folders — the music is reachable, but the losing folder-album browses
+incomplete) and 96 are DISTINCT files with colliding tags (mostly VA
+"Hi-Res Masters" comps sharing tag tuples, plus untagged junk like
+"18 Track.flac"); fix by beets-retagging those folders — a plain rescan
+now picks retags up. The bigger find: **10,859 of 10,890 manual
+`metadata_overrides` are ORPHANED** — 10,810 still key on dead AssetUPnP
+`:26125` URLs (the ~10k `improve_song_years` year corrections + user
+edits) and 49 on the old `:8201` LocalFs port, so the original-year
+display has been inert since the decommission. By normalized
+(artist,title): 4,596 relink uniquely, 3,100 multi-match, 3,114 have no
+LocalFs match; 5,895 would actually change a displayed year. A relink
+tool (same pattern as `relink_playlists_to_localfs.py`) would recover
+most of it. The 2026-05-31 playlist-relink casualties (744 removed rows)
+are unrecoverable — no pre-relink backup survives. 650 orphaned
+`notfound` override rows are harmless, prunable.
 
 ### Open questions
 
-- **ReplayGain / loudness.** Default: pass tags through, do **not**
-  act on them (bit-perfect, simplest, the choice most critical listeners
-  make). Loudness normalization was built then removed (2026-05-31,
-  negligible benefit in peak mode + broke browser bit-perfect — see
-  "Volume control"); revisit only if perceptual/LUFS normalization is
-  ever genuinely wanted.
 - **Plex/Jellyfin priority.** Build both in Phase 2-3 only if the
   LocalFs path proves the seam works. If the seam's clean,
   third-party providers become weekend projects, not a blocker
@@ -734,6 +750,11 @@ Open questions below.
   trees or merge? Default: **separate trees, switchable from a
   source picker**, mirroring today's per-UDN browse. Merge-view
   is post-MVP.
+- ~~ReplayGain / loudness~~ — CLOSED 2026-07-12: pass tags through,
+  never act on them (bit-perfect). Loudness normalization was built
+  then removed (2026-05-31, negligible benefit in peak mode + broke
+  browser bit-perfect — see "Volume control"). Not tracked anymore;
+  a future perceptual/LUFS feature would be a fresh decision.
 
 ### Audiophile notes
 
@@ -1164,7 +1185,7 @@ rather than 500.
 
 ## External services (outbound HTTP)
 
-The gateway is LAN-only except for album-art, lyrics, radio-catalogue, and (in flight) AcoustID metadata lookups. All over TLS:
+The gateway is LAN-only except for album-art, lyrics, and radio-catalogue lookups. All over TLS:
 
 | Host | Purpose | Method + path |
 |---|---|---|
@@ -1172,7 +1193,10 @@ The gateway is LAN-only except for album-art, lyrics, radio-catalogue, and (in f
 | `coverartarchive.org` | Confirm a front cover exists for that MBID | `HEAD /release-group/{mbid}/front-500` — 200/301/302/307 counts as "have it", 404 counts as "no cover" |
 | `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
 | `*.api.radio-browser.info` | Internet-radio station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&hidebroken=true` — see the "Internet radio" section |
-| `api.acoustid.org` | AcoustID fingerprint → MusicBrainz metadata enrichment | `POST /v2/lookup` form body `client=&meta=recordings+releasegroups&duration=&fingerprint=` — see the "Metadata enrichment" section |
+
+(`api.acoustid.org` was in this table until 2026-07-12 — the in-process
+AcoustID worker was removed in 2.0; beets calls AcoustID from its own
+process now. The key-types bullet below is kept for beets debugging.)
 
 Required contract:
 
@@ -2312,7 +2336,7 @@ and the weekly retry agent are gone — beets is now the only metadata path. The
 through. (Because the worker no longer exists, that clear is now unconditionally
 safe — the old "refuse while the worker is live" guard was removed too.)
 
-## Subsonic API (Phase 1, in flight)
+## Subsonic API (shipped — browse/playlists/starring/stream/radio all live)
 
 A read-only-ish Subsonic-compatible HTTP API that lets any third-party
 Subsonic iOS client (Amperfy, substreamer, play:Sub, …) browse the
