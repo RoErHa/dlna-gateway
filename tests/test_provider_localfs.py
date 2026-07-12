@@ -354,6 +354,67 @@ class TestRescan(unittest.TestCase):
         self.assertEqual(stats["changed"], 1)
         self.assertEqual(stats["unchanged"], 0)
 
+    def test_rescan_updates_metadata_of_retagged_file(self):
+        """In-place retagging (beets writes new tags; mtime/size change)
+        must land in the tracks row on the next rescan — the 2026-07-12
+        fix. Before it, INSERT OR IGNORE swallowed the fresh row and the
+        old metadata stuck forever (workaround was DELETE + rebuild)."""
+        f = self._write_file("Artist/Album/song.flac")
+        p = LocalFsProvider(self.db, self.root)
+
+        def retagged(path):
+            return {**self._fake_tags(path),
+                    "title": "Canonical Title", "artist": "Canonical Artist",
+                    "album": "Canonical Album", "genre": "Jazz",
+                    "year": 1969}
+
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            with patch("dlna_providers.localfs._read_tags",
+                       side_effect=self._fake_tags):
+                p.rescan()
+            f.write_bytes(b"\0" * 64)   # beets rewrote the file in place
+            with patch("dlna_providers.localfs._read_tags",
+                       side_effect=retagged):
+                stats = p.rescan()
+
+        self.assertEqual(stats["changed"], 1)
+        self.assertEqual(self.db.track_count(p.udn), 1)   # updated, not added
+        with self.db._pool.read() as conn:
+            row = dict(conn.execute(
+                "SELECT title, artist, album, genre, year FROM tracks "
+                "WHERE udn=?", (p.udn,)).fetchone())
+        self.assertEqual(row["title"], "Canonical Title")
+        self.assertEqual(row["artist"], "Canonical Artist")
+        self.assertEqual(row["album"], "Canonical Album")
+        self.assertEqual(row["genre"], "Jazz")
+        self.assertEqual(row["year"], 1969)
+
+    def test_force_rescan_updates_metadata_without_file_change(self):
+        """`force=True` re-reads tags even when (mtime, size) is
+        unchanged — new tag values must reach the tracks row."""
+        self._write_file("Artist/Album/song.flac")
+        p = LocalFsProvider(self.db, self.root)
+
+        def retagged(path):
+            return {**self._fake_tags(path), "title": "Fixed Title"}
+
+        with patch("dlna_providers.localfs._require_mutagen"), \
+             patch("dlna_providers.localfs._extract_art_hash",
+                   return_value=None):
+            with patch("dlna_providers.localfs._read_tags",
+                       side_effect=self._fake_tags):
+                p.rescan()
+            with patch("dlna_providers.localfs._read_tags",
+                       side_effect=retagged):
+                p.rescan(force=True)
+
+        with self.db._pool.read() as conn:
+            row = conn.execute(
+                "SELECT title FROM tracks WHERE udn=?", (p.udn,)).fetchone()
+        self.assertEqual(row["title"], "Fixed Title")
+
     def test_rescan_skips_dot_directories(self):
         self._write_file(".Trashes/old.flac")
         self._write_file("Artist/Album/song.flac")

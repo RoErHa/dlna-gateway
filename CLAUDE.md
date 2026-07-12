@@ -280,6 +280,10 @@ tracks_fts — FTS5 virtual table over (title, artist, album)
   path — LibraryDB.run_with_fts_heal (repair_fts + one retry) wraps
   clear(), upsert_tracks(), the LocalFs rescan finalize txn, and the
   Indexer crawl. Guarded by tests/test_fts_heal.py.
+  SYNC TRIGGERS (2026-07-12): tracks_ai (INSERT), tracks_ad (DELETE),
+  and tracks_au (UPDATE OF title/artist/album — added with the
+  retagged-file rescan fix; before it, any in-place metadata UPDATE
+  desynced FTS until the next full rebuild).
 metadata_overrides(url, artist, album, title, genre, year, updated_at, source)
   source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
   year is the MUSICBRAINZ original release year (release-group's
@@ -2231,18 +2235,20 @@ new tags, and this tool does both in the right order:
    dispatches to `provider.rescan(force=True)`, which re-reads every file's
    tags but does **NOT clear** the tracks table first).
 
-   > **⚠ CAVEAT (observed 2026-07-03): a rescan — incremental OR force —
-   > cannot update the metadata of EXISTING-URL rows.** `upsert_tracks` is
-   > `INSERT OR IGNORE` (the URL-unique index swallows the fresh row) plus a
-   > genre/art-only UPDATE keyed on the OLD identity — so in-place retagging
-   > (beets!) is invisible to any rescan. The reliable flow after retagging:
-   > `sqlite3 library.db "DELETE FROM tracks WHERE udn='uuid:localfs-…'"`
-   > then `GET /api/index/rebuild?udn=…` — the clear+re-crawl rebuilds every
-   > row from file tags (the FTS trip a mass DELETE can cause is auto-healed
-   > since `run_with_fts_heal`). Note the rescan stats then mislabel the
-   > reinserts as `changed` (the localfs_files cache wasn't cleared) —
-   > harmless. A proper in-code fix (update title/artist/album/year on
-   > changed rows, or make rebuild clear first) is on the next-session list.
+   > **✅ FIXED 2026-07-12 (was the 2026-07-03 caveat): a rescan now
+   > updates the metadata of EXISTING-URL rows in place.** `upsert_tracks`
+   > gained a URL-keyed metadata-refresh pass (title/artist/album/year/
+   > duration/etc.; change-guarded so untouched rows are no-ops;
+   > incoming-empty genre/art never blank an existing value; UNIQUE
+   > collisions skipped via `OR IGNORE`) plus the previously-missing
+   > `tracks_au` AFTER-UPDATE FTS trigger — the old schema only synced FTS
+   > on INSERT/DELETE, so ANY in-place metadata UPDATE (including the
+   > overrides COALESCE pass) desynced search until the next full rebuild;
+   > the trigger's migration does a one-time FTS rebuild on existing DBs.
+   > In-place retagging (beets) is therefore visible to a plain rescan —
+   > the old `DELETE FROM tracks` + rebuild workaround is obsolete.
+   > Regression-guarded by `tests/test_library.py::TestUpsertMetadataRefresh`
+   > and the retag/force tests in `tests/test_provider_localfs.py`.
 
 **Manual-override safety (the core invariant, regression-guarded):** ONLY
 `source='acoustid'` rows are deleted. `source='manual'` (user edits + the

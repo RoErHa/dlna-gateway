@@ -317,6 +317,10 @@ class LibraryDB:
                         INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
                         VALUES ('delete', old.id, old.title, old.artist, old.album);
                     END;
+                -- tracks_au (AFTER UPDATE FTS sync) is created by
+                -- _migrate_fts_update_trigger below — kept out of this
+                -- script so the migration can detect first-run and do a
+                -- one-time FTS rebuild on existing DBs.
 
                 CREATE TABLE IF NOT EXISTS playlists (
                     id         TEXT PRIMARY KEY,
@@ -506,6 +510,11 @@ class LibraryDB:
         # ids and raw metadata).
         with self._pool.write() as conn:
             self._migrate_unique_url(conn)
+        # 2026-07-12: AFTER UPDATE FTS sync trigger. Must run AFTER the
+        # table-rebuild migrations above (they only recreate ai/ad; on a
+        # legacy DB the trigger doesn't exist yet when they run).
+        with self._pool.write() as conn:
+            self._migrate_fts_update_trigger(conn)
         # Ensure Favourites always exists
         with self._pool.write() as conn:
             conn.execute(
@@ -746,6 +755,39 @@ class LibraryDB:
                     END
             """)
             conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
+
+    def _migrate_fts_update_trigger(self, conn: sqlite3.Connection):
+        """2026-07-12: add `tracks_au`, the AFTER UPDATE FTS sync trigger.
+
+        The original schema had only tracks_ai/tracks_ad, so ANY in-place
+        UPDATE of title/artist/album left tracks_fts stale until the next
+        full rebuild — the metadata-refresh pass in upsert_tracks (the
+        retagged-file fix this trigger ships with), the overrides COALESCE
+        pass, and metadata_override_set's live push all desynced it.
+        Scoped to the three indexed columns so genre/art updates and the
+        LocalFs URL-heal don't churn FTS.
+
+        One-time on existing DBs: rebuilds FTS after creating the trigger
+        to flush any desync accumulated before it existed — an external-
+        content 'delete' whose old values don't match the indexed ones
+        corrupts the index rather than cleaning it, so the trigger must
+        start from a known-good state. Idempotent (detects by name)."""
+        if conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='trigger' AND name='tracks_au'").fetchone():
+            return
+        conn.execute("""
+            CREATE TRIGGER tracks_au
+                AFTER UPDATE OF title, artist, album ON tracks BEGIN
+                    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                    VALUES ('delete', old.id, old.title, old.artist, old.album);
+                    INSERT INTO tracks_fts(rowid, title, artist, album)
+                    VALUES (new.id, new.title, new.artist, new.album);
+                END
+        """)
+        conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')")
+        log.info("DB migration: added tracks_au FTS update trigger; "
+                 "FTS5 rebuilt")
 
     def _migrate_json(self, conn: sqlite3.Connection):
         """One-time import from old playlists.json if present."""
@@ -1008,8 +1050,48 @@ class LibraryDB:
                 "        :year,:album_key)",
                 rows)
             inserted = conn.execute("SELECT changes()").fetchone()[0]
-            # Step 2: update genre + art on already-indexed tracks
-            # (safe UPDATE preserves FTS5 triggers, picks up new metadata on re-index)
+            # Step 2a: refresh metadata on already-indexed URLs. Step 1's
+            # INSERT OR IGNORE swallows rows whose URL already exists, and
+            # before 2026-07-12 only genre/art were then patched — so
+            # in-place retagging (beets) was invisible to any rescan and
+            # the workaround was DELETE FROM tracks + rebuild. LocalFs
+            # URLs are path-based (sha1(rel_path)), stable across retags,
+            # so (udn, url) is the right key. The change-guard keeps this
+            # a no-op for untouched rows (no FTS trigger churn on a force
+            # rescan); IS NOT is the null-safe comparison for the
+            # nullable year/bit_depth/sample_rate. Incoming-empty genre
+            # and art never blank an existing value (art may have been
+            # backfilled from album_art; genre from an override). OR
+            # IGNORE tolerates the wide-UNIQUE collision — same trade-off
+            # as the overrides pass below: the colliding row keeps its
+            # old metadata.
+            refresh_cur = conn.executemany(
+                "UPDATE OR IGNORE tracks SET "
+                "  obj_id=:obj_id, title=:title, artist=:artist, "
+                "  album=:album, duration=:duration, mime=:mime, "
+                "  year=:year, bit_depth=:bit_depth, "
+                "  sample_rate=:sample_rate, album_key=:album_key, "
+                "  file_path=:file_path, "
+                "  genre = CASE WHEN :genre != '' THEN :genre ELSE genre END, "
+                "  art   = CASE WHEN :art   != '' THEN :art   ELSE art   END "
+                "WHERE udn=:udn AND url=:url "
+                "  AND (obj_id IS NOT :obj_id OR title IS NOT :title "
+                "       OR artist IS NOT :artist OR album IS NOT :album "
+                "       OR duration IS NOT :duration OR mime IS NOT :mime "
+                "       OR year IS NOT :year OR bit_depth IS NOT :bit_depth "
+                "       OR sample_rate IS NOT :sample_rate "
+                "       OR album_key IS NOT :album_key "
+                "       OR file_path IS NOT :file_path "
+                "       OR (:genre != '' AND genre IS NOT :genre) "
+                "       OR (:art != '' AND art IS NOT :art))",
+                rows)
+            refreshed = max(refresh_cur.rowcount, 0)
+            if refreshed:
+                log.info(f"upsert_tracks [{udn[:12]}…]: refreshed metadata "
+                         f"on {refreshed} existing row(s)")
+            # Step 2b: update genre + art on already-indexed tracks keyed
+            # by identity (covers the UPnP case where the same file
+            # arrives via a different URL; only fills empty genre)
             conn.executemany(
                 "UPDATE tracks SET genre=:genre, art=:art "
                 "WHERE udn=:udn AND artist=:artist AND album=:album AND title=:title "
@@ -2419,8 +2501,8 @@ class LibraryDB:
         Track rows are not touched. ``tracks_fts`` is an external-content
         FTS table (``content=tracks``), so a full rebuild produces an
         identical index from the live row data. The ``tracks_ai`` /
-        ``tracks_ad`` triggers reference ``tracks_fts`` by name and keep
-        working after the recreate.
+        ``tracks_ad`` / ``tracks_au`` triggers reference ``tracks_fts``
+        by name and keep working after the recreate.
         """
         with self._pool.write() as conn:
             conn.execute("DROP TABLE IF EXISTS tracks_fts")
