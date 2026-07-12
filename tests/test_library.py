@@ -191,5 +191,96 @@ class TestRepairFts(unittest.TestCase):
         self.assertEqual(self._fts_hits("fresh"), 0)
 
 
+class TestUpsertMetadataRefresh(unittest.TestCase):
+    """Re-upserting an EXISTING url must refresh its metadata (the
+    2026-07-12 fix). Before it, INSERT OR IGNORE swallowed the fresh
+    row and only genre/art were patched — so in-place retagging
+    (beets) was invisible to any rescan and the workaround was
+    `DELETE FROM tracks` + rebuild."""
+
+    URL = "http://gw:8200/localfs/stream/abc123"
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+        self.udn = "uuid:localfs-test"
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def _upsert(self, **kw):
+        row = {"id": "abc123", "url": self.URL, "title": "Old Title",
+               "artist": "Old Artist", "album": "Old Album",
+               "genre": "Rock", "art": "localfs-art:aa", "year": 1999,
+               "duration": "0:03:00", "mime": "audio/flac",
+               "bit_depth": 16, "sample_rate": 44100,
+               "album_key": "Old Artist/Old Album"}
+        row.update(kw)
+        return self.db.upsert_tracks(self.udn, [row])
+
+    def _row(self, url=None):
+        with self.db._pool.read() as conn:
+            r = conn.execute("SELECT * FROM tracks WHERE url=?",
+                             (url or self.URL,)).fetchone()
+        return dict(r) if r else None
+
+    def test_reupsert_same_url_updates_metadata(self):
+        self._upsert()
+        self._upsert(title="New Title", artist="New Artist",
+                     album="New Album", year=1975, genre="Jazz",
+                     album_key="New Artist/New Album")
+        row = self._row()
+        self.assertEqual(row["title"], "New Title")
+        self.assertEqual(row["artist"], "New Artist")
+        self.assertEqual(row["album"], "New Album")
+        self.assertEqual(row["year"], 1975)
+        self.assertEqual(row["genre"], "Jazz")
+        self.assertEqual(row["album_key"], "New Artist/New Album")
+        # Still one row — refreshed in place, not duplicated.
+        self.assertEqual(self.db.track_count(self.udn), 1)
+
+    def test_refresh_keeps_existing_genre_and_art_when_incoming_empty(self):
+        """An incoming empty genre/art must not blank a value that was
+        backfilled from album_art or set by an override."""
+        self._upsert()
+        self._upsert(title="New Title", genre="", art="")
+        row = self._row()
+        self.assertEqual(row["title"], "New Title")
+        self.assertEqual(row["genre"], "Rock")
+        self.assertEqual(row["art"], "localfs-art:aa")
+
+    def test_refresh_updates_fts_index(self):
+        """The in-place UPDATE must keep tracks_fts in sync so the new
+        title is searchable and the old one is gone."""
+        self._upsert()
+        self._upsert(title="Completely Different Song")
+        hits = self.db.search(self.udn, "completely")
+        self.assertEqual(len(hits["tracks"]), 1)
+        hits_old = self.db.search(self.udn, "old title")
+        self.assertEqual(len(hits_old["tracks"]), 0)
+
+    def test_manual_override_still_wins_after_refresh(self):
+        """The overrides COALESCE pass runs after the refresh, so a
+        manual override keeps outranking fresh file tags."""
+        self._upsert()
+        self.db.metadata_override_set(
+            self.URL, title="Corrected Title", source="manual")
+        self._upsert(title="Retagged Title")
+        self.assertEqual(self._row()["title"], "Corrected Title")
+
+    def test_refresh_unique_collision_is_ignored(self):
+        """Refreshing a row into an identity that collides with the
+        wide UNIQUE must be skipped silently (OR IGNORE), never raise."""
+        other = "http://gw:8200/localfs/stream/def456"
+        self._upsert()
+        self._upsert(id="def456", url=other, title="Second Title")
+        # Try to refresh the second row into the first row's identity.
+        self._upsert(id="def456", url=other, title="Old Title")
+        row = self._row(other)
+        self.assertEqual(row["title"], "Second Title")   # kept old
+        self.assertEqual(self.db.track_count(self.udn), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -172,4 +172,11 @@ CREATE TABLE video_people (
                     PRIMARY KEY (video_id, person)
                 );
 CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url);
+CREATE TRIGGER tracks_au
+                AFTER UPDATE OF title, artist, album ON tracks BEGIN
+                    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
+                    VALUES ('delete', old.id, old.title, old.artist, old.album);
+                    INSERT INTO tracks_fts(rowid, title, artist, album)
+                    VALUES (new.id, new.title, new.artist, new.album);
+                END;
 CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key);
