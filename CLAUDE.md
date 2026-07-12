@@ -731,13 +731,13 @@ now picks retags up. The bigger find: **10,859 of 10,890 manual
 `metadata_overrides` are ORPHANED** — 10,810 still key on dead AssetUPnP
 `:26125` URLs (the ~10k `improve_song_years` year corrections + user
 edits) and 49 on the old `:8201` LocalFs port, so the original-year
-display has been inert since the decommission. By normalized
-(artist,title): 4,596 relink uniquely, 3,100 multi-match, 3,114 have no
-LocalFs match; 5,895 would actually change a displayed year. A relink
-tool (same pattern as `relink_playlists_to_localfs.py`) would recover
-most of it. The 2026-05-31 playlist-relink casualties (744 removed rows)
-are unrecoverable — no pre-relink backup survives. 650 orphaned
-`notfound` override rows are harmless, prunable.
+display has been inert since the decommission. **RECOVERED same day** by
+`tools/relink_overrides_to_localfs.py` (see its section below): 46
+port-healed, 8,087 orphans transplanted onto 8,009 live URLs, 650
+orphaned notfound rows pruned; live manual overrides went 31 → 7,976 and
+`year_original` display works again. 2,726 unmatched orphans kept
+(inert). The 2026-05-31 playlist-relink casualties (744 removed rows)
+remain unrecoverable — no pre-relink backup survives.
 
 ### Open questions
 
@@ -1884,6 +1884,53 @@ First real run (2026-05-31, 2,044 dead rows): relinked 1,260 (367 strong
 python3 tools/relink_playlists_to_localfs.py            # dry-run
 python3 tools/relink_playlists_to_localfs.py --apply    # backup + commit
 python3 -m unittest tools.test_relink_playlists_to_localfs -v
+```
+
+### `tools/relink_overrides_to_localfs.py`
+
+Recovers the ORPHANED `metadata_overrides` found by the 2026-07-12
+completeness audit: 10,859 of 10,890 manual rows keyed on dead URLs
+(10,810 AssetUPnP `:26125` — the improve_song_years / correct_year_drift
+original-year corrections — plus 49 on the pre-cutover `:8201` LocalFs
+port), all inert since the decommission because the COALESCE pass and
+`/api/track_meta` match by exact URL.
+
+Two modes, deliberately different:
+
+- **Port-heal** (`…/localfs/stream/<id>` orphans): the id is the stable
+  LocalFs obj_id → exact same-file match; the WHOLE row is repointed,
+  fields intact.
+- **Year transplant** (all other manual orphans): matched by normalised
+  (artist, title) against current LocalFs tracks; ONLY THE YEAR moves —
+  as a fresh year-only `source='manual'` row on every matching track's
+  URL (multi-match fans out, same per-recording semantic as
+  improve_song_years; capped at 25 to skip junk keys). The orphan's
+  artist/album/title/genre are **deliberately dropped**: they're mostly
+  AcoustID-era values the improve_song_years merge carried along, and
+  relinking them would re-lay stale metadata over beets' file tags on the
+  next rescan (the masking problem post_beets_reindex.py fights). Year is
+  safe — display-only, never COALESCEd into `tracks`. Trade-off: genuine
+  pre-decommission hand edits to artist/title text are not recovered
+  (indistinguishable from the merged AcoustID fields).
+
+Never overwrites: an existing row with a non-NULL year always wins (a
+NULL-year row gets filled, other fields untouched). Consumed orphans are
+deleted; unmatched manual orphans are kept (inert) unless
+`--prune-unmatched`; orphaned `notfound` rows are pruned by default
+(`--no-prune-notfound` to keep). Idempotent — a second run no-ops.
+DRY-RUN by default; `--apply` auto-backs-up `library.db`.
+
+First real run (2026-07-12, 11,509 orphans): 46 port-healed, 8,087
+transplanted onto 8,009 live URLs (7,899 inserts + 110 fills), 650
+notfound pruned, 2,726 unmatched kept. Live manual overrides went
+31 → 7,976; `year_original` display verified working immediately (no
+restart needed — read path). Backup:
+`library.db.bak-ovrelink-20260712-162540`.
+
+```bash
+python3 tools/relink_overrides_to_localfs.py            # dry-run
+python3 tools/relink_overrides_to_localfs.py --apply    # backup + commit
+python3 -m unittest tools.test_relink_overrides_to_localfs -v   # 16 tests
 ```
 
 ### `tools/audit_override_mismatches.py`
