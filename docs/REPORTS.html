@@ -519,7 +519,9 @@
     paths under two roots would collide on stream ids). One layout discovery: 11 books are
     single files at the library root (<code>album_key=''</code>) — their positions key by
     file URL so they don’t share one resume row. P3 (Naim seek), P4 (CarPlay bookmarks)
-    and P5 (chapter atoms, shelf) remain as planned below.</p>
+    and P5 (chapter atoms, shelf) remain as planned below. <b>P6 (OpenLibrary
+    metadata — series/author/title overlay) shipped the same day</b>; see the phases
+    table.</p>
   </div>
 </div>
 
@@ -700,6 +702,23 @@
           PWA; a 📖 container in the Naim’s UPnP tree; sleep timer.</td>
           <td>Chapter-parse fixtures; UPnP browse test in the
           <code>test_upnp_videos_browse.py</code> mould.</td>
+        </tr>
+        <tr>
+          <td class="mono">P6</td>
+          <td><b>OpenLibrary metadata — SHIPPED 13 July.</b> Canonical
+          <b>author</b>, <b>title</b>, and <b>series + number-in-series</b> per book from
+          the OpenLibrary API (<code>tools/openlibrary_books.py</code>): search by
+          tag/folder-derived guesses behind a fuzzy floor + author-overlap guard, series
+          majority-voted from edition records (catalog numbers &gt; 100 rejected — the
+          “Frye annotated #1249” case; short titles never retried title-only — the
+          “Alpha” → “Alphas” case). Results live in <code>book_meta</code>, a
+          display-layer overlay (files and <code>tracks</code> untouched; sticky
+          notfound; manual wins). The PWA reads <code>/api/book_meta_all</code> once per
+          source switch: 📚 series chips on book rows, a series + author line in the
+          book header. Number is REAL — novellas are #1.5.</td>
+          <td><code>tools/test_openlibrary_books.py</code> (27 — series parsing,
+          folder parsing, match guards, found/notfound/transient trichotomy);
+          book_meta DB tests; 3 Playwright UI tests.</td>
         </tr>
       </tbody>
     </table>

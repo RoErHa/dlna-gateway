@@ -170,6 +170,62 @@ class TestPositionPayloads(unittest.TestCase):
         self.assertEqual(code, 200)   # bad limit falls back, never 500s
 
 
+class TestBookMeta(unittest.TestCase):
+    """book_meta — the OpenLibrary display overlay. manual wins,
+    notfound is bookkeeping (absent from book_meta_all)."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def test_round_trip(self):
+        self.assertTrue(self.db.book_meta_set(
+            BOOK, author="Peter F. Hamilton", title="The Reality Dysfunction",
+            series="Night's Dawn", series_seq=1.0))
+        m = self.db.book_meta_get(BOOK)
+        self.assertEqual(m["series"], "Night's Dawn")
+        self.assertEqual(m["series_seq"], 1.0)
+        self.assertEqual(m["source"], "openlibrary")
+
+    def test_manual_never_overwritten_by_tool(self):
+        self.db.book_meta_set(BOOK, series="My Series", series_seq=2,
+                              source="manual")
+        self.assertFalse(self.db.book_meta_set(
+            BOOK, series="OL Series", series_seq=9, source="openlibrary"))
+        self.assertEqual(self.db.book_meta_get(BOOK)["series"], "My Series")
+        # manual → manual is allowed (user re-edits)
+        self.assertTrue(self.db.book_meta_set(
+            BOOK, series="Edited", source="manual"))
+
+    def test_all_excludes_notfound(self):
+        self.db.book_meta_set(BOOK, series="S", series_seq=1)
+        self.db.book_meta_set("other-book", source="notfound")
+        books = self.db.book_meta_all()
+        self.assertIn(BOOK, books)
+        self.assertNotIn("other-book", books)
+
+    def test_survives_clear_udn(self):
+        self.db.book_meta_set(BOOK, series="S", series_seq=1)
+        self.db.clear("uuid:localfs-any")
+        self.assertIsNotNone(self.db.book_meta_get(BOOK))
+
+    def test_payload(self):
+        import api_playback
+        orig = api_playback.DB
+        api_playback.DB = self.db
+        try:
+            self.db.book_meta_set(BOOK, series="S", series_seq=1)
+            code, body = api_playback.book_meta_all_payload({})
+            self.assertEqual(code, 200)
+            self.assertIn(BOOK, body["books"])
+        finally:
+            api_playback.DB = orig
+
+
 class TestAudiobooksRootConfig(unittest.TestCase):
     """dlna_localfs_wiring.audiobooks_root — env beats config, '' when
     neither set (feature off)."""

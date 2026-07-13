@@ -154,6 +154,30 @@ document.addEventListener("visibilitychange",()=>{
   }
 });
 
+// ── Audiobook metadata overlay (OpenLibrary) ──────────────────────
+// album_key → {author, title, series, series_seq} from /api/book_meta_all,
+// fetched once per switch onto the audiobooks source. Display-layer only.
+let abMeta=null, _abMetaLoading=null;
+function _loadAbMeta(){
+  if(curServer?.kind!=="audiobooks"){abMeta=null;return Promise.resolve();}
+  if(abMeta) return Promise.resolve();
+  if(_abMetaLoading) return _abMetaLoading;
+  _abMetaLoading=(async()=>{
+    try{
+      const r=await api("/api/book_meta_all");
+      if(r){abMeta=(await r.json()).books||{};}
+    }catch(e){/* rows just render un-annotated */}
+    finally{_abMetaLoading=null;}
+  })();
+  return _abMetaLoading;
+}
+function _abSeriesOf(albumKey){
+  const m=abMeta&&albumKey?abMeta[albumKey]:null;
+  if(!m||!m.series) return null;
+  const n=m.series_seq;
+  return `${m.series}${n!=null?` #${n%1===0?n:n.toFixed(1)}`:""}`;
+}
+
 // Playback speed (audiobooks, browser output only — narration pace, not
 // a music feature; the Naim has no UPnP rate control). Persisted.
 let _abRate=(()=>{const v=parseFloat(localStorage.getItem("dlna_ab_rate"));
@@ -434,6 +458,7 @@ async function refreshServers(){
   } else if(curServer && servers[curServer.udn]){
     curServer=servers[curServer.udn];   // refresh online flag etc.
   }
+  _loadAbMeta();   // no-op unless the active source is audiobooks
   rebuildSourceSel(data);
   updateDiscStatus();
 }
@@ -479,6 +504,8 @@ function selectSource(udn){
   const s=servers[udn];
   if(!s || (curServer && curServer.udn===udn)) return;
   curServer=s;
+  abMeta=null;      // meta belongs to the previous source
+  _loadAbMeta();
   updateDiscStatus();
   // Reset browse navigation and reload the new source's library.
   if(typeof exitDrillDown==="function") exitDrillDown(false);
@@ -567,6 +594,7 @@ async function loadBrowsePage(){
   $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   $("browse-back").style.display        = "none";
   $("browse-section-hdr").style.display = "none";
+  if($("browse-series")) $("browse-series").style.display = "none";
   $("browse-pager").classList.add("hidden");
 
   // Genres: load full list without letter filter
@@ -651,7 +679,8 @@ function renderBrowseItems(items){
       div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.artist)}</div><div class="row-sub">${item.album_count} album${item.album_count!==1?"s":""} · ${item.track_count} tracks</div></div>`;
       div.addEventListener("click", ()=>showArtistAlbums(item));
     } else if(browseMode==="albums"){
-      div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.album)}</div><div class="row-sub">${esc(item.artist)} · ${item.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
+      const ser=_abSeriesOf(item.album_key||"");
+      div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.album)}</div><div class="row-sub">${esc(item.artist)} · ${item.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
       const _artist = item.artist==="Various Artists"?"":item.artist;
       const _ak = item.album_key||"";
       div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, item.album, _ak);});
@@ -864,6 +893,7 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   _setAlbumFavStar(false, false);
   const rbtn = $("browse-resume");
   if(rbtn) rbtn.style.display = "none";
+  if($("browse-series")) $("browse-series").style.display = "none";
   const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
   const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
@@ -876,7 +906,28 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
     // album_key='' and keys its position by the file URL instead.
     _wireResumeButton(artist, album,
                       albumKey||tracks[0].album_key||tracks[0].url, tracks);
+    _showBookMetaLine(albumKey||tracks[0].album_key||"");
   }
+}
+
+// ── Book header meta line (OpenLibrary overlay) ──────────────────
+// "📚 Night's Dawn #1 · ✒️ Peter F. Hamilton" under the book header.
+async function _showBookMetaLine(albumKey){
+  const el=$("browse-series");
+  if(!el) return;
+  el.style.display="none";
+  if(!albumKey) return;
+  await _loadAbMeta();
+  const m=abMeta&&abMeta[albumKey];
+  if(!m) return;
+  const parts=[];
+  const ser=_abSeriesOf(albumKey);
+  if(ser) parts.push(`📚 ${esc(ser)}`);
+  if(m.author) parts.push(`✒️ ${esc(m.author)}`);
+  if(m.title) parts.push(esc(m.title));
+  if(!parts.length) return;
+  el.innerHTML=parts.join(" · ");
+  el.style.display="";
 }
 
 // ── Audiobook resume button (book header) ────────────────────────
@@ -984,6 +1035,7 @@ function drillBack(){
     drillArtist=null; drillAlbum=null;
     _drillShowChrome(false);
     $("browse-section-hdr").style.display="none";
+    if($("browse-series")) $("browse-series").style.display="none";
     loadBrowsePage();
     return;
   }
@@ -992,6 +1044,7 @@ function drillBack(){
   if(prev.type==="root"){
     drillArtist=null;
     $("browse-section-hdr").style.display="none";
+    if($("browse-series")) $("browse-series").style.display="none";
     _drillShowChrome(false);
     loadBrowsePage();
   } else if(prev.type==="artist"){
@@ -1010,6 +1063,7 @@ function exitDrillDown(reload=true){
   drillArtist=null; drillAlbum=null;
   $("browse-back").style.display        = "none";
   $("browse-section-hdr").style.display = "none";
+  if($("browse-series")) $("browse-series").style.display = "none";
   _drillShowChrome(false);
   if(reload) loadBrowsePage();
 }

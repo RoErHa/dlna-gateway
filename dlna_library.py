@@ -281,6 +281,24 @@ class LibraryDB:
                     finished     INTEGER NOT NULL DEFAULT 0,
                     updated_at   INTEGER NOT NULL
                 );
+                -- Audiobook metadata overlay (2026-07-13). One row per
+                -- book (album_key), filled by tools/openlibrary_books.py
+                -- from the OpenLibrary API: canonical author/title plus
+                -- series name + number-in-series (REAL — novellas can be
+                -- #1.5). DISPLAY-layer only, never written into tracks
+                -- or files. Survives clear(udn); sticky notfound like
+                -- album_art/lyrics ('manual' always wins). Retry one:
+                --   DELETE FROM book_meta WHERE source='notfound'
+                --     AND album_key='…'
+                CREATE TABLE IF NOT EXISTS book_meta (
+                    album_key  TEXT PRIMARY KEY,
+                    author     TEXT,
+                    title      TEXT,
+                    series     TEXT,
+                    series_seq REAL,
+                    source     TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
                 -- User-favourited internet-radio stations. Capped at
                 -- RADIO_FAV_MAX (25), enforced server-side in
                 -- radio_fav_add(). Identity = radio-browser stationuuid,
@@ -2745,6 +2763,51 @@ class LibraryDB:
                 "DELETE FROM playback_positions WHERE album_key=?",
                 (album_key,))
         return cur.rowcount > 0
+
+    # ── Audiobook metadata overlay (OpenLibrary) ─────────────────
+    # Display-layer only — canonical author/title + series name/number
+    # per book. 'manual' rows are never overwritten by tool runs; a
+    # 'notfound' row is the sticky negative (delete it to retry).
+
+    def book_meta_set(self, album_key: str, *, author=None, title=None,
+                      series=None, series_seq=None,
+                      source: str = "openlibrary") -> bool:
+        if not album_key or not source:
+            return False
+        with self._pool.write() as conn:
+            existing = conn.execute(
+                "SELECT source FROM book_meta WHERE album_key=?",
+                (album_key,)).fetchone()
+            if existing and existing["source"] == "manual" \
+                    and source != "manual":
+                return False   # user edits always win
+            conn.execute(
+                "INSERT OR REPLACE INTO book_meta "
+                "(album_key, author, title, series, series_seq, source, "
+                " fetched_at) VALUES (?,?,?,?,?,?, strftime('%s','now'))",
+                (album_key, author, title, series, series_seq, source))
+        return True
+
+    def book_meta_get(self, album_key: str) -> Optional[dict]:
+        if not album_key:
+            return None
+        with self._pool.read() as conn:
+            r = conn.execute(
+                "SELECT album_key, author, title, series, series_seq, "
+                "       source FROM book_meta WHERE album_key=?",
+                (album_key,)).fetchone()
+        return dict(r) if r else None
+
+    def book_meta_all(self) -> dict:
+        """album_key → meta for every POSITIVE row (notfound rows are
+        cache bookkeeping, not display data). Small — one row per book —
+        so the PWA fetches the whole map on source switch."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT album_key, author, title, series, series_seq, "
+                "       source FROM book_meta WHERE source != 'notfound'"
+            ).fetchall()
+        return {r["album_key"]: dict(r) for r in rows}
 
     def positions_list(self, limit: int = 50) -> list:
         """In-progress books, newest first — powers a future

@@ -426,6 +426,13 @@ async def positions_list_route(request: Request):
     return JSONResponse(body, status_code=code)
 
 
+@app.get("/api/book_meta_all", include_in_schema=False)
+async def book_meta_all_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_playback.book_meta_all_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
 # ── Binary proxies ────────────────────────────────────────────────────
 # /art is a one-shot image proxy (lock-screen artwork must be same-origin).
 # It shares api_playback.art_fetch with the legacy handler; the blocking

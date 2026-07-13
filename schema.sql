@@ -62,6 +62,15 @@ CREATE TABLE playback_positions (
                     finished     INTEGER NOT NULL DEFAULT 0,
                     updated_at   INTEGER NOT NULL
                 );
+CREATE TABLE book_meta (
+                    album_key  TEXT PRIMARY KEY,
+                    author     TEXT,
+                    title      TEXT,
+                    series     TEXT,
+                    series_seq REAL,
+                    source     TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
 CREATE TABLE radio_favourites (
                     station_uuid TEXT PRIMARY KEY,
                     name         TEXT NOT NULL,
