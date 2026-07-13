@@ -87,6 +87,16 @@ class TestExtractSeries(unittest.TestCase):
     def test_tiny_junk_names_rejected(self):
         self.assertEqual(extract_series([{"series": ["v. 4"]}]), ("", None))
 
+    def test_publisher_paren_suffix_rejected(self):
+        """'Series (Publisher)' form (real sweep data: 'Historia
+        (DeBolsillo)', 'Madaʻ bidyoni (Keter)') is an imprint marker."""
+        editions = [{"series": ["Historia (DeBolsillo)"]},
+                    {"series": ["Mada bidyoni (Keter) ; 12"]}]
+        self.assertEqual(extract_series(editions), ("", None))
+        # A numeric parenthetical is a series POSITION, not a publisher.
+        self.assertEqual(extract_series([{"series": ["Discworld (13)"]}]),
+                         ("Discworld", 13.0))
+
     def test_latin_script_preferred_over_translation(self):
         """A foreign edition's series name must not beat the Latin one
         (real sweep data: Armenian 'Narniayi kʻroniknerě')."""
@@ -95,6 +105,15 @@ class TestExtractSeries(unittest.TestCase):
         name, num = extract_series(editions)
         self.assertEqual(name, "The Chronicles of Narnia")
         self.assertEqual(num, 5.0)
+
+    def test_foreign_script_hard_rejected_even_alone(self):
+        """User rule: books are English/Dutch ONLY — a foreign series
+        name is never valid, even with no alternative candidate."""
+        editions = [{"series": ["Narniayi kʻroniknerě (5)"]}]
+        self.assertEqual(extract_series(editions), ("", None))
+        # Dutch diacritics survive the ASCII floor.
+        editions = [{"series": ["Het Bureau ; 3"]}]
+        self.assertEqual(extract_series(editions), ("Het Bureau", 3.0))
 
     def test_multi_series_string_split(self):
         """One edition string carrying several series (real sweep data:

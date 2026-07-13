@@ -174,7 +174,12 @@ _PUBLISHER_SERIES = (
 
 def _is_publisher_series(name: str) -> bool:
     n = _norm(name)
-    return any(p in n for p in _PUBLISHER_SERIES)
+    if any(p in n for p in _PUBLISHER_SERIES):
+        return True
+    # "Series (Publisher)" form — a WORDY parenthetical suffix is an
+    # imprint marker ("Historia (DeBolsillo)", "Madaʻ bidyoni (Keter)");
+    # story series carry numbers there, not words.
+    return re.search(r"\([^)]*[a-zA-Z]{2}[^)]*\)\s*$", name) is not None
 
 
 def _ascii_ratio(s: str) -> float:
@@ -206,6 +211,14 @@ def extract_series(editions: list) -> tuple[str, Optional[float]]:
                     continue   # catalog number, not a series position
                 if _is_publisher_series(name):
                     continue   # imprint bookkeeping, not a story series
+                if sum(1 for c in name if ord(c) > 127) >= 2:
+                    # The library is English/Dutch ONLY (user rule) — a
+                    # translated edition's series name is always the
+                    # wrong edition's data. One accented char is normal
+                    # English/Dutch ("Misérables", "Één"); two or more
+                    # marks a transliteration or foreign script. HARD
+                    # reject, not just rank-lower.
+                    continue
                 key = _norm(name)
                 votes[key] += 1
                 display.setdefault(key, name)
