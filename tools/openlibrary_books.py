@@ -169,6 +169,7 @@ _PUBLISHER_SERIES = (
     "penguin", "masterworks", "oxford bookworms", "everyman",
     "vintage classics", "twentieth-century classics", "modern library",
     "wordsworth classics", "book club", "great books",
+    "oscar moderni", "oscar mondadori",   # Mondadori imprints (Italian)
 )
 
 
@@ -207,6 +208,8 @@ def extract_series(editions: list) -> tuple[str, Optional[float]]:
                 name, num = parse_series(frag)
                 if not name or len(name) < 3:
                     continue   # "v." and friends
+                if not re.search(r"[A-Za-z]{2}", name):
+                    continue   # all-digit/symbol "names" ("101")
                 if num is not None and num > _MAX_SERIES_SEQ:
                     continue   # catalog number, not a series position
                 if _is_publisher_series(name):
