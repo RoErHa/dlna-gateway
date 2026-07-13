@@ -161,6 +161,25 @@ def parse_series(s: str) -> tuple[str, Optional[float]]:
 # is publisher bookkeeping and gets dropped.
 _MAX_SERIES_SEQ = 100
 
+# Publisher/imprint series are edition bookkeeping, not story series —
+# normalised substring blocklist (first live sweep: "Penguin
+# twentieth-century classics" ×10, "SF Masterworks" ×7, "Oxford
+# Bookworms"). Curated, deliberately short.
+_PUBLISHER_SERIES = (
+    "penguin", "masterworks", "oxford bookworms", "everyman",
+    "vintage classics", "twentieth-century classics", "modern library",
+    "wordsworth classics", "book club", "great books",
+)
+
+
+def _is_publisher_series(name: str) -> bool:
+    n = _norm(name)
+    return any(p in n for p in _PUBLISHER_SERIES)
+
+
+def _ascii_ratio(s: str) -> float:
+    return sum(1 for c in s if ord(c) < 128) / max(1, len(s))
+
 
 def extract_series(editions: list) -> tuple[str, Optional[float]]:
     """Majority-vote a series (name, number) out of a work's editions.
@@ -172,21 +191,36 @@ def extract_series(editions: list) -> tuple[str, Optional[float]]:
     display: dict[str, str] = {}
     for ed in editions:
         for raw in (ed.get("series") or []):
-            name, num = parse_series(str(raw))
-            if not name:
-                continue
-            if num is not None and num > _MAX_SERIES_SEQ:
-                continue   # catalog number, not a series position
-            key = _norm(name)
-            votes[key] += 1
-            display.setdefault(key, name)
-            if num is not None:
-                numbers.setdefault(key, Counter())[num] += 1
+            # An edition can cram several series into ONE string
+            # ("Mistborn, Era 2… (#1), The Mistborn Saga (#4), The
+            # Cosmere #16") — split on '), ' into separate candidates.
+            frags = re.split(r"\)\s*,\s*", str(raw))
+            if len(frags) > 1:
+                frags = [f if f.endswith(")") or "(" not in f else f + ")"
+                         for f in frags]
+            for frag in frags:
+                name, num = parse_series(frag)
+                if not name or len(name) < 3:
+                    continue   # "v." and friends
+                if num is not None and num > _MAX_SERIES_SEQ:
+                    continue   # catalog number, not a series position
+                if _is_publisher_series(name):
+                    continue   # imprint bookkeeping, not a story series
+                key = _norm(name)
+                votes[key] += 1
+                display.setdefault(key, name)
+                if num is not None:
+                    numbers.setdefault(key, Counter())[num] += 1
     if not votes:
         return "", None
-    # Prefer a name that has at least one numbered vote.
-    ranked = sorted(votes.items(),
-                    key=lambda kv: (kv[0] in numbers, kv[1]), reverse=True)
+    # Rank: numbered beats bare; more-Latin-script beats a translated
+    # edition's series name (Armenian Narnia); then vote count.
+    ranked = sorted(
+        votes.items(),
+        key=lambda kv: (kv[0] in numbers,
+                        _ascii_ratio(display[kv[0]]),
+                        kv[1]),
+        reverse=True)
     key = ranked[0][0]
     num = numbers[key].most_common(1)[0][0] if key in numbers else None
     return display[key], num
