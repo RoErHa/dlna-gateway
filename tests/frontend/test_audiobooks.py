@@ -273,6 +273,73 @@ def test_album_rows_carry_series_chip(page, stub, gateway):
     assert "📚 Night's Dawn #1" in row
 
 
+def test_seek_slider_active_only_for_books(page, stub, gateway):
+    """The time slider is drag/tap-seekable ONLY for audiobook queues —
+    the .seekable class gates the pointer handlers and the CSS
+    affordance; music stays display-only."""
+    gateway.servers = [MUSIC, BOOKS]
+    _seed_book(gateway)
+    _boot(page, stub)
+    # Music (default): not seekable.
+    page.evaluate("browserQueueIsBook = false; _abApplyRate();")
+    assert "seekable" not in (page.get_attribute("#seek-track", "class") or "")
+    # Book mode: seekable.
+    page.evaluate("browserQueueIsBook = true; _abApplyRate();")
+    assert "seekable" in page.get_attribute("#seek-track", "class")
+
+
+def test_seek_click_scrubs_book_chapter_and_saves(page, stub, gateway):
+    """Clicking the slider in book mode seeks the <audio> to that
+    fraction and the 'seeked' event persists the new position."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    _boot(page, stub)
+    page.evaluate(f"""
+      browserQueue = {json.dumps(tracks)};
+      browserIdx = 0;
+      browserQueueIsBook = true;
+      _abApplyRate();
+      activeDevice = "browser";
+      browserAudio.src = "/stream?url=" + encodeURIComponent(browserQueue[0].url);
+      new Promise(res => browserAudio.addEventListener(
+        "loadedmetadata", () => res(true), {{once: true}}));
+    """)
+    gateway.clear_requests()
+    # Click mid-track (the stub WAV is 1s long → expect ≈0.5s).
+    box = page.locator("#seek-track").bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_function("browserAudio.currentTime > 0.3", timeout=3000)
+    t = page.evaluate("browserAudio.currentTime")
+    assert 0.3 <= t <= 0.7
+    # The seeked event saved the scrubbed position.
+    r = gateway.wait_for_request(
+        "/api/position", method="POST",
+        match=lambda r: BOOK_KEY in r["body"])
+    assert r is not None
+    assert json.loads(r["body"])["position_sec"] >= 0.3
+
+
+def test_seek_click_inert_for_music(page, stub, gateway):
+    """Same click on a music queue must not move playback."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    _boot(page, stub)
+    page.evaluate(f"""
+      browserQueue = {json.dumps(tracks)};
+      browserIdx = 0;
+      browserQueueIsBook = false;
+      _abApplyRate();
+      activeDevice = "browser";
+      browserAudio.src = "/stream?url=" + encodeURIComponent(browserQueue[0].url);
+      new Promise(res => browserAudio.addEventListener(
+        "loadedmetadata", () => res(true), {{once: true}}));
+    """)
+    box = page.locator("#seek-track").bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(300)
+    assert page.evaluate("browserAudio.currentTime") == 0
+
+
 def test_rate_control_applies_and_persists(page, stub, gateway):
     gateway.servers = [MUSIC, BOOKS]
     _seed_book(gateway)
