@@ -383,6 +383,30 @@ def _rc_soap(rc_url: str, action: str, body_inner: str,
         except Exception: pass
 
 
+def _sec_to_hms(sec: float) -> str:
+    """Seconds → 'H:MM:SS' as AVTransport Seek/REL_TIME wants it."""
+    s = max(0, int(sec))
+    return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
+def avtransport_seek(av_url: str, seconds: float) -> bool:
+    """Seek within the current track (AVTransport#Seek, Unit=REL_TIME).
+    Audiobook resume (P3): jump to the saved offset after Play. Returns
+    False on SOAP fault / transport failure — callers treat a failed
+    seek as non-fatal (playback continues from 0:00)."""
+    target = _sec_to_hms(seconds)
+    raw, err = _av_soap(av_url, "Seek",
+        '<u:Seek xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+        '<InstanceID>0</InstanceID>'
+        '<Unit>REL_TIME</Unit>'
+        f'<Target>{target}</Target>'
+        '</u:Seek>')
+    if err is not None:
+        log.warning(f"avtransport_seek to {target} failed: {err}")
+        return False
+    return raw is not None
+
+
 def set_volume(rc_url: str, level: int) -> bool:
     """Set the renderer's volume on Master channel. Clamped 0-100."""
     level = max(0, min(100, int(level)))

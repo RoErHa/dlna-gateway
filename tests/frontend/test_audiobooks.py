@@ -340,6 +340,99 @@ def test_seek_click_inert_for_music(page, stub, gateway):
     assert page.evaluate("browserAudio.currentTime") == 0
 
 
+def test_continue_listening_shelf(page, stub, gateway):
+    """The 📖 letter-bar entry (audiobooks source only) lists in-progress
+    books with chapter + progress; clicking opens the book."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    gateway.positions[BOOK_KEY] = {
+        "album_key": BOOK_KEY, "url": tracks[1]["url"],
+        "position_sec": 754, "duration_sec": 1800, "finished": 0,
+        "updated_at": 0, "book": "The Book", "author": "Author",
+        "art": "", "chapter_title": "Chapter 2"}
+    gateway.positions["done-book"] = {
+        "album_key": "done-book", "url": "http://stub/x", "position_sec": 1,
+        "duration_sec": 2, "finished": 1, "updated_at": 0,
+        "book": "Finished Book", "author": "", "art": "",
+        "chapter_title": ""}
+    _boot(page, stub)
+    page.select_option("#source-sel", "uuid:localfs-books")
+    page.wait_for_function(
+        "document.getElementById('source-sel').value === 'uuid:localfs-books'",
+        timeout=3000)
+    # The 📖 letter appears only on the audiobooks source.
+    page.wait_for_function(
+        "[...document.querySelectorAll('.letter-btn')].some(b=>b.textContent==='📖')",
+        timeout=3000)
+    page.evaluate("setLetter('📖')")
+    page.wait_for_function(
+        "document.getElementById('item-list').textContent.includes('The Book')",
+        timeout=3000)
+    body = page.text_content("#item-list")
+    assert "Chapter 2" in body and "12:34" in body
+    assert "Finished Book" not in body      # finished rows stay off the shelf
+    # Clicking the row opens the book view (album_tracks fetch fires).
+    gateway.clear_requests()
+    page.click("#item-list .row")
+    r = gateway.wait_for_request("/api/album_tracks", method="GET")
+    assert r is not None
+
+
+def test_chapter_picker_populates_and_seeks(page, stub, gateway):
+    """A chapter-atom track shows the 📑 picker; choosing one seeks."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    gateway.chapters[tracks[0]["url"]] = [
+        {"start": 0.0, "end": 0.4, "title": "Opening"},
+        {"start": 0.5, "end": 1.0, "title": "The Middle"},
+    ]
+    _boot(page, stub)
+    page.evaluate(f"""
+      browserQueue = {json.dumps(tracks)};
+      browserIdx = 0;
+      browserQueueIsBook = true;
+      _abApplyRate();
+      browserAudio.src = "/stream?url=" + encodeURIComponent(browserQueue[0].url);
+      _abLoadChapters(browserQueue[0]);
+      new Promise(res => browserAudio.addEventListener(
+        "loadedmetadata", () => res(true), {{once: true}}));
+    """)
+    page.wait_for_selector("#ab-chapters", state="visible", timeout=3000)
+    opts = page.locator("#ab-chapters option").all_text_contents()
+    assert any("The Middle" in o for o in opts)
+    page.select_option("#ab-chapters", "0.5")
+    page.wait_for_function("browserAudio.currentTime >= 0.5", timeout=2000)
+
+
+def test_sleep_timer_pauses_and_saves(page, stub, gateway):
+    """The sleep timer pauses playback when it fires; the pause listener
+    persists the position. Armed with a tiny fraction of a minute so the
+    test doesn't wait."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    _boot(page, stub)
+    gateway.clear_requests()
+    page.evaluate(f"""
+      browserQueue = {json.dumps(tracks)};
+      browserIdx = 0;
+      browserQueueIsBook = true;
+      _abApplyRate();
+      browserAudio.src = "/stream?url=" + encodeURIComponent(browserQueue[0].url);
+      new Promise(res => browserAudio.addEventListener(
+        "loadedmetadata", () => {{
+          browserAudio.play().catch(()=>{{}});
+          browserAudio.currentTime = 0.2;
+          _abSleepArm(0.005);   // ~0.3 s
+          res(true);
+        }}, {{once: true}}));
+    """)
+    page.wait_for_function("browserAudio.paused === true", timeout=4000)
+    r = gateway.wait_for_request(
+        "/api/position", method="POST",
+        match=lambda r: BOOK_KEY in r["body"])
+    assert r is not None
+
+
 def test_rate_control_applies_and_persists(page, stub, gateway):
     gateway.servers = [MUSIC, BOOKS]
     _seed_book(gateway)

@@ -933,6 +933,72 @@ def _delete_internet_radio_station(h, params):
 
 # ── Dispatcher ───────────────────────────────────────────────────
 
+# ── Bookmarks (P4, 2026-07-14) — CarPlay audiobook resume ───────────
+# Subsonic's bookmark = a saved position on a media file. Mapped onto
+# `playback_positions` (ONE row per book, keyed by album_key), the same
+# table the PWA and the Naim monitor write — so pausing in the car
+# resumes on the couch and vice versa. createBookmark on a chapter
+# replaces the book's row; deleteBookmark clears the book.
+
+def _iso(ts) -> str:
+    import datetime
+    try:
+        return datetime.datetime.fromtimestamp(
+            int(ts), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError, OSError):
+        return "1970-01-01T00:00:00Z"
+
+
+def _get_bookmarks(h, params):
+    """getBookmarks → every unfinished book with a saved position whose
+    chapter still resolves to a live track."""
+    out = []
+    for p in DB.positions_list(limit=200):
+        if p.get("finished"):
+            continue
+        t = DB.track_by_url(p["url"])
+        if not t:
+            continue   # orphan row (file gone / retagged) — skip, keep row
+        out.append({
+            "position": int(float(p["position_sec"]) * 1000),   # ms
+            "username": os.environ.get("SUBSONIC_USER", "user"),
+            "comment":  "",
+            "created":  _iso(p.get("updated_at")),
+            "changed":  _iso(p.get("updated_at")),
+            "entry":    _so_song(t),
+        })
+    _ok(h, {"bookmarks": {"bookmark": out}})
+
+
+def _create_bookmark(h, params):
+    """createBookmark?id=<track>&position=<ms>[&comment=] — save the
+    book's resume point at this chapter + offset."""
+    url = _track_id_decode(params.get("id", ""))
+    if not url:
+        return _fail(h, ERR_MISSING_PARAM, "id required")
+    try:
+        pos_ms = max(0, int(params.get("position", "0")))
+    except ValueError:
+        return _fail(h, ERR_MISSING_PARAM, "position must be an integer")
+    t = DB.track_by_url(url)
+    if not t:
+        return _fail(h, ERR_NOT_FOUND, "track not found")
+    key = t.get("album_key") or url   # root-level single-file book
+    DB.position_set(key, url, pos_ms / 1000.0)
+    _ok(h, {})
+
+
+def _delete_bookmark(h, params):
+    """deleteBookmark?id=<track> — clear the whole book's position."""
+    url = _track_id_decode(params.get("id", ""))
+    if not url:
+        return _fail(h, ERR_MISSING_PARAM, "id required")
+    t = DB.track_by_url(url)
+    key = (t.get("album_key") if t else "") or url
+    DB.position_clear(key)
+    _ok(h, {})
+
+
 _METHODS: dict[str, Callable] = {
     "ping":             _ping,
     "getLicense":       _get_license,
@@ -961,6 +1027,9 @@ _METHODS: dict[str, Callable] = {
     "createInternetRadioStation": _create_internet_radio_station,
     "updateInternetRadioStation": _update_internet_radio_station,
     "deleteInternetRadioStation": _delete_internet_radio_station,
+    "getBookmarks":     _get_bookmarks,
+    "createBookmark":   _create_bookmark,
+    "deleteBookmark":   _delete_bookmark,
     "getGenres":        _get_genres,
     "getScanStatus":    _get_scan_status,
     "getOpenSubsonicExtensions": _get_open_subsonic_extensions,

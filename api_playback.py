@@ -9,6 +9,7 @@ Handles: /api/renderer_state, /api/index/status, /api/index/rebuild,
 import http.client
 import json
 import logging
+import os
 import ssl
 import threading
 import urllib.parse
@@ -320,13 +321,54 @@ def book_meta_all_payload(params) -> tuple:
 
 
 def positions_list_payload(params) -> tuple:
-    """Core of GET /api/positions → (status, body). Newest-first list
-    of every book with a saved position (a continue-listening shelf)."""
+    """Core of GET /api/positions → (status, body). Newest-first list of
+    every book with a saved position, enriched with the chapter's track
+    row (book/author/art + chapter title) so the PWA's continue-listening
+    shelf renders without N follow-up queries. Orphan rows (chapter file
+    gone) still appear with their bare position fields."""
     try:
         limit = int(params.get("limit", "50"))
     except ValueError:
         limit = 50
-    return 200, {"positions": DB.positions_list(limit)}
+    out = []
+    for p in DB.positions_list(limit):
+        t = DB.track_by_url(p["url"]) or {}
+        p = dict(p)
+        p["book"]          = t.get("album", "")
+        p["author"]        = t.get("artist", "")
+        p["art"]           = t.get("art", "")
+        p["chapter_title"] = t.get("title", "")
+        out.append(p)
+    return 200, {"positions": out}
+
+
+# In-memory chapter cache keyed by (url, file mtime) — chapter atoms only
+# change when the file does, and ffprobe on a local file is ~100 ms; the
+# cache makes the PWA's per-track fetch free on repeats.
+_chapters_cache: dict = {}
+
+
+def chapters_payload(params) -> tuple:
+    """Core of GET /api/chapters?url= → (status, body). Chapter atoms of
+    a (typically single-file m4b) audiobook track. {"chapters": []} when
+    the file has none or ffprobe is unavailable — the PWA just shows no
+    chapter picker."""
+    import dlna_ffmpeg
+    url = (params.get("url") or "").strip()
+    if not url:
+        return 400, {"error": "missing url"}
+    t = DB.track_by_url(url)
+    if not t:
+        return 404, {"error": "track not in library"}
+    path = t.get("file_path") or ""
+    if not path or not os.path.exists(path):
+        return 200, {"chapters": []}
+    key = (url, os.path.getmtime(path))
+    if key not in _chapters_cache:
+        if len(_chapters_cache) > 500:
+            _chapters_cache.clear()
+        _chapters_cache[key] = dlna_ffmpeg.probe_chapters(path)
+    return 200, {"chapters": _chapters_cache[key]}
 
 
 def lyrics_payload(params) -> tuple:
@@ -386,6 +428,13 @@ def render_queue(h, body):
         udn    = data.get("udn", "")
         tracks = data.get("tracks", [])
         force  = bool(data.get("force", False))
+        # Audiobooks (P3): resume offset within the first track + the
+        # book flag that turns on the monitor's position persistence.
+        is_book = bool(data.get("book", False))
+        try:
+            start_at = max(0.0, float(data.get("start_at_sec") or 0))
+        except (TypeError, ValueError):
+            start_at = 0.0
         rnd    = RENDERERS.get(udn)
         if not rnd:
             h._json(404, {"error": f"Renderer {udn!r} not found"})
@@ -420,7 +469,8 @@ def render_queue(h, body):
         def _start_safe(q=queue, av_url=rnd.av_url, rc_url=rnd.rc_url,
                         tracks=tracks, name=rnd.name):
             try:
-                q.start(av_url, tracks, name, rc_url=rc_url)
+                q.start(av_url, tracks, name, rc_url=rc_url,
+                        start_at_sec=start_at, is_book=is_book)
             except Exception:
                 log.exception(
                     f"RendererQueue.start crashed for {name} — "

@@ -142,6 +142,42 @@ def probe(path: str, ffprobe: str = None):
         return None
 
 
+def parse_chapters(data: dict) -> list:
+    """ffprobe -show_chapters JSON → [{"start": sec, "end": sec|None,
+    "title": str}], sorted by start. Untitled chapters get 'Chapter N'."""
+    out = []
+    for i, ch in enumerate(data.get("chapters") or []):
+        start = _to_float(ch.get("start_time"))
+        if start is None:
+            continue
+        title = ((ch.get("tags") or {}).get("title") or "").strip()
+        out.append({"start": start,
+                    "end": _to_float(ch.get("end_time")),
+                    "title": title or f"Chapter {i + 1}"})
+    out.sort(key=lambda c: c["start"])
+    return out
+
+
+def probe_chapters(path: str, ffprobe: str = None) -> list:
+    """Chapter atoms of a media file (single-file m4b audiobooks carry
+    them). [] when ffprobe is unavailable, the probe fails, or the file
+    simply has no chapters — callers need no distinction."""
+    exe = ffprobe or find_ffprobe()
+    if not exe:
+        return []
+    try:
+        r = subprocess.run(
+            [exe, "-v", "quiet", "-print_format", "json",
+             "-show_chapters", path],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return []
+        return parse_chapters(json.loads(r.stdout))
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        log.debug("ffprobe chapters failed for %s: %s", path, e)
+        return []
+
+
 # ── poster frame ──────────────────────────────────────────────────
 
 def poster_cmd(path: str, out_path: str, when: str = "00:00:03",
