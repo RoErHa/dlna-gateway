@@ -73,9 +73,40 @@ class TestExtractSeries(unittest.TestCase):
         self.assertEqual(extract_series([{}, {"series": []}]), ("", None))
 
     def test_most_common_number_wins(self):
-        editions = [{"series": ["S #2"]}, {"series": ["S #2"]},
-                    {"series": ["S #3"]}]
-        self.assertEqual(extract_series(editions), ("S", 2.0))
+        editions = [{"series": ["Saga #2"]}, {"series": ["Saga #2"]},
+                    {"series": ["Saga #3"]}]
+        self.assertEqual(extract_series(editions), ("Saga", 2.0))
+
+    def test_publisher_series_rejected(self):
+        """Imprint series are edition bookkeeping (real sweep data:
+        'Penguin twentieth-century classics', 'SF Masterworks')."""
+        editions = [{"series": ["Penguin twentieth-century classics"]},
+                    {"series": ["SF Masterworks (12)"]}]
+        self.assertEqual(extract_series(editions), ("", None))
+
+    def test_tiny_junk_names_rejected(self):
+        self.assertEqual(extract_series([{"series": ["v. 4"]}]), ("", None))
+
+    def test_latin_script_preferred_over_translation(self):
+        """A foreign edition's series name must not beat the Latin one
+        (real sweep data: Armenian 'Narniayi kʻroniknerě')."""
+        editions = [{"series": ["Narniayi kʻroniknerě (5)"]},
+                    {"series": ["The Chronicles of Narnia (5)"]}]
+        name, num = extract_series(editions)
+        self.assertEqual(name, "The Chronicles of Narnia")
+        self.assertEqual(num, 5.0)
+
+    def test_multi_series_string_split(self):
+        """One edition string carrying several series (real sweep data:
+        The Alloy of Law) — each fragment parses separately."""
+        editions = [
+            {"series": ["Mistborn, Era 2: Wax & Wayne (#1), "
+                        "The Mistborn Saga (#4), The Cosmere #16"]},
+            {"series": ["The Mistborn Saga (4)"]},
+        ]
+        name, num = extract_series(editions)
+        self.assertEqual(name, "The Mistborn Saga")
+        self.assertEqual(num, 4.0)
 
     def test_catalog_numbers_rejected(self):
         """A publisher catalog entry ("Frye annotated #1249", real case:
