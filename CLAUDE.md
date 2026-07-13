@@ -1792,11 +1792,17 @@ folder-name parsing ("57 - The Reality Dysfunction - Peter F Hamilton -
 overlap guard; series majority-voted from the work's editions'
 `series` strings ("Discworld (13)", "Name #3", "Name, Book 3", "Book 3
 of Name"; number is REAL so novellas are #1.5). Hard-won guards from
-the first live batch: **catalog numbers > 100 reject the whole entry**
+the first live batches: **catalog numbers > 100 reject the whole entry**
 (a "Frye annotated #1249" publisher series is bookkeeping, not a story
-series) and **short titles (<3 words) never retry title-only** (the
+series); **short titles (<3 words) never retry title-only** (the
 narrator-in-artist fallback matched "Alpha" to Lisi Harrison's
-"Alphas"). Transport failures are transient (NOT cached — retried next
+"Alphas"); **publisher/imprint series rejected** (curated blocklist +
+the "Series (Publisher)" wordy-paren form — "SF Masterworks",
+"Historia (DeBolsillo)"); **multi-series edition strings split** into
+separate candidates; and **≥2 non-ASCII chars hard-reject a series
+name** — the USER RULE that books are English/Dutch ONLY means a
+translated edition's series ("Madaʻ bidyoni", Armenian Narnia, pinyin)
+is never valid data. Transport failures are transient (NOT cached — retried next
 run); a confident miss is a sticky `notfound`; `manual` rows are never
 overwritten. ~1 req/s, identifying UA (contact email from `.env`).
 Root-level single-file books (album_key='') are skipped — give them a
