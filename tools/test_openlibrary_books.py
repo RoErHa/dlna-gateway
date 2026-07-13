@@ -87,6 +87,18 @@ class TestExtractSeries(unittest.TestCase):
     def test_tiny_junk_names_rejected(self):
         self.assertEqual(extract_series([{"series": ["v. 4"]}]), ("", None))
 
+    def test_numeric_only_names_rejected(self):
+        """Real sweep data: series '101' on the per-disk Eichmann rows —
+        an all-digit name is a catalog artefact, not a series."""
+        self.assertEqual(extract_series([{"series": ["101"]}]), ("", None))
+
+    def test_italian_imprint_rejected(self):
+        """Real sweep data: 'Oscar Moderni Cult' (Mondadori imprint) —
+        pure ASCII, wordy, paren-free; only the blocklist catches it."""
+        self.assertEqual(
+            extract_series([{"series": ["Oscar Moderni Cult (33)"]}]),
+            ("", None))
+
     def test_publisher_paren_suffix_rejected(self):
         """'Series (Publisher)' form (real sweep data: 'Historia
         (DeBolsillo)', 'Madaʻ bidyoni (Keter)') is an imprint marker."""
