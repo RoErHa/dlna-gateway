@@ -742,7 +742,10 @@ The remaining **78** unindexed files are SAME-folder same-tag collisions
 (alternate takes tagged identically, disc-subfolder folding putting two
 "Jamming"s in one album_key, untagged "NN Track.flac" junk) — genuine
 tag ambiguities; fix by real retagging (interactive `beets --timid`
-session) if ever worth it. The bigger find: **10,859 of 10,890 manual
+session) if ever worth it. The full audit report — and the proposed
+**audiobooks plan** (second LocalFs root + `playback_positions`
+cross-session resume; P1–P5) — is `docs/REPORTS.html` (self-contained
+HTML, open in any browser). The bigger find: **10,859 of 10,890 manual
 `metadata_overrides` are ORPHANED** — 10,810 still key on dead AssetUPnP
 `:26125` URLs (the ~10k `improve_song_years` year corrections + user
 edits) and 49 on the old `:8201` LocalFs port, so the original-year
