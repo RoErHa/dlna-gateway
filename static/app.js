@@ -188,6 +188,9 @@ function _abApplyRate(){
   browserAudio.playbackRate=on?_abRate:1;
   const sel=$("ab-rate");
   if(sel){sel.style.display=on?"":"none";sel.value=String(_abRate);}
+  // The time slider is drag/tap-seekable ONLY for audiobook queues.
+  const st=$("seek-track");
+  if(st) st.classList.toggle("seekable", on);
 }
 (()=>{const sel=$("ab-rate");
   if(sel)sel.addEventListener("change",()=>{
@@ -1305,6 +1308,7 @@ async function playTracklist(tracks, title, artist, opts={}){
   } else {
     // UPnP renderer
     browserQueueIsBook=false;
+    _abApplyRate();
     const rendUdn=out.replace("upnp:","");
     if(!await sendRenderQueue(rendUdn, tracks)) return;
     const rname=renderers[rendUdn]?.name||rendUdn;
@@ -2253,12 +2257,41 @@ function resetPlayer(){
   $("t-pos").textContent="0:00";$("t-dur").textContent="0:00";curItemId=null;
 }
 
+// ── Time slider — interactive for AUDIOBOOKS only ─────────────────
+// Music (browser or Naim) keeps a display-only bar: scrubbing a song
+// is an accident there, scrubbing a 40-minute chapter is the feature.
+// Pointer events cover mouse AND touch (the old mouse-only handlers
+// were dead on the iOS PWA); duration comes from the <audio> element
+// (the old handlers read the stale renderer snapshot in browser mode).
 const seekTrack=$("seek-track");
+function _seekAllowed(){return browserQueueIsBook&&activeDevice==="browser";}
+function _seekDur(){return _seekAllowed()?(isNaN(browserAudio.duration)?0:browserAudio.duration):(ps.duration||0);}
 function pct(e){const r=seekTrack.getBoundingClientRect();return Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));}
-function applyPct(p){$("seek-fill").style.width=(p*100)+"%";$("seek-thumb").style.left=(p*100)+"%";$("t-pos").textContent=fmtSec(p*(ps.duration||0));}
-seekTrack.addEventListener("mousedown",e=>{seeking=true;seekTrack.classList.add("dragging");const p=pct(e);applyPct(p);seekTarget=p*(ps.duration||0);});
-document.addEventListener("mousemove",e=>{if(!seeking)return;const p=pct(e);applyPct(p);seekTarget=p*(ps.duration||0);});
-document.addEventListener("mouseup",()=>{if(!seeking)return;seeking=false;seekTrack.classList.remove("dragging");control({action:"seek_abs",value:seekTarget});});
+function applyPct(p){$("seek-fill").style.width=(p*100)+"%";$("seek-thumb").style.left=(p*100)+"%";$("t-pos").textContent=fmtSec(p*_seekDur());}
+seekTrack.addEventListener("pointerdown",e=>{
+  if(!_seekAllowed()||!_seekDur())return;
+  seeking=true;seekTrack.classList.add("dragging");
+  try{seekTrack.setPointerCapture(e.pointerId);}catch(err){}
+  const p=pct(e);applyPct(p);seekTarget=p*_seekDur();
+  e.preventDefault();
+});
+seekTrack.addEventListener("pointermove",e=>{
+  if(!seeking)return;
+  const p=pct(e);applyPct(p);seekTarget=p*_seekDur();
+});
+seekTrack.addEventListener("pointerup",()=>{
+  if(!seeking)return;
+  seeking=false;seekTrack.classList.remove("dragging");
+  control({action:"seek_abs",value:seekTarget});
+});
+seekTrack.addEventListener("pointercancel",()=>{
+  seeking=false;seekTrack.classList.remove("dragging");
+});
+// A completed seek is worth persisting immediately — resuming on the
+// phone right after scrubbing on the desktop should land on the new spot.
+browserAudio.addEventListener("seeked",()=>{
+  if(browserQueueIsBook&&!seeking) _abSavePosition("seek");
+});
 
 async function pollState(){
   // Poll the right player depending on active output
