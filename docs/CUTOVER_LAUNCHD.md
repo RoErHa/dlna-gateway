@@ -1,5 +1,12 @@
 # 2.0 Cutover — the LaunchAgent (plist draft)
 
+> **⚠ HISTORICAL (superseded 2026-07-13).** The plist below shows config
+> keys (`GW_UDN`, `LOCALFS_*`, …) inside `EnvironmentVariables` — that
+> was the cutover-era layout. **All configuration now lives in `.env`**
+> (see `.env.example`); the live plist carries only PATH + the launch
+> command. Never add config keys back to the plist: plist env OVERRIDES
+> `.env`.
+
 Companion to **`CUTOVER_RUNBOOK.md`**. This is the 2.x `com.roha.dlna-gateway`
 LaunchAgent that **adopts 1.x's identity** so the Naim, CarPlay/Amperfy,
 Subsonic and the PWA keep their existing connections after cutover.

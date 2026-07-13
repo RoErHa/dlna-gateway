@@ -57,43 +57,16 @@
     <key>StandardErrorPath</key>
     <string>/tmp/dlna-gateway.err</string>
 
+    <!-- ALL gateway configuration lives in <repo>/.env — the single
+         source (2026-07-13; see .env.example for every key). This plist
+         carries ONLY PATH: dlna_config loads .env at startup, and a key
+         set here would OVERRIDE .env — so never add config keys back.
+         GW_UDN / GW_NAME / APP_VERSION / LOCALFS_* / AUDIOBOOKS_ROOT /
+         SUBSONIC_* all come from .env. -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-
-        <!-- Identity adopted from 1.x (locked-in decisions) -->
-        <key>GW_UDN</key>
-        <string>uuid:dlna-gateway-iina-8765</string>
-        <key>GW_NAME</key>
-        <string>DLNA Gateway (IINA)</string>
-        <key>APP_VERSION</key>
-        <string>2.0.0</string>
-
-        <!-- LocalFs: same music root + 1.x's :8200 so stream URLs are
-             byte-identical to 1.x's → copied play_counts/lyrics/overrides
-             match after the step-5 force rebuild. -->
-        <key>LOCALFS_MUSIC_ROOT</key>
-        <string>/Volumes/SAMDATA/Music</string>
-        <key>LOCALFS_PORT</key>
-        <string>8200</string>
-
-        <!-- Video library (separate root). Enables the GWMovies scan + the
-             "📹 Videos" folder in the gateway server (for the LG TV / PWA;
-             served from the same :8200). Unset = video disabled. -->
-        <key>LOCALFS_VIDEO_ROOT</key>
-        <string>/Volumes/SAMDATA/GWMovies</string>
-
-        <!-- /gw/* (UPnP for the Naim) + the SSDP advert are served by the app
-             on the plain :8765 bind (GATEWAY_PLAIN_PORT defaults to 8765) — no
-             separate device port. GATEWAY_PORT was retired in Cleanup C. -->
-
-        <!-- Subsonic (CarPlay/Amperfy): SUBSONIC_USER / SUBSONIC_PASSWORD come
-             from .env (gitignored), NOT from this plist. The gateway loads
-             .env via dlna_config; plist EnvironmentVariables would OVERRIDE
-             .env, so these keys are deliberately absent — .env is the single
-             source for all names / emails / passwords. An empty/unset password
-             makes /rest/* return 503 (safe default). -->
     </dict>
 </dict>
 </plist>
