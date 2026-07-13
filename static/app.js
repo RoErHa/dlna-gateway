@@ -100,9 +100,77 @@ async function _renderNpYear(url){
 let shuffleEnabled=(()=>{const v=localStorage.getItem("dlna_shuffle");return v===null?true:v==="1";})();
 
 browserAudio.addEventListener("ended",()=>{
+  _abSavePosition("ended");   // audiobook: persist end-of-chapter (no-op for music)
   if(browserIdx<browserQueue.length-1){browserIdx++;_browserPlayIdx(browserIdx);}
   else{activeDevice="browser";} // playlist done
 });
+
+// ── Audiobook resume positions (P2) ───────────────────────────────
+// Active only when the current browser queue came from the audiobooks
+// source (curServer.kind === "audiobooks" at queue time — set via
+// playTracklist's opts.book, never inferred from the playing track, so
+// a music playlist can't trigger position writes). One row per book
+// (album_key) on the server; saves are fire-and-forget.
+let browserQueueIsBook=false;
+const _AB_SAVE_MS=20000;
+let _abLastSave=0;
+const _AB_FINISH_TAIL_SEC=60;   // last chapter, final minute → finished
+
+function _abSavePosition(ev){
+  if(!browserQueueIsBook) return;
+  const t=browserQueue[browserIdx];
+  if(!t||!t.url) return;
+  // Book identity = its folder (album_key). A single-file book at the
+  // library ROOT has album_key='' — fall back to the file URL so those
+  // books don't all share one position row.
+  const key=t.album_key||t.url;
+  const dur=browserAudio.duration;
+  const pos=browserAudio.currentTime||0;
+  if(!dur||isNaN(dur)) return;
+  const isLast=browserIdx===browserQueue.length-1;
+  const finished=isLast&&(dur-pos)<=_AB_FINISH_TAIL_SEC;
+  const body=JSON.stringify({album_key:key,url:t.url,
+    position_sec:pos,duration_sec:dur,finished});
+  _abLastSave=Date.now();
+  if(ev==="hide"&&navigator.sendBeacon){
+    // Tab hidden / phone locked mid-listen — beacon survives the freeze.
+    navigator.sendBeacon("/api/position",new Blob([body],{type:"application/json"}));
+    return;
+  }
+  fetch("/api/position",{method:"POST",
+    headers:{"Content-Type":"application/json"},body}).catch(()=>{});
+}
+browserAudio.addEventListener("timeupdate",()=>{
+  if(!browserQueueIsBook) return;
+  if(Date.now()-_abLastSave<_AB_SAVE_MS) return;
+  _abSavePosition("tick");
+});
+browserAudio.addEventListener("pause",()=>{
+  if(browserQueueIsBook&&browserAudio.currentTime>0) _abSavePosition("pause");
+});
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="hidden"&&browserQueueIsBook&&!browserAudio.paused){
+    _abSavePosition("hide");
+  }
+});
+
+// Playback speed (audiobooks, browser output only — narration pace, not
+// a music feature; the Naim has no UPnP rate control). Persisted.
+let _abRate=(()=>{const v=parseFloat(localStorage.getItem("dlna_ab_rate"));
+  return (v>=0.5&&v<=3)?v:1;})();
+function _abApplyRate(){
+  const on=browserQueueIsBook;
+  browserAudio.defaultPlaybackRate=on?_abRate:1;
+  browserAudio.playbackRate=on?_abRate:1;
+  const sel=$("ab-rate");
+  if(sel){sel.style.display=on?"":"none";sel.value=String(_abRate);}
+}
+(()=>{const sel=$("ab-rate");
+  if(sel)sel.addEventListener("change",()=>{
+    _abRate=parseFloat(sel.value)||1;
+    localStorage.setItem("dlna_ab_rate",String(_abRate));
+    if(browserQueueIsBook){browserAudio.playbackRate=_abRate;}
+  });})();
 // ── <audio> error handling ───────────────────────────────────────
 // MediaError.code mapping:
 //   1 MEDIA_ERR_ABORTED        — user/script aborted (not our concern, ignore)
@@ -272,6 +340,9 @@ browserAudio.addEventListener("timeupdate",()=>{
 function _browserPlayIdx(idx){
   const t=browserQueue[idx];if(!t)return;
   browserAudio.src=`/stream?url=${enc(t.url)}`;
+  // Loading a new src resets playbackRate to defaultPlaybackRate in some
+  // engines — re-assert the audiobook speed per chapter.
+  if(browserQueueIsBook){browserAudio.playbackRate=_abRate;}
   _playBrowserAudio("queue_advance");
   $("np-title").textContent=t.title||"";
   $("np-artist").textContent=t.artist||"";
@@ -791,6 +862,8 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   // Hide the star until the track count is known so single-track
   // "albums" (orphan metadata-less tracks) never expose it.
   _setAlbumFavStar(false, false);
+  const rbtn = $("browse-resume");
+  if(rbtn) rbtn.style.display = "none";
   const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
   const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
@@ -798,6 +871,55 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   const tracks = data.tracks||[];
   renderListAppend({containers:[], items: tracks});
   if(tracks.length > 1){ _wireAlbumFavStar(artist, album, albumKey); }
+  if(curServer?.kind==="audiobooks" && tracks.length){
+    // Same fallback as the save path: a root-level single-file book has
+    // album_key='' and keys its position by the file URL instead.
+    _wireResumeButton(artist, album,
+                      albumKey||tracks[0].album_key||tracks[0].url, tracks);
+  }
+}
+
+// ── Audiobook resume button (book header) ────────────────────────
+// Shown only on the audiobooks source, only when the book has a saved
+// position. finished=1 → "start over" from chapter 1.
+async function _wireResumeButton(artist, album, albumKey, tracks){
+  const btn=$("browse-resume");
+  if(!btn||!albumKey) return;
+  try{
+    const r=await api(`/api/position?album_key=${enc(albumKey)}`);
+    if(!r) return;
+    const pos=(await r.json()).position;
+    if(!pos) return;
+    if(pos.finished){
+      btn.textContent="↻ Start over";
+      btn.title="Book finished — play again from chapter 1";
+    }else{
+      const idx=tracks.findIndex(t=>t.url===pos.url);
+      const ch=idx>=0?`Ch ${idx+1} — `:"";
+      btn.textContent=`▶ Resume · ${ch}${fmtSec(pos.position_sec)}`;
+      btn.title="Continue from where you stopped";
+    }
+    btn.style.display="";
+    btn.onclick=()=>_resumeBook(artist, album, tracks, pos);
+  }catch(e){ /* no button — Play all still works */ }
+}
+
+function _resumeBook(artist, album, tracks, pos){
+  if(pos.finished){
+    playTracklist(tracks.slice(), album, artist, {book:true});
+    return;
+  }
+  let idx=tracks.findIndex(t=>t.url===pos.url);
+  let seekTo=pos.position_sec||0;
+  if(idx<0){ idx=0; seekTo=0; }   // chapter file renamed/gone → book start
+  playTracklist(tracks.slice(idx), album, artist, {book:true});
+  // Browser path: jump to the saved offset once the chapter's metadata
+  // loads. Renderer path resumes at chapter granularity until P3 adds
+  // AVTransport Seek.
+  if($("output-sel").value==="browser" && seekTo>1){
+    browserAudio.addEventListener("loadedmetadata",
+      ()=>{try{browserAudio.currentTime=seekTo;}catch(e){}}, {once:true});
+  }
 }
 
 // ── Album favourite star (album header) ──────────────────────────
@@ -1068,7 +1190,8 @@ async function playAlbumFromDB(artist,album,albumKey=""){
   if(!r){toast("Failed to load album");return;}
   const data=await r.json();
   if(!data.tracks||!data.tracks.length){toast("No tracks found for this album");return;}
-  await playTracklist(data.tracks, album, artist);
+  await playTracklist(data.tracks, album, artist,
+                      {book: curServer?.kind==="audiobooks"});
 }
 
 // POST a queue to a UPnP renderer. Handles the server's 409 "renderer busy"
@@ -1097,10 +1220,12 @@ async function sendRenderQueue(udn, tracks){
 }
 
 // Central function: play a list of track objects via whatever output is selected
-async function playTracklist(tracks, title, artist){
+// opts.book=true → audiobook queue: never shuffled (chapter order is the
+// content), and the browser path saves resume positions while it plays.
+async function playTracklist(tracks, title, artist, opts={}){
   _exitRadioMode();   // a normal queue replaces any radio session
   // Apply shuffle before anything else so art/title reflect actual first track
-  if(shuffleEnabled) tracks=shuffle(tracks);
+  if(shuffleEnabled && !opts.book) tracks=shuffle(tracks);
   const out=$("output-sel").value;
   const first=tracks[0];
 
@@ -1119,10 +1244,13 @@ async function playTracklist(tracks, title, artist){
 
   if(out==="browser"){
     browserQueue=tracks;browserIdx=0;
+    browserQueueIsBook=!!opts.book;
+    _abApplyRate();
     _browserPlayIdx(0);
     toast(`▶ Playing ${tracks.length} tracks in browser`);
   } else {
     // UPnP renderer
+    browserQueueIsBook=false;
     const rendUdn=out.replace("upnp:","");
     if(!await sendRenderQueue(rendUdn, tracks)) return;
     const rname=renderers[rendUdn]?.name||rendUdn;
@@ -1692,7 +1820,7 @@ async function playStation(st){
   _updateMiniPlayer({title:st.name,artist:"📻 Radio",art:st.favicon||""});
 
   if(out==="browser"){
-    browserQueue=[];browserIdx=0;
+    browserQueue=[];browserIdx=0;browserQueueIsBook=false;_abApplyRate();
     browserAudio.src=`/radio_stream?url=${enc(st.stream_url)}`;
     _playBrowserAudio("radio_station");
     toast(`📡 ${st.name}`);
@@ -1922,6 +2050,7 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
 
   if(out==="browser"){
     browserQueue=[{url,title,artist,album,art,mime:""}];browserIdx=0;
+    browserQueueIsBook=false;_abApplyRate();
     browserAudio.src=`/stream?url=${enc(url)}`;
     _playBrowserAudio("single_track_send");
     toast("▶ Streaming in browser…");
@@ -2031,7 +2160,7 @@ async function control(cmd){
         break;
       case "stop":
         browserAudio.pause();browserAudio.src="";browserAudio.load();
-        browserQueue=[];browserIdx=0;
+        browserQueue=[];browserIdx=0;browserQueueIsBook=false;_abApplyRate();
         $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
         break;
       case "next":

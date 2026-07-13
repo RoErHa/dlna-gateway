@@ -75,6 +75,7 @@
     <div class="browse-section-hdr" id="browse-section-hdr" style="display:none">
       <span id="browse-section-title"></span>
       <button class="icon-btn" style="display:none;font-size:18px;padding:0 6px" id="browse-fav-album" data-fav="0" title="Favourite this album">☆</button>
+      <button class="btn" style="display:none;font-size:11px;padding:4px 10px" id="browse-resume" title="Continue from where you stopped">▶ Resume</button>
       <button class="btn primary" style="font-size:11px;padding:4px 10px" id="browse-play-all">▶ Play all</button>
     </div>
     <!-- Main list -->
@@ -128,6 +129,14 @@
       <div class="sep" style="margin:0 8px"></div>
       <button class="btn" id="btn-shuffle" title="Toggle shuffle">🔀</button>
       <button class="btn" id="btn-radio" title="Radio — 100 random tracks from library" style="margin-left:4px">📻</button>
+      <select class="btn" id="ab-rate" title="Audiobook playback speed (browser output)" style="display:none;margin-left:4px">
+        <option value="0.8">0.8×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="1.75">1.75×</option>
+        <option value="2">2×</option>
+      </select>
     </div>
   </div>
   <!-- RIGHT: playlists panel -->

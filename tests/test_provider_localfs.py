@@ -391,6 +391,61 @@ class TestRescan(unittest.TestCase):
         self.assertEqual(row["genre"], "Jazz")
         self.assertEqual(row["year"], 1969)
 
+    def test_two_providers_share_cache_without_clobbering(self):
+        """The localfs_files cache is shared by every provider (music +
+        audiobooks). Each provider's rescan must only see ITS root's
+        rows — unscoped, provider A's removed-detection would purge
+        provider B's cache (and tracks) on every pass. (2026-07-13)"""
+        rootB = Path(tempfile.mkdtemp(prefix="localfs-ab-test-")).resolve()
+        try:
+            self._write_file("Artist/Album/song.flac")
+            (rootB / "Author" / "Book").mkdir(parents=True)
+            (rootB / "Author" / "Book" / "ch1.mp3").write_bytes(b"\0" * 16)
+            pA = LocalFsProvider(self.db, self.root)
+            pB = LocalFsProvider(self.db, rootB, id_namespace="audiobooks")
+
+            def tags_any_root(path: Path) -> dict:
+                # _fake_tags assumes self.root; B's files live elsewhere.
+                return {"title": path.stem, "artist": path.parent.parent.name,
+                        "album": path.parent.name, "genre": "",
+                        "duration": "0:03:00", "bit_depth": 16,
+                        "sample_rate": 44100, "year": None,
+                        "track_number": 1, "mime": "audio/flac"}
+
+            with patch("dlna_providers.localfs._require_mutagen"), \
+                 patch("dlna_providers.localfs._read_tags",
+                       side_effect=tags_any_root), \
+                 patch("dlna_providers.localfs._extract_art_hash",
+                       return_value=None):
+                pA.rescan()
+                pB.rescan()
+                # A's second pass must not see B's paths as "removed".
+                statsA = pA.rescan()
+            self.assertEqual(statsA["removed"], 0)
+            self.assertEqual(self.db.track_count(pA.udn), 1)
+            self.assertEqual(self.db.track_count(pB.udn), 1)
+        finally:
+            for p in sorted(rootB.rglob("*"), reverse=True):
+                p.unlink() if p.is_file() else p.rmdir()
+            rootB.rmdir()
+
+    def test_id_namespace_prevents_cross_root_collisions(self):
+        from dlna_providers.localfs import _track_id_for
+        rel = "Author/Book/ch1.mp3"
+        self.assertNotEqual(_track_id_for(rel),
+                            _track_id_for(rel, "audiobooks"))
+        # No namespace → byte-identical to the legacy derivation, so
+        # every existing music URL/playlist row stays valid.
+        import hashlib
+        self.assertEqual(_track_id_for(rel),
+                         hashlib.sha1(rel.encode()).hexdigest()[:16])
+
+    def test_m4b_is_audio(self):
+        from dlna_providers.localfs import _is_audio_file, _mime_for
+        self.assertTrue(_is_audio_file(Path("book/ch1.m4b")))
+        self.assertTrue(_is_audio_file(Path("book/CH1.M4B")))
+        self.assertEqual(_mime_for(".m4b"), "audio/mp4")
+
     def test_force_rescan_updates_metadata_without_file_change(self):
         """`force=True` re-reads tags even when (mtime, size) is
         unchanged — new tag values must reach the tracks row."""

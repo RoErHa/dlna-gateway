@@ -64,6 +64,7 @@ _AUDIO_EXTENSIONS = frozenset((
     ".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac",
     ".wav", ".aiff", ".aif", ".alac",
     ".dsf", ".dff", ".ape", ".wma",
+    ".m4b",   # audiobooks (MP4 container, same as .m4a)
 ))
 
 
@@ -94,13 +95,21 @@ def _album_key_for(rel_path: str) -> str:
     return parent
 
 
-def _track_id_for(rel_path: str) -> str:
+def _track_id_for(rel_path: str, namespace: str = "") -> str:
     """Stable per-file identifier — survives rescans. The lesson
     from AssetUPnP's `d-<id>` was: NEVER auto-increment. Use a
     content-derived hash of the relative path so renaming a file
     legitimately produces a new id while a re-walk produces the same
-    id."""
-    return hashlib.sha1(rel_path.encode("utf-8")).hexdigest()[:16]
+    id.
+
+    `namespace` (2026-07-13, audiobooks): a SECOND provider root can
+    contain the same rel_path as the music root, and the file server
+    resolves `/localfs/stream/<id>` by obj_id across ALL localfs UDNs
+    — so ids from secondary roots are salted with a namespace. The
+    music root keeps namespace='' so every existing URL/playlist row
+    stays byte-identical."""
+    key = f"{namespace}\x00{rel_path}" if namespace else rel_path
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
 def _udn_for_root(root: Path) -> str:
@@ -200,6 +209,7 @@ _MIME_BY_EXT = {
     ".ogg":  "audio/ogg",
     ".opus": "audio/opus",
     ".m4a":  "audio/mp4",
+    ".m4b":  "audio/mp4",
     ".aac":  "audio/aac",
     ".wav":  "audio/x-wav",
     ".aiff": "audio/x-aiff",
@@ -300,7 +310,7 @@ class LocalFsProvider:
     name = "localfs"
 
     def __init__(self, library_db: Any, music_root: Path | str,
-                 *, base_url: str = ""):
+                 *, base_url: str = "", id_namespace: str = ""):
         self._library = library_db
         self._root = Path(music_root).expanduser().resolve()
         self.udn: str = _udn_for_root(self._root)
@@ -309,6 +319,11 @@ class LocalFsProvider:
         # stream_url(track_id) emit a full Naim-fetchable URL. Empty
         # means the server isn't running yet → stream_url raises.
         self._base_url: str = base_url.rstrip("/")
+        # Secondary roots (audiobooks) salt their track ids so a
+        # rel_path shared with the music root can't collide on obj_id
+        # (the file server resolves ids across ALL localfs UDNs). The
+        # music root passes '' → ids unchanged.
+        self._id_namespace: str = id_namespace
 
     # ── Public surface ──────────────────────────────────────────
 
@@ -386,7 +401,7 @@ class LocalFsProvider:
                 rel = str(fs_path.relative_to(self._root))
             except ValueError:
                 rel = abs_path     # symlink-out / weird case; defensive
-            track_id = _track_id_for(rel)
+            track_id = _track_id_for(rel, self._id_namespace)
             tags = _read_tags(fs_path)
             if tags is None:
                 stats["malformed"] += 1
@@ -671,13 +686,21 @@ class LocalFsProvider:
 
     def _load_cache(self) -> dict[str, tuple[float, int, str]]:
         """Snapshot localfs_files into a path → (mtime, size,
-        track_id) map. Done once per scan; cheap even for 50k rows."""
+        track_id) map. Done once per scan; cheap even for 50k rows.
+
+        Scoped to THIS provider's root (2026-07-13): the table is shared
+        by every LocalFs provider (music + audiobooks), and the rescan's
+        removed-detection treats any cached path it didn't walk as
+        deleted — unscoped, each provider's scan would purge the other's
+        cache rows on every pass."""
+        prefix = str(self._root) + os.sep
         out: dict[str, tuple[float, int, str]] = {}
         with self._library._pool.read() as conn:
             for path, mtime, size, track_id in conn.execute(
                     "SELECT path, mtime, size, track_id "
                     "FROM localfs_files"):
-                out[path] = (mtime, size, track_id)
+                if path.startswith(prefix):
+                    out[path] = (mtime, size, track_id)
         return out
 
     def __repr__(self) -> str:

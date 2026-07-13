@@ -75,6 +75,8 @@ class StubGateway:
         self.icy_title: str = ""               # /api/radio/nowplaying
         self.sse_events: list[dict] = []       # frames /api/events emits on connect
         self.videos: list[dict] = []           # GET /api/videos (V2-PWA)
+        # audiobook resume positions keyed by album_key (P2)
+        self.positions: dict[str, dict] = {}
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -343,6 +345,13 @@ class _Handler(BaseHTTPRequestHandler):
                 tracks = gw.album_tracks.get((artist, album), [])
             self._send_json({"tracks": tracks})
             return
+        if path == "/api/position":
+            self._send_json(
+                {"position": gw.positions.get(q.get("album_key", ""))})
+            return
+        if path == "/api/positions":
+            self._send_json({"positions": list(gw.positions.values())})
+            return
         if path == "/api/search":
             qstr = (q.get("q") or "").lower()
             res = gw.search_results.get(qstr)
@@ -533,6 +542,20 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
             return
         if path == "/api/client_log":
+            self._send_json({"ok": True})
+            return
+        if path == "/api/position":
+            key = payload.get("album_key", "")
+            if not key or not payload.get("url"):
+                self._send_json({"error": "missing album_key or url"},
+                                status=400)
+                return
+            gw.positions[key] = {
+                "album_key": key, "url": payload.get("url"),
+                "position_sec": payload.get("position_sec", 0),
+                "duration_sec": payload.get("duration_sec"),
+                "finished": 1 if payload.get("finished") else 0,
+                "updated_at": 0}
             self._send_json({"ok": True})
             return
         if path == "/api/radio/favourites/add":

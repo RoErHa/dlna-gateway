@@ -54,6 +54,14 @@ CREATE TABLE album_favourites (
                     added_at   INTEGER NOT NULL,
                     PRIMARY KEY (artist, album, album_key)
                 );
+CREATE TABLE playback_positions (
+                    album_key    TEXT PRIMARY KEY,
+                    url          TEXT NOT NULL,
+                    position_sec REAL NOT NULL,
+                    duration_sec REAL,
+                    finished     INTEGER NOT NULL DEFAULT 0,
+                    updated_at   INTEGER NOT NULL
+                );
 CREATE TABLE radio_favourites (
                     station_uuid TEXT PRIMARY KEY,
                     name         TEXT NOT NULL,

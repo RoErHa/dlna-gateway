@@ -42,6 +42,25 @@ log = logging.getLogger("dlna.localfs.wiring")
 # source so videos never mix into the music browse / the Naim's UPnP tree.
 VIDEO_UDN = "uuid:localfs-movies"
 
+# UDN of the audiobooks LocalFs source, set when maybe_start_localfs()
+# starts one ('' when the feature is off). api_browse.servers_payload
+# reads this to tag the /api/servers entry `kind: "audiobooks"` so the
+# PWA knows which source gets resume-position behaviour.
+AUDIOBOOKS_UDN = ""
+
+
+def audiobooks_root() -> str:
+    """Configured AUDIOBOOKS root: env `AUDIOBOOKS_ROOT`, else
+    `localfs.audiobooks_root` in config.json. Returns '' when unset =
+    audiobooks disabled. A separate root + UDN keeps books out of the
+    music letter bar, 📻 radio shuffle, and music search (all per-UDN)."""
+    root = os.environ.get("AUDIOBOOKS_ROOT", "").strip()
+    if not root:
+        from dlna_config import load_config
+        root = ((load_config().get("localfs") or {})
+                .get("audiobooks_root", "") or "").strip()
+    return root
+
 
 def video_root() -> str:
     """Configured VIDEO root for the video feature (Phase V1+): env
@@ -113,6 +132,19 @@ def maybe_start_localfs(get_lan_ip):
                     "(is the volume mounted?)")
         vpath = None
 
+    # Audiobooks root (separate from music — own provider, own UDN, so
+    # books never surface in the music browse / radio / search). Served
+    # by this same file server, so it joins allowed_roots.
+    abroot = audiobooks_root()
+    abpath = Path(abroot).expanduser() if abroot else None
+    if abpath and abpath.exists():
+        roots.append(str(abpath.resolve()))
+        log.info(f"Audiobooks enabled: root={abroot}")
+    elif abroot:
+        log.warning(f"Audiobooks root not found: {abroot} — audiobooks "
+                    "disabled (is the volume mounted?)")
+        abpath = None
+
     try:
         start_server(DB_FILE, port=port, host="0.0.0.0",
                      allowed_roots=tuple(roots))
@@ -134,15 +166,42 @@ def maybe_start_localfs(get_lan_ip):
         control_url=base_url,
         base_url=base_url))
 
+    # Audiobooks provider — same machinery, own UDN. id_namespace salts
+    # the track ids so a rel_path shared with the music root can't
+    # collide on obj_id (the file server resolves across all localfs
+    # UDNs).
+    ab_provider = None
+    if abpath:
+        ab_provider = LocalFsProvider(DB, abpath, base_url=base_url,
+                                      id_namespace="audiobooks")
+        bind_provider(ab_provider.udn, ab_provider)
+        global AUDIOBOOKS_UDN
+        AUDIOBOOKS_UDN = ab_provider.udn
+        _disc.SERVERS.add(MediaServer(
+            udn=ab_provider.udn,
+            name="RoHaAudioBooks",
+            location=base_url,
+            control_url=base_url,
+            base_url=base_url))
+        log.info(f"Audiobooks provider bound: udn={ab_provider.udn}")
+
     # Initial scan in the background — same lazy posture as the
     # existing AcoustID / Loudness mop-ups so the gateway doesn't
-    # block on a big tree at boot.
+    # block on a big tree at boot. Sequential: the audiobooks scan
+    # follows the music scan on the same thread (LibraryDB writes are
+    # serialized anyway).
     def _initial_scan():
         try:
             stats = provider.rescan()
             log.info(f"LocalFs initial scan complete: {stats}")
         except Exception as e:                                # noqa: BLE001
             log.exception(f"LocalFs initial scan failed: {e}")
+        if ab_provider is not None:
+            try:
+                stats = ab_provider.rescan()
+                log.info(f"Audiobooks initial scan complete: {stats}")
+            except Exception as e:                            # noqa: BLE001
+                log.exception(f"Audiobooks initial scan failed: {e}")
     threading.Thread(target=_initial_scan, daemon=True,
                      name="localfs-initial-scan").start()
 
@@ -174,4 +233,5 @@ def maybe_start_localfs(get_lan_ip):
                          name="video-scan").start()
 
 
-__all__ = ["maybe_start_localfs", "video_root", "VIDEO_UDN"]
+__all__ = ["maybe_start_localfs", "video_root", "VIDEO_UDN",
+           "audiobooks_root", "AUDIOBOOKS_UDN"]

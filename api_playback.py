@@ -281,6 +281,47 @@ def lyrics(h, params):
     h._json(code, body)
 
 
+def position_save_payload(payload: dict) -> tuple:
+    """Core of POST /api/position → (status, body). Audiobook resume-
+    position save — the PWA fires this every ~20s while an audiobook
+    plays, plus on pause/end and via sendBeacon on tab hide. Fields are
+    clamped defensively (same posture as client_log): a broken client
+    can't grow the DB unboundedly or 500 the endpoint."""
+    if not isinstance(payload, dict):
+        return 400, {"error": "invalid body"}
+    album_key = str(payload.get("album_key") or "")[:512]
+    url = str(payload.get("url") or "")[:1024]
+    if not album_key or not url:
+        return 400, {"error": "missing album_key or url"}
+    ok = DB.position_set(
+        album_key, url,
+        payload.get("position_sec"),
+        payload.get("duration_sec"),
+        finished=bool(payload.get("finished")))
+    if not ok:
+        return 400, {"error": "invalid position_sec"}
+    return 200, {"ok": True}
+
+
+def position_get_payload(params) -> tuple:
+    """Core of GET /api/position?album_key= → (status, body).
+    `position` is null when the book has never been played."""
+    album_key = (params.get("album_key") or "").strip()
+    if not album_key:
+        return 400, {"error": "missing album_key"}
+    return 200, {"position": DB.position_get(album_key)}
+
+
+def positions_list_payload(params) -> tuple:
+    """Core of GET /api/positions → (status, body). Newest-first list
+    of every book with a saved position (a continue-listening shelf)."""
+    try:
+        limit = int(params.get("limit", "50"))
+    except ValueError:
+        limit = 50
+    return 200, {"positions": DB.positions_list(limit)}
+
+
 def lyrics_payload(params) -> tuple:
     """Core of GET /api/lyrics → (status, body). Cache-first; one lrclib call
     per URL on a miss. Shared by the legacy handler and the 2.0 native route
