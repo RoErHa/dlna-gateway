@@ -19,26 +19,48 @@ DB_FILE   = os.path.join(_BASE_DIR, "library.db")
 CFG_FILE  = os.path.join(_BASE_DIR, "config.json")
 LOG_FILE  = os.path.join(_BASE_DIR, "gateway.log")
 
+# ── .env loader ───────────────────────────────────────────────────
+# .env is THE configuration file (2026-07-13 — user decision: single
+# source, safe clean-slate installs; the LaunchAgent plist keeps only
+# PATH + ProgramArguments). It MUST load before ANY config key is read
+# — including VERSION below — and it must load even when python-dotenv
+# isn't installed: the old optional-import silently skipped loading,
+# which cost real debugging time (see CLAUDE.md ".env caveat"). The
+# fallback parser handles the KEY=VALUE subset we use (comments, blank
+# lines, optional quotes). Existing os.environ values always win, so a
+# shell export / launchd setenv still overrides for ad-hoc runs.
+def _load_env_file(path: str) -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(path)
+        return
+    except ImportError:
+        pass
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key, val = key.strip(), val.strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                    val = val[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except OSError:
+        pass   # no .env — process env / defaults apply
+
+
+_load_env_file(os.path.join(_BASE_DIR, ".env"))
+
 # ── Version ───────────────────────────────────────────────────────
 # Release-line marker. 1.x lives on `main`; this `2.0` branch carries
 # the transport/architecture refresh (see REQUIREMENTS_2.0.md and
 # docs/BUILDING_2.0.md). Surfaced at /api/version and in the
 # PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
-# Override with $APP_VERSION for ad-hoc builds.
+# Set via $APP_VERSION (.env).
 VERSION = os.environ.get("APP_VERSION", "2.0.0-alpha.1")
-
-# ── .env loader (optional) ────────────────────────────────────────
-# Load <repo>/.env into os.environ BEFORE any other module reads it.
-# Imported here because dlna_config is the first module imported by
-# dlna_gateway and by every api_*/dlna_* module. python-dotenv only
-# sets variables that aren't already in os.environ, so launchd
-# plist / systemd EnvironmentFile values still win.
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(_BASE_DIR, ".env"))
-except ImportError:
-    pass   # python-dotenv is optional; deployments setting env via
-           # other means don't need it.
 # Ensure the base directory exists as soon as this module is imported.
 # LibraryDB is a module-level singleton that calls _connect() before
 # setup_logging() runs, so we cannot rely on setup_logging to create it.

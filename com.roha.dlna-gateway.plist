@@ -72,20 +72,14 @@
     <key>StandardErrorPath</key>
     <string>/tmp/dlna-gateway.err</string>
 
+    <!-- ALL gateway configuration lives in <repo>/.env — the single
+         source (see .env.example for every key). This plist carries
+         ONLY PATH: dlna_config loads .env at startup, and a key set
+         here would OVERRIDE .env — so never add config keys here. -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-
-        <!-- Subsonic API credentials. Prefer setting these in .env
-             (gitignored) instead of this plist — the gateway loads
-             .env at startup via python-dotenv. Values set here
-             override .env. Leaving SUBSONIC_PASSWORD empty makes the
-             /rest/* API return 503 on every call (safe default). -->
-        <key>SUBSONIC_USER</key>
-        <string>user</string>
-        <key>SUBSONIC_PASSWORD</key>
-        <string></string>
     </dict>
 </dict>
 </plist>

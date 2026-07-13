@@ -837,17 +837,27 @@ External CLI binaries — optional per feature:
 
 Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
 
-**`.env` caveat:** if `python-dotenv` isn't installed in the runtime Python, `dlna_config.py` silently catches the ImportError and the `.env` file is **never loaded** — env vars must then come from the process environment (`launchctl setenv` on macOS, systemd `EnvironmentFile`, shell `export`). The warnings `GATEWAY_CONTACT_EMAIL not set in .env — using placeholder` at startup are a symptom of dotenv-not-installed, even if the `.env` file looks populated.
+**`.env` is THE configuration file (consolidated 2026-07-13).** Every
+gateway setting lives in `<repo>/.env` — identity (`GW_UDN`, `GW_NAME`,
+`APP_VERSION`), libraries (`LOCALFS_MUSIC_ROOT`/`_PORT`/`_VIDEO_ROOT`,
+`AUDIOBOOKS_ROOT`), Subsonic credentials, contact email, Immich keys.
+The LaunchAgent plist carries ONLY `PATH` + the launch command; the
+committed **`.env.example`** documents every key for clean-slate
+installs. Rules that keep it sane:
 
-> **⚠ TOP-PRIORITY TODO (user decision 2026-07-13): ALL configuration moves
-> to `.env`.** Config is currently split — `LOCALFS_MUSIC_ROOT`/`_PORT`/
-> `_VIDEO_ROOT`, `GW_UDN`, `GW_NAME`, `APP_VERSION` live in the LaunchAgent
-> plist's `EnvironmentVariables` while secrets live in `.env`. Target: the
-> plist keeps only PATH + ProgramArguments; everything else in `.env` (one
-> place, safe clean-slate installs), with a committed `.env.example`.
-> Mind: plist env OVERRIDES `.env`, so keys must be REMOVED from the plist,
-> never duplicated; python-dotenv must become a verified hard dependency.
-> New keys (e.g. `AUDIOBOOKS_ROOT`, added 2026-07-13) go straight to `.env`.
+- **Never put a config key back in the plist** — plist env OVERRIDES
+  `.env`, so a stale plist value silently wins.
+- `dlna_config._load_env_file` loads `.env` at the TOP of the module
+  (before `VERSION` is read — moving the load above that read was a
+  real bug fix) and has a **built-in fallback parser**, so `.env` loads
+  even without python-dotenv — the old "dotenv missing → `.env`
+  silently never loaded" failure mode is gone (guarded by
+  `tests/test_env_loader.py`). Real process env (shell export,
+  `launchctl setenv`) still wins over `.env` for ad-hoc overrides.
+- Editing the plist itself needs a full `launchctl bootout` +
+  `bootstrap` (a `kickstart -k` does NOT re-read plist env — and
+  bootout is async: retry the bootstrap if it fails with I/O error).
+  Editing `.env` only needs the normal `./setup.sh --restart`.
 
 ## Album art persistence (Phase A + Phase B)
 
