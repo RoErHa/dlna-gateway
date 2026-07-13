@@ -501,12 +501,26 @@
 
 <!-- ════════════════════ PART II — AUDIOBOOKS PLAN ════════════════════ -->
 <div class="part" id="audiobooks">
-  <p class="part-eyebrow">Part II · Plan · proposed 12 July 2026</p>
+  <p class="part-eyebrow">Part II · Plan · proposed 12 July 2026 · <strong>P1+P2 shipped 13 July</strong></p>
   <h1>Audiobooks: playback with cross-session resume</h1>
   <p class="standfirst">Play audiobooks through the gateway — in the PWA, on the Naim, and in
   CarPlay — and <strong>always pick up where the last listening session stopped</strong>,
   on any device. The design reuses the LocalFs machinery almost wholesale; the genuinely
   new piece is one small table and the discipline of writing to it.</p>
+  <div class="note">
+    <p><b>Status (2026-07-13):</b> P1 + P2 are live — the collection at
+    <code>/Volumes/SAMDATA-1TB/Audio_Books</code> scanned as
+    <b>11,548 chapters across 509 books</b> (52&nbsp;s first pass, 163 malformed files
+    skipped), the source picker shows 💾&nbsp;RoHaAudioBooks next to the music library, and
+    the resume round-trip is verified end-to-end in the live PWA
+    (“▶ Resume · Ch 1 — 5:21”). Two multi-root safety fixes landed en route: the shared
+    scan cache is now scoped per root (each provider’s rescan would otherwise purge the
+    other’s rows), and secondary-root track ids are namespace-salted (identical relative
+    paths under two roots would collide on stream ids). One layout discovery: 11 books are
+    single files at the library root (<code>album_key=''</code>) — their positions key by
+    file URL so they don’t share one resume row. P3 (Naim seek), P4 (CarPlay bookmarks)
+    and P5 (chapter atoms, shelf) remain as planned below.</p>
+  </div>
 </div>
 
 <section>

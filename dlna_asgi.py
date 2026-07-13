@@ -395,6 +395,37 @@ async def lyrics_route(request: Request):
     return JSONResponse(body, status_code=code)
 
 
+# ── Audiobook resume positions (P2, 2026-07-13) ───────────────────────
+# Native-only (no legacy handler — these endpoints post-date the bridge).
+# NOT on the Service Worker's CACHEABLE_API allowlist: live state,
+# network-only by default. POST accepts sendBeacon bodies (no reliable
+# Content-Type there), so the body is parsed manually.
+
+@app.post("/api/position", include_in_schema=False)
+async def position_save_route(request: Request):
+    try:
+        payload = json.loads(await request.body())
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse({"error": "invalid body"}, status_code=400)
+    code, body = await run_in_threadpool(
+        api_playback.position_save_payload, payload)
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/position", include_in_schema=False)
+async def position_get_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_playback.position_get_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/positions", include_in_schema=False)
+async def positions_list_route(request: Request):
+    code, body = await run_in_threadpool(
+        api_playback.positions_list_payload, dict(request.query_params))
+    return JSONResponse(body, status_code=code)
+
+
 # ── Binary proxies ────────────────────────────────────────────────────
 # /art is a one-shot image proxy (lock-screen artwork must be same-origin).
 # It shares api_playback.art_fetch with the legacy handler; the blocking

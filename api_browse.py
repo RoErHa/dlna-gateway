@@ -40,8 +40,15 @@ def servers_payload():
         if s.udn.startswith("uuid:localfs-"):
             prov = get_provider(s.udn)
             d["online"] = bool(prov and prov.probe())
+            # The audiobooks source gets kind="audiobooks" so the PWA
+            # switches on resume-position behaviour for it; the music
+            # source (and any UPnP server) stays kind="music".
+            import dlna_localfs_wiring as _wiring
+            d["kind"] = ("audiobooks"
+                         if s.udn == _wiring.AUDIOBOOKS_UDN else "music")
         else:
             d["online"] = (now - s.last_seen) < _STALE_SEC
+            d["kind"] = "music"
         d["tracks"] = DB.track_count(s.udn)
         d["albums"] = DB.album_count(s.udn)
         result.append(d)

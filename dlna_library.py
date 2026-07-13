@@ -266,6 +266,21 @@ class LibraryDB:
                     added_at   INTEGER NOT NULL,
                     PRIMARY KEY (artist, album, album_key)
                 );
+                -- Audiobook resume positions (2026-07-13). One row per
+                -- BOOK (album_key = its folder): which chapter file was
+                -- playing and how far in. Independent of `tracks` so it
+                -- survives clear(udn)/re-index — same contract as
+                -- play_counts / lyrics / album_art. finished=1 → the PWA
+                -- offers "start over"; any normal save clears it. A
+                -- renamed book folder orphans its row harmlessly.
+                CREATE TABLE IF NOT EXISTS playback_positions (
+                    album_key    TEXT PRIMARY KEY,
+                    url          TEXT NOT NULL,
+                    position_sec REAL NOT NULL,
+                    duration_sec REAL,
+                    finished     INTEGER NOT NULL DEFAULT 0,
+                    updated_at   INTEGER NOT NULL
+                );
                 -- User-favourited internet-radio stations. Capped at
                 -- RADIO_FAV_MAX (25), enforced server-side in
                 -- radio_fav_add(). Identity = radio-browser stationuuid,
@@ -2682,6 +2697,67 @@ class LibraryDB:
                 f"UPDATE radio_favourites SET {', '.join(sets)} "
                 f"WHERE station_uuid=?", vals)
         return cur.rowcount > 0
+
+    # ── Audiobook resume positions ────────────────────────────────
+    # One row per book (album_key). Survives clear(udn) — same contract
+    # as play_counts / lyrics. The FINISHED decision is the client's
+    # (it knows chapter index + duration); the server stores it, and any
+    # save with finished=False clears the flag (re-listening).
+
+    def position_set(self, album_key: str, url: str, position_sec,
+                     duration_sec=None, finished: bool = False) -> bool:
+        """Upsert the resume position for a book. Returns False on
+        missing keys or a non-numeric position (never raises — the PWA
+        fires these every ~20s and a bad payload must not 500)."""
+        if not album_key or not url:
+            return False
+        try:
+            pos = max(0.0, float(position_sec))
+        except (TypeError, ValueError):
+            return False
+        try:
+            dur = max(0.0, float(duration_sec)) if duration_sec is not None \
+                else None
+        except (TypeError, ValueError):
+            dur = None
+        with self._pool.write() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO playback_positions "
+                "(album_key, url, position_sec, duration_sec, finished, "
+                " updated_at) VALUES (?,?,?,?,?, strftime('%s','now'))",
+                (album_key, url, pos, dur, 1 if finished else 0))
+        return True
+
+    def position_get(self, album_key: str) -> Optional[dict]:
+        if not album_key:
+            return None
+        with self._pool.read() as conn:
+            r = conn.execute(
+                "SELECT album_key, url, position_sec, duration_sec, "
+                "       finished, updated_at "
+                "FROM playback_positions WHERE album_key=?",
+                (album_key,)).fetchone()
+        return dict(r) if r else None
+
+    def position_clear(self, album_key: str) -> bool:
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                "DELETE FROM playback_positions WHERE album_key=?",
+                (album_key,))
+        return cur.rowcount > 0
+
+    def positions_list(self, limit: int = 50) -> list:
+        """In-progress books, newest first — powers a future
+        continue-listening shelf. Includes finished rows (the caller
+        filters); joins nothing so orphaned rows still appear."""
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT album_key, url, position_sec, duration_sec, "
+                "       finished, updated_at "
+                "FROM playback_positions "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (max(1, int(limit)),)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _dur_to_secs(dur: str) -> int:

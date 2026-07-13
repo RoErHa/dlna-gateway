@@ -312,6 +312,12 @@ album_art(artist, album, art_url, source, updated_at)
 play_counts(url, count, last_played)
   PRIMARY KEY (url)
   Incremented by LibraryDB.radio_tracks(); persists across rebuild-index.
+playback_positions(album_key, url, position_sec, duration_sec, finished, updated_at)
+  PRIMARY KEY (album_key) — audiobook resume: ONE row per book (its
+  folder), holding which chapter + offset. Survives clear(udn) like
+  play_counts/lyrics. finished=1 → PWA offers "start over"; any normal
+  save clears it. Root-level single-file books key by URL (PWA fallback).
+  See "Audiobooks" section.
 videos(id, udn, url, title, file_path, ..., created, location,
        location_name, country, poster, ...)
   id = sha1(rel_path)[:16], udn = uuid:localfs-movies. Populated by
@@ -832,6 +838,16 @@ External CLI binaries — optional per feature:
 Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
 
 **`.env` caveat:** if `python-dotenv` isn't installed in the runtime Python, `dlna_config.py` silently catches the ImportError and the `.env` file is **never loaded** — env vars must then come from the process environment (`launchctl setenv` on macOS, systemd `EnvironmentFile`, shell `export`). The warnings `GATEWAY_CONTACT_EMAIL not set in .env — using placeholder` at startup are a symptom of dotenv-not-installed, even if the `.env` file looks populated.
+
+> **⚠ TOP-PRIORITY TODO (user decision 2026-07-13): ALL configuration moves
+> to `.env`.** Config is currently split — `LOCALFS_MUSIC_ROOT`/`_PORT`/
+> `_VIDEO_ROOT`, `GW_UDN`, `GW_NAME`, `APP_VERSION` live in the LaunchAgent
+> plist's `EnvironmentVariables` while secrets live in `.env`. Target: the
+> plist keeps only PATH + ProgramArguments; everything else in `.env` (one
+> place, safe clean-slate installs), with a committed `.env.example`.
+> Mind: plist env OVERRIDES `.env`, so keys must be REMOVED from the plist,
+> never duplicated; python-dotenv must become a verified hard dependency.
+> New keys (e.g. `AUDIOBOOKS_ROOT`, added 2026-07-13) go straight to `.env`.
 
 ## Album art persistence (Phase A + Phase B)
 
@@ -2400,6 +2416,55 @@ and the weekly retry agent are gone — beets is now the only metadata path. The
 `post_beets_reindex.py` still clears them after a beets run so the file tags show
 through. (Because the worker no longer exists, that clear is now unconditionally
 safe — the old "refuse while the worker is live" guard was removed too.)
+
+## Audiobooks (P1+P2 shipped 2026-07-13; P3–P5 planned)
+
+Full plan/design: `docs/REPORTS.html` Part II. What's live:
+
+- **Second LocalFs library** — `AUDIOBOOKS_ROOT` in `.env`
+  (`/Volumes/SAMDATA-1TB/Audio_Books`; or `localfs.audiobooks_root` in
+  config.json). `maybe_start_localfs` starts a second `LocalFsProvider`
+  (name "RoHaAudioBooks", own UDN, `dlna_localfs_wiring.AUDIOBOOKS_UDN`),
+  served by the same `:8200` file server (root joins `allowed_roots`).
+  Per-UDN isolation keeps books out of music browse/radio/search for
+  free. First scan: 11,548 chapters / 509 books (163 malformed files
+  skipped — worth a `find_corrupt_audio.py` pass someday). `.m4b` added
+  to `AUDIO_EXTENSIONS` (MIME `audio/mp4`).
+- **Two multi-root safety fixes that matter for ANY future third root**:
+  `_load_cache` is scoped to the provider's own root (the shared
+  `localfs_files` cache + removed-detection would otherwise purge the
+  OTHER provider's rows every rescan), and secondary-root track ids are
+  salted (`_track_id_for(rel, namespace)` — the file server resolves
+  obj_id across ALL localfs UDNs, so identical rel_paths under two roots
+  would collide; music keeps namespace='' so its ids/URLs are unchanged).
+- **`kind` field** on `/api/servers` entries (`audiobooks` | `music`) —
+  the PWA gates all resume behaviour on it, never on track shape, so a
+  music playlist can't trigger position writes.
+- **Resume positions** — `playback_positions` (see schema), LibraryDB
+  `position_set/get/clear/positions_list`, native `POST /api/position` +
+  `GET /api/position?album_key=` + `GET /api/positions` (NOT on the SW
+  CACHEABLE_API allowlist — live state, network-only by default; POST
+  parses raw body so sendBeacon works).
+- **PWA** (`static/app.js`): a book queue (`opts.book` through
+  `playTracklist` → `browserQueueIsBook`) never shuffles; positions save
+  every ~20s + on pause/chapter-end + `sendBeacon` on visibilitychange;
+  "▶ Resume · Ch N — H:MM:SS" button in the book header (`#browse-resume`,
+  "↻ Start over" when finished; missing chapter file → clean restart);
+  playback-rate select `#ab-rate` (0.8–2×, browser output only,
+  localStorage-persisted, re-asserted per chapter). Root-level
+  single-file books (album_key='') key their position by file URL.
+- **Tests**: `tests/test_positions.py` (20 — DB contract incl.
+  clear(udn) survival, payload validation, wiring config),
+  multi-root provider tests in `test_provider_localfs.py`,
+  `tests/frontend/test_audiobooks.py` (9 Playwright — button states,
+  source gating, unshuffled resume queue, pause-POST assertions,
+  URL-fallback, rate control).
+
+**Not yet (per plan):** P3 renderer-path resume (`avtransport_seek` +
+monitor persist — resume on the Naim is currently chapter-granular via
+the PWA), P4 Subsonic bookmarks (CarPlay), P5 m4b chapter atoms +
+continue-listening shelf + Naim UPnP tree exposure. Day-one open
+question stands: whether the Naim accepts m4b/AAC over AVTransport.
 
 ## Subsonic API (shipped — browse/playlists/starring/stream/radio all live)
 
