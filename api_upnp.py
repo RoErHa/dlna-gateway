@@ -266,9 +266,12 @@ def _gw_browse(obj_id: str, browse_flag: str,
 
     if obj_id == "0":
         n_videos = len(DB.all_videos(_VIDEO_UDN))
+        ab_udn   = _ab_udn()
+        n_books  = len(_lib_artists(ab_udn)) if ab_udn else 0
         if browse_flag == "BrowseMetadata":
             return (OPEN + container("0", "-1", GW_NAME,
-                                     5 + (1 if n_videos else 0)) + CLOSE, 1, 1)
+                                     5 + (1 if n_videos else 0)
+                                       + (1 if n_books else 0)) + CLOSE, 1, 1)
         udn       = DB.primary_udn()
         n_artists = len(_lib_artists(udn))   if udn else 0
         n_albums  = len(_album_letters(udn)) if udn else 0   # # of letter buckets
@@ -286,8 +289,66 @@ def _gw_browse(obj_id: str, browse_flag: str,
         # Naim's view unless GWMovies is enabled + populated).
         if n_videos:
             items.append(container("videos", "0", "\U0001F4F9 Videos", n_videos))
+        # Audiobooks — only when the audiobooks source exists + has authors
+        # (P5). Authors → books → chapters, resolved via the AB udn.
+        if n_books:
+            items.append(container("abooks", "0",
+                                   "\U0001F4D6 Audiobooks", n_books))
         n = len(items)
         return OPEN + "".join(items) + CLOSE, n, n
+
+    # ── Audiobooks tree (P5): abooks → authors → books → chapters ──
+    if obj_id == "abooks":
+        ab_udn = _ab_udn()
+        rows   = _lib_artists(ab_udn) if ab_udn else []
+        total  = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container("abooks", "0", "\U0001F4D6 Audiobooks",
+                                     total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = [container("abauthor:" + _b64e(r["artist"]), "abooks",
+                           r["artist"], r.get("album_count", 0))
+                 for r in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("abauthor:"):
+        author = _b64d(obj_id[len("abauthor:"):])
+        ab_udn = _ab_udn()
+        rows   = [r for r in DB.artist_albums(ab_udn, author)
+                  if not _is_junk_name(r.get("album"))] if ab_udn else []
+        total  = len(rows)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "abooks",
+                                     author or "(author)", total) + CLOSE, 1, 1)
+        page  = rows[start:start + count] if count else rows[start:]
+        items = []
+        for r in page:
+            cid   = _encode_ab_book_id(r.get("artist", ""), r.get("album", ""),
+                                       r.get("album_key", ""))
+            title = r.get("album", "") or "(book)"
+            # Series overlay when OpenLibrary knows the book.
+            meta = DB.book_meta_get(r.get("album_key", "")) \
+                if r.get("album_key") else None
+            if meta and meta.get("series"):
+                seq = meta.get("series_seq")
+                seq_s = f" #{seq:g}" if seq is not None else ""
+                title = f"{title}  \U0001F4DA {meta['series']}{seq_s}"
+            items.append(container(cid, obj_id, title,
+                                   r.get("track_count", 0)))
+        return OPEN + "".join(items) + CLOSE, len(items), total
+
+    if obj_id.startswith("abbook:"):
+        artist, album, album_key = _decode_ab_book_id(obj_id)
+        ab_udn = _ab_udn()
+        tracks = DB.album_tracks(ab_udn, artist, album, album_key=album_key) \
+            if ab_udn and (artist or album or album_key) else []
+        total  = len(tracks)
+        if browse_flag == "BrowseMetadata":
+            return (OPEN + container(obj_id, "abooks",
+                                     album or "(book)", total) + CLOSE, 1, 1)
+        page  = tracks[start:start + count] if count else tracks[start:]
+        items = [track_item(t, obj_id) for t in page]
+        return OPEN + "".join(items) + CLOSE, len(items), total
 
     # ── Full-library tree (Artists / Albums / Genres) ──────────────
     # Backed by LibraryDB on the primary library udn (the LocalFs backend).
@@ -647,6 +708,36 @@ def _encode_lib_album_id(artist: str, album: str, album_key: str = "") -> str:
     a galbum resolves via the primary library udn, not the favourites row)."""
     raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
     return "galbum:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _ab_udn() -> str:
+    """The audiobooks LocalFs UDN ('' when the feature is off). Read
+    dynamically — dlna_localfs_wiring sets it during boot."""
+    try:
+        import dlna_localfs_wiring
+        return dlna_localfs_wiring.AUDIOBOOKS_UDN
+    except ImportError:
+        return ""
+
+
+def _encode_ab_book_id(artist: str, album: str, album_key: str = "") -> str:
+    """abbook:* ObjectID — same 3-field payload as galbum:*, but resolves
+    against the AUDIOBOOKS udn, not the music library."""
+    raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
+    return "abbook:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_ab_book_id(obj_id: str) -> tuple:
+    payload = obj_id[len("abbook:"):]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(payload).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ("", "", "")
+    parts = raw.split("\x00")
+    return (parts[0] if len(parts) > 0 else "",
+            parts[1] if len(parts) > 1 else "",
+            parts[2] if len(parts) > 2 else "")
 
 
 def _decode_lib_album_id(obj_id: str) -> tuple:

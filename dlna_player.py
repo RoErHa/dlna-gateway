@@ -173,6 +173,10 @@ class RendererQueue:
         # 0 means "play at renderer's natural volume" (no surprise jolt
         # on slider tap). Clamped ±MAX_USER_TRIM_DB.
         self._user_trim_db: float = 0.0
+        # Audiobook queue (P3): the monitor persists playback positions
+        # every ~15 s so a Naim session resumes anywhere else.
+        self._is_book: bool = False
+        self._last_pos_save: float = 0.0
         # Pre-populate with a "stopped" default so concurrent callers
         # during the first fetch have something to return rather than
         # block waiting for the SOAP.
@@ -189,7 +193,8 @@ class RendererQueue:
     # ── Public API ────────────────────────────────────────────────
 
     def start(self, av_url: str, tracks: list, renderer_name: str = "",
-              rc_url: str = ""):
+              rc_url: str = "", start_at_sec: float = 0.0,
+              is_book: bool = False):
         """
         Start playing a list of tracks on the renderer.
         Cancels any currently active queue, and explicitly stops the renderer
@@ -199,6 +204,12 @@ class RendererQueue:
         rc_url is the RenderingControl SOAP endpoint (used for loudness
         normalization SetVolume calls). Optional — when empty, no
         per-track volume adjustment happens.
+
+        Audiobooks (P3): `start_at_sec` seeks within the FIRST track once
+        it plays (resume mid-chapter — REL_TIME Seek, fired async with a
+        retry because a Seek during TRANSITIONING faults on the Naim).
+        `is_book` makes the monitor persist the playback position every
+        ~15 s so a session stopped on the Naim resumes anywhere else.
         """
         from dlna_avtransport import avtransport_stop
         self._log_track_end("queue_replaced")
@@ -227,6 +238,7 @@ class RendererQueue:
             # carry into today's session.
             self._renderer_baseline  = None
             self._user_trim_db       = 0.0
+            self._is_book            = bool(is_book)
             self._stop_event.clear()
 
         self._invalidate_snap()
@@ -235,11 +247,33 @@ class RendererQueue:
 
         log.info(f"RendererQueue: new queue with {len(tracks)} track(s) "
                  f"→ {renderer_name}")
-        self._send_current()
+        if self._send_current() and start_at_sec > 1:
+            self._seek_async(start_at_sec)
 
         self._thread = threading.Thread(
             target=self._monitor, daemon=True, name="renderer-queue")
         self._thread.start()
+
+    def _seek_async(self, seconds: float):
+        """Fire the resume Seek off-thread: the renderer needs a moment
+        to reach PLAYING (a Seek during TRANSITIONING faults on the
+        Naim), so wait, seek, and retry once. Failure is non-fatal —
+        the chapter simply plays from 0:00."""
+        def _run():
+            from dlna_avtransport import avtransport_seek
+            self._stop_event.wait(1.5)
+            if self._stop_event.is_set():
+                return
+            with self._lock:
+                av_url = self._av_url
+            if not av_url:
+                return
+            if not avtransport_seek(av_url, seconds):
+                self._stop_event.wait(2.0)
+                if not self._stop_event.is_set():
+                    avtransport_seek(av_url, seconds)
+        threading.Thread(target=_run, daemon=True,
+                         name="renderer-seek").start()
 
     def stop(self):
         """Stop playback and cancel the queue."""
@@ -613,6 +647,23 @@ class RendererQueue:
             else:
                 log.debug(f"RendererQueue monitor: state={cur_state} "
                           f"[{idx+1}/{total}]")
+
+            # Audiobook queue: persist the position every ~15 s while
+            # actually playing, so a session stopped on the Naim resumes
+            # in the PWA / CarPlay at the right spot. Never fatal — a
+            # failed save just waits for the next poll.
+            if (self._is_book and cur_state == "PLAYING" and cur_t
+                    and time.monotonic() - self._last_pos_save >= 15.0):
+                self._last_pos_save = time.monotonic()
+                try:
+                    pos = avtransport_get_position(av_url)
+                    if pos.get("position"):
+                        from dlna_library import DB
+                        key = cur_t.get("album_key") or cur_t.get("url", "")
+                        DB.position_set(key, cur_t.get("url", ""),
+                                        pos["position"], pos.get("duration"))
+                except Exception as e:                        # noqa: BLE001
+                    log.debug(f"RendererQueue: book position save failed: {e}")
 
             # Track how long the renderer has been out of contact —
             # either genuinely UNKNOWN or UNREACHABLE (SOAP failing).

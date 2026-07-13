@@ -551,6 +551,87 @@ def _radio_station(uuid_, name, **kw):
             "codec": "MP3", "bitrate": 128, "country": "GB", "tags": "rock"}
 
 
+class TestBookmarks(_BaseDB):
+    """P4 — CarPlay audiobook resume. Bookmarks map onto
+    playback_positions (one row per book / album_key), the SAME table
+    the PWA and Naim monitor write — cross-device by construction."""
+
+    URL = "http://srv/pf/a/01.flac"   # seeded track ("Pigs")
+
+    def _seed_album_key(self):
+        with self.db._pool.write() as c:
+            c.execute("UPDATE tracks SET album_key='PF/Animals' "
+                      "WHERE url=?", (self.URL,))
+
+    def test_create_bookmark_saves_book_position(self):
+        self._seed_album_key()
+        tid = api_subsonic._track_id(self.URL)
+        h, body = _call("createBookmark",
+                        {"id": tid, "position": "754300"}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        pos = self.db.position_get("PF/Animals")
+        self.assertIsNotNone(pos)
+        self.assertAlmostEqual(pos["position_sec"], 754.3)
+        self.assertEqual(pos["url"], self.URL)
+
+    def test_create_bookmark_rootlevel_falls_back_to_url_key(self):
+        # No album_key → the book key is the file URL (single-file book).
+        tid = api_subsonic._track_id(self.URL)
+        _call("createBookmark", {"id": tid, "position": "1000"}, db=self.db)
+        self.assertIsNotNone(self.db.position_get(self.URL))
+
+    def test_create_bookmark_unknown_track_fails(self):
+        tid = api_subsonic._track_id("http://srv/nope.flac")
+        h, body = _call("createBookmark",
+                        {"id": tid, "position": "1"}, db=self.db)
+        self.assertEqual(body["status"], "failed")
+
+    def test_get_bookmarks_round_trip(self):
+        self._seed_album_key()
+        self.db.position_set("PF/Animals", self.URL, 120.5, 600.0)
+        h, body = _call("getBookmarks", {}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        bms = body["bookmarks"]["bookmark"]
+        self.assertEqual(len(bms), 1)
+        self.assertEqual(bms[0]["position"], 120500)      # milliseconds
+        self.assertEqual(bms[0]["entry"]["title"], "Pigs")
+        self.assertTrue(bms[0]["entry"]["id"].startswith("tr:"))
+
+    def test_get_bookmarks_skips_finished_and_orphans(self):
+        self._seed_album_key()
+        self.db.position_set("PF/Animals", self.URL, 590, 600,
+                             finished=True)                # finished book
+        self.db.position_set("Gone/Book", "http://srv/gone.m4b", 10)  # orphan
+        h, body = _call("getBookmarks", {}, db=self.db)
+        self.assertEqual(body["bookmarks"]["bookmark"], [])
+
+    def test_delete_bookmark_clears_book(self):
+        self._seed_album_key()
+        self.db.position_set("PF/Animals", self.URL, 120.5)
+        tid = api_subsonic._track_id(self.URL)
+        h, body = _call("deleteBookmark", {"id": tid}, db=self.db)
+        self.assertEqual(body["status"], "ok")
+        self.assertIsNone(self.db.position_get("PF/Animals"))
+
+    def test_cross_path_consistency(self):
+        """A bookmark created from CarPlay resumes in the PWA: the row
+        it writes is exactly what GET /api/position returns."""
+        self._seed_album_key()
+        tid = api_subsonic._track_id(self.URL)
+        _call("createBookmark", {"id": tid, "position": "300000"},
+              db=self.db)
+        import api_playback
+        orig = api_playback.DB
+        api_playback.DB = self.db
+        try:
+            code, body = api_playback.position_get_payload(
+                {"album_key": "PF/Animals"})
+        finally:
+            api_playback.DB = orig
+        self.assertEqual(code, 200)
+        self.assertAlmostEqual(body["position"]["position_sec"], 300.0)
+
+
 class TestInternetRadio(_BaseDB):
 
     def test_radio_id_round_trip(self):

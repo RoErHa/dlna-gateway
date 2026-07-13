@@ -2521,11 +2521,49 @@ tools) into the `book_meta` table — a DISPLAY-layer overlay: files and
 ("📚 Night's Dawn #1 · ✒️ Peter F. Hamilton"). `series_seq` is REAL —
 novellas are #1.5.
 
-**Not yet (per plan):** P3 renderer-path resume (`avtransport_seek` +
-monitor persist — resume on the Naim is currently chapter-granular via
-the PWA), P4 Subsonic bookmarks (CarPlay), P5 m4b chapter atoms +
-continue-listening shelf + Naim UPnP tree exposure. Day-one open
-question stands: whether the Naim accepts m4b/AAC over AVTransport.
+**P3 — Naim resume (shipped 2026-07-14).** `avtransport_seek()`
+(AVTransport#Seek, `Unit=REL_TIME`) + `RendererQueue.start(...,
+start_at_sec=, is_book=)`: the resume offset rides the
+`/api/render_queue` POST (`book` + `start_at_sec` keys, sent by
+`_resumeBook`), and the Seek fires async ~1.5s after Play with one
+retry (a Seek during TRANSITIONING faults on the Naim; failure =
+non-fatal, chapter plays from 0:00). While an `is_book` queue is
+PLAYING, the existing 2s monitor persists the position every ~15s
+(`playback_positions`, lazy `dlna_library.DB` import) — stop on the
+Naim, resume in the PWA/CarPlay. `tests/test_renderer_resume.py`.
+
+**P4 — CarPlay bookmarks (shipped 2026-07-14).** Subsonic
+`getBookmarks` / `createBookmark` / `deleteBookmark` in `api_subsonic`
+map onto the SAME `playback_positions` table (track id → its
+`album_key` = the book; root-level single files key by URL;
+`createBookmark` position is ms). `getBookmarks` lists unfinished books
+whose chapter still resolves (`LibraryDB.track_by_url`); finished +
+orphan rows are skipped. Cross-path consistency is regression-tested
+(a CarPlay bookmark resumes in the PWA). `TestBookmarks` in
+`tests/test_subsonic.py`.
+
+**P5 — polish (shipped 2026-07-14).**
+- **m4b chapter atoms**: `dlna_ffmpeg.probe_chapters/parse_chapters`
+  (ffprobe `-show_chapters`; [] when no ffprobe/no chapters) behind
+  `GET /api/chapters?url=` (in-memory cache keyed (url, mtime)). PWA:
+  `#ab-chapters` picker in book mode (browser output) — choosing a
+  chapter seeks.
+- **Continue-listening shelf**: `GET /api/positions` rows are enriched
+  with the chapter's track fields (book/author/art/chapter_title;
+  orphans still listed bare). PWA: a **📖 letter-bar entry** (front,
+  audiobooks source only) rendering in-progress books with a chapter
+  progress bar; click opens the book.
+- **Naim tree**: root gains "📖 Audiobooks" (only when the source has
+  authors) → `abauthor:*` → `abbook:*` (3-field codec like `galbum:*`,
+  resolved against `dlna_localfs_wiring.AUDIOBOOKS_UDN`) → chapter
+  items. Book titles carry the OpenLibrary series ("… 📚 Culture #2").
+  Garbled ids → empty container. `tests/test_upnp_audiobooks.py`.
+- **Sleep timer**: `#ab-sleep` select (off/15/30/45/60 min, book mode)
+  → pause + position save when it fires.
+
+Open question still standing: whether the Naim accepts m4b/AAC over
+AVTransport — the tree exposes the books either way; test with one
+file on the real device.
 
 ## Subsonic API (shipped — browse/playlists/starring/stream/radio all live)
 

@@ -63,7 +63,8 @@ class FakeQueue:
         self.prev_calls  = 0
 
     def snapshot(self):       return dict(self._snap)
-    def start(self, av_url, tracks, name, rc_url=""):
+    def start(self, av_url, tracks, name, rc_url="",
+              start_at_sec=0.0, is_book=False):
         self.start_calls.append((av_url, list(tracks), name, rc_url))
     def pause(self):          self.pause_calls += 1
     def stop(self):           self.stop_calls  += 1

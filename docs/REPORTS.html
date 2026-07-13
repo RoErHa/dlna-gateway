@@ -501,7 +501,7 @@
 
 <!-- ════════════════════ PART II — AUDIOBOOKS PLAN ════════════════════ -->
 <div class="part" id="audiobooks">
-  <p class="part-eyebrow">Part II · Plan · proposed 12 July 2026 · <strong>P1+P2 shipped 13 July</strong></p>
+  <p class="part-eyebrow">Part II · Plan · proposed 12 July 2026 · <strong>all phases shipped 13–14 July</strong></p>
   <h1>Audiobooks: playback with cross-session resume</h1>
   <p class="standfirst">Play audiobooks through the gateway — in the PWA, on the Naim, and in
   CarPlay — and <strong>always pick up where the last listening session stopped</strong>,
@@ -518,10 +518,11 @@
     other’s rows), and secondary-root track ids are namespace-salted (identical relative
     paths under two roots would collide on stream ids). One layout discovery: 11 books are
     single files at the library root (<code>album_key=''</code>) — their positions key by
-    file URL so they don’t share one resume row. P3 (Naim seek), P4 (CarPlay bookmarks)
-    and P5 (chapter atoms, shelf) remain as planned below. <b>P6 (OpenLibrary
-    metadata — series/author/title overlay) shipped the same day</b>; see the phases
-    table.</p>
+    file URL so they don’t share one resume row. <b>All phases are now live:</b>
+    P3 (Naim seek-resume) and P4 (CarPlay bookmarks) shipped 14 July, P5 (chapter
+    picker, 📖 continue-listening shelf, the Naim’s Audiobooks tree, sleep timer)
+    the same day, and P6 (OpenLibrary series/author/title overlay) on the 13th —
+    see the phases table for what each contains.</p>
   </div>
 </div>
 
@@ -682,26 +683,35 @@
         </tr>
         <tr>
           <td class="mono">P3</td>
-          <td><b>Resume, Naim path.</b> <code>avtransport_seek()</code> SOAP helper;
-          <code>RendererQueue.start(start_at_sec=)</code>; monitor persists positions for
-          audiobook UDN queues.</td>
-          <td>Seek SOAP body shape (the <code>test_avtransport_volume.py</code> pattern);
-          monitor-persist unit test with a fake clock.</td>
+          <td><b>Resume, Naim path — SHIPPED 14 July.</b> <code>avtransport_seek()</code>
+          (REL_TIME); the resume offset rides the <code>render_queue</code> POST and the
+          Seek fires ~1.5&nbsp;s after Play with one retry (a Seek during TRANSITIONING
+          faults on the Naim; failure is non-fatal). Book queues get their position
+          persisted every ~15&nbsp;s by the existing monitor — stop on the Naim, resume
+          anywhere.</td>
+          <td><code>tests/test_renderer_resume.py</code> — Seek SOAP body, H:MM:SS
+          formatter, start_at plumbing, payload passthrough (8 tests).</td>
         </tr>
         <tr>
           <td class="mono">P4</td>
-          <td><b>Resume, CarPlay.</b> Subsonic bookmark methods (and/or play-queue pair,
-          per what Amperfy really calls) mapped onto the same table.</td>
-          <td><code>test_subsonic.py</code> additions: bookmark round-trip, id codec,
-          cross-path consistency (a bookmark saved from CarPlay resumes in the PWA).</td>
+          <td><b>Resume, CarPlay — SHIPPED 14 July.</b> Subsonic
+          <code>getBookmarks / createBookmark / deleteBookmark</code> mapped onto the same
+          <code>playback_positions</code> table (track → its book via album_key; finished
+          and orphaned rows skipped from the list).</td>
+          <td><code>TestBookmarks</code> in <code>test_subsonic.py</code> — round-trip,
+          ms conversion, URL-fallback for single-file books, cross-path consistency
+          (a CarPlay bookmark resumes in the PWA). 7 tests.</td>
         </tr>
         <tr>
           <td class="mono">P5</td>
-          <td><b>Optional polish.</b> Single-file m4b chapter atoms via
-          <code>ffprobe</code> (already a video-feature dependency) → chapter nav in the
-          PWA; a 📖 container in the Naim’s UPnP tree; sleep timer.</td>
-          <td>Chapter-parse fixtures; UPnP browse test in the
-          <code>test_upnp_videos_browse.py</code> mould.</td>
+          <td><b>Polish — SHIPPED 14 July.</b> m4b chapter atoms via
+          <code>ffprobe</code> behind <code>GET /api/chapters</code> → a 📑 chapter picker
+          in book mode; a <b>📖 continue-listening shelf</b> in the letter bar
+          (enriched <code>/api/positions</code>, chapter progress bars); a
+          <b>📖 Audiobooks tree on the Naim</b> (authors → books — series in the title —
+          → chapters); a 😴 sleep timer (pause + save).</td>
+          <td><code>tests/test_upnp_audiobooks.py</code> (12) + 3 Playwright tests
+          (shelf, chapter picker seeks, sleep timer pauses &amp; saves).</td>
         </tr>
         <tr>
           <td class="mono">P6</td>

@@ -191,12 +191,63 @@ function _abApplyRate(){
   // The time slider is drag/tap-seekable ONLY for audiobook queues.
   const st=$("seek-track");
   if(st) st.classList.toggle("seekable", on);
+  // Chapter picker + sleep timer are book-mode-only controls.
+  if(!on){
+    const ch=$("ab-chapters");if(ch)ch.style.display="none";
+    if(typeof _abSleepArm==="function")_abSleepArm(0);
+  }
+  const sl=$("ab-sleep");if(sl){sl.style.display=on?"":"none";if(!on)sl.value="0";}
 }
 (()=>{const sel=$("ab-rate");
   if(sel)sel.addEventListener("change",()=>{
     _abRate=parseFloat(sel.value)||1;
     localStorage.setItem("dlna_ab_rate",String(_abRate));
     if(browserQueueIsBook){browserAudio.playbackRate=_abRate;}
+  });})();
+
+// ── Chapter picker (single-file m4b, book mode, browser output) ───
+// Populated per chapter-file from /api/chapters; empty result hides it.
+async function _abLoadChapters(track){
+  const sel=$("ab-chapters");
+  if(!sel) return;
+  sel.style.display="none";sel.innerHTML="";
+  if(!browserQueueIsBook||!track?.url) return;
+  try{
+    const r=await api(`/api/chapters?url=${enc(track.url)}`);
+    if(!r) return;
+    const chapters=(await r.json()).chapters||[];
+    if(!chapters.length) return;
+    sel.innerHTML=`<option value="">📑 ${chapters.length} chapters</option>`
+      + chapters.map(c=>`<option value="${c.start}">${esc(c.title)} · ${fmtSec(c.start)}</option>`).join("");
+    sel.style.display="";
+  }catch(e){/* no picker */}
+}
+(()=>{const sel=$("ab-chapters");
+  if(sel)sel.addEventListener("change",()=>{
+    const v=parseFloat(sel.value);
+    if(!isNaN(v)&&browserQueueIsBook){try{browserAudio.currentTime=v;}catch(e){}}
+  });})();
+
+// ── Sleep timer (book mode) — pause + save after N minutes ────────
+let _abSleepTimer=null;
+function _abSleepArm(minutes){
+  if(_abSleepTimer){clearTimeout(_abSleepTimer);_abSleepTimer=null;}
+  if(!(minutes>0)) return;
+  _abSleepTimer=setTimeout(()=>{
+    _abSleepTimer=null;
+    if(!browserAudio.paused){
+      browserAudio.pause();   // pause listener saves the position
+      $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+      toast("😴 Sleep timer — paused");
+    }
+    const sel=$("ab-sleep");if(sel)sel.value="0";
+  }, minutes*60*1000);
+}
+(()=>{const sel=$("ab-sleep");
+  if(sel)sel.addEventListener("change",()=>{
+    const m=parseFloat(sel.value)||0;
+    _abSleepArm(m);
+    if(m>0) toast(`😴 Pausing in ${m} min`);
   });})();
 // ── <audio> error handling ───────────────────────────────────────
 // MediaError.code mapping:
@@ -370,6 +421,7 @@ function _browserPlayIdx(idx){
   // Loading a new src resets playbackRate to defaultPlaybackRate in some
   // engines — re-assert the audiobook speed per chapter.
   if(browserQueueIsBook){browserAudio.playbackRate=_abRate;}
+  if(browserQueueIsBook){_abLoadChapters(t);}
   _playBrowserAudio("queue_advance");
   $("np-title").textContent=t.title||"";
   $("np-artist").textContent=t.artist||"";
@@ -583,7 +635,10 @@ function setLetter(l){
 function buildLetterBar(){
   const bar = $("letter-bar");
   bar.innerHTML = "";
-  LETTERS.forEach(l=>{
+  // 📖 continue-listening shelf — audiobooks source only, in front of ⭐.
+  const letters = curServer?.kind==="audiobooks"
+    ? ["📖", ...LETTERS] : LETTERS;
+  letters.forEach(l=>{
     const b = document.createElement("button");
     b.className = "letter-btn" + (l===browseLetter?" active":"");
     b.textContent = l;
@@ -625,6 +680,15 @@ async function loadBrowsePage(){
     return;
   }
 
+  // 📖 — continue-listening shelf (audiobooks source): every book with a
+  // saved position, newest first, with chapter progress.
+  if(browseLetter==="📖"){
+    const r = await api("/api/positions");
+    if(!r){ $("item-list").innerHTML='<div class="msg">Could not load positions.</div>'; return; }
+    renderContinueListening(((await r.json()).positions)||[]);
+    return;
+  }
+
   // ⭐ — favourited albums (the star at the front of the letter bar).
   // Replaces the removed right-column Favourite Albums view; folder-keyed.
   if(browseLetter==="⭐"){
@@ -644,6 +708,44 @@ async function loadBrowsePage(){
   }
   renderBrowseItems(data.items);
   updatePager(data.total, data.offset, data.limit);
+}
+
+// ── 📖 Continue listening (audiobooks shelf) ─────────────────────
+// One row per in-progress book: cover, book title, chapter + offset,
+// and a progress bar through the current chapter. Clicking opens the
+// book (where the ▶ Resume button lives).
+function renderContinueListening(positions){
+  const list = $("item-list");
+  list.innerHTML = "";
+  const rows = positions.filter(p=>!p.finished);
+  if(!rows.length){
+    list.innerHTML='<div class="msg">Nothing in progress — play a book and it appears here.</div>';
+    return;
+  }
+  rows.forEach(p=>{
+    const div = document.createElement("div");
+    div.className = "row";
+    const artEl = p.art
+      ? `<img src="${artUrl(p.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      : `<div class="row-icon">📖</div>`;
+    const pct = (p.duration_sec>0)
+      ? Math.min(100, Math.round(p.position_sec/p.duration_sec*100)) : 0;
+    const book = p.book || p.album_key || "(book)";
+    const sub  = `${esc(p.chapter_title||"")} · ${fmtSec(p.position_sec)}`
+               + (p.duration_sec?` / ${fmtSec(p.duration_sec)}`:"");
+    div.innerHTML = `${artEl}<div class="row-body">`
+      + `<div class="row-title">${esc(book)}</div>`
+      + `<div class="row-sub">${sub}</div>`
+      + `<div style="height:3px;background:var(--raised);border-radius:2px;margin-top:4px">`
+      + `<div style="height:100%;width:${pct}%;background:var(--amber);border-radius:2px"></div></div>`
+      + `</div>`;
+    div.addEventListener("click", ()=>{
+      if(p.book||p.author){
+        showAlbumTracks(p.author||"", p.book||"", null, p.album_key||"");
+      }
+    });
+    list.appendChild(div);
+  });
 }
 
 function renderFavouriteAlbums(favs){
@@ -966,10 +1068,10 @@ function _resumeBook(artist, album, tracks, pos){
   let idx=tracks.findIndex(t=>t.url===pos.url);
   let seekTo=pos.position_sec||0;
   if(idx<0){ idx=0; seekTo=0; }   // chapter file renamed/gone → book start
-  playTracklist(tracks.slice(idx), album, artist, {book:true});
-  // Browser path: jump to the saved offset once the chapter's metadata
-  // loads. Renderer path resumes at chapter granularity until P3 adds
-  // AVTransport Seek.
+  // Renderer path (P3): start_at_sec rides the render_queue POST and the
+  // gateway issues an AVTransport Seek once the chapter plays.
+  playTracklist(tracks.slice(idx), album, artist, {book:true, startAt:seekTo});
+  // Browser path: jump to the saved offset once the chapter's metadata loads.
   if($("output-sel").value==="browser" && seekTo>1){
     browserAudio.addEventListener("loadedmetadata",
       ()=>{try{browserAudio.currentTime=seekTo;}catch(e){}}, {once:true});
@@ -1254,10 +1356,11 @@ async function playAlbumFromDB(artist,album,albumKey=""){
 // POST a queue to a UPnP renderer. Handles the server's 409 "renderer busy"
 // response by prompting the user to take over an existing session.
 // Returns true on success, false if user declined or request failed.
-async function sendRenderQueue(udn, tracks){
+async function sendRenderQueue(udn, tracks, opts={}){
   const post=(force)=>api("/api/render_queue",{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({udn, tracks, force})});
+    body:JSON.stringify({udn, tracks, force,
+      book: !!opts.book, start_at_sec: opts.startAt||0})});
   let r=await post(false);
   if(!r){toast("Failed to reach renderer");return false;}
   if(r.status===409){
@@ -1310,7 +1413,8 @@ async function playTracklist(tracks, title, artist, opts={}){
     browserQueueIsBook=false;
     _abApplyRate();
     const rendUdn=out.replace("upnp:","");
-    if(!await sendRenderQueue(rendUdn, tracks)) return;
+    if(!await sendRenderQueue(rendUdn, tracks,
+        {book: !!opts.book, startAt: opts.startAt||0})) return;
     const rname=renderers[rendUdn]?.name||rendUdn;
     toast(`▶ Playing ${tracks.length} tracks on ${rname}`);
   }

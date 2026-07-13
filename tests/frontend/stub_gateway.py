@@ -79,6 +79,8 @@ class StubGateway:
         self.positions: dict[str, dict] = {}
         # audiobook OpenLibrary metadata overlay keyed by album_key
         self.book_meta: dict[str, dict] = {}
+        # audiobook chapter atoms keyed by track url (P5)
+        self.chapters: dict[str, list] = {}
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -356,6 +358,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/book_meta_all":
             self._send_json({"books": gw.book_meta})
+            return
+        if path == "/api/chapters":
+            self._send_json(
+                {"chapters": gw.chapters.get(q.get("url", ""), [])})
             return
         if path == "/api/search":
             qstr = (q.get("q") or "").lower()

@@ -2306,6 +2306,19 @@ class LibraryDB:
             """, (url,)).fetchone()
         return dict(row) if row else None
 
+    def track_by_url(self, url: str) -> Optional[dict]:
+        """Full tracks row for one URL — the Subsonic bookmark methods
+        need the complete song shape (album_key, mime, art, …), not the
+        display subset track_meta_by_url returns."""
+        if not url:
+            return None
+        with self._pool.read() as conn:
+            row = conn.execute(
+                "SELECT udn, obj_id AS id, url, title, artist, album, "
+                "       album_key, duration, art, mime, genre, file_path "
+                "FROM tracks WHERE url = ? LIMIT 1", (url,)).fetchone()
+        return dict(row) if row else None
+
     def get_lyrics(self, url: str):
         with self._pool.read() as conn:
             row = conn.execute(
