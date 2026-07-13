@@ -77,6 +77,8 @@ class StubGateway:
         self.videos: list[dict] = []           # GET /api/videos (V2-PWA)
         # audiobook resume positions keyed by album_key (P2)
         self.positions: dict[str, dict] = {}
+        # audiobook OpenLibrary metadata overlay keyed by album_key
+        self.book_meta: dict[str, dict] = {}
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -351,6 +353,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/positions":
             self._send_json({"positions": list(gw.positions.values())})
+            return
+        if path == "/api/book_meta_all":
+            self._send_json({"books": gw.book_meta})
             return
         if path == "/api/search":
             qstr = (q.get("q") or "").lower()

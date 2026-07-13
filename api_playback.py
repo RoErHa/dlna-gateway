@@ -312,6 +312,13 @@ def position_get_payload(params) -> tuple:
     return 200, {"position": DB.position_get(album_key)}
 
 
+def book_meta_all_payload(params) -> tuple:
+    """Core of GET /api/book_meta_all → (status, body). The whole
+    audiobook metadata overlay (one row per book) — the PWA fetches it
+    once per source switch and annotates browse rows client-side."""
+    return 200, {"books": DB.book_meta_all()}
+
+
 def positions_list_payload(params) -> tuple:
     """Core of GET /api/positions → (status, body). Newest-first list
     of every book with a saved position (a continue-listening shelf)."""

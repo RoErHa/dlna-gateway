@@ -219,6 +219,60 @@ def test_rootlevel_single_file_book_keys_by_url(page, stub, gateway):
     assert body["album_key"] == track["url"]   # URL fallback, never ''
 
 
+def test_book_header_shows_series_line(page, stub, gateway):
+    """OpenLibrary overlay: the book header carries the series + number
+    + canonical author when book_meta has a row."""
+    gateway.servers = [MUSIC, BOOKS]
+    _seed_book(gateway)
+    gateway.book_meta[BOOK_KEY] = {
+        "album_key": BOOK_KEY, "author": "Peter F. Hamilton",
+        "title": "The Reality Dysfunction",
+        "series": "Night's Dawn", "series_seq": 1,
+        "source": "openlibrary"}
+    _boot(page, stub)
+    _open_book(page)
+    page.wait_for_selector("#browse-series", state="visible", timeout=3000)
+    line = page.text_content("#browse-series")
+    assert "Night's Dawn #1" in line
+    assert "Peter F. Hamilton" in line
+
+
+def test_book_header_no_meta_no_line(page, stub, gateway):
+    gateway.servers = [MUSIC, BOOKS]
+    _seed_book(gateway)
+    _boot(page, stub)
+    _open_book(page)
+    assert page.is_hidden("#browse-series")
+
+
+def test_album_rows_carry_series_chip(page, stub, gateway):
+    """The albums letter-bar rows on the audiobooks source get a 📚
+    series chip when the overlay knows the book."""
+    gateway.servers = [MUSIC, BOOKS]
+    gateway.albums_default = [
+        {"artist": "Peter F Hamilton", "album": "The Reality Dysfunction",
+         "track_count": 40, "art": "", "album_key": BOOK_KEY}]
+    gateway.book_meta[BOOK_KEY] = {
+        "album_key": BOOK_KEY, "author": "Peter F. Hamilton",
+        "title": "The Reality Dysfunction",
+        "series": "Night's Dawn", "series_seq": 1,
+        "source": "openlibrary"}
+    _boot(page, stub)
+    page.select_option("#source-sel", "uuid:localfs-books")
+    page.wait_for_function(
+        "document.getElementById('source-sel').value === 'uuid:localfs-books'",
+        timeout=3000)
+    # Wait for the meta map, then render the albums letter view.
+    page.wait_for_function("abMeta !== null", timeout=3000)
+    page.evaluate("browseMode='albums'; renderBrowseItems("
+                  + json.dumps([{"artist": "Peter F Hamilton",
+                                 "album": "The Reality Dysfunction",
+                                 "track_count": 40, "art": "",
+                                 "album_key": BOOK_KEY}]) + ")")
+    row = page.text_content("#item-list")
+    assert "📚 Night's Dawn #1" in row
+
+
 def test_rate_control_applies_and_persists(page, stub, gateway):
     gateway.servers = [MUSIC, BOOKS]
     _seed_book(gateway)

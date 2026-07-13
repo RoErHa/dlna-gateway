@@ -1779,6 +1779,39 @@ new Immich face-tagging, safe as a habit. DRY-RUN by default.
 python3 -m unittest tools.test_immich_people_sync -v    # 14 tests
 ```
 
+### `tools/openlibrary_books.py`
+
+Enriches **audiobook metadata from the OpenLibrary API** (2026-07-13):
+canonical author/title + **series name & number-in-series** per book
+(a book = its folder = `album_key` under the audiobooks UDN) into the
+`book_meta` display overlay. Never touches files or `tracks`.
+
+Per book: (author, title) guessed from majority tags, falling back to
+folder-name parsing ("57 - The Reality Dysfunction - Peter F Hamilton -
+1996"); `search.json` behind a fuzzy title floor (0.60) + author-token
+overlap guard; series majority-voted from the work's editions'
+`series` strings ("Discworld (13)", "Name #3", "Name, Book 3", "Book 3
+of Name"; number is REAL so novellas are #1.5). Hard-won guards from
+the first live batch: **catalog numbers > 100 reject the whole entry**
+(a "Frye annotated #1249" publisher series is bookkeeping, not a story
+series) and **short titles (<3 words) never retry title-only** (the
+narrator-in-artist fallback matched "Alpha" to Lisi Harrison's
+"Alphas"). Transport failures are transient (NOT cached — retried next
+run); a confident miss is a sticky `notfound`; `manual` rows are never
+overwritten. ~1 req/s, identifying UA (contact email from `.env`).
+Root-level single-file books (album_key='') are skipped — give them a
+folder. Deliberately does NOT import dlna_library (module import runs
+migrations on the live DB); creates `book_meta` itself if missing.
+
+```bash
+python3 tools/openlibrary_books.py                # dry-run preview
+python3 tools/openlibrary_books.py --apply -v     # fetch + write
+python3 tools/openlibrary_books.py --refetch --apply   # redo non-manual
+python3 -m unittest tools.test_openlibrary_books -v    # 27 tests
+# retry one book:
+sqlite3 library.db "DELETE FROM book_meta WHERE source='notfound' AND album_key='…'"
+```
+
 ### `tools/compilation_playlists.py`
 
 Creates playlists for **scattered compilation albums** — an album TAG
@@ -2459,6 +2492,18 @@ Full plan/design: `docs/REPORTS.html` Part II. What's live:
   `tests/frontend/test_audiobooks.py` (9 Playwright — button states,
   source gating, unshuffled resume queue, pause-POST assertions,
   URL-fallback, rate control).
+
+**OpenLibrary metadata overlay (P6, shipped 2026-07-13).** Canonical
+author/title + **series name & number-in-series** per book, fetched by
+`tools/openlibrary_books.py` (see its section under Library housekeeping
+tools) into the `book_meta` table — a DISPLAY-layer overlay: files and
+`tracks` are never written; sticky `notfound`; `manual` wins
+(`LibraryDB.book_meta_set/get/all`). The PWA fetches
+`GET /api/book_meta_all` once per switch onto the audiobooks source
+(`abMeta` map in app.js) and renders 📚 series chips on album rows
+(`renderBrowseItems`) plus a `#browse-series` header line
+("📚 Night's Dawn #1 · ✒️ Peter F. Hamilton"). `series_seq` is REAL —
+novellas are #1.5.
 
 **Not yet (per plan):** P3 renderer-path resume (`avtransport_seek` +
 monitor persist — resume on the Naim is currently chapter-granular via
