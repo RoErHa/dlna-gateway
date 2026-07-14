@@ -523,6 +523,22 @@
     picker, 📖 continue-listening shelf, the Naim’s Audiobooks tree, sleep timer)
     the same day, and P6 (OpenLibrary series/author/title overlay) on the 13th —
     see the phases table for what each contains.</p>
+    <p><b>Real-device follow-up (14 July):</b> the first Naim/iPad/iPhone test showed
+    the server-side bookmark was only honoured by the small “Resume” button —
+    “Play all”, book-row ▶, and chapter taps all restarted from zero (and chapter
+    taps silently never <em>saved</em>). Fixed so <b>continue is the default on every
+    device and entry point</b>: any play of a bookmarked unfinished book resumes,
+    the primary button relabels to “▶ Resume · 9:02:26”-style, and “↻ Start over”
+    is the explicit secondary. Retested on all three devices: works.</p>
+    <p><b>Library cleanup (14 July):</b> the ten “Eichmann in Jerusalem (disk N)”
+    folders were merged into one book (231 chapters via disc-subfolder folding —
+    one resume bookmark instead of ten). The 163 “malformed” files from the first
+    scan were diagnosed as an <b>incomplete torrent</b> — the entire
+    “DC-COMPLETE GRAPHIC AUDIO COLLECTION” (53 zero-byte + 110 zero-filled files,
+    with the surviving fragments unlistenable) — and removed; malformed count is
+    now exactly <b>1</b>, a single zero-filled Eichmann chapter deliberately kept
+    (the scan names it each pass as a re-source reminder). Final library:
+    <b>11,453 chapters across 471 books</b>.</p>
   </div>
 </div>
 
