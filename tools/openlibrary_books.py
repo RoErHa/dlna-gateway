@@ -170,6 +170,7 @@ _PUBLISHER_SERIES = (
     "vintage classics", "twentieth-century classics", "modern library",
     "wordsworth classics", "book club", "great books",
     "oscar moderni", "oscar mondadori",   # Mondadori imprints (Italian)
+    "reclam", "bibliothek",               # German imprints (Reclam-Bibliothek)
 )
 
 
