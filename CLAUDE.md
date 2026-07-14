@@ -2497,11 +2497,22 @@ Full plan/design: `docs/REPORTS.html` Part II. What's live:
 - **PWA** (`static/app.js`): a book queue (`opts.book` through
   `playTracklist` → `browserQueueIsBook`) never shuffles; positions save
   every ~20s + on pause/chapter-end + `sendBeacon` on visibilitychange;
-  "▶ Resume · Ch N — H:MM:SS" button in the book header (`#browse-resume`,
-  "↻ Start over" when finished; missing chapter file → clean restart);
   playback-rate select `#ab-rate` (0.8–2×, browser output only,
   localStorage-persisted, re-asserted per chapter). Root-level
   single-file books (album_key='') key their position by file URL.
+  **CONTINUE IS THE DEFAULT (2026-07-14, after the first real Naim/iPad
+  test):** the bookmark is SERVER-side per book, so EVERY play entry
+  point resumes on every device — `playAlbumFromDB` auto-resumes for
+  the audiobooks source (covers the header button AND the ▶ on book
+  rows), the header PRIMARY button relabels to "▶ Resume · Ch N —
+  H:MM:SS" with `#browse-resume` as the explicit "↻ Start over", and
+  tapping a chapter row routes through `_playBookFromChapter` (a real
+  book queue from that chapter — the old single-track path silently
+  never saved positions). A finished book behaves like an unread one.
+  Caveat: playback started from the Naim's OWN controller (browsing the
+  📖 UPnP tree) can't resume — the renderer fetches files directly and
+  the gateway isn't in that loop; resume applies to playback initiated
+  from the PWA/CarPlay.
 - **Tests**: `tests/test_positions.py` (20 — DB contract incl.
   clear(udn) survival, payload validation, wiring config),
   multi-root provider tests in `test_provider_localfs.py`,

@@ -50,7 +50,10 @@ def _open_book(page):
         timeout=3000)
 
 
-def test_resume_button_shown_with_saved_position(page, stub, gateway):
+def test_primary_button_shows_resume_point(page, stub, gateway):
+    """CONTINUE is the default: with a saved position, the PRIMARY
+    header button relabels to the resume point and the secondary
+    becomes the explicit start-over."""
     gateway.servers = [MUSIC, BOOKS]
     tracks = _seed_book(gateway)
     gateway.positions[BOOK_KEY] = {
@@ -60,10 +63,9 @@ def test_resume_button_shown_with_saved_position(page, stub, gateway):
     _boot(page, stub)
     _open_book(page)
     page.wait_for_selector("#browse-resume", state="visible", timeout=3000)
-    label = page.text_content("#browse-resume")
-    assert "Resume" in label
-    assert "Ch 2" in label          # chapter index from the track list
-    assert "12:34" in label         # fmtSec(754)
+    primary = page.text_content("#browse-play-all")
+    assert "Resume" in primary and "Ch 2" in primary and "12:34" in primary
+    assert "Start over" in page.text_content("#browse-resume")
 
 
 def test_resume_button_hidden_without_position(page, stub, gateway):
@@ -92,7 +94,10 @@ def test_resume_button_never_shown_on_music_source(page, stub, gateway):
     assert page.is_hidden("#browse-resume")
 
 
-def test_resume_click_queues_from_saved_chapter_unshuffled(page, stub, gateway):
+def test_primary_click_resumes_from_saved_chapter_unshuffled(page, stub, gateway):
+    """Clicking the primary button on a bookmarked book resumes — from
+    the saved chapter, unshuffled — on ANY device (the bookmark is
+    server-side, per book)."""
     gateway.servers = [MUSIC, BOOKS]
     tracks = _seed_book(gateway)
     gateway.positions[BOOK_KEY] = {
@@ -104,18 +109,32 @@ def test_resume_click_queues_from_saved_chapter_unshuffled(page, stub, gateway):
     page.wait_for_selector("#browse-resume", state="visible", timeout=3000)
     # Shuffle ON must not scramble a book queue.
     page.evaluate("shuffleEnabled = true")
-    page.click("#browse-resume")
+    page.click("#browse-play-all")
     page.wait_for_function("browserQueue.length === 2", timeout=3000)
-    q0 = page.evaluate("browserQueue[0].url")
-    q1 = page.evaluate("browserQueue[1].url")
-    assert q0 == tracks[1]["url"]
-    assert q1 == tracks[2]["url"]
+    assert page.evaluate("browserQueue[0].url") == tracks[1]["url"]
+    assert page.evaluate("browserQueue[1].url") == tracks[2]["url"]
     assert page.evaluate("browserQueueIsBook") is True
-    # Rate control appears in book mode.
     assert page.is_visible("#ab-rate")
 
 
-def test_finished_book_offers_start_over(page, stub, gateway):
+def test_start_over_button_plays_from_chapter_one(page, stub, gateway):
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    gateway.positions[BOOK_KEY] = {
+        "album_key": BOOK_KEY, "url": tracks[1]["url"],
+        "position_sec": 754, "duration_sec": 1800,
+        "finished": 0, "updated_at": 0}
+    _boot(page, stub)
+    _open_book(page)
+    page.wait_for_selector("#browse-resume", state="visible", timeout=3000)
+    page.click("#browse-resume")
+    page.wait_for_function("browserQueue.length === 3", timeout=3000)
+    assert page.evaluate("browserQueue[0].url") == tracks[0]["url"]
+
+
+def test_finished_book_plays_from_start(page, stub, gateway):
+    """A finished book behaves like an unread one: primary plays from
+    chapter 1, no start-over button, no stale 'Resume' label."""
     gateway.servers = [MUSIC, BOOKS]
     tracks = _seed_book(gateway)
     gateway.positions[BOOK_KEY] = {
@@ -124,11 +143,48 @@ def test_finished_book_offers_start_over(page, stub, gateway):
         "finished": 1, "updated_at": 0}
     _boot(page, stub)
     _open_book(page)
-    page.wait_for_selector("#browse-resume", state="visible", timeout=3000)
-    assert "Start over" in page.text_content("#browse-resume")
-    page.click("#browse-resume")
+    assert page.is_hidden("#browse-resume")
+    assert page.text_content("#browse-play-all").strip() == "▶ Play all"
+    page.click("#browse-play-all")
     page.wait_for_function("browserQueue.length === 3", timeout=3000)
     assert page.evaluate("browserQueue[0].url") == tracks[0]["url"]
+
+
+def test_book_row_play_button_auto_resumes(page, stub, gateway):
+    """The ▶ on a book row in browse lists goes through playAlbumFromDB
+    — it must resume too, not restart (the reported iPad→iPhone bug)."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    gateway.positions[BOOK_KEY] = {
+        "album_key": BOOK_KEY, "url": tracks[1]["url"],
+        "position_sec": 754, "duration_sec": 1800,
+        "finished": 0, "updated_at": 0}
+    _boot(page, stub)
+    page.select_option("#source-sel", "uuid:localfs-books")
+    page.wait_for_function(
+        "document.getElementById('source-sel').value === 'uuid:localfs-books'",
+        timeout=3000)
+    page.evaluate(f"playAlbumFromDB('Author', 'The Book', {BOOK_KEY!r})")
+    page.wait_for_function("browserQueue.length === 2", timeout=3000)
+    assert page.evaluate("browserQueue[0].url") == tracks[1]["url"]
+    assert page.evaluate("browserQueueIsBook") is True
+
+
+def test_chapter_tap_starts_book_queue(page, stub, gateway):
+    """Tapping a chapter row plays THAT chapter but as a book queue —
+    later chapters auto-advance and positions keep saving (the old
+    single-track path silently never bookmarked)."""
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    _boot(page, stub)
+    page.select_option("#source-sel", "uuid:localfs-books")
+    page.wait_for_function(
+        "document.getElementById('source-sel').value === 'uuid:localfs-books'",
+        timeout=3000)
+    page.evaluate(f"startPlay({json.dumps(tracks[1])}, null)")
+    page.wait_for_function("browserQueue.length === 2", timeout=3000)
+    assert page.evaluate("browserQueue[0].url") == tracks[1]["url"]
+    assert page.evaluate("browserQueueIsBook") is True
 
 
 def test_pause_posts_position(page, stub, gateway):

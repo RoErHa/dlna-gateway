@@ -998,6 +998,7 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   _setAlbumFavStar(false, false);
   const rbtn = $("browse-resume");
   if(rbtn) rbtn.style.display = "none";
+  $("browse-play-all").textContent = "▶ Play all";   // reset a book's "Resume · …" label
   if($("browse-series")) $("browse-series").style.display = "none";
   const kq = albumKey?`&album_key=${enc(albumKey)}`:"";
   const r = await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(artist)}&album=${enc(album)}${kq}`);
@@ -1035,9 +1036,11 @@ async function _showBookMetaLine(albumKey){
   el.style.display="";
 }
 
-// ── Audiobook resume button (book header) ────────────────────────
-// Shown only on the audiobooks source, only when the book has a saved
-// position. finished=1 → "start over" from chapter 1.
+// ── Audiobook book-header buttons ─────────────────────────────────
+// CONTINUE is the default: the PRIMARY button ("▶ Play all") already
+// auto-resumes via playAlbumFromDB — here it gets relabelled to show
+// WHERE it will resume ("▶ Resume · Ch 7 — 2:05:12"), and the
+// secondary #browse-resume becomes the explicit "↻ Start over".
 async function _wireResumeButton(artist, album, albumKey, tracks){
   const btn=$("browse-resume");
   if(!btn||!albumKey) return;
@@ -1045,19 +1048,16 @@ async function _wireResumeButton(artist, album, albumKey, tracks){
     const r=await api(`/api/position?album_key=${enc(albumKey)}`);
     if(!r) return;
     const pos=(await r.json()).position;
-    if(!pos) return;
-    if(pos.finished){
-      btn.textContent="↻ Start over";
-      btn.title="Book finished — play again from chapter 1";
-    }else{
-      const idx=tracks.findIndex(t=>t.url===pos.url);
-      const ch=idx>=0?`Ch ${idx+1} — `:"";
-      btn.textContent=`▶ Resume · ${ch}${fmtSec(pos.position_sec)}`;
-      btn.title="Continue from where you stopped";
-    }
+    if(!pos||pos.finished||!(pos.position_sec>1)) return;   // primary plays from start
+    const idx=tracks.findIndex(t=>t.url===pos.url);
+    const ch=idx>=0&&tracks.length>1?`Ch ${idx+1} — `:"";
+    const pa=$("browse-play-all");
+    if(pa) pa.textContent=`▶ Resume · ${ch}${fmtSec(pos.position_sec)}`;
+    btn.textContent="↻ Start over";
+    btn.title="Ignore the bookmark and play from the beginning";
     btn.style.display="";
-    btn.onclick=()=>_resumeBook(artist, album, tracks, pos);
-  }catch(e){ /* no button — Play all still works */ }
+    btn.onclick=()=>playTracklist(tracks.slice(), album, artist, {book:true});
+  }catch(e){ /* primary still resumes via playAlbumFromDB */ }
 }
 
 function _resumeBook(artist, album, tracks, pos){
@@ -1349,8 +1349,24 @@ async function playAlbumFromDB(artist,album,albumKey=""){
   if(!r){toast("Failed to load album");return;}
   const data=await r.json();
   if(!data.tracks||!data.tracks.length){toast("No tracks found for this album");return;}
-  await playTracklist(data.tracks, album, artist,
-                      {book: curServer?.kind==="audiobooks"});
+  const isBook=curServer?.kind==="audiobooks";
+  if(isBook){
+    // CONTINUE is the default for a book, on EVERY device and entry
+    // point (header button, ▶ on a book row, …) — the bookmark lives
+    // on the SERVER, per book, not per device. Start-over is the
+    // explicit secondary action in the book header.
+    const key=albumKey||data.tracks[0]?.album_key||data.tracks[0]?.url||"";
+    try{
+      const pr=key?await api(`/api/position?album_key=${enc(key)}`):null;
+      const pos=pr?(await pr.json()).position:null;
+      if(pos&&!pos.finished&&pos.position_sec>1){
+        toast(`▶ Resuming · ${fmtSec(pos.position_sec)}`);
+        _resumeBook(artist, album, data.tracks, pos);
+        return;
+      }
+    }catch(e){/* fall through to play-from-start */}
+  }
+  await playTracklist(data.tracks, album, artist, {book:isBook});
 }
 
 // POST a queue to a UPnP renderer. Handles the server's 409 "renderer busy"
@@ -2190,7 +2206,25 @@ async function startPlay(item,rowEl){
   curItemId=item.id;
   document.querySelectorAll(".row").forEach(r=>r.classList.remove("active"));
   if(rowEl)rowEl.classList.add("active");
+  // Audiobooks: tapping a chapter is an explicit "start HERE" — but it
+  // must still be a BOOK queue (auto-advance to later chapters, and
+  // positions keep saving; the old single-track path silently produced
+  // sessions that never bookmarked).
+  if(curServer?.kind==="audiobooks" && (item.type||"audio")==="audio"){
+    _playBookFromChapter(item);
+    return;
+  }
   PLAYER_play(item.url,item.title,item.art,item.type||"audio",item.artist||"",item.album||"");
+}
+
+async function _playBookFromChapter(item){
+  const key=item.album_key||"";
+  const kq=key?`&album_key=${enc(key)}`:"";
+  const r=await api(`/api/album_tracks?udn=${enc(curServer.udn)}&artist=${enc(item.artist||"")}&album=${enc(item.album||"")}${kq}`);
+  let tracks=r?((await r.json()).tracks||[]):[];
+  let idx=tracks.findIndex(t=>t.url===item.url);
+  if(idx<0){ tracks=[item]; idx=0; }   // defensive — play at least the tap
+  playTracklist(tracks.slice(idx), item.album||"", item.artist||"", {book:true});
 }
 
 async function PLAYER_play(url,title,art,mtype,artist,album){
