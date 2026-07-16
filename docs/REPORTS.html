@@ -312,11 +312,12 @@
   <p class="eyebrow">DLNA Gateway 2.0 · Reports &amp; plans</p>
   <h1>Gateway reports &amp; plans</h1>
   <p class="standfirst">The project’s working documents, one page: <strong>what was found and fixed</strong>
-  in the 12 July library audit, and <strong>what comes next</strong> — audiobook playback with
-  cross-session resume.</p>
+  in the 12 July library audit, <strong>the audiobooks build</strong> — playback with
+  cross-session resume — and <strong>the iOS battery-drain fix</strong> that followed it.</p>
   <nav class="doc-nav">
     <a href="#audit">I · Library audit — closed 2026-07-12</a>
-    <a href="#audiobooks">II · Audiobooks plan — proposed</a>
+    <a href="#audiobooks">II · Audiobooks plan — shipped</a>
+    <a href="#battery">III · iOS battery drain — fixed 2026-07-16</a>
   </nav>
 </header>
 
@@ -776,9 +777,76 @@
   blocks P1/P2.</p>
 </section>
 
+<!-- ═══════════════ PART III — iOS BATTERY DRAIN ═══════════════ -->
+<div class="part" id="battery">
+  <p class="part-eyebrow">Part III · Incident · reported &amp; fixed 16 July 2026</p>
+  <h1>iOS battery drain: the SSE stream that never slept</h1>
+  <p class="standfirst">Using the PWA on the iPhone started draining the battery much faster
+  than before. Cause: <strong>the server-sent-events connection stayed open with the screen
+  locked, and its 15-second keepalive frames kept the phone’s radio out of low-power state
+  for entire listening sessions.</strong> Fixed in one commit, regression-tested.</p>
+</div>
+
+<section>
+  <p class="kicker">Finding · the gating that gated almost everything</p>
+  <h2>Visibility gating stopped the polls — but not SSE</h2>
+  <p>The PWA’s battery hygiene was deliberate: a <code>visibilitychange</code> handler stops
+  all four poll timers when the screen locks or the app backgrounds — the code comment even
+  says it “cuts iPhone radio wake-ups from ~3600/hr to zero while hidden.” But the SSE
+  <code>EventSource</code> added on 5 June (commit <code>d2069e2</code>, R2
+  “push accelerator”) was opened once and <b>never closed</b> — the hidden branch stopped the
+  polls and left <code>_es</code> untouched. Server-side, <code>/api/events</code> emits a
+  <code>: keepalive</code> comment frame every <span class="num">15 s</span>
+  (<code>_SSE_HEARTBEAT_SEC</code> in <code>dlna_asgi.py</code>).</p>
+  <p><b>Why that costs real battery on iOS specifically:</b> while audio plays, a locked
+  iPhone keeps the PWA’s JavaScript and network alive. Audio streaming itself is cheap —
+  iOS buffers in bursts, so the radio downloads a chunk and powers down for tens of seconds.
+  A packet arriving every 15 s defeats that: the radio never reaches its low-power state for
+  the whole session. On top of it, every SSE <code>state</code> event fired a
+  <code>pollState()</code> fetch even while hidden, and the silent
+  <code>onerror</code> handler meant a dropped connection (tailnet flap, gateway restart)
+  auto-reconnected every few seconds, forever, invisibly.</p>
+  <div class="note">
+    <p><b>Why it surfaced in July, not June:</b> the audiobooks feature (13–14 July) changed
+    the usage pattern to exactly the worst case — hours-long, locked-screen, browser-audio
+    sessions in the PWA. Before that, long iOS listening went through CarPlay/Amperfy or the
+    Naim, where the PWA isn’t the player. The audiobook position saves themselves are
+    well-behaved (one throttled POST per 20 s, book queues only) — a minor contributor, but
+    combined with the 15 s keepalive the radio essentially never idled.</p>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">Fix · treat SSE like the polls</p>
+  <h2>Hidden closes the stream; visible reopens it</h2>
+  <p>SSE is purely a UI accelerator — worthless with the screen off. The fix
+  (commit <code>4c67c71</code>) makes the <code>visibilitychange</code> hidden
+  branch close the <code>EventSource</code> (new <code>closeEventSource()</code>) and stop
+  the radio-mode ICY now-playing poll (same class of leak, 10 s interval, radio mode only);
+  returning to visible reopens SSE via the existing <code>startPolling()</code> path and
+  restarts the ICY poll if a station is active. A locked phone is now fully network-quiet
+  between audio buffer bursts.</p>
+  <ul>
+    <li><b>Regression test</b> — <code>tests/frontend/test_sse.py::test_sse_closed_on_hidden_reopened_on_visible</code>:
+    the stub closes each <code>/api/events</code> response with <code>retry=86400000</code>,
+    so a second request can <em>only</em> come from a new <code>EventSource</code> — which
+    only exists if the hidden branch really closed the old one. Verified failing without the
+    fix; full Playwright suite <span class="num">185/185</span> green.</li>
+    <li><b>Rollout</b> — gateway restarted 16 July; the app shell is network-first, so every
+    client picks the fixed <code>app.js</code> up on its next foreground open. No reinstall,
+    no cache clearing.</li>
+    <li><b>Side catch</b> — the five <code>TestSubsonicAsgi</code> auth tests failed on this
+    machine because the <code>dlna_config</code> import loads <code>.env</code>, whose real
+    <code>SUBSONIC_USER</code> clashed with the hardcoded <code>u=user</code>. Fixed with the
+    same env-strip guard <code>test_subsonic.py</code> already had
+    (commit <code>f4c1458</code>); backend suite
+    <span class="num">915/915</span> green.</li>
+  </ul>
+</section>
+
 <footer>
   <span>dlna-gateway · docs/REPORTS.html</span>
-  <span>audit closed · audiobooks plan proposed · 2026‑07‑12</span>
+  <span>audit closed · audiobooks shipped · battery fix · 2026‑07‑16</span>
 </footer>
 </div>
 </body>
