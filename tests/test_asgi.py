@@ -527,9 +527,15 @@ class TestSubsonicAsgi(unittest.TestCase):
     def setUp(self):
         self._prev = api_subsonic.SUBSONIC_PASSWORD_OVERRIDE
         api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "pw"
+        # The dlna_config import loads .env, which on the dev machine sets a
+        # real SUBSONIC_USER — but these tests authenticate as the default
+        # "user". Strip it (same guard as tests/test_subsonic.py).
+        self._prev_user = os.environ.pop("SUBSONIC_USER", None)
 
     def tearDown(self):
         api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = self._prev
+        if self._prev_user is not None:
+            os.environ["SUBSONIC_USER"] = self._prev_user
 
     @staticmethod
     def _req(query, method="GET", headers=None):
