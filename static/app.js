@@ -2545,6 +2545,11 @@ function initEventSource(){
     _es.onerror=()=>{};   // transient drop — EventSource retries on its own
   }catch(e){ /* SSE is optional; polling carries on */ }
 }
+function closeEventSource(){
+  if(!_es) return;
+  try{ _es.close(); }catch(e){}
+  _es=null;
+}
 
 function startPolling(){
   stopPolling();
@@ -2563,13 +2568,20 @@ function stopPolling(){
 
 // Page Visibility API — stop polling when screen locks or tab goes background.
 // Cuts iPhone radio wake-ups from ~3600/hr to zero while hidden.
+// The SSE stream must close too: its 15s server keepalive frames would
+// otherwise keep the iPhone radio out of low-power state for an entire
+// locked-screen listening session (SSE is a UI accelerator — worthless
+// with the screen off). Same for the radio-mode ICY poll.
 document.addEventListener("visibilitychange", ()=>{
   if(document.hidden){
     stopPolling();
+    closeEventSource();
+    _stopIcyPoll();
   } else {
-    startPolling();
+    startPolling();               // re-opens SSE via initEventSource()
     pollState();
     refreshRenderers();
+    if(currentRadioStation) _startIcyPoll();
   }
 });
 
