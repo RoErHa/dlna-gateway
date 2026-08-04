@@ -469,6 +469,24 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
   `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
   `TestCacheVariants`).
 
+### MediaSession playback state (CarPlay / lock-screen resume)
+
+`_updateMediaSession` (`static/app.js`) wires the lock-screen / CarPlay
+metadata + transport handlers (play/pause/prev/next + position scrubber). On
+top of that, **`navigator.mediaSession.playbackState` is driven off the
+`<audio>` element's own `play`/`pause` events** (2026-08-04) — the single
+source of truth, so it's correct no matter what caused the change (a tap,
+autoplay, a queue advance, or a phone-call/Siri interruption). A correct
+`playbackState` is what makes CarPlay / the lock screen show the right control
+and reliably deliver the PLAY command back to us, i.e. a dependable **one-tap
+resume after a call**. **Hard platform limit:** iOS forbids a backgrounded web
+page from resuming audio without a user gesture, so fully-automatic hands-free
+resume is *not* achievable in the PWA — only a native app (Amperfy, via
+`AVAudioSession` `.shouldResume`) can do that. Keeping `playbackState` correct
+is the realistic best the web path can offer. Guarded by
+`tests/frontend/test_mediasession.py` (play→playing, pause→paused, and the
+playing→paused→playing call-interruption round-trip).
+
 ### Browser audio error handling (MediaError discrimination)
 
 `static/app.js` listens for `error` events on the `<audio>` element and branches on `MediaError.code`:

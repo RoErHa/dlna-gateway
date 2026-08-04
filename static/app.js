@@ -2589,7 +2589,19 @@ document.addEventListener("visibilitychange", ()=>{
 // When iOS interrupts audio (call, Siri), it may resume a different
 // audio session on end (podcast app, etc). Reassert our MediaSession
 // when audio pauses unexpectedly so iOS knows we own the session.
+//
+// playbackState is driven off the <audio> element's own play/pause events
+// (the single source of truth — so it's correct no matter what triggered the
+// change: a tap, autoplay, a queue advance, or a phone-call interruption).
+// A correct playbackState is what makes CarPlay / the lock screen show the
+// right control and reliably deliver the PLAY command back to us — i.e. a
+// dependable ONE-TAP resume after a call. (iOS forbids a backgrounded web
+// page from resuming audio without that user gesture, so hands-free auto-
+// resume isn't achievable here; keeping the state correct is.)
 browserAudio.addEventListener("pause", ()=>{
+  if("mediaSession" in navigator && !browserAudio.ended){
+    navigator.mediaSession.playbackState="paused";
+  }
   setTimeout(()=>{
     if(browserAudio.paused && activeDevice==="browser" &&
        browserQueue.length && !browserAudio.ended){
@@ -2601,6 +2613,7 @@ browserAudio.addEventListener("pause", ()=>{
 
 // Reassert on resume too — locks in our session after interruption ends
 browserAudio.addEventListener("play", ()=>{
+  if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
   const t=browserQueue[browserIdx];
   if(t && activeDevice==="browser") _updateMediaSession(t, browserIdx);
 });
