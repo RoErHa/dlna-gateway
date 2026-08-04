@@ -43,20 +43,25 @@ _lock = threading.Lock()
 _put_count = 0
 
 
-def _key(url: str) -> str:
-    return hashlib.sha1(url.encode("utf-8")).hexdigest()
+def _key(url: str, variant: str = "") -> str:
+    # An empty variant hashes the bare url so pre-variant entries (the original
+    # full-size covers already on disk) keep the SAME key — no cache churn. A
+    # scaled variant (e.g. "s256") is folded into the hash as a distinct entry.
+    payload = url if not variant else f"{url}\n{variant}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
-def _path(url: str) -> str:
-    return os.path.join(CACHE_DIR, _key(url))
+def _path(url: str, variant: str = "") -> str:
+    return os.path.join(CACHE_DIR, _key(url, variant))
 
 
-def get(url: str):
+def get(url: str, variant: str = ""):
     """Return ``(content_type, body)`` for a fresh cached entry, else ``None``.
-    A stale (TTL-expired) or corrupt entry is treated as a miss (and dropped)."""
+    A stale (TTL-expired) or corrupt entry is treated as a miss (and dropped).
+    ``variant`` selects a size-scaled copy (e.g. ``"s256"``); empty = original."""
     if not url:
         return None
-    p = _path(url)
+    p = _path(url, variant)
     try:
         st = os.stat(p)
     except OSError:
@@ -82,10 +87,10 @@ def get(url: str):
     return ctype, body
 
 
-def put(url: str, ctype: str, body: bytes) -> None:
+def put(url: str, ctype: str, body: bytes, variant: str = "") -> None:
     """Store ``body`` (an image) for ``url``. No-op on empty url/body. Writes
     atomically (tmp + os.replace) so a concurrent reader never sees a partial
-    file."""
+    file. ``variant`` stores a size-scaled copy under a distinct key."""
     if not url or not body:
         return
     ctype = (ctype or "image/jpeg").splitlines()[0][:120] or "image/jpeg"
@@ -94,7 +99,7 @@ def put(url: str, ctype: str, body: bytes) -> None:
     except OSError as e:
         log.debug(f"art_cache: cannot create {CACHE_DIR}: {e}")
         return
-    p = _path(url)
+    p = _path(url, variant)
     tmp = f"{p}.tmp.{os.getpid()}.{threading.get_ident()}"
     try:
         with open(tmp, "wb") as f:

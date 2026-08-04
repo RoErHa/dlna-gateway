@@ -897,11 +897,20 @@ async def subsonic(request: Request, rest_path: str):
         sid = params.get("id", "")
         log.info(f"Subsonic {method} id={sid[:48]} client={_client!r} ip={_ip}")
         if method == "getcoverart":
+            # Honour the Subsonic `size` box: Amperfy asks for a thumbnail
+            # (~100–600 px) per list row, so serve a downscaled JPEG instead of
+            # the full multi-MB embedded original — the dominant cost of a
+            # library art-sync over the tailnet. Malformed size → 0 (original).
+            try:
+                _size = int(params.get("size", "0") or 0)
+            except (TypeError, ValueError):
+                _size = 0
+            _fetch = functools.partial(api_playback.art_fetch_scaled, size=_size)
             # Try every candidate art URL for the id (folder albums have one
             # per track; some files lack embedded art) and serve the first that
             # actually fetches 200 — not an arbitrary one that may 404.
             code, ctype, art_body = await run_in_threadpool(
-                api_subsonic._resolve_cover, sid, api_playback.art_fetch_cached)
+                api_subsonic._resolve_cover, sid, _fetch)
             if code != 200:
                 return Response(content=b"no art", status_code=404)
             return Response(content=art_body, media_type=ctype,

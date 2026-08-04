@@ -4,6 +4,7 @@ The cache amortises Subsonic getCoverArt / PWA /art fetches so a client library
 sync (Amperfy pulls every cover) and gateway restarts don't re-hit
 coverartarchive or re-decode embedded art each time.
 """
+import io
 import os
 import tempfile
 import time
@@ -11,6 +12,7 @@ import unittest
 from unittest import mock
 
 import dlna_art_cache as ac
+import api_playback
 
 
 class _CacheBase(unittest.TestCase):
@@ -132,6 +134,113 @@ class TestArtFetchCached(_CacheBase):
             api_playback.art_fetch_cached("http://x/bad")
         self.assertEqual(m.call_count, 2)          # nothing cached → re-fetched
         self.assertIsNone(ac.get("http://x/bad"))
+
+
+class TestCacheVariants(_CacheBase):
+    """Size-scaled copies live under a distinct key (the `variant`); the
+    original (empty variant) keeps the pre-variant key so existing on-disk
+    entries are untouched."""
+
+    def test_empty_variant_matches_legacy_key(self):
+        # A no-variant put must land on the same key the pre-variant code used
+        # (bare sha1(url)) so covers already cached on disk aren't orphaned.
+        self.assertEqual(ac._key("http://x/c"), ac._key("http://x/c", ""))
+
+    def test_variant_is_distinct_entry(self):
+        ac.put("http://x/c", "image/jpeg", b"ORIG")
+        ac.put("http://x/c", "image/jpeg", b"SMALL", variant="s256")
+        self.assertEqual(ac.get("http://x/c"), ("image/jpeg", b"ORIG"))
+        self.assertEqual(ac.get("http://x/c", "s256"), ("image/jpeg", b"SMALL"))
+
+    def test_variants_isolated_from_each_other(self):
+        ac.put("http://x/c", "image/jpeg", b"A", variant="s96")
+        ac.put("http://x/c", "image/jpeg", b"B", variant="s512")
+        self.assertEqual(ac.get("http://x/c", "s96"),  ("image/jpeg", b"A"))
+        self.assertEqual(ac.get("http://x/c", "s512"), ("image/jpeg", b"B"))
+        self.assertIsNone(ac.get("http://x/c"))        # no original stored
+
+
+class TestSizeBucket(unittest.TestCase):
+    def test_ladder(self):
+        b = api_playback._size_bucket
+        self.assertEqual(b(0),    0)     # no size → original
+        self.assertEqual(b(-5),   0)
+        self.assertEqual(b(50),   96)
+        self.assertEqual(b(96),   96)
+        self.assertEqual(b(97),   256)
+        self.assertEqual(b(256),  256)
+        self.assertEqual(b(300),  512)
+        self.assertEqual(b(1024), 1024)
+        self.assertEqual(b(2000), 0)     # above top bucket → serve original
+
+
+def _jpeg(w, h, colour=(20, 120, 200)):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), colour).save(buf, format="JPEG", quality=95)
+    return buf.getvalue()
+
+
+@unittest.skipUnless(api_playback._PILImage is not None, "Pillow not installed")
+class TestArtFetchScaled(_CacheBase):
+    """getCoverArt?size=N path: downscale the cover to the size bucket, cache
+    the scaled copy per bucket, and never re-hit the network for a size the
+    original is already cached for."""
+
+    def _dims(self, body):
+        from PIL import Image
+        return Image.open(io.BytesIO(body)).size
+
+    def test_size_zero_is_original_passthrough(self):
+        orig = _jpeg(1500, 1500)
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(200, "image/jpeg", orig)):
+            code, ctype, body = api_playback.art_fetch_scaled("http://x/c", 0)
+        self.assertEqual(code, 200)
+        self.assertEqual(body, orig)                    # unmodified
+
+    def test_scales_down_to_bucket(self):
+        orig = _jpeg(1500, 1500)
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(200, "image/jpeg", orig)):
+            code, ctype, body = api_playback.art_fetch_scaled("http://x/c", 200)
+        self.assertEqual(code, 200)
+        self.assertEqual(ctype, "image/jpeg")
+        self.assertEqual(max(self._dims(body)), 256)    # 200 → bucket 256
+        self.assertLess(len(body), len(orig))
+
+    def test_second_request_served_from_variant_cache(self):
+        orig = _jpeg(1500, 1500)
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(200, "image/jpeg", orig)) as m:
+            b1 = api_playback.art_fetch_scaled("http://x/c", 200)[2]
+            b2 = api_playback.art_fetch_scaled("http://x/c", 200)[2]
+        self.assertEqual(b1, b2)
+        m.assert_called_once()                          # variant cache hit
+
+    def test_new_bucket_reuses_original_cache_no_refetch(self):
+        orig = _jpeg(1500, 1500)
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(200, "image/jpeg", orig)) as m:
+            api_playback.art_fetch_scaled("http://x/c", 200)   # bucket 256
+            b512 = api_playback.art_fetch_scaled("http://x/c", 500)[2]  # bucket 512
+        self.assertEqual(max(self._dims(b512)), 512)
+        m.assert_called_once()      # original fetched once; 2nd bucket re-scaled it
+
+    def test_already_small_image_passthrough(self):
+        orig = _jpeg(120, 120)
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(200, "image/jpeg", orig)):
+            body = api_playback.art_fetch_scaled("http://x/c", 256)[2]
+        self.assertEqual(body, orig)    # already within box → original bytes
+
+    def test_non_200_not_scaled_or_cached(self):
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(404, "not found", b"")) as m:
+            code, _ct, body = api_playback.art_fetch_scaled("http://x/bad", 200)
+        self.assertEqual(code, 404)
+        self.assertEqual(body, b"")
+        self.assertIsNone(ac.get("http://x/bad", "s256"))
 
 
 if __name__ == "__main__":

@@ -209,7 +209,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_gateway.py` | Module wiring + `start_background_services()` (spawns the daemon threads). **2.0:** no longer the process entry — the `dlna_asgi` lifespan calls it so `hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib HTTP edge + TLS were removed. |
 | `dlna_asgi.py` | **2.0 — THE server (Hypercorn owns the whole edge).** FastAPI app; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, the Subsonic byte methods, and the **Naim-facing `/gw/*` UPnP surface** (device.xml/desc.xml/events/control on the plain `:8765` bind — Cleanup C folded it in here, retiring the separate `dlna_server.py` device server + `run-2.0.sh`). Remaining legacy handlers run via the bridge. Lifespan boots `start_background_services`. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
 | `dlna_asgi_bridge.py` | Shim that runs the legacy `(h, params)` handlers unchanged inside the ASGI app (fake `h` captures `_json`/`_html`/`_xml_response`/`send_error`; runs in a threadpool). Routes are rewritten native one batch at a time, then dropped from the bridge. |
-| `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL. `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
+| `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
 | `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
 | `dlna_discovery.py` | SSDP listener, probe, subnet scanner, server heartbeat |
@@ -455,6 +455,19 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
 - Validates Content-Type starts with `image/` — an upstream HTML 404 page won't poison the SW cache.
 - 10-second timeout; slow upstream fails fast.
 - The handler is in `api_playback.art()` routed at `/art` in `dlna_asgi.py`.
+- **Subsonic `getCoverArt?size=N` downscaling (2026-08-04).** The native
+  `getCoverArt` route in `dlna_asgi.py` honours the client's `size` box via
+  `api_playback.art_fetch_scaled(url, size)` — Amperfy asks for ~100–600 px
+  thumbnails per list row, so serving the full multi-MB embedded original was
+  the main "cover art slow on Amperfy" cause. Sizes snap to a 96/256/512/1024
+  bucket ladder; each scaled JPEG (Pillow, quality 85) is cached per bucket in
+  `dlna_art_cache` under a `s<box>` variant, so a bucket is scaled at most once
+  and the original is fetched at most once regardless of how many sizes are
+  requested. `size=0`/absent, a size above the top bucket, an already-small
+  image, or Pillow-missing all serve the unmodified original. The PWA `/art`
+  route is unchanged (it wants lock-screen-res art). Guarded by
+  `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
+  `TestCacheVariants`).
 
 ### Browser audio error handling (MediaError discrimination)
 
@@ -2645,7 +2658,7 @@ Errors: `"status":"failed"` with `{"error": {"code": N, "message": "…"}}`.
 | `/rest/star` `/unstar` | `DB.album_fav_add / album_fav_remove` | Album-level starring → reuses Album Favourites |
 | `/rest/getStarred2` | `DB.album_fav_list()` | Starred albums |
 | `/rest/stream?id=` | track ID → URL → `dlna_player.proxy_stream` | Audio (Range supported via existing proxy) |
-| `/rest/getCoverArt?id=` | album/track ID → art URL → `api_playback.art` | Cover image |
+| `/rest/getCoverArt?id=&size=` | album/track ID → art URL → `api_playback.art_fetch_scaled` | Cover image, downscaled to the `size` box (bucketed 96/256/512/1024, Pillow) so thumbnails aren't full-res originals |
 | `/rest/scrobble?id=&submission=true` | `play_counts.count += 1` | Bumps radio bias from cars |
 
 ### ID encoding

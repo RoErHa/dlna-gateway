@@ -7,6 +7,7 @@ Handles: /api/renderer_state, /api/index/status, /api/index/rebuild,
          /api/edit_track, /stream, /art, /api/client_log
 """
 import http.client
+import io
 import json
 import logging
 import os
@@ -16,6 +17,20 @@ import urllib.parse
 
 import dlna_art_cache
 from dlna_avtransport import avtransport_send
+
+# Pillow is an OPTIONAL dependency (same pattern as rich/dotenv): when present,
+# Subsonic `getCoverArt?size=N` is honoured by downscaling the cover to the
+# requested box before serving. Without it, the original full-resolution image
+# is served (the pre-scaling behaviour) — no hard failure.
+try:
+    from PIL import Image as _PILImage
+    # Resampling enum is the canonical home since Pillow 9.1; the bare
+    # Image.LANCZOS alias is deprecated and may be removed in a future major.
+    _PIL_LANCZOS = getattr(getattr(_PILImage, "Resampling", _PILImage),
+                           "LANCZOS", None)
+except ImportError:                                      # noqa: BLE001
+    _PILImage = None
+    _PIL_LANCZOS = None
 from dlna_config import VERSION
 from dlna_discovery import RENDERERS, SERVERS
 from dlna_library import DB, INDEXER
@@ -219,6 +234,72 @@ def art_fetch_cached(upstream: str):
     if code == 200 and body:
         dlna_art_cache.put(upstream, ctype, body)
     return code, ctype, body
+
+
+# Snap arbitrary client-requested sizes onto a small ladder so the scaled-variant
+# cache holds a handful of copies per cover, not one per distinct pixel value a
+# client happens to ask for. A request is served the smallest bucket that still
+# covers it; anything above the top bucket falls through to the original (scaling
+# UP is pointless and a >1024 cover is already the full image on a phone).
+_ART_SIZE_BUCKETS = (96, 256, 512, 1024)
+_ART_JPEG_QUALITY = 85
+
+
+def _size_bucket(size: int) -> int:
+    """Nearest bucket >= size, or 0 (= serve original) when size is 0/negative
+    or larger than the top bucket."""
+    if size <= 0:
+        return 0
+    for b in _ART_SIZE_BUCKETS:
+        if size <= b:
+            return b
+    return 0
+
+
+def _scale_image(body: bytes, ctype: str, box: int):
+    """Downscale `body` to fit a `box`×`box` square (aspect-preserving), returning
+    `(content_type, bytes)`. Returns the ORIGINAL `(ctype, body)` unchanged when
+    the image is already within the box, or on any decode/encode error — the
+    caller caches whatever comes back under the size variant so a subsequent
+    request is a pure disk read either way."""
+    if _PILImage is None or _PIL_LANCZOS is None:
+        return ctype, body
+    try:
+        im = _PILImage.open(io.BytesIO(body))
+        if max(im.size) <= box:
+            return ctype, body                       # already small enough
+        im.thumbnail((box, box), _PIL_LANCZOS)
+        if im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")                   # JPEG can't hold alpha/palette
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=_ART_JPEG_QUALITY, optimize=True)
+        return "image/jpeg", out.getvalue()
+    except Exception as e:                            # noqa: BLE001
+        log.debug(f"art scale failed (box={box}): {type(e).__name__}: {e}")
+        return ctype, body
+
+
+def art_fetch_scaled(upstream: str, size: int = 0):
+    """`art_fetch_cached` plus optional downscaling to the Subsonic `size` box.
+
+    Honours `getCoverArt?size=N` so Amperfy/CarPlay pull a right-sized thumbnail
+    (a few KB) for list rows instead of the full embedded cover (often multiple
+    MB) — the dominant cost of an Amperfy library sync over the tailnet. `size=0`
+    (or no Pillow, or a size above the top bucket) is exactly the old behaviour.
+    Scaled copies are cached per size bucket (`dlna_art_cache` variant)."""
+    box = _size_bucket(size)
+    if box == 0 or _PILImage is None or _PIL_LANCZOS is None or not upstream:
+        return art_fetch_cached(upstream)
+    variant = f"s{box}"
+    hit = dlna_art_cache.get(upstream, variant)
+    if hit is not None:
+        return 200, hit[0], hit[1]
+    code, ctype, body = art_fetch_cached(upstream)   # warms the original cache too
+    if code != 200 or not body:
+        return code, ctype, body
+    sctype, sbody = _scale_image(body, ctype, box)
+    dlna_art_cache.put(upstream, sctype, sbody, variant)
+    return 200, sctype, sbody
 
 
 def art(h, params):
