@@ -412,5 +412,51 @@ class TestAlbumKeyUniqueMigration(unittest.TestCase):
         self.assertEqual(len(hits["tracks"]), 1)
 
 
+class TestAllAlbumsPagination(unittest.TestCase):
+    """all_albums(order/limit/offset) — the SQL pagination behind Subsonic
+    getAlbumList2 (Amperfy pages the whole library)."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+        self.udn = "uuid:test"
+        # 4 albums: Delta/Cream, Alpha/Zed, Charlie/Mike, Bravo/Aaron —
+        # deliberately album-name order != artist order.
+        seed = [("Cream", "Delta"), ("Zed", "Alpha"),
+                ("Mike", "Charlie"), ("Aaron", "Bravo")]
+        with self.db._pool.write() as conn:
+            for i, (ar, al) in enumerate(seed):
+                conn.execute(
+                    "INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (self.udn, f"o{i}", f"http://t/{i}", f"T{i}", ar, al))
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def test_default_orders_by_album_name(self):
+        names = [a["album"] for a in self.db.all_albums(self.udn)]
+        self.assertEqual(names, ["Alpha", "Bravo", "Charlie", "Delta"])
+
+    def test_order_by_artist(self):
+        names = [a["album"]
+                 for a in self.db.all_albums(self.udn, order="artist")]
+        # Aaron(Bravo), Cream(Delta), Mike(Charlie), Zed(Alpha)
+        self.assertEqual(names, ["Bravo", "Delta", "Charlie", "Alpha"])
+
+    def test_limit_offset_paginates(self):
+        p1 = [a["album"] for a in
+              self.db.all_albums(self.udn, limit=2, offset=0)]
+        p2 = [a["album"] for a in
+              self.db.all_albums(self.udn, limit=2, offset=2)]
+        self.assertEqual(p1, ["Alpha", "Bravo"])
+        self.assertEqual(p2, ["Charlie", "Delta"])
+        self.assertTrue(set(p1).isdisjoint(p2))
+
+    def test_limit_none_returns_all(self):
+        self.assertEqual(len(self.db.all_albums(self.udn)), 4)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

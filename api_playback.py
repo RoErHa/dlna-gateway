@@ -205,8 +205,12 @@ def art_fetch(upstream: str):
                 return 502, "Image too small", b""
             return 200, ctype, body
         except Exception as e:                       # noqa: BLE001
+            # 503 (not 502) marks a TRANSIENT failure — upstream unreachable /
+            # timed out / TLS error. art_fetch_cached must NOT negative-cache
+            # these (a momentary localfs restart mustn't suppress a cover for an
+            # hour); the deterministic 502s above (not-an-image / too-big) it may.
             log.debug(f"art proxy: {url[:80]}  {type(e).__name__}: {e}")
-            return 502, str(e), b""
+            return 503, str(e), b""
         finally:
             if conn:
                 try:
@@ -225,14 +229,27 @@ def art_fetch_cached(upstream: str):
     `/localfs/art/<id>` re-decoding the audio file). The cache serves repeat
     requests — across clients AND gateway restarts — from disk. Only 200s are
     cached; covers for a URL don't meaningfully change (TTL-bounded; delete the
-    cache dir to force-refresh). Same `(status, ctype_or_msg, body)` contract."""
+    cache dir to force-refresh). Same `(status, ctype_or_msg, body)` contract.
+
+    A deterministic FAILURE (a candidate whose file has no embedded art, a CAA
+    404, a not-an-image body) is remembered under a short-TTL negative marker so
+    Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate
+    each time. Transient failures (503 — upstream unreachable) are never cached,
+    so a momentary blip is retried on the next request."""
     if upstream:
         hit = dlna_art_cache.get(upstream)
         if hit is not None:
             return 200, hit[0], hit[1]
+        neg = dlna_art_cache.get_negative(upstream)
+        if neg is not None:
+            return neg[0], neg[1], b""
     code, ctype, body = art_fetch(upstream)
     if code == 200 and body:
         dlna_art_cache.put(upstream, ctype, body)
+    elif upstream and code != 200 and code != 503:
+        # code 503 = transient (unreachable); everything else here is a
+        # deterministic miss worth remembering briefly (ctype holds the message).
+        dlna_art_cache.put_negative(upstream, code, ctype)
     return code, ctype, body
 
 

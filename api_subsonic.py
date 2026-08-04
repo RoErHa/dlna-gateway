@@ -512,39 +512,53 @@ def _get_album(h, params):
     }})
 
 
+def _int_param(val, default: int) -> int:
+    """Tolerant int parse for client-supplied query params — a non-numeric
+    `size`/`offset` degrades to the default instead of 500-ing the request."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def _get_album_list2(h, params):
     """Subsonic supports several `type` values. We map:
-        alphabeticalByName, alphabeticalByArtist → all albums (sorted)
-        newest, recent, frequent → all albums (we don't track add/play
+        alphabeticalByName, alphabeticalByArtist → all albums (sorted; the
+            page is fetched with SQL LIMIT/OFFSET so Amperfy's full-library
+            sync doesn't reload every album per page)
+        newest, recent, frequent → all albums by name (we don't track add/play
             dates per album; degrade gracefully)
-        random → random.shuffle of all
+        random → day-seeded shuffle (stable pagination within a session)
         starred → album_favourites
     """
     import random as _rnd
     typ    = params.get("type", "alphabeticalByName")
-    size   = int(params.get("size", "10") or 10)
-    offset = int(params.get("offset", "0") or 0)
-    size   = max(1, min(size, 500))
+    size   = max(1, min(_int_param(params.get("size"), 10), 500))
+    offset = max(0, _int_param(params.get("offset"), 0))
 
     if typ == "starred":
         favs = DB.album_fav_list()
         page = favs[offset:offset + size]
-        _ok(h, {"albumList2": {"album": [
-            _so_album(f)
-            for f in page
-        ]}})
+        _ok(h, {"albumList2": {"album": [_so_album(f) for f in page]}})
         return
 
     udn = _default_udn()
-    albums = DB.all_albums(udn) if udn else []
-    if typ in ("random",):
-        _rnd.shuffle(albums)
-    elif typ in ("alphabeticalByArtist",):
-        albums.sort(key=lambda a: ((a.get("artist") or "").lower(),
-                                    (a.get("album")  or "").lower()))
-    # alphabeticalByName / newest / recent / frequent → as-is
-    # (all_albums already sorts by album name COLLATE NOCASE)
-    page = albums[offset:offset + size]
+    if not udn:
+        _ok(h, {"albumList2": {}})
+        return
+
+    if typ == "random":
+        # Stateless random with COHERENT pagination: a per-day seed means a
+        # client paging through gets non-overlapping pages within a session
+        # (re-shuffling per call returned duplicate/missing albums across
+        # pages). random isn't the sync hot path, so the O(n) materialise is
+        # acceptable; the alphabetical types below page in SQL.
+        albums = DB.all_albums(udn)
+        _rnd.Random(int(time.time() // 86400)).shuffle(albums)
+        page = albums[offset:offset + size]
+    else:
+        order = "artist" if typ == "alphabeticalByArtist" else "album"
+        page = DB.all_albums(udn, order=order, limit=size, offset=offset)
     _ok(h, {"albumList2": {"album": [_so_album(a) for a in page]}})
 
 

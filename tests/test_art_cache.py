@@ -19,14 +19,17 @@ class _CacheBase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         # Point the module at a throwaway dir + tight knobs for this test.
-        self._saved = (ac.CACHE_DIR, ac.TTL_SEC, ac.MAX_BYTES, ac._put_count)
+        self._saved = (ac.CACHE_DIR, ac.TTL_SEC, ac.MAX_BYTES, ac._put_count,
+                       ac.NEG_TTL_SEC)
         ac.CACHE_DIR = self._tmp.name
         ac.TTL_SEC = 14 * 24 * 3600
         ac.MAX_BYTES = 1024 * 1024 * 1024
         ac._put_count = 0
+        ac.NEG_TTL_SEC = 3600
 
     def tearDown(self):
-        ac.CACHE_DIR, ac.TTL_SEC, ac.MAX_BYTES, ac._put_count = self._saved
+        (ac.CACHE_DIR, ac.TTL_SEC, ac.MAX_BYTES, ac._put_count,
+         ac.NEG_TTL_SEC) = self._saved
         self._tmp.cleanup()
 
 
@@ -126,14 +129,56 @@ class TestArtFetchCached(_CacheBase):
         m.assert_called_once()                     # second call hit the cache
         self.assertEqual(ac.get("http://x/new"), ("image/jpeg", b"FRESH"))
 
-    def test_non_200_not_cached(self):
+    def test_non_200_not_in_positive_cache(self):
         import api_playback
         with mock.patch.object(api_playback, "art_fetch",
-                               return_value=(502, "Upstream 404", b"")) as m:
+                               return_value=(502, "Not an image", b"")):
             api_playback.art_fetch_cached("http://x/bad")
-            api_playback.art_fetch_cached("http://x/bad")
-        self.assertEqual(m.call_count, 2)          # nothing cached → re-fetched
-        self.assertIsNone(ac.get("http://x/bad"))
+        self.assertIsNone(ac.get("http://x/bad"))   # never a positive entry
+
+    def test_deterministic_failure_negative_cached(self):
+        import api_playback
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(404, "Upstream 404", b"")) as m:
+            r1 = api_playback.art_fetch_cached("http://x/noart")
+            r2 = api_playback.art_fetch_cached("http://x/noart")
+        self.assertEqual(r1[0], 404)
+        self.assertEqual(r2[0], 404)               # served from the negative marker
+        m.assert_called_once()                      # second call did NOT re-fetch
+        self.assertEqual(ac.get_negative("http://x/noart"),
+                         (404, "Upstream 404"))
+
+    def test_transient_503_not_negative_cached(self):
+        import api_playback
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(503, "timed out", b"")) as m:
+            api_playback.art_fetch_cached("http://x/down")
+            api_playback.art_fetch_cached("http://x/down")
+        self.assertEqual(m.call_count, 2)          # transient → retried each time
+        self.assertIsNone(ac.get_negative("http://x/down"))
+
+    def test_negative_marker_ttl_expiry(self):
+        import api_playback
+        ac.NEG_TTL_SEC = 3600
+        with mock.patch.object(api_playback, "art_fetch",
+                               return_value=(404, "gone", b"")):
+            api_playback.art_fetch_cached("http://x/exp")
+        p = ac._path("http://x/exp", ac._NEG_VARIANT)
+        old = time.time() - (ac.NEG_TTL_SEC + 60)
+        os.utime(p, (old, old))
+        self.assertIsNone(ac.get_negative("http://x/exp"))   # expired → miss
+        self.assertFalse(os.path.exists(p), "stale marker should be removed")
+
+    def test_positive_hit_beats_negative_probe(self):
+        # A fresh 200 after a prior negative marker serves the image (positive
+        # cache is checked first).
+        import api_playback
+        ac.put_negative("http://x/heal", 404, "was gone")
+        ac.put("http://x/heal", "image/png", b"NOWHERE")
+        with mock.patch.object(api_playback, "art_fetch") as m:
+            code, ctype, body = api_playback.art_fetch_cached("http://x/heal")
+        m.assert_not_called()
+        self.assertEqual((code, ctype, body), (200, "image/png", b"NOWHERE"))
 
 
 class TestCacheVariants(_CacheBase):
