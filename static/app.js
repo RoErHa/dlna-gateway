@@ -14,6 +14,28 @@ const fmtDur=d=>{if(!d)return"";const p=d.split(":").map(Number);return p.length
 async function api(url,opts){try{return await fetch(url,opts);}catch{return null;}}
 function toast(msg,ms=2400){const t=$("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),ms);}
 
+// ── Loading spinner, with a watchdog ──────────────────────────────
+// `.spinner` is an infinite CSS rotation. Every loader here follows the
+// pattern "show spinner → fetch → `if(!r) return;`", so ANY failed fetch
+// (dropped tailnet, gateway restart) used to leave that rotation running
+// at display refresh rate for as long as the app stayed open — a silent
+// GPU wake every frame, and no feedback for the user either. The watchdog
+// swaps the spinner for a static message if the fetch never replaces it.
+// The replacement keeps the `spinner-wrap` class so the existing
+// "clear the spinner before appending" checks still find and remove it.
+let _SPINNER_TIMEOUT_MS = 15000;   // `let` so the frontend tests can shrink it
+const _spinnerTimers = new WeakMap();
+function showSpinner(el){
+  if(!el) return;
+  clearTimeout(_spinnerTimers.get(el));
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  _spinnerTimers.set(el, setTimeout(()=>{
+    if(!el.querySelector(".spinner")) return;    // content arrived — done
+    el.innerHTML = '<div class="spinner-wrap" style="color:var(--ink-dim);'
+                 + 'font-size:12px;text-align:center">⚠ Couldn\'t load — try again</div>';
+  }, _SPINNER_TIMEOUT_MS));
+}
+
 // Fisher-Yates shuffle — cryptographically seeded, truly uniform distribution.
 // .sort(()=>Math.random()-0.5) is biased and produces near-identical sequences.
 function shuffle(arr){
@@ -544,13 +566,18 @@ function rebuildSourceSel(data){
     sel.innerHTML=`<option value="">Scanning…</option>`;
     return;
   }
-  sel.innerHTML=data.map(s=>{
+  const html=data.map(s=>{
     const icon=s.udn.startsWith("uuid:localfs-")?"💾":"🗄";
     const dim=s.online?"":" (offline)";
     const cnt=s.tracks?` · ${s.tracks.toLocaleString()} tracks`:"";
     const acnt=s.albums?` · ${s.albums.toLocaleString()} albums`:"";
     return `<option value="${esc(s.udn)}">${icon} ${esc(s.name)}${cnt}${acnt}${dim}</option>`;
   }).join("");
+  // The source list is identical on almost every refresh — reassigning
+  // innerHTML anyway destroys and rebuilds the <option> nodes, forcing a
+  // style/layout pass (and on iOS closing an open native picker) for no
+  // change at all. Skip the write when nothing differs.
+  if(sel.innerHTML!==html) sel.innerHTML=html;
   if(curServer) sel.value=curServer.udn;
 }
 
@@ -562,6 +589,7 @@ function selectSource(udn){
   abMeta=null;      // meta belongs to the previous source
   _loadAbMeta();
   updateDiscStatus();
+  if(typeof kickPoll==="function") kickPoll("index");   // bar is per-source
   // Reset browse navigation and reload the new source's library.
   if(typeof exitDrillDown==="function") exitDrillDown(false);
   browseLetter="A"; browseOffset=0;
@@ -649,7 +677,7 @@ function buildLetterBar(){
 
 async function loadBrowsePage(){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   $("browse-back").style.display        = "none";
   $("browse-section-hdr").style.display = "none";
   if($("browse-series")) $("browse-series").style.display = "none";
@@ -841,7 +869,7 @@ async function showDecadeAlbums(decadeItem){
 
 async function _showDecadeAlbumsInner(decadeItem){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   $("browse-back-title").textContent = browseNavStack.length>0
@@ -879,7 +907,7 @@ async function showGenreAlbums(genreItem){
 
 async function _showGenreAlbumsInner(genreItem){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   $("browse-back-title").textContent = browseNavStack.length>0
@@ -936,7 +964,7 @@ async function showArtistAlbums(artistItem){
 
 async function _showArtistAlbumsInner(artistItem){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   // Back label = one level up in the stack
@@ -985,7 +1013,7 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   };
   browseNavStack.push(stackEntry);
   drillAlbum = album;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   // Back label = artist name (the level we're returning to)
@@ -1181,7 +1209,7 @@ async function browse(id){
   if(browsing)return;  // drop if already in flight
   browsing=true;
   clearTimeout(_browseRetryTimer);
-  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   try{
     const r=await api(`/api/browse?udn=${enc(curServer.udn)}&id=${enc(id)}`);
     if(!r){
@@ -1270,7 +1298,7 @@ $("search-input").addEventListener("keydown",e=>{
 
 async function doSearch(q){
   if(!curServer||!q)return;
-  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   const r=await api(`/api/search?udn=${enc(curServer.udn)}&q=${enc(q)}`);
   if(!r){$("item-list").innerHTML='<div class="msg">Search failed.</div>';return;}
   const data=await r.json();
@@ -1392,6 +1420,10 @@ async function sendRenderQueue(udn, tracks, opts={}){
   }
   const d=await r.json().catch(()=>({}));
   if(d.error){toast("Error: "+d.error);return false;}
+  // A renderer just went live — promote the state loop to its 1 Hz tier
+  // now instead of waiting out an idle-tier tick (_upnpAlive is still
+  // false at this point; kickPoll polls first, then sizes the delay).
+  bumpPolling();
   return true;
 }
 
@@ -1874,7 +1906,7 @@ async function radioSearch({q="",tag=""}={}){
 async function renderRadioFavourites(){
   const list=$("radio-list");
   if(!list) return;
-  list.innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner(list);
   if(radioFavCache===null){
     const r=await api("/api/radio/favourites");
     if(!r){ list.innerHTML='<div class="msg" style="padding:16px">Could not load.</div>'; return; }
@@ -2384,6 +2416,10 @@ async function control(cmd){
   }
   await api("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({...cmd,device:activeDevice})});
+  // Transport commands change whether the renderer is live — re-read the
+  // state at once so the loop lands in the right tier (and the UI updates
+  // without waiting for an idle-tier tick).
+  bumpPolling();
 }
 
 function resetPlayer(){
@@ -2457,6 +2493,10 @@ async function pollState(){
   const url="/api/renderer_state"+(udn?"?udn="+encodeURIComponent(udn):"");
   const r=await api(url);if(!r)return;
   const ps=await r.json();
+  // Drives the adaptive poll cadence: a live renderer earns the 1 Hz tier,
+  // a stopped one drops back to the slow tier (this endpoint costs the
+  // gateway two SOAP round-trips to the renderer per call).
+  _upnpAlive=!!ps.alive;
   $("sb-dot").className="sb-dot "+(ps.state||"stopped");
   $("sb-state").textContent=ps.state||"stopped";
   $("sb-uri").textContent=ps.media_title||ps.title||"—";
@@ -2491,6 +2531,9 @@ async function pollIndex(){
   const r=await api(`/api/index/status?udn=${enc(curServer.udn)}`);
   if(!r)return;
   const s=await r.json();
+  // Only a running rebuild needs 2 s progress updates; idle/done/error is a
+  // static line that SSE re-pushes on the next transition (see _POLL_MS).
+  _idxRunning = s.status==="running";
   const bar=$("index-bar"),lbl=$("index-label"),pb=$("index-progress-bar");
   // Indexing takes priority — it's a foreground rebuild.
   if(s.status==="running"){
@@ -2524,8 +2567,8 @@ async function reindex(){
   toast("Rebuilding index…",3000);
 }
 
-// ── Polling — paused when tab hidden to save iOS battery ─────────
-let _t_servers, _t_renderers, _t_state, _t_index;
+// ── Polling — paused when tab hidden, throttled when idle ────────
+// Timers live in the _timers map next to the _LOOPS table below.
 
 // ── SSE (R2) — instant pushes on top of the polls ───────────────
 // The 2.0 ASGI gateway pushes server-sent events on state/index/device
@@ -2533,42 +2576,123 @@ let _t_servers, _t_renderers, _t_state, _t_index;
 // fires the same refresh the interval would, so updates feel instant.
 // Polling stays as the fallback — if SSE never connects (stdlib server,
 // older browser), nothing is lost. EventSource auto-reconnects on drop.
-let _es=null;
+let _es=null, _sseUp=false;
 function initEventSource(){
   if(_es) return;                                   // open once
   if(typeof EventSource==="undefined") return;      // unsupported → polling
   try{
     _es=new EventSource("/api/events");
-    _es.addEventListener("state",   ()=>pollState());
-    _es.addEventListener("index",   ()=>pollIndex());
+    _es.onopen=()=>{ _sseUp=true; _rearmPolls(); };
+    _es.addEventListener("state",   ()=>kickPoll("state"));
+    _es.addEventListener("index",   ()=>kickPoll("index"));
     _es.addEventListener("devices", ()=>{refreshServers();refreshRenderers();});
-    _es.onerror=()=>{};   // transient drop — EventSource retries on its own
+    // Transient drop — EventSource retries on its own. Until it's back the
+    // polls must carry the load again, so drop out of the SSE-backed tier.
+    _es.onerror=()=>{ _sseUp=false; _rearmPolls(); };
   }catch(e){ /* SSE is optional; polling carries on */ }
 }
 function closeEventSource(){
+  _sseUp=false;
   if(!_es) return;
   try{ _es.close(); }catch(e){}
   _es=null;
 }
 
+// ── Adaptive poll cadence (iOS battery) ─────────────────────────
+// The four polls used to run at FIXED 1s/2s/8s/10s regardless of what the
+// app was doing. An open-but-idle PWA therefore fired ~2,600 requests/hour
+// — ~6,200/hr with a UPnP output selected, where every /api/renderer_state
+// costs the gateway two SOAP round-trips to the renderer as well. At better
+// than one request per second the iPhone's radio never reaches its low-power
+// idle state, which is the "app is open but not playing and the battery still
+// drains" report. Nothing about that traffic was useful: the library, the
+// device list and the transport state are all STATIC while idle, and SSE
+// already pushes every change that does happen.
+//
+// Cadence now follows what is actually going on:
+//   • state      — 1s while audio is genuinely playing, 20s idle.
+//   • index      — 2s while a rebuild runs, 60s otherwise.
+//   • servers    — 8s until SSE connects, 60s once it's up.
+//   • renderers  — 10s until SSE connects, 60s once it's up.
+// The slow tiers are a safety net for a missed/dropped event, not the
+// primary update path — an SSE push re-arms the affected loop immediately,
+// so a state change is still reflected instantly. If SSE never connects
+// (older browser, proxy that eats event-streams) every loop falls back to
+// its original interval and behaviour is exactly as before.
+let _pollingOn=false;
+let _idxRunning=false;   // set by pollIndex from the server's status
+let _upnpAlive=false;    // set by pollState from the renderer snapshot
+
+// Is a player actually running right now? Only then is a 1 Hz state poll
+// worth its radio wake-up. Browser output is answered locally (the <audio>
+// element IS the state), so its fast tier costs no network at all — only
+// the UPnP tier is a real request, and that one also costs the gateway two
+// SOAP round-trips to the renderer.
+function _playbackActive(){
+  if(activeDevice==="browser")
+    return !!(browserAudio.currentSrc && !browserAudio.paused && !browserAudio.ended);
+  return _upnpAlive;
+}
+
+// `hot()` decides the tier for each loop; `fast` is the pre-existing
+// interval, so a hot loop behaves exactly as it always did.
+const _LOOPS = {
+  state:     {fn:()=>pollState(),        fast: 1000, slow:20000, hot:()=>_playbackActive()},
+  // `!curServer` keeps the loop hot through boot: the first pollIndex fires
+  // before refreshServers has adopted a source and returns early, so without
+  // it the index bar would wait a full slow tick to appear.
+  index:     {fn:()=>pollIndex(),        fast: 2000, slow:60000, hot:()=>_idxRunning||!curServer},
+  servers:   {fn:()=>refreshServers(),   fast: 8000, slow:60000, hot:()=>!_sseUp},
+  renderers: {fn:()=>refreshRenderers(), fast:10000, slow:60000, hot:()=>!_sseUp},
+};
+const _timers={};
+
+function _armLoop(key){
+  clearTimeout(_timers[key]);
+  if(!_pollingOn) return;
+  const L=_LOOPS[key];
+  _timers[key]=setTimeout(()=>_runLoop(key), L.hot() ? L.fast : L.slow);
+}
+
+async function _runLoop(key){
+  if(!_pollingOn) return;
+  // A failed poll must never kill its own loop — that would silently
+  // freeze the UI until the next visibility change.
+  try{ await _LOOPS[key].fn(); }catch(e){}
+  _armLoop(key);      // re-evaluate the tier AFTER the poll refreshed it
+}
+
+// Run a loop NOW and re-arm from the fresh result. Arming without polling
+// first would size the delay off stale flags (e.g. _upnpAlive is still
+// false the instant a queue is posted), so every "something changed"
+// caller goes through here rather than _armLoop.
+function kickPoll(key){
+  if(!_pollingOn) return;
+  clearTimeout(_timers[key]);
+  _runLoop(key);
+}
+// Called from every path that starts or stops playback.
+function bumpPolling(){ kickPoll("state"); }
+// SSE connected/dropped — only the device loops key off _sseUp.
+function _rearmPolls(){ _armLoop("servers"); _armLoop("renderers"); }
+
 function startPolling(){
   stopPolling();
-  _t_servers   = setInterval(refreshServers,   8000);
-  _t_renderers = setInterval(refreshRenderers, 10000);
-  _t_state     = setInterval(pollState,        1000);
-  _t_index     = setInterval(pollIndex,        2000);
+  _pollingOn=true;
+  // Seed immediately so the UI is correct on first paint — the index bar
+  // in particular must render now, not one slow tick from now.
+  kickPoll("state"); kickPoll("index");
+  _armLoop("servers"); _armLoop("renderers");
   initEventSource();
 }
 function stopPolling(){
-  clearInterval(_t_servers);
-  clearInterval(_t_renderers);
-  clearInterval(_t_state);
-  clearInterval(_t_index);
+  _pollingOn=false;
+  Object.keys(_LOOPS).forEach(k=>clearTimeout(_timers[k]));
 }
 
 // Page Visibility API — stop polling when screen locks or tab goes background.
 // Cuts iPhone radio wake-ups from ~3600/hr to zero while hidden.
-// The SSE stream must close too: its 15s server keepalive frames would
+// The SSE stream must close too: its server keepalive frames would
 // otherwise keep the iPhone radio out of low-power state for an entire
 // locked-screen listening session (SSE is a UI accelerator — worthless
 // with the screen off). Same for the radio-mode ICY poll.
@@ -2578,8 +2702,7 @@ document.addEventListener("visibilitychange", ()=>{
     closeEventSource();
     _stopIcyPoll();
   } else {
-    startPolling();               // re-opens SSE via initEventSource()
-    pollState();
+    startPolling();               // seeds state+index, re-opens SSE
     refreshRenderers();
     if(currentRadioStation) _startIcyPoll();
   }
@@ -2602,6 +2725,15 @@ browserAudio.addEventListener("pause", ()=>{
   if("mediaSession" in navigator && !browserAudio.ended){
     navigator.mediaSession.playbackState="paused";
   }
+  // `#player.playing.is-audio .art` is an 8 s infinite rotation. Nothing
+  // used to take `playing` off in browser output (pollState only clears it
+  // on the UPnP branch), so pausing left a full-size album cover spinning
+  // at display refresh rate FOREVER — a compositor/GPU wake every frame for
+  // as long as the app stayed open. That is the single biggest non-network
+  // idle drain on iOS. Drive the class off the element's own play/pause
+  // events, the same single-source-of-truth as MediaSession.playbackState.
+  if(activeDevice==="browser") $("player").classList.remove("playing");
+  bumpPolling();          // idle now → let the state loop drop to slow tier
   setTimeout(()=>{
     if(browserAudio.paused && activeDevice==="browser" &&
        browserQueue.length && !browserAudio.ended){
@@ -2614,6 +2746,9 @@ browserAudio.addEventListener("pause", ()=>{
 // Reassert on resume too — locks in our session after interruption ends
 browserAudio.addEventListener("play", ()=>{
   if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
+  // Restore the vinyl spin the pause handler took off (see above).
+  if(activeDevice==="browser") $("player").classList.add("playing");
+  bumpPolling();          // playing again → 1 Hz seek-bar updates
   const t=browserQueue[browserIdx];
   if(t && activeDevice==="browser") _updateMediaSession(t, browserIdx);
 });
@@ -2637,7 +2772,7 @@ function rebuildOutputSel(upnpData){
       html+=`<option value="upnp:${esc(rd.udn)}">📡 ${esc(rd.name)}</option>`;
     });
   }
-  out.innerHTML=html;
+  if(out.innerHTML!==html) out.innerHTML=html;   // see rebuildSourceSel
   if(prev&&out.querySelector(`option[value="${prev}"]`)) out.value=prev;
   else out.value="browser";
   activeDevice=out.value;

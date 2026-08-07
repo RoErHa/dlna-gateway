@@ -805,8 +805,19 @@ async def radio_stream(request: Request, url: str = ""):
 # pushes — now-playing, index progress, device changes — instead of polling.
 # Worker threads call dlna_events.EVENTS.publish({...}); the bus (bound to this
 # loop in _lifespan) fans each event to every connected subscriber's queue.
-# A 15 s comment heartbeat keeps the connection alive through proxies/idle.
-_SSE_HEARTBEAT_SEC = 15.0
+# A comment heartbeat keeps the connection alive through proxies/idle.
+#
+# 45 s, raised from 15 s (2026-08-07, iOS battery). Now that the PWA throttles
+# its polls when idle, this heartbeat is the most frequent thing left on the
+# wire in a foreground-but-idle session — at 15 s it was 240 inbound frames an
+# hour, each one a radio wake-up, purely to say "still here". Nothing needs
+# that rate: it only has to beat whatever idle timeout sits in the middle, and
+# on the tailnet there is no proxy at all. The cost of raising it is that a
+# vanished client is reaped up to 45 s later (a bounded queue, freed in the
+# `finally`) and that a dead connection is noticed one heartbeat later — both
+# harmless. Keep it comfortably under 60 s so a future reverse proxy's default
+# idle timeout can't close the stream.
+_SSE_HEARTBEAT_SEC = 45.0
 
 
 @app.get("/api/events", include_in_schema=False)

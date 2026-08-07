@@ -469,6 +469,82 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
   `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
   `TestCacheVariants`).
 
+### iOS battery — what an OPEN but IDLE PWA costs (2026-08-07)
+
+The 2026-07 work fixed the **screen-locked** case (Page Visibility stops the
+polls, closes SSE, stops the ICY poll). The follow-up report was that the app
+still drains while **open and NOT playing**. Two independent causes, both now
+fixed; regression-guarded by `tests/frontend/test_battery.py` (10 tests).
+
+**1. The polls ran at a fixed cadence regardless of activity.**
+`startPolling()` set flat intervals — state 1 s, index 2 s, servers 8 s,
+renderers 10 s — so an idle-but-open PWA fired **~2,600 requests/hour**, and
+**~6,200/hr with a UPnP output selected**, where every `/api/renderer_state`
+also costs the gateway **two SOAP round-trips to the renderer**
+(`RendererQueue.snapshot()`; `_tracks` is never cleared on stop, so a
+finished session keeps answering with live SOAP forever). At better than one
+request per second the iPhone radio never reaches low-power idle. None of
+that traffic was useful — the library, the device list and the transport
+state are all static while idle, and SSE already pushes every change.
+
+Polling is now **two-tier**, one self-scheduling loop per poll
+(`_LOOPS` / `_armLoop` / `_runLoop` / `kickPoll` in `app.js`). The **fast tier
+is the original interval**, so anything "active" behaves exactly as before:
+
+| loop | fast (when) | slow |
+|---|---|---|
+| `state` | 1 s — audio genuinely playing (`_playbackActive()`) | 20 s |
+| `index` | 2 s — a rebuild is running, or no source adopted yet | 60 s |
+| `servers` | 8 s — until SSE connects | 60 s |
+| `renderers` | 10 s — until SSE connects | 60 s |
+
+The slow tiers are a **safety net for a dropped event, not the update path**:
+an SSE push calls `kickPoll(...)`, which polls *then* re-arms, so a change is
+still reflected instantly. `bumpPolling()` does the same from every path that
+starts/stops playback (`sendRenderQueue`, `control`, the `<audio>`
+play/pause events) — arming without polling first would size the delay off
+stale flags. **If SSE never connects, every loop stays in its fast tier and
+behaviour is identical to before.** A throwing poll re-arms its own loop
+(guarded) — otherwise one blip would freeze the UI until the next visibility
+change.
+
+Backend counterpart: `_SSE_HEARTBEAT_SEC` 15 s → **45 s** (`dlna_asgi.py`).
+With the polls throttled, the keepalive was the most frequent thing left on
+the wire — 240 inbound frames/hour to say "still here". Kept under 60 s so a
+future reverse proxy's idle timeout can't close the stream.
+
+**2. The vinyl rotation never stopped.** `#player.playing.is-audio .art` is an
+**8 s infinite rotation**, and nothing removed `playing` on the browser-output
+path (`pollState` only clears it on the UPnP branch). Pausing therefore left a
+full-size album cover spinning at display refresh rate **forever** — a
+compositor/GPU wake every frame for as long as the app stayed open, and the
+biggest **non-network** idle drain. The class is now driven off the `<audio>`
+element's own `play`/`pause` events, the same single-source-of-truth as
+`MediaSession.playbackState` below.
+
+**3. Orphaned spinners.** Every loader is "show spinner → fetch →
+`if(!r) return;`", so any failed fetch left `.spinner`'s infinite CSS rotation
+running with no user feedback. All eight sites now go through
+`showSpinner(el)`, which arms a `_SPINNER_TIMEOUT_MS` (15 s) watchdog that
+swaps the spinner for a static "⚠ Couldn't load" line. The replacement keeps
+the `spinner-wrap` class so the existing "clear the spinner before appending"
+checks still remove it.
+
+**Also fixed:** `rebuildSourceSel` / `rebuildOutputSel` reassigned `<select>`
+`innerHTML` on every refresh even when the list was identical, destroying and
+rebuilding the `<option>` nodes (a style/layout pass, and on iOS it closes an
+open native picker). Both now skip the write when nothing changed.
+
+**Known, NOT changed** (deliberate — each is a real trade-off):
+- `<audio preload="auto">`: after a pause Safari finishes buffering the
+  current track. Bounded by one track (not continuous), and changing
+  `preload` risks the "stops after one track" class of regression.
+- The PWA `/art` route still serves full-res originals (lock-screen art).
+  `art_fetch_scaled` already exists for Subsonic — routing PWA list-row art
+  through a small `size=` bucket is the highest-value remaining win (network
+  + decode + the memory held by a rotating layer), but it changes the
+  documented `/art` contract, so it's a separate decision.
+
 ### MediaSession playback state (CarPlay / lock-screen resume)
 
 `_updateMediaSession` (`static/app.js`) wires the lock-screen / CarPlay
