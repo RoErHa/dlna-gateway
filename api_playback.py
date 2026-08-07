@@ -325,8 +325,15 @@ def art(h, params):
     Purpose: iOS MediaSession will NOT load cross-origin artwork on the lock
     screen. The PWA rewrites track art URLs to `/art?url=<external>` so the
     fetch is same-origin. The 2.0 ASGI route (dlna_asgi.art) shares
-    `art_fetch_cached` with this. No Range (art is small, one-shot)."""
-    code, ctype, body = art_fetch_cached(params.get("url", ""))
+    `art_fetch_scaled` with this. No Range (art is small, one-shot).
+
+    `size` (optional) snaps to the shared bucket ladder, same as the Subsonic
+    getCoverArt route — absent/0 serves the unmodified original."""
+    try:
+        size = int(params.get("size", 0) or 0)
+    except (TypeError, ValueError):
+        size = 0                                   # a junk size is not an error
+    code, ctype, body = art_fetch_scaled(params.get("url", ""), size)
     if code != 200:
         h.send_error(code, ctype)
         return

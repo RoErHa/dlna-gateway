@@ -560,7 +560,11 @@ if os.path.isfile(_ap_path):
     # Every <img src=…> should either be a literal /static asset or route
     # through artUrl()/`/art?url=`. Anything else means a raw track-art
     # URL is being dropped into an img tag — the regression.
-    _img_srcs = re.findall(r'img\s+src="([^"]+)"', _app)
+    # `<img[^>]*\ssrc=` not `<img\s+src=`: the browse-row images carry
+    # class="row-art" (and loading="lazy") BEFORE src, so the old anchored
+    # pattern quietly stopped seeing them — the guard was still green while
+    # covering fewer tags than it thought.
+    _img_srcs = re.findall(r'<img[^>]*\ssrc="([^"]+)"', _app)
     bad = [s for s in _img_srcs
            if ".art" in s and "/art?url=" not in s and "artUrl(" not in s]
     check(f"Every art <img src=> uses /art proxy ({len(_img_srcs)} img tags, {len(bad)} raw)",

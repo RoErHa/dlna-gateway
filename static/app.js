@@ -8,7 +8,20 @@ const enc=s=>encodeURIComponent(s||"");
 // strictest) — the thumbnail and the now-playing art then load
 // inconsistently depending on whether the browser's cache has a prior
 // successful fetch. Same-origin via /art removes that whole class.
-const artUrl=raw=>raw?`/art?url=${encodeURIComponent(raw)}`:"";
+// Named sizes, snapped to the gateway's shared 96/256/512/1024 bucket ladder
+// (api_playback._ART_SIZE_BUCKETS). Fixed rather than devicePixelRatio-derived
+// on purpose: every device then asks for the SAME few URLs, so a bucket is
+// scaled once, cached on disk once, and shared — a dpr-derived size would
+// fragment the cache per device for no visible gain.
+//   THUMB  256 — 36px list rows, 44px mini-player, station logos (crisp at 3x)
+//   COVER  512 — album grid cards (130–180px, crisp at 3x)
+//   FULL  1024 — now-playing panel AND the MediaSession lock-screen artwork
+// FULL is deliberately not 0/original: iOS never displays lock-screen art
+// above ~600px, so 1024 is generous, and it keeps the now-playing panel and
+// the lock screen on ONE url — one fetch, one cache entry, per track.
+const ART_THUMB=256, ART_COVER=512, ART_FULL=1024;
+const artUrl=(raw,size=0)=>raw
+  ? `/art?url=${encodeURIComponent(raw)}${size?`&size=${size}`:""}` : "";
 const fmtSec=s=>{if(s==null||isNaN(s))return"0:00";s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60,p=n=>String(n).padStart(2,"0");return h?`${h}:${p(m)}:${p(sc)}`:`${m}:${p(sc)}`;};
 const fmtDur=d=>{if(!d)return"";const p=d.split(":").map(Number);return p.length===3?fmtSec(p[0]*3600+p[1]*60+p[2]):d;};
 async function api(url,opts){try{return await fetch(url,opts);}catch{return null;}}
@@ -390,7 +403,7 @@ function _playBrowserAudio(reason){
 function _updateMediaSession(t, idx){
   if(!("mediaSession" in navigator)) return;
   // Artwork: proxy through gateway so iOS can load it (cross-origin art URLs fail on lock screen)
-  const artSrc = t.art ? `/art?url=${encodeURIComponent(t.art)}` : null;
+  const artSrc = t.art ? artUrl(t.art, ART_FULL) : null;
   const artwork = artSrc ? [{src: artSrc, sizes: "512x512", type: "image/jpeg"}] : [];
   navigator.mediaSession.metadata = new MediaMetadata({
     title:  t.title  || "Unknown track",
@@ -453,7 +466,7 @@ function _browserPlayIdx(idx){
   $("np-artist").textContent=t.artist||"";
   $("np-album").textContent=t.album||"";
   $("np-meta").textContent=`Track ${idx+1} of ${browserQueue.length}`;
-  if(t.art){$("art").innerHTML=`<img src="${artUrl(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+  if(t.art){$("art").innerHTML=`<img src="${artUrl(t.art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
   else{$("art").textContent="💿";}
   $("player").className="playing is-audio";
   $("btn-pp").textContent="⏸ Pause";
@@ -470,7 +483,7 @@ function _browserPlayIdx(idx){
 function _updateMiniPlayer(t){
   $("mini-title").textContent=t?.title||"Nothing playing";
   $("mini-artist").textContent=t?.artist||"";
-  if(t?.art){$("mini-art").innerHTML=`<img src="${artUrl(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px" onerror="this.parentElement.textContent='🎵'">`;}
+  if(t?.art){$("mini-art").innerHTML=`<img src="${artUrl(t.art,ART_THUMB)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px" onerror="this.parentElement.textContent='🎵'">`;}
   else{$("mini-art").textContent=t?"💿":"🎵";}
   // Pulse the now-playing nav icon when something is playing
   const icon=$("bnav-np-icon");
@@ -789,7 +802,7 @@ function renderContinueListening(positions){
     const div = document.createElement("div");
     div.className = "row";
     const artEl = p.art
-      ? `<img class="row-art" src="${artUrl(p.art)}" onerror="this.style.display='none'">`
+      ? `<img class="row-art" src="${artUrl(p.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="row-icon">📖</div>`;
     const pct = (p.duration_sec>0)
       ? Math.min(100, Math.round(p.position_sec/p.duration_sec*100)) : 0;
@@ -839,7 +852,7 @@ function renderAlbumRows(albums, opts={}){
     // Art sizing lives in CSS (.row-art), not an inline style — an inline
     // width/height can't be overridden by the grid rules.
     const artEl = a.art
-      ? `<img class="row-art" src="/art?url=${encodeURIComponent(a.art)}" alt="" onerror="this.style.display='none'">`
+      ? `<img class="row-art" src="${artUrl(a.art,ART_COVER)}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="row-icon">💿</div>`;
     div.innerHTML = `${artEl}<div class="row-body">`
       + `<div class="row-title">${esc(a.album)}</div>`
@@ -892,7 +905,7 @@ function renderBrowseItems(items){
     const div = document.createElement("div");
     div.className = "row";
     const artEl = item.art
-      ? `<img class="row-art" src="/art?url=${encodeURIComponent(item.art)}" alt="" onerror="this.style.display='none'">`
+      ? `<img class="row-art" src="${artUrl(item.art,ART_THUMB)}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="row-icon">${browseMode==="tracks"?"🎵":"👤"}</div>`;
 
     if(browseMode==="artists"){
@@ -1314,7 +1327,7 @@ function renderList(data,context="browse"){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img class="row-art" src="${artUrl(item.art)}" onerror="this.style.display='none'">`
+      ?`<img class="row-art" src="${artUrl(item.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
 
     const isItem = item.type !== "container";
@@ -1401,7 +1414,7 @@ async function doSearch(q){
       const k=regItem({id:"artist:"+a.artist,title:a.artist,type:"container",art:a.art||""});
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art)}" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`:
         `<div class="row-icon">👤</div>`}<div class="row-body"><div class="row-title">${esc(a.artist)}</div><div class="row-sub">${a.album_count} albums · ${a.track_count} tracks</div></div>`;
       div.addEventListener("click",()=>{ showTab('browse'); showArtistAlbums({artist:a.artist, album_count:a.album_count||0}); });
       $("item-list").appendChild(div);
@@ -1416,7 +1429,7 @@ async function doSearch(q){
       const k=regItem(pseudo);
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art)}" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`:
         `<div class="row-icon">💿</div>`}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" data-k="${k}" data-action="fav">⭐</button><button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
       div.addEventListener("click",e=>{
         const btn=e.target.closest("[data-action]");
@@ -1528,7 +1541,7 @@ async function playTracklist(tracks, title, artist, opts={}){
   $("np-album").textContent=first?.album||"";
   $("np-meta").textContent=`${tracks.length} tracks`;
   setNpTrack(first||null);
-  if(first?.art){$("art").innerHTML=`<img src="${artUrl(first.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+  if(first?.art){$("art").innerHTML=`<img src="${artUrl(first.art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
   else{$("art").textContent="💿";}
   $("player").className="playing is-audio";
   $("btn-pp").textContent="⏸ Pause";
@@ -1581,7 +1594,7 @@ function renderListAppend(data){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img class="row-art" src="${artUrl(item.art)}" onerror="this.style.display='none'">`
+      ?`<img class="row-art" src="${artUrl(item.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
     const isItem=item.type!=="container";
     div.innerHTML=`${artEl}<div class="row-body"><div class="row-title">${esc(item.title)}</div>${sub?`<div class="row-sub">${esc(sub)}</div>`:""}</div>${item.duration?`<div class="row-dur">${fmtDur(item.duration)}</div>`:""}<div class="row-actions">${isItem?`<button class="icon-btn" data-k="${k}" data-action="fav" title="Add to Favourites">⭐</button><button class="icon-btn" data-k="${k}" data-action="add" title="Add to playlist">＋</button><button class="icon-btn" data-k="${k}" data-action="edit" title="Edit metadata">✏️</button>`:""}<button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
@@ -2039,7 +2052,7 @@ function _radioRow(st,isFav){
   div.className="pl-track radio-row";
   div.dataset.uuid=st.station_uuid||"";
   const art=st.favicon
-    ? `<img src="${artUrl(st.favicon)}" style="width:32px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
+    ? `<img src="${artUrl(st.favicon,ART_THUMB)}" loading="lazy" style="width:32px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
     : `<div class="row-icon">📻</div>`;
   const genre=(st.tags||"").split(",").map(s=>s.trim()).filter(Boolean).slice(0,2).join(", ");
   const tech=[st.codec,st.bitrate?st.bitrate+"k":"",st.country].filter(Boolean).join(" ");
@@ -2105,7 +2118,7 @@ async function playStation(st){
   $("np-album").textContent="";
   $("np-meta").textContent="";
   if(st.favicon){
-    $("art").innerHTML=`<img src="${artUrl(st.favicon)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='📻'">`;
+    $("art").innerHTML=`<img src="${artUrl(st.favicon,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='📻'">`;
   } else { $("art").textContent="📻"; }
   $("player").className="playing is-audio is-radio";
   $("btn-pp").textContent="⏸ Pause";
@@ -2205,7 +2218,7 @@ async function openPlaylist(plId){
     const div=document.createElement("div");
     div.className="pl-track";
     const k2=regItem(t);
-    div.innerHTML=`${t.art?`<img src="/art?url=${encodeURIComponent(t.art)}" style="width:28px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`:""}<div class="pl-track-body"><div class="pl-track-title">${esc(t.title)}</div><div class="pl-track-sub">${esc([t.artist,t.album].filter(Boolean).join(" · "))}</div></div><button class="pl-remove" title="Remove from playlist">✕</button>`;
+    div.innerHTML=`${t.art?`<img src="${artUrl(t.art,ART_THUMB)}" loading="lazy" style="width:28px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`:""}<div class="pl-track-body"><div class="pl-track-title">${esc(t.title)}</div><div class="pl-track-sub">${esc([t.artist,t.album].filter(Boolean).join(" · "))}</div></div><button class="pl-remove" title="Remove from playlist">✕</button>`;
     div.querySelector(".pl-track-body").addEventListener("click",()=>startPlayTrack(t));
     // Wire the remove button from JS — using inline onclick with JSON.stringify(url)
     // produced HTML like onclick="…removeFromPlaylist('pl-1',"http://…")" which
@@ -2350,7 +2363,7 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
   $("np-artist").textContent=artist||"";
   $("np-album").textContent=album||"";
   $("np-meta").textContent="";
-  if(art){$("art").innerHTML=`<img src="${artUrl(art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='🎵'">`;}
+  if(art){$("art").innerHTML=`<img src="${artUrl(art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='🎵'">`;}
   else{$("art").textContent=mtype==="video"?"🎬":"🎵";}
   $("btn-pp").textContent="⏸ Pause";
   $("hdr-status").textContent=title||"";

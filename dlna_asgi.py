@@ -447,8 +447,24 @@ async def chapters_route(request: Request):
 # byte relays, served as StreamingResponse over a threadpool-driven upstream.
 
 @app.get("/art", include_in_schema=False)
-async def art(url: str = ""):
-    code, ctype, body = await run_in_threadpool(api_playback.art_fetch_cached, url)
+async def art(url: str = "", size: int = 0):
+    """Same-origin artwork proxy for the PWA (iOS won't load cross-origin art
+    on the lock screen), now with the same `size` downscaling the Subsonic
+    getCoverArt route uses.
+
+    Why it matters here too (2026-08-07): the PWA asked for the FULL-resolution
+    cover everywhere — a 36px list thumbnail and a 130px grid card both pulled
+    the multi-MB embedded original. The album cover grid made that worse by
+    putting a dozen of them on screen at once. `size` snaps to the shared
+    96/256/512/1024 bucket ladder and each bucket is scaled once and cached on
+    disk, so the original is fetched at most once no matter how many sizes are
+    asked for.
+
+    `size=0` (or absent) is exactly the old behaviour: the unmodified original.
+    Pillow is optional — without it every size serves the original, so the PWA
+    degrades to the old bandwidth, never to a broken image."""
+    code, ctype, body = await run_in_threadpool(
+        api_playback.art_fetch_scaled, url, size)
     if code != 200:
         return JSONResponse({"error": ctype}, status_code=code)
     return Response(content=body, media_type=ctype,

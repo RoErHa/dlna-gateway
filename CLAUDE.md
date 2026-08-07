@@ -448,6 +448,29 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 
 iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PWA rewrites every track art URL to `/art?url=<external>` so the lock-screen fetch is same-origin. Service Worker cache-firsts these (art rarely changes).
 
+- **Size-bucketed downscaling (2026-08-07).** `/art?url=…&size=N` now honours
+  `size` via `api_playback.art_fetch_scaled` — the same 96/256/512/1024 bucket
+  ladder and per-bucket disk cache the Subsonic `getCoverArt` route uses. The
+  PWA previously asked for the **full-resolution original everywhere**: a 36px
+  list thumbnail and a 130px grid card both pulled the multi-MB embedded
+  cover, and the album grid put a dozen on screen at once. Measured on the
+  real library, a **772 KB cover is 12 KB at `size=256` (1.6%) and 42 KB at
+  `size=512` (5.5%)**. `artUrl(raw, size)` in `app.js` names one bucket per
+  surface — `ART_THUMB` 256 (36px rows, mini-player, station logos),
+  `ART_COVER` 512 (grid cards), `ART_FULL` 1024 (now-playing panel **and** the
+  MediaSession lock-screen artwork, deliberately the same url so it's one
+  fetch and one cache entry per track; iOS never shows lock-screen art above
+  ~600px). Sizes are **fixed, not devicePixelRatio-derived** — every device
+  then asks for the same few URLs and shares one on-disk scaled copy per
+  bucket, where a dpr-derived size would fragment the cache per device for no
+  visible gain. `size` absent/0 is byte-for-byte the old behaviour, and Pillow
+  stays optional (absent → original served, so it degrades to the old
+  bandwidth, never to a broken image). Browse/grid `<img>`s also carry
+  `loading="lazy"`. `ART_CACHE` bumped to v3 to evict the originals cached
+  under the old size-less URLs. Guarded by
+  `tests/test_asgi.py::TestArtProxy` (size forwarded, absent-size unchanged,
+  junk size degrades) and the `/art` bucket tests in
+  `tests/frontend/test_layout.py`.
 - Hard-caps at 12 MB per image to prevent memory abuse (raised from 5 MB
   2026-07-03 — real embedded covers exceed 5 MB and the cap made
   getCoverArt 404 deterministically for every candidate of such an
@@ -464,8 +487,9 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
   `dlna_art_cache` under a `s<box>` variant, so a bucket is scaled at most once
   and the original is fetched at most once regardless of how many sizes are
   requested. `size=0`/absent, a size above the top bucket, an already-small
-  image, or Pillow-missing all serve the unmodified original. The PWA `/art`
-  route is unchanged (it wants lock-screen-res art). Guarded by
+  image, or Pillow-missing all serve the unmodified original. **The PWA `/art`
+  route now uses the same ladder** (2026-08-07 — see the `/art` section above;
+  it used to serve full-res everywhere). Guarded by
   `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
   `TestCacheVariants`).
 

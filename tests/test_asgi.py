@@ -358,6 +358,48 @@ class TestArtProxy(unittest.TestCase):
             self.assertEqual(bytes(r.body), b"PNGDATA")
             self.assertEqual(r.headers.get("Access-Control-Allow-Origin"), "*")
 
+    def test_size_is_forwarded_to_the_scaler(self):
+        """The PWA asks for a bucket per use site (36px list thumb vs a grid
+        card vs the lock screen). Before this the route ignored size entirely
+        and every one of them pulled the full-resolution original."""
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_playback, "art_fetch_scaled",
+                               return_value=(200, "image/jpeg", b"J")) as m:
+            asyncio.run(dlna_asgi.art(url="http://x/c.jpg", size=256))
+        m.assert_called_once_with("http://x/c.jpg", 256)
+
+    def test_no_size_still_serves_the_original(self):
+        """Absent size must stay byte-identical to the old behaviour."""
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_playback, "art_fetch_scaled",
+                               return_value=(200, "image/png", b"PNGDATA")) as m:
+            r = asyncio.run(dlna_asgi.art(url="http://x/c.png"))
+        m.assert_called_once_with("http://x/c.png", 0)
+        self.assertEqual(bytes(r.body), b"PNGDATA")
+
+    def test_legacy_handler_parses_size_and_tolerates_junk(self):
+        """The bridged stdlib handler takes size as a STRING query param; a
+        junk value must degrade to the original, never 500."""
+        import api_playback
+        from unittest import mock
+
+        class _H:
+            def __init__(self): self.code = None
+            def send_response(self, c): self.code = c
+            def send_header(self, *a): pass
+            def end_headers(self): pass
+            send_error = lambda self, c, m="": setattr(self, "code", c)
+            wfile = type("W", (), {"write": staticmethod(lambda b: None)})()
+
+        with mock.patch.object(api_playback, "art_fetch_scaled",
+                               return_value=(200, "image/jpeg", b"J")) as m:
+            api_playback.art(_H(), {"url": "http://x/c.jpg", "size": "512"})
+            m.assert_called_once_with("http://x/c.jpg", 512)
+        with mock.patch.object(api_playback, "art_fetch_scaled",
+                               return_value=(200, "image/jpeg", b"J")) as m:
+            api_playback.art(_H(), {"url": "http://x/c.jpg", "size": "big"})
+            m.assert_called_once_with("http://x/c.jpg", 0)
+
 
 class _FakeResp:
     def __init__(self, status, headers, chunks):

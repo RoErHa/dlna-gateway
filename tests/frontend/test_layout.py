@@ -304,3 +304,85 @@ def test_body_actually_paints_the_navy(page, stub, gateway):
     _sized(page, stub, gateway, 1280, 800)
     assert page.evaluate("getComputedStyle(document.body).backgroundColor") \
         == "rgb(10, 21, 38)"
+
+
+# ── /art size buckets ─────────────────────────────────────────────
+# The PWA used to ask for the FULL-resolution cover everywhere: a 36px list
+# thumbnail and a 130px grid card both pulled the multi-MB embedded original.
+# Measured on the real library, a 772 KB cover is 12 KB at size=256 and 42 KB
+# at size=512 — and the album grid puts a dozen of them on screen at once.
+# Each surface now names its bucket; the sizes are FIXED rather than derived
+# from devicePixelRatio so every device asks for the same few URLs and shares
+# one on-disk scaled copy per bucket.
+
+
+def _art_sizes(gateway):
+    """The `size` query value of every /art request the page has made.
+    The stub records path and query as separate fields — `path` carries no
+    query string, so read `query`."""
+    return [r["query"].get("size")
+            for r in gateway.captured(path_contains="/art")]
+
+
+def test_grid_covers_request_the_cover_bucket(page, stub, gateway):
+    gateway.add_album("Miles Davis", "A Kind of Blue", 5, art="http://s/cover.jpg")
+    page.set_viewport_size({"width": 820, "height": 1180})
+    _boot(page, stub)
+    gateway.clear_requests()
+    _albums_mode(page)
+    page.wait_for_timeout(400)
+    sizes = _art_sizes(gateway)
+    assert sizes, "the grid fetched no artwork at all"
+    assert all(s == "512" for s in sizes), \
+        f"grid covers asked for {set(sizes)}, expected the 512 bucket"
+
+
+def test_list_rows_request_the_thumb_bucket(page, stub, gateway):
+    # Letter A: the stub filters the tracks list by TITLE initial, and the
+    # letter bar starts on "A".
+    gateway.add_track("Miles Davis", "Kind of Blue", "All Blues",
+                      art="http://s/cover.jpg")
+    page.set_viewport_size({"width": 1280, "height": 800})
+    _boot(page, stub)
+    gateway.clear_requests()
+    page.evaluate("setBrowseMode('tracks')")
+    page.wait_for_function(
+        "document.querySelectorAll('#item-list .row').length > 0", timeout=5000)
+    page.wait_for_timeout(400)
+    sizes = _art_sizes(gateway)
+    assert sizes, "the track list fetched no artwork at all"
+    assert all(s == "256" for s in sizes), \
+        f"36px list thumbs asked for {set(sizes)}, expected the 256 bucket"
+
+
+def test_now_playing_and_lock_screen_share_one_url(page, stub, gateway):
+    """The panel and MediaSession must resolve to the SAME url — one fetch and
+    one cache entry per track, not two. 1024 is generous for a lock screen
+    (iOS never shows it above ~600px) and far below a multi-MB original."""
+    page.set_viewport_size({"width": 1280, "height": 800})
+    _boot(page, stub)
+    urls = page.evaluate("""() => {
+      const t = {art: 'http://s/cover.jpg'};
+      return [artUrl(t.art, ART_FULL), artUrl(t.art, ART_FULL)];
+    }""")
+    assert urls[0] == urls[1]
+    assert "size=1024" in urls[0], f"lock-screen art url is {urls[0]}"
+
+
+def test_art_url_without_a_size_is_unchanged(page, stub, gateway):
+    """Callers that pass no size must still get the plain proxy url, so any
+    surface not yet audited keeps working exactly as before."""
+    page.set_viewport_size({"width": 1280, "height": 800})
+    _boot(page, stub)
+    u = page.evaluate("artUrl('http://s/cover.jpg')")
+    assert u == "/art?url=" + "http%3A%2F%2Fs%2Fcover.jpg"
+    assert "size=" not in u
+
+
+def test_buckets_match_the_gateway_ladder(page, stub, gateway):
+    """A size the server doesn't bucket to would be scaled to the next one up
+    and cached under a variant nothing else reuses."""
+    page.set_viewport_size({"width": 1280, "height": 800})
+    _boot(page, stub)
+    vals = page.evaluate("[ART_THUMB, ART_COVER, ART_FULL]")
+    assert vals == [256, 512, 1024], f"art buckets drifted: {vals}"
