@@ -1011,9 +1011,12 @@ _MANIFEST = json.dumps({
     "description": "Personal music gateway — browse, search and play your library",
     "start_url": "/",
     "display": "standalone",
-    "orientation": "portrait",
-    "background_color": "#0e0d0b",
-    "theme_color": "#0e0d0b",
+    # "any", not "portrait": an installed PWA obeys this, so the old value
+    # LOCKED the home-screen app upright — the landscape-phone layout was
+    # unreachable from the very place it matters most (2026-08-07).
+    "orientation": "any",
+    "background_color": "#0A1526",
+    "theme_color": "#0A1526",
     "icons": [
         {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
          "purpose": "any maskable"},
@@ -1047,11 +1050,11 @@ async def _manifest():
 
 
 def _make_icon_png(size: int) -> bytes:
-    """Generate a simple PNG icon: dark square with amber ♪ symbol.
+    """Generate a simple PNG icon: navy square with amber ♪ symbol.
     Relocated from dlna_server.py (retired in Cleanup C) — this app is now the
     sole server, so the only caller (the /icon routes) keeps it local."""
-    bg    = (14, 13, 11)
-    amber = (212, 168, 67)
+    bg    = (10, 21, 38)      # --bg  #0A1526
+    amber = (255, 194, 74)    # --amber #FFC24A
 
     img = [list(bg + (255,)) for _ in range(size * size)]
 

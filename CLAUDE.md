@@ -469,6 +469,92 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
   `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
   `TestCacheVariants`).
 
+### UI — navy palette, per-device layouts, album grid (2026-08-07)
+
+Guarded by `tests/frontend/test_layout.py` (24 tests). Design proposal that
+was approved: the artifact linked from that session; the numbers below are
+measured, not estimated.
+
+**Palette.** The warm near-black set is replaced by a deep navy one. The
+change that matters is **`--ink-dim`**: it carries every artist line,
+duration, count and label, and at the old `#9a907f` it sat at **6.2:1**
+against the ground — that, not the background, is what washed out in
+sunlight. It is now `#B4C9E6` at **10.8:1**. Body `#F4F8FF` 17.2:1, amber
+`#FFC24A` 11.4:1, green `#4FD98C` 10.1:1 — all AAA. The amber accent is
+kept deliberately (it's the app's identity and reads better on navy than on
+the warm black). `--ink-dim-soft` is the one sub-AAA ink, for decorative
+labels that never carry information alone. Also repainted: the PWA
+`theme-color`, the manifest `background_color`/`theme_color`, and the
+generated app icon (`_make_icon_png` in `dlna_asgi.py`).
+
+**Type.** `DM Mono` is no longer requested at weight **300** — thin small
+type is what actually disappears outdoors, roughly as much as low contrast.
+Secondary text went 11px → 12px via `--fs-sub`; uppercase micro-labels
+10px → 11px via `--fs-micro`.
+
+**Breakpoints.** There was ONE (768px). There are now four zones:
+
+| Zone | Query | Layout |
+|---|---|---|
+| Phone upright | `≤767px` | one column + bottom nav |
+| Tablet upright | `768–1023px` | **two** columns; playlists via a tab |
+| Desktop / tablet sideways | `≥1024px` | three columns, fluid `clamp()` |
+| Phone sideways | `max-height:500px and min-width:768px` | list beside player + side rail |
+
+Two situations were on the wrong side of the old single breakpoint:
+- **iPad upright** (Air/Pro 11 = 820–834px) took the desktop layout, where
+  `#browser` 360px + `#pl-panel` 260px = 620px of fixed chrome left the
+  player **~200px** — too narrow for the six transport buttons. Now two
+  columns: measured **426px** player on an 820px iPad.
+- **Every iPhone on its side is 852px wide** (932 Pro Max), so it also took
+  the desktop layout — three columns and a status bar inside 393px of
+  height. The rule that catches it is keyed on **height**, so it works on
+  any model and never catches an iPad sideways (1024×768). **This block must
+  stay LAST in the file** — a landscape phone also matches the tablet query
+  and has to override it.
+
+**Non-obvious things that bit during this work — do not re-introduce:**
+- `#bottom-nav` is a **sibling of `.workspace`**, at the end of `<body>`.
+  Making it `position:static` to build the landscape side rail dropped it
+  into the body's column flow *below* the panes and squeezed them to
+  nothing. It stays `position:fixed`, with `.workspace{margin-left:54px}`.
+- `.tab.tablet-only{display:none}` **must be declared before** the tablet
+  media query. A media query adds no specificity, so the same selector
+  written afterwards simply wins and hides the tabs at every width.
+- The inline `style="…"` attributes on `#source-sel`/`#output-sel` were
+  moved into CSS. An inline style beats any selector short of `!important`,
+  so the responsive rules could not reach them.
+- The manifest said `"orientation": "portrait"`, which an **installed PWA
+  obeys** — it would have locked the home-screen app upright and made the
+  landscape layout unreachable from the one place it matters. Now `"any"`.
+
+**Album cover grid.** Albums, the artist/genre/decade drill-downs and the ⭐
+favourites list render through **one** `renderAlbumRows()` (they were five
+near-identical copies that had already drifted). Putting `grid` on
+`#item-list` turns the *same* markup into a cover card — the markup is
+deliberately unchanged (`.row` / `.row-art` / `.row-body` / `.row-actions >
+.icon-btn`), so every existing handler, selector and test still applies and
+list-vs-grid stays a pure presentation choice. `showSpinner()` clears the
+class, which is why every view load resets to a list. Artists and tracks
+stay lists — text-first content, a cover adds nothing.
+
+> **`grid-auto-rows:max-content` is NOT optional**, and the card is
+> `display:block`, not a flex column. A cover sized `width:100%` +
+> `aspect-ratio:1` contributes **no intrinsic height**: as a flex item the
+> ratio is circular (the line's height is wanted before the width it depends
+> on is known), and inside `#item-list`'s bounded scroll container the auto
+> rows were squeezed to share the visible height — 114px rows around 129px
+> covers, every title spilling onto the card below. **It only broke once the
+> cards needed more than one row**, so a single-row test passes vacuously;
+> `test_grid_cards_never_overflow` seeds eight albums and asserts a second
+> row exists.
+
+**Also:** the header is one row on the phone (search collapses to a 🔍
+button, wordmark hidden — the pickers need that ~90px to show a readable
+source name), and the app now boots into `mobileTab("browse")`. Without a
+body `m-*` class the phone stylesheet hides nothing, so a fresh load used to
+stack the entire playlist panel under the browse list, below the fold.
+
 ### iOS battery — what an OPEN but IDLE PWA costs (2026-08-07)
 
 The 2026-07 work fixed the **screen-locked** case (Page Visibility stops the

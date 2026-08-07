@@ -28,6 +28,10 @@ const _spinnerTimers = new WeakMap();
 function showSpinner(el){
   if(!el) return;
   clearTimeout(_spinnerTimers.get(el));
+  // Every view load starts here, so this is the one place that reliably
+  // resets the album cover-grid layout. Renderers that want the grid set
+  // it back on (renderAlbumRows); everything else is a list by default.
+  el.classList.remove("grid");
   el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   _spinnerTimers.set(el, setTimeout(()=>{
     if(!el.querySelector(".spinner")) return;    // content arrived — done
@@ -483,23 +487,54 @@ function mobileTab(tab){
     $("bnav-"+t)?.classList.toggle("active",t===tab));
   // Show/hide back button on Now Playing
   const nb=$("np-back");if(nb)nb.style.display=tab==="nowplaying"?"":"none";
+  // The phone header collapses search to a 🔍 button, so arriving at the
+  // Search view from the bottom nav has to open the field — otherwise the
+  // user lands on a search screen with nothing to type into. Leaving it
+  // collapses again (without the recursion of toggleSearch's own tidy-up).
+  const wrap=$("search-wrap");
+  if(wrap){
+    const wantOpen = tab==="search";
+    wrap.classList.toggle("expanded", wantOpen);
+    $("search-toggle")?.setAttribute("aria-expanded", wantOpen?"true":"false");
+  }
   if(tab==="nowplaying"){document.body.classList.add("m-np");}
   else if(tab==="playlists"){document.body.classList.add("m-pl");showTab("playlists");}
   else if(tab==="favourites"){document.body.classList.add("m-fav");showTab("favourites");}
-  else if(tab==="search"){document.body.classList.add("m-search");showTab("search");}
+  else if(tab==="search"){document.body.classList.add("m-search");showTab("search");$("search-input").focus();}
   else{document.body.classList.add("m-browse");showTab("browse");}
 }
 
 
 // ── Tabs ──────────────────────────────────────────────────────────
+// Tablet zone (768–1023px, e.g. an iPad upright). At that width the app
+// runs TWO columns — browse beside the player — because three fixed
+// columns left the player about 200px. The playlist pane is therefore not
+// permanently on screen there, and reaches the workspace through a
+// `t-*` body class instead, exactly like the phone's `m-*` classes.
+// Above 1023px the pane is always visible and these do nothing; below 768
+// the bottom nav owns navigation.
+const _tabletClasses=["t-pl","t-fav"];
+const _isTablet = () =>
+  window.matchMedia("(min-width:768px) and (max-width:1023px)").matches
+  && !window.matchMedia("(max-height:500px)").matches;   // not a landscape phone
+
+function _applyTabletPane(tab){
+  document.body.classList.remove(..._tabletClasses);
+  if(!_isTablet()) return;
+  if(tab==="playlists")      document.body.classList.add("t-pl");
+  else if(tab==="favourites")document.body.classList.add("t-fav");
+}
+
 function showTab(tab){
   curTab=tab;
-  // Only browse/search exist as desktop tab-bar buttons; playlists/favourites
-  // are mobile-only (#bnav-*). Optional-chain so calling showTab("playlists")
-  // from mobileTab() doesn't crash on the desktop layout.
+  // browse/search are the always-present tab-bar buttons; playlists and
+  // favourites exist as tab-bar buttons only in the tablet zone, and as
+  // #bnav-* buttons on the phone. Optional-chain so calling
+  // showTab("playlists") can't crash on a layout where the button is absent.
   ["browse","search","playlists","favourites"].forEach(t=>{
     $("tab-"+t)?.classList.toggle("active",t===tab);
   });
+  _applyTabletPane(tab);
   const isBrowse = tab==="browse";
   $("browse-modes").style.display = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
   $("letter-bar").style.display   = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
@@ -754,7 +789,7 @@ function renderContinueListening(positions){
     const div = document.createElement("div");
     div.className = "row";
     const artEl = p.art
-      ? `<img src="${artUrl(p.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ? `<img class="row-art" src="${artUrl(p.art)}" onerror="this.style.display='none'">`
       : `<div class="row-icon">📖</div>`;
     const pct = (p.duration_sec>0)
       ? Math.min(100, Math.round(p.position_sec/p.duration_sec*100)) : 0;
@@ -776,48 +811,93 @@ function renderContinueListening(positions){
   });
 }
 
-function renderFavouriteAlbums(favs){
+// ── Album cards ───────────────────────────────────────────────────
+// Single renderer for every album-producing view: the Albums browse mode,
+// the artist / genre / decade drill-downs, and the ⭐ favourites list.
+// Those were five near-identical copies of the same markup, which is why
+// they had drifted (different subtitle shapes, different Various-Artists
+// handling). Now one place to change.
+//
+// The element keeps class `row` and the `.row-art` / `.row-body` /
+// `.row-title` / `.row-sub` / `.row-actions > .icon-btn` structure the
+// list layout uses — putting `grid` on #item-list is what turns the same
+// markup into a cover card (see app.css). Keeping the markup identical is
+// deliberate: every existing click handler, selector and test still
+// applies, and list-vs-grid stays a pure presentation choice.
+//
+// opts.sub(a)      → subtitle text for one album (defaults to artist · N tracks)
+// opts.onOpen(a)   → click on the card
+// opts.onPlay(a)   → click on the ▶ button
+function renderAlbumRows(albums, opts={}){
   const list = $("item-list");
   list.innerHTML = "";
+  list.classList.add("grid");
+  const sub = opts.sub || (a=>`${a.artist?esc(a.artist)+" · ":""}${a.track_count||0} tracks`);
+  albums.forEach(a=>{
+    const div = document.createElement("div");
+    div.className = "row";
+    // Art sizing lives in CSS (.row-art), not an inline style — an inline
+    // width/height can't be overridden by the grid rules.
+    const artEl = a.art
+      ? `<img class="row-art" src="/art?url=${encodeURIComponent(a.art)}" alt="" onerror="this.style.display='none'">`
+      : `<div class="row-icon">💿</div>`;
+    div.innerHTML = `${artEl}<div class="row-body">`
+      + `<div class="row-title">${esc(a.album)}</div>`
+      + `<div class="row-sub">${sub(a)}</div></div>`
+      + `<div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
+    div.querySelector(".icon-btn").addEventListener("click", e=>{
+      e.stopPropagation(); opts.onPlay?.(a);
+    });
+    div.addEventListener("click", ()=>opts.onOpen?.(a));
+    list.appendChild(div);
+  });
+}
+
+// "Various Artists" is a display name, not a real performer — album lookups
+// key on an empty artist plus the folder (album_key) instead.
+const _albumArtistArg = a => a.artist==="Various Artists" ? "" : a.artist;
+
+function renderFavouriteAlbums(favs){
+  const list = $("item-list");
   if(!favs.length){
+    list.classList.remove("grid");
     list.innerHTML='<div class="msg">No favourite albums yet — open an album and tap the ☆ in its header.</div>';
     return;
   }
-  favs.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    const _artist = a.artist==="Various Artists"?"":a.artist;
-    const _ak = a.album_key||"";
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist||"")}${a.track_count?` · ${a.track_count} tracks`:""}</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, a.album, _ak);});
-    div.addEventListener("click", ()=>showAlbumTracks(_artist, a.album, null, _ak));
-    list.appendChild(div);
+  renderAlbumRows(favs, {
+    sub:    a=>`${esc(a.artist||"")}${a.track_count?` · ${a.track_count} tracks`:""}`,
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album, null, a.album_key||""),
   });
 }
 
 function renderBrowseItems(items){
   const list = $("item-list");
+  // Albums get the cover grid; artists and tracks stay lists — those are
+  // text-first, and a cover adds nothing to a track row.
+  if(browseMode==="albums"){
+    renderAlbumRows(items, {
+      sub: a=>{
+        const ser=_abSeriesOf(a.album_key||"");
+        return `${esc(a.artist)} · ${a.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}`;
+      },
+      onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+      onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album, null, a.album_key||""),
+    });
+    return;
+  }
+  list.classList.remove("grid");
   list.innerHTML = "";
   items.forEach(item=>{
     const div = document.createElement("div");
     div.className = "row";
     const artEl = item.art
-      ? `<img src="/art?url=${encodeURIComponent(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">${browseMode==="tracks"?"🎵":browseMode==="albums"?"💿":"👤"}</div>`;
+      ? `<img class="row-art" src="/art?url=${encodeURIComponent(item.art)}" alt="" onerror="this.style.display='none'">`
+      : `<div class="row-icon">${browseMode==="tracks"?"🎵":"👤"}</div>`;
 
     if(browseMode==="artists"){
       div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.artist)}</div><div class="row-sub">${item.album_count} album${item.album_count!==1?"s":""} · ${item.track_count} tracks</div></div>`;
       div.addEventListener("click", ()=>showArtistAlbums(item));
-    } else if(browseMode==="albums"){
-      const ser=_abSeriesOf(item.album_key||"");
-      div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.album)}</div><div class="row-sub">${esc(item.artist)} · ${item.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-      const _artist = item.artist==="Various Artists"?"":item.artist;
-      const _ak = item.album_key||"";
-      div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, item.album, _ak);});
-      div.addEventListener("click", ()=>showAlbumTracks(_artist, item.album, null, _ak));
     } else {
       // tracks
       const k = regItem(item);
@@ -884,18 +964,11 @@ async function _showDecadeAlbumsInner(decadeItem){
   const r = await api(`/api/decade_albums?udn=${enc(curServer.udn)}&decade=${decadeItem.decade}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load decade albums.</div>'; return; }
   const albums = await r.json();
-  const list = $("item-list");
-  list.innerHTML = "";
-  albums.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album, a.album_key||"");});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}, a.album_key||""));
-    list.appendChild(div);
+  renderAlbumRows(albums, {
+    sub:    a=>`${esc(a.artist)} · ${a.track_count} tracks`,
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album,
+                               {artist:a.artist, album_count:null}, a.album_key||""),
   });
 }
 
@@ -922,18 +995,11 @@ async function _showGenreAlbumsInner(genreItem){
   const r = await api(`/api/genre_albums?udn=${enc(curServer.udn)}&genre=${enc(genreItem.genre)}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load genre albums.</div>'; return; }
   const albums = await r.json();
-  const list = $("item-list");
-  list.innerHTML = "";
-  albums.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album, a.album_key||"");});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}, a.album_key||""));
-    list.appendChild(div);
+  renderAlbumRows(albums, {
+    sub:    a=>`${esc(a.artist)} · ${a.track_count} tracks`,
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album,
+                               {artist:a.artist, album_count:null}, a.album_key||""),
   });
 }
 
@@ -984,18 +1050,11 @@ async function _showArtistAlbumsInner(artistItem){
   const r = await api(`/api/artist_albums?udn=${enc(curServer.udn)}&artist=${enc(artistItem.artist)}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load albums.</div>'; return; }
   const albums = await r.json();
-  const list = $("item-list");
-  list.innerHTML = "";
-  albums.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist, a.album, a.album_key||"");});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist, a.album, artistItem, a.album_key||""));
-    list.appendChild(div);
+  // Inside one artist the artist name is redundant on every card.
+  renderAlbumRows(albums, {
+    sub:    a=>`${a.track_count} tracks`,
+    onPlay: a=>playAlbumFromDB(a.artist, a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(a.artist, a.album, artistItem, a.album_key||""),
   });
 }
 
@@ -1255,7 +1314,7 @@ function renderList(data,context="browse"){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img src="${artUrl(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ?`<img class="row-art" src="${artUrl(item.art)}" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
 
     const isItem = item.type !== "container";
@@ -1296,6 +1355,32 @@ $("search-input").addEventListener("keydown",e=>{
   if(e.key==="Enter"){clearTimeout(searchTimer);doSearch(e.target.value.trim());}
 });
 
+// ── Phone header: tap-to-expand search ────────────────────────────
+// The header used to wrap onto two rows because the search field always
+// claimed a full row of its own. Collapsing it to a 🔍 button (CSS shows
+// the button only below 768px) puts the whole header back on one line and
+// returns ~44px to the list on every phone screen. Expanding drops the
+// field onto a second row and focuses it; collapsing clears the query so
+// the app doesn't sit in a search result with no visible search box.
+function toggleSearch(force){
+  const wrap=$("search-wrap"), btn=$("search-toggle");
+  const open = force!==undefined ? force : !wrap.classList.contains("expanded");
+  wrap.classList.toggle("expanded", open);
+  btn?.setAttribute("aria-expanded", open ? "true" : "false");
+  if(open){ $("search-input").focus(); }
+  else{
+    $("search-input").value="";
+    clearTimeout(searchTimer);
+    if(curTab==="search") mobileTab("browse");
+  }
+}
+$("search-toggle")?.addEventListener("click", ()=>toggleSearch());
+
+// Rotating an iPad moves it between the tablet and desktop zones, which
+// changes whether the playlist pane is a tab or a permanent column — so
+// the body class has to be re-evaluated, not just set once on tap.
+window.addEventListener("resize", ()=>_applyTabletPane(curTab));
+
 async function doSearch(q){
   if(!curServer||!q)return;
   showSpinner($("item-list"));
@@ -1316,7 +1401,7 @@ async function doSearch(q){
       const k=regItem({id:"artist:"+a.artist,title:a.artist,type:"container",art:a.art||""});
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img src="${artUrl(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art)}" onerror="this.style.display='none'">`:
         `<div class="row-icon">👤</div>`}<div class="row-body"><div class="row-title">${esc(a.artist)}</div><div class="row-sub">${a.album_count} albums · ${a.track_count} tracks</div></div>`;
       div.addEventListener("click",()=>{ showTab('browse'); showArtistAlbums({artist:a.artist, album_count:a.album_count||0}); });
       $("item-list").appendChild(div);
@@ -1331,7 +1416,7 @@ async function doSearch(q){
       const k=regItem(pseudo);
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img src="${artUrl(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art)}" onerror="this.style.display='none'">`:
         `<div class="row-icon">💿</div>`}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" data-k="${k}" data-action="fav">⭐</button><button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
       div.addEventListener("click",e=>{
         const btn=e.target.closest("[data-action]");
@@ -1496,7 +1581,7 @@ function renderListAppend(data){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img src="${artUrl(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ?`<img class="row-art" src="${artUrl(item.art)}" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
     const isItem=item.type!=="container";
     div.innerHTML=`${artEl}<div class="row-body"><div class="row-title">${esc(item.title)}</div>${sub?`<div class="row-sub">${esc(sub)}</div>`:""}</div>${item.duration?`<div class="row-dur">${fmtDur(item.duration)}</div>`:""}<div class="row-actions">${isItem?`<button class="icon-btn" data-k="${k}" data-action="fav" title="Add to Favourites">⭐</button><button class="icon-btn" data-k="${k}" data-action="add" title="Add to playlist">＋</button><button class="icon-btn" data-k="${k}" data-action="edit" title="Edit metadata">✏️</button>`:""}<button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
@@ -2761,6 +2846,14 @@ refreshServers();
 refreshRenderers();
 loadPlaylists().then(showPlaylists);
 startPolling();
+
+// Land on Browse. Until a nav button was tapped the body carried NO m-*
+// class, and the phone stylesheet only hides a pane when one is present —
+// so a fresh load stacked the whole playlist panel underneath the browse
+// list, below the fold, for no reason. Deferred one tick so the bottom nav
+// has been laid out (mobileTab no-ops while it is display:none, which is
+// exactly how this stays desktop- and tablet-safe).
+setTimeout(()=>mobileTab("browse"), 0);
 
 // Rebuild the output selector with browser + UPnP renderers
 function rebuildOutputSel(upnpData){
