@@ -31,7 +31,7 @@ def _set_visibility(app, state: str) -> None:
 
 
 def test_sse_closed_on_hidden_reopened_on_visible(app, gateway):
-    """Screen lock must CLOSE the SSE stream (its 15s server keepalives
+    """Screen lock must CLOSE the SSE stream (its server keepalives
     would keep the iPhone radio out of low-power state for a whole
     locked-screen listening session — the 2026-07 battery-drain bug);
     returning to visible must open a fresh EventSource.

@@ -7,33 +7,36 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="DLNA GW">
-<meta name="theme-color" content="#0e0d0b">
+<meta name="theme-color" content="#0A1526">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <title>DLNA Gateway</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <header>
   <div class="logo">DLNA<sup>GW</sup></div>
   <span id="app-version" title="gateway version" style="font-size:10px;color:var(--ink-dim);letter-spacing:.04em;flex-shrink:0;align-self:center"></span>
   <div class="sep"></div>
-  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-    <span style="font-size:10px;color:var(--ink-dim);letter-spacing:.05em">SRC</span>
-    <select id="source-sel" onchange="selectSource(this.value)" style="background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:5px 8px;border-radius:var(--r);cursor:pointer;outline:none">
+  <div class="hdr-pick">
+    <span class="hdr-pick-label">SRC</span>
+    <select id="source-sel" onchange="selectSource(this.value)" title="Library source">
       <option value="">Scanning…</option>
     </select>
   </div>
   <div class="sep"></div>
-  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-    <span style="font-size:10px;color:var(--ink-dim);letter-spacing:.05em">OUT</span>
-    <select id="output-sel" style="background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:5px 8px;border-radius:var(--r);cursor:pointer;outline:none">
+  <div class="hdr-pick">
+    <span class="hdr-pick-label">OUT</span>
+    <select id="output-sel" title="Playback output">
       <option value="browser">📱 Browser</option>
     </select>
   </div>
   <div class="sep"></div>
-  <div class="search-wrap">
+  <div class="search-wrap" id="search-wrap">
+    <!-- Phone only (CSS): collapses search to a button so the header fits
+         on ONE row. Tapping expands the field onto a second row. -->
+    <button class="btn" id="search-toggle" title="Search library" aria-label="Search library" aria-expanded="false">🔍</button>
     <input type="text" id="search-input" placeholder="🔍 Search library…" autocomplete="off">
   </div>
   <div class="hdr-right" id="hdr-status">Ready</div>
@@ -41,6 +44,12 @@
 <div class="tab-bar">
   <div class="tab active" id="tab-browse" onclick="showTab('browse')">Browse</div>
   <div class="tab" id="tab-search" onclick="showTab('search')">Search</div>
+  <!-- Tablet-width only (768–1023px): at that size the playlist column is
+       dropped so the player has room, so these two need a way in. Hidden
+       by CSS on phone (bottom nav owns navigation) and on desktop (the
+       panel is permanently on screen). -->
+  <div class="tab tablet-only" id="tab-playlists" onclick="showTab('playlists')">Playlists</div>
+  <div class="tab tablet-only" id="tab-favourites" onclick="showTab('favourites')">Favourites</div>
 </div>
 <div class="workspace">
   <!-- LEFT: browser / search / playlist view -->

@@ -33,6 +33,14 @@ CACHE_DIR = os.environ.get("ART_CACHE_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "art_cache")
 TTL_SEC = int(os.environ.get("ART_CACHE_TTL_SEC", str(14 * 24 * 3600)))
 MAX_BYTES = int(os.environ.get("ART_CACHE_MAX_BYTES", str(1024 * 1024 * 1024)))
+# Deterministic cover-fetch FAILURES (a candidate with an art URL in the DB
+# whose file has no embedded picture, or a CAA 404) are remembered briefly so
+# Amperfy — which re-requests every cover repeatedly — doesn't re-decode the
+# same dead candidate on every getCoverArt. SHORT TTL (1 h) so a re-tagged /
+# re-added cover is retried within the hour. Transient failures (upstream
+# unreachable) are NOT stored — see api_playback.art_fetch_cached.
+NEG_TTL_SEC = int(os.environ.get("ART_CACHE_NEG_TTL_SEC", str(3600)))
+_NEG_VARIANT = "__neg__"
 
 # Run the (O(n)) size-eviction sweep only once every N puts so a multi-thousand
 # cover sync isn't O(n^2). The cap is soft — a small overshoot between sweeps is
@@ -43,20 +51,25 @@ _lock = threading.Lock()
 _put_count = 0
 
 
-def _key(url: str) -> str:
-    return hashlib.sha1(url.encode("utf-8")).hexdigest()
+def _key(url: str, variant: str = "") -> str:
+    # An empty variant hashes the bare url so pre-variant entries (the original
+    # full-size covers already on disk) keep the SAME key — no cache churn. A
+    # scaled variant (e.g. "s256") is folded into the hash as a distinct entry.
+    payload = url if not variant else f"{url}\n{variant}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
-def _path(url: str) -> str:
-    return os.path.join(CACHE_DIR, _key(url))
+def _path(url: str, variant: str = "") -> str:
+    return os.path.join(CACHE_DIR, _key(url, variant))
 
 
-def get(url: str):
+def get(url: str, variant: str = ""):
     """Return ``(content_type, body)`` for a fresh cached entry, else ``None``.
-    A stale (TTL-expired) or corrupt entry is treated as a miss (and dropped)."""
+    A stale (TTL-expired) or corrupt entry is treated as a miss (and dropped).
+    ``variant`` selects a size-scaled copy (e.g. ``"s256"``); empty = original."""
     if not url:
         return None
-    p = _path(url)
+    p = _path(url, variant)
     try:
         st = os.stat(p)
     except OSError:
@@ -82,10 +95,10 @@ def get(url: str):
     return ctype, body
 
 
-def put(url: str, ctype: str, body: bytes) -> None:
+def put(url: str, ctype: str, body: bytes, variant: str = "") -> None:
     """Store ``body`` (an image) for ``url``. No-op on empty url/body. Writes
     atomically (tmp + os.replace) so a concurrent reader never sees a partial
-    file."""
+    file. ``variant`` stores a size-scaled copy under a distinct key."""
     if not url or not body:
         return
     ctype = (ctype or "image/jpeg").splitlines()[0][:120] or "image/jpeg"
@@ -94,7 +107,7 @@ def put(url: str, ctype: str, body: bytes) -> None:
     except OSError as e:
         log.debug(f"art_cache: cannot create {CACHE_DIR}: {e}")
         return
-    p = _path(url)
+    p = _path(url, variant)
     tmp = f"{p}.tmp.{os.getpid()}.{threading.get_ident()}"
     try:
         with open(tmp, "wb") as f:
@@ -115,6 +128,65 @@ def put(url: str, ctype: str, body: bytes) -> None:
         do_evict = (_put_count % _EVICT_EVERY == 0)
     if do_evict:
         _evict_if_needed()
+
+
+def get_negative(url: str):
+    """Return the cached `(status, message)` for a recently-failed cover fetch
+    of `url`, or ``None`` when there's no fresh negative marker. Uses the short
+    ``NEG_TTL_SEC`` rather than the positive ``TTL_SEC`` so a fixed cover is
+    retried within the hour."""
+    if not url or NEG_TTL_SEC <= 0:
+        return None
+    p = _path(url, _NEG_VARIANT)
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    if (time.time() - st.st_mtime) > NEG_TTL_SEC:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        return None
+    try:
+        with open(p, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return None
+    nl = raw.find(b"\n")                       # "<status>\n<message>"
+    if nl <= 0:
+        return None
+    try:
+        status = int(raw[:nl])
+    except ValueError:
+        return None
+    return status, raw[nl + 1:].decode("ascii", "replace")
+
+
+def put_negative(url: str, status: int, message: str = "") -> None:
+    """Remember that fetching `url` failed with `status` (a short-TTL marker).
+    Written atomically like `put`; no-op on empty url or a disabled TTL."""
+    if not url or NEG_TTL_SEC <= 0:
+        return
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+    except OSError as e:
+        log.debug(f"art_cache: cannot create {CACHE_DIR}: {e}")
+        return
+    p = _path(url, _NEG_VARIANT)
+    tmp = f"{p}.tmp.{os.getpid()}.{threading.get_ident()}"
+    payload = (f"{int(status)}\n{(message or '')[:200]}"
+               .encode("ascii", "replace"))
+    try:
+        with open(tmp, "wb") as f:
+            f.write(payload)
+        os.replace(tmp, p)
+    except OSError as e:
+        log.debug(f"art_cache: put_negative failed for {url[:80]}: {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _evict_if_needed() -> None:

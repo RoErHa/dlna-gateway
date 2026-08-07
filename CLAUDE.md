@@ -209,7 +209,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_gateway.py` | Module wiring + `start_background_services()` (spawns the daemon threads). **2.0:** no longer the process entry — the `dlna_asgi` lifespan calls it so `hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib HTTP edge + TLS were removed. |
 | `dlna_asgi.py` | **2.0 — THE server (Hypercorn owns the whole edge).** FastAPI app; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, the Subsonic byte methods, and the **Naim-facing `/gw/*` UPnP surface** (device.xml/desc.xml/events/control on the plain `:8765` bind — Cleanup C folded it in here, retiring the separate `dlna_server.py` device server + `run-2.0.sh`). Remaining legacy handlers run via the bridge. Lifespan boots `start_background_services`. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
 | `dlna_asgi_bridge.py` | Shim that runs the legacy `(h, params)` handlers unchanged inside the ASGI app (fake `h` captures `_json`/`_html`/`_xml_response`/`send_error`; runs in a threadpool). Routes are rewritten native one batch at a time, then dropped from the bridge. |
-| `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL. `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
+| `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
 | `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
 | `dlna_discovery.py` | SSDP listener, probe, subnet scanner, server heartbeat |
@@ -448,6 +448,29 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 
 iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PWA rewrites every track art URL to `/art?url=<external>` so the lock-screen fetch is same-origin. Service Worker cache-firsts these (art rarely changes).
 
+- **Size-bucketed downscaling (2026-08-07).** `/art?url=…&size=N` now honours
+  `size` via `api_playback.art_fetch_scaled` — the same 96/256/512/1024 bucket
+  ladder and per-bucket disk cache the Subsonic `getCoverArt` route uses. The
+  PWA previously asked for the **full-resolution original everywhere**: a 36px
+  list thumbnail and a 130px grid card both pulled the multi-MB embedded
+  cover, and the album grid put a dozen on screen at once. Measured on the
+  real library, a **772 KB cover is 12 KB at `size=256` (1.6%) and 42 KB at
+  `size=512` (5.5%)**. `artUrl(raw, size)` in `app.js` names one bucket per
+  surface — `ART_THUMB` 256 (36px rows, mini-player, station logos),
+  `ART_COVER` 512 (grid cards), `ART_FULL` 1024 (now-playing panel **and** the
+  MediaSession lock-screen artwork, deliberately the same url so it's one
+  fetch and one cache entry per track; iOS never shows lock-screen art above
+  ~600px). Sizes are **fixed, not devicePixelRatio-derived** — every device
+  then asks for the same few URLs and shares one on-disk scaled copy per
+  bucket, where a dpr-derived size would fragment the cache per device for no
+  visible gain. `size` absent/0 is byte-for-byte the old behaviour, and Pillow
+  stays optional (absent → original served, so it degrades to the old
+  bandwidth, never to a broken image). Browse/grid `<img>`s also carry
+  `loading="lazy"`. `ART_CACHE` bumped to v3 to evict the originals cached
+  under the old size-less URLs. Guarded by
+  `tests/test_asgi.py::TestArtProxy` (size forwarded, absent-size unchanged,
+  junk size degrades) and the `/art` bucket tests in
+  `tests/frontend/test_layout.py`.
 - Hard-caps at 12 MB per image to prevent memory abuse (raised from 5 MB
   2026-07-03 — real embedded covers exceed 5 MB and the cap made
   getCoverArt 404 deterministically for every candidate of such an
@@ -455,6 +478,200 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
 - Validates Content-Type starts with `image/` — an upstream HTML 404 page won't poison the SW cache.
 - 10-second timeout; slow upstream fails fast.
 - The handler is in `api_playback.art()` routed at `/art` in `dlna_asgi.py`.
+- **Subsonic `getCoverArt?size=N` downscaling (2026-08-04).** The native
+  `getCoverArt` route in `dlna_asgi.py` honours the client's `size` box via
+  `api_playback.art_fetch_scaled(url, size)` — Amperfy asks for ~100–600 px
+  thumbnails per list row, so serving the full multi-MB embedded original was
+  the main "cover art slow on Amperfy" cause. Sizes snap to a 96/256/512/1024
+  bucket ladder; each scaled JPEG (Pillow, quality 85) is cached per bucket in
+  `dlna_art_cache` under a `s<box>` variant, so a bucket is scaled at most once
+  and the original is fetched at most once regardless of how many sizes are
+  requested. `size=0`/absent, a size above the top bucket, an already-small
+  image, or Pillow-missing all serve the unmodified original. **The PWA `/art`
+  route now uses the same ladder** (2026-08-07 — see the `/art` section above;
+  it used to serve full-res everywhere). Guarded by
+  `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
+  `TestCacheVariants`).
+
+### UI — navy palette, per-device layouts, album grid (2026-08-07)
+
+Guarded by `tests/frontend/test_layout.py` (24 tests). Design proposal that
+was approved: the artifact linked from that session; the numbers below are
+measured, not estimated.
+
+**Palette.** The warm near-black set is replaced by a deep navy one. The
+change that matters is **`--ink-dim`**: it carries every artist line,
+duration, count and label, and at the old `#9a907f` it sat at **6.2:1**
+against the ground — that, not the background, is what washed out in
+sunlight. It is now `#B4C9E6` at **10.8:1**. Body `#F4F8FF` 17.2:1, amber
+`#FFC24A` 11.4:1, green `#4FD98C` 10.1:1 — all AAA. The amber accent is
+kept deliberately (it's the app's identity and reads better on navy than on
+the warm black). `--ink-dim-soft` is the one sub-AAA ink, for decorative
+labels that never carry information alone. Also repainted: the PWA
+`theme-color`, the manifest `background_color`/`theme_color`, and the
+generated app icon (`_make_icon_png` in `dlna_asgi.py`).
+
+**Type.** `DM Mono` is no longer requested at weight **300** — thin small
+type is what actually disappears outdoors, roughly as much as low contrast.
+Secondary text went 11px → 12px via `--fs-sub`; uppercase micro-labels
+10px → 11px via `--fs-micro`.
+
+**Breakpoints.** There was ONE (768px). There are now four zones:
+
+| Zone | Query | Layout |
+|---|---|---|
+| Phone upright | `≤767px` | one column + bottom nav |
+| Tablet upright | `768–1023px` | **two** columns; playlists via a tab |
+| Desktop / tablet sideways | `≥1024px` | three columns, fluid `clamp()` |
+| Phone sideways | `max-height:500px and min-width:768px` | list beside player + side rail |
+
+Two situations were on the wrong side of the old single breakpoint:
+- **iPad upright** (Air/Pro 11 = 820–834px) took the desktop layout, where
+  `#browser` 360px + `#pl-panel` 260px = 620px of fixed chrome left the
+  player **~200px** — too narrow for the six transport buttons. Now two
+  columns: measured **426px** player on an 820px iPad.
+- **Every iPhone on its side is 852px wide** (932 Pro Max), so it also took
+  the desktop layout — three columns and a status bar inside 393px of
+  height. The rule that catches it is keyed on **height**, so it works on
+  any model and never catches an iPad sideways (1024×768). **This block must
+  stay LAST in the file** — a landscape phone also matches the tablet query
+  and has to override it.
+
+**Non-obvious things that bit during this work — do not re-introduce:**
+- `#bottom-nav` is a **sibling of `.workspace`**, at the end of `<body>`.
+  Making it `position:static` to build the landscape side rail dropped it
+  into the body's column flow *below* the panes and squeezed them to
+  nothing. It stays `position:fixed`, with `.workspace{margin-left:54px}`.
+- `.tab.tablet-only{display:none}` **must be declared before** the tablet
+  media query. A media query adds no specificity, so the same selector
+  written afterwards simply wins and hides the tabs at every width.
+- The inline `style="…"` attributes on `#source-sel`/`#output-sel` were
+  moved into CSS. An inline style beats any selector short of `!important`,
+  so the responsive rules could not reach them.
+- The manifest said `"orientation": "portrait"`, which an **installed PWA
+  obeys** — it would have locked the home-screen app upright and made the
+  landscape layout unreachable from the one place it matters. Now `"any"`.
+
+**Album cover grid.** Albums, the artist/genre/decade drill-downs and the ⭐
+favourites list render through **one** `renderAlbumRows()` (they were five
+near-identical copies that had already drifted). Putting `grid` on
+`#item-list` turns the *same* markup into a cover card — the markup is
+deliberately unchanged (`.row` / `.row-art` / `.row-body` / `.row-actions >
+.icon-btn`), so every existing handler, selector and test still applies and
+list-vs-grid stays a pure presentation choice. `showSpinner()` clears the
+class, which is why every view load resets to a list. Artists and tracks
+stay lists — text-first content, a cover adds nothing.
+
+> **`grid-auto-rows:max-content` is NOT optional**, and the card is
+> `display:block`, not a flex column. A cover sized `width:100%` +
+> `aspect-ratio:1` contributes **no intrinsic height**: as a flex item the
+> ratio is circular (the line's height is wanted before the width it depends
+> on is known), and inside `#item-list`'s bounded scroll container the auto
+> rows were squeezed to share the visible height — 114px rows around 129px
+> covers, every title spilling onto the card below. **It only broke once the
+> cards needed more than one row**, so a single-row test passes vacuously;
+> `test_grid_cards_never_overflow` seeds eight albums and asserts a second
+> row exists.
+
+**Also:** the header is one row on the phone (search collapses to a 🔍
+button, wordmark hidden — the pickers need that ~90px to show a readable
+source name), and the app now boots into `mobileTab("browse")`. Without a
+body `m-*` class the phone stylesheet hides nothing, so a fresh load used to
+stack the entire playlist panel under the browse list, below the fold.
+
+### iOS battery — what an OPEN but IDLE PWA costs (2026-08-07)
+
+The 2026-07 work fixed the **screen-locked** case (Page Visibility stops the
+polls, closes SSE, stops the ICY poll). The follow-up report was that the app
+still drains while **open and NOT playing**. Two independent causes, both now
+fixed; regression-guarded by `tests/frontend/test_battery.py` (10 tests).
+
+**1. The polls ran at a fixed cadence regardless of activity.**
+`startPolling()` set flat intervals — state 1 s, index 2 s, servers 8 s,
+renderers 10 s — so an idle-but-open PWA fired **~2,600 requests/hour**, and
+**~6,200/hr with a UPnP output selected**, where every `/api/renderer_state`
+also costs the gateway **two SOAP round-trips to the renderer**
+(`RendererQueue.snapshot()`; `_tracks` is never cleared on stop, so a
+finished session keeps answering with live SOAP forever). At better than one
+request per second the iPhone radio never reaches low-power idle. None of
+that traffic was useful — the library, the device list and the transport
+state are all static while idle, and SSE already pushes every change.
+
+Polling is now **two-tier**, one self-scheduling loop per poll
+(`_LOOPS` / `_armLoop` / `_runLoop` / `kickPoll` in `app.js`). The **fast tier
+is the original interval**, so anything "active" behaves exactly as before:
+
+| loop | fast (when) | slow |
+|---|---|---|
+| `state` | 1 s — audio genuinely playing (`_playbackActive()`) | 20 s |
+| `index` | 2 s — a rebuild is running, or no source adopted yet | 60 s |
+| `servers` | 8 s — until SSE connects | 60 s |
+| `renderers` | 10 s — until SSE connects | 60 s |
+
+The slow tiers are a **safety net for a dropped event, not the update path**:
+an SSE push calls `kickPoll(...)`, which polls *then* re-arms, so a change is
+still reflected instantly. `bumpPolling()` does the same from every path that
+starts/stops playback (`sendRenderQueue`, `control`, the `<audio>`
+play/pause events) — arming without polling first would size the delay off
+stale flags. **If SSE never connects, every loop stays in its fast tier and
+behaviour is identical to before.** A throwing poll re-arms its own loop
+(guarded) — otherwise one blip would freeze the UI until the next visibility
+change.
+
+Backend counterpart: `_SSE_HEARTBEAT_SEC` 15 s → **45 s** (`dlna_asgi.py`).
+With the polls throttled, the keepalive was the most frequent thing left on
+the wire — 240 inbound frames/hour to say "still here". Kept under 60 s so a
+future reverse proxy's idle timeout can't close the stream.
+
+**2. The vinyl rotation never stopped.** `#player.playing.is-audio .art` is an
+**8 s infinite rotation**, and nothing removed `playing` on the browser-output
+path (`pollState` only clears it on the UPnP branch). Pausing therefore left a
+full-size album cover spinning at display refresh rate **forever** — a
+compositor/GPU wake every frame for as long as the app stayed open, and the
+biggest **non-network** idle drain. The class is now driven off the `<audio>`
+element's own `play`/`pause` events, the same single-source-of-truth as
+`MediaSession.playbackState` below.
+
+**3. Orphaned spinners.** Every loader is "show spinner → fetch →
+`if(!r) return;`", so any failed fetch left `.spinner`'s infinite CSS rotation
+running with no user feedback. All eight sites now go through
+`showSpinner(el)`, which arms a `_SPINNER_TIMEOUT_MS` (15 s) watchdog that
+swaps the spinner for a static "⚠ Couldn't load" line. The replacement keeps
+the `spinner-wrap` class so the existing "clear the spinner before appending"
+checks still remove it.
+
+**Also fixed:** `rebuildSourceSel` / `rebuildOutputSel` reassigned `<select>`
+`innerHTML` on every refresh even when the list was identical, destroying and
+rebuilding the `<option>` nodes (a style/layout pass, and on iOS it closes an
+open native picker). Both now skip the write when nothing changed.
+
+**Known, NOT changed** (deliberate — each is a real trade-off):
+- `<audio preload="auto">`: after a pause Safari finishes buffering the
+  current track. Bounded by one track (not continuous), and changing
+  `preload` risks the "stops after one track" class of regression.
+- The PWA `/art` route still serves full-res originals (lock-screen art).
+  `art_fetch_scaled` already exists for Subsonic — routing PWA list-row art
+  through a small `size=` bucket is the highest-value remaining win (network
+  + decode + the memory held by a rotating layer), but it changes the
+  documented `/art` contract, so it's a separate decision.
+
+### MediaSession playback state (CarPlay / lock-screen resume)
+
+`_updateMediaSession` (`static/app.js`) wires the lock-screen / CarPlay
+metadata + transport handlers (play/pause/prev/next + position scrubber). On
+top of that, **`navigator.mediaSession.playbackState` is driven off the
+`<audio>` element's own `play`/`pause` events** (2026-08-04) — the single
+source of truth, so it's correct no matter what caused the change (a tap,
+autoplay, a queue advance, or a phone-call/Siri interruption). A correct
+`playbackState` is what makes CarPlay / the lock screen show the right control
+and reliably deliver the PLAY command back to us, i.e. a dependable **one-tap
+resume after a call**. **Hard platform limit:** iOS forbids a backgrounded web
+page from resuming audio without a user gesture, so fully-automatic hands-free
+resume is *not* achievable in the PWA — only a native app (Amperfy, via
+`AVAudioSession` `.shouldResume`) can do that. Keeping `playbackState` correct
+is the realistic best the web path can offer. Guarded by
+`tests/frontend/test_mediasession.py` (play→playing, pause→paused, and the
+playing→paused→playing call-interruption round-trip).
 
 ### Browser audio error handling (MediaError discrimination)
 
@@ -2637,7 +2854,7 @@ Errors: `"status":"failed"` with `{"error": {"code": N, "message": "…"}}`.
 | `/rest/getArtists` | `DB.all_artists` | Modern artist list |
 | `/rest/getArtist?id=` | `DB.artist_albums(udn, artist)` | Albums under an artist |
 | `/rest/getAlbum?id=` | `DB.album_tracks(udn, artist, album)` | Tracks in an album |
-| `/rest/getAlbumList2?type=&size=&offset=` | `DB.all_albums` + sort by `type` | type ∈ newest/alphabeticalByName/recent/random/frequent/starred |
+| `/rest/getAlbumList2?type=&size=&offset=` | `DB.all_albums(order=,limit=,offset=)` | type ∈ newest/alphabeticalByName/recent/random/frequent/starred. The alphabetical types page in **SQL** (`LIMIT/OFFSET`) so Amperfy's full-library sync doesn't reload every album per page; `alphabeticalByArtist` orders by artist. `random` is **day-seeded** so paging is coherent (no dup/missing albums across pages). `size`/`offset` parse tolerantly (a bad value degrades to the default, no 500). |
 | `/rest/search3?query=` | `DB.search` | Existing FTS5 search |
 | `/rest/getPlaylists` | `DB.pl_list()` | All playlists |
 | `/rest/getPlaylist?id=` | `DB.pl_get(pl_id)` | One playlist's tracks |
@@ -2645,7 +2862,7 @@ Errors: `"status":"failed"` with `{"error": {"code": N, "message": "…"}}`.
 | `/rest/star` `/unstar` | `DB.album_fav_add / album_fav_remove` | Album-level starring → reuses Album Favourites |
 | `/rest/getStarred2` | `DB.album_fav_list()` | Starred albums |
 | `/rest/stream?id=` | track ID → URL → `dlna_player.proxy_stream` | Audio (Range supported via existing proxy) |
-| `/rest/getCoverArt?id=` | album/track ID → art URL → `api_playback.art` | Cover image |
+| `/rest/getCoverArt?id=&size=` | album/track ID → art URL → `api_playback.art_fetch_scaled` | Cover image, downscaled to the `size` box (bucketed 96/256/512/1024, Pillow) so thumbnails aren't full-res originals |
 | `/rest/scrobble?id=&submission=true` | `play_counts.count += 1` | Bumps radio bias from cars |
 
 ### ID encoding

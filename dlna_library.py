@@ -1773,11 +1773,24 @@ class LibraryDB:
                     (udn, album, artist, artist)).fetchall()
         return [dict(r) for r in rows]
 
-    def all_albums(self, udn: str) -> list:
+    def all_albums(self, udn: str, *, order: str = "album",
+                   limit: "int | None" = None, offset: int = 0) -> list:
         """All distinct albums, grouping compilations under 'Various Artists'.
         Track count reflects browse-visible (deduped) tracks only.
         LocalFs sources group by FOLDER (album_key) and carry it as the
-        album identity; other sources keep (artist, album) grouping."""
+        album identity; other sources keep (artist, album) grouping.
+
+        `order` ∈ {'album', 'artist'} chooses the sort (both COLLATE NOCASE).
+        `limit`/`offset` push pagination into SQL so a paged consumer
+        (Subsonic getAlbumList2) fetches one page's worth of rows instead of
+        the whole library per page. `limit=None` returns everything (default)."""
+        order_sql = ("artist COLLATE NOCASE, album COLLATE NOCASE"
+                     if order == "artist" else "album COLLATE NOCASE")
+        page_sql = ""
+        extra: tuple = ()
+        if limit is not None:
+            page_sql = " LIMIT ? OFFSET ?"
+            extra = (int(limit), max(0, int(offset)))
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             if _is_localfs(udn):
@@ -1791,8 +1804,8 @@ class LibraryDB:
                        WHERE t.udn=? AND t.album_key != ''
                          AND {dedup}
                        GROUP BY t.album_key
-                       ORDER BY album COLLATE NOCASE""",
-                    (udn,)).fetchall()
+                       ORDER BY {order_sql}{page_sql}""",
+                    (udn,) + extra).fetchall()
             else:
                 rows = conn.execute(
                     f"""SELECT t.album,
@@ -1805,8 +1818,8 @@ class LibraryDB:
                        WHERE t.udn=? AND t.album != ''
                          AND {dedup}
                        GROUP BY t.album
-                       ORDER BY t.album COLLATE NOCASE""",
-                    (udn,)).fetchall()
+                       ORDER BY {order_sql}{page_sql}""",
+                    (udn,) + extra).fetchall()
         return [dict(r) for r in rows]
 
     def artist_albums(self, udn: str, artist: str) -> list:

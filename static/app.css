@@ -1,64 +1,110 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--ink:#f2ede4;--ink-dim:#9a907f;--bg:#0e0d0b;--surface:#161410;--raised:#1f1d19;--border:#2a2720;--amber:#d4a843;--amber-d:#a07820;--red:#c84b3c;--green:#4a9c6d;--r:6px;--fh:'Syne',sans-serif;--fm:'DM Mono',monospace}
+/* ── Palette — deep navy, daylight-tuned (2026-08-07) ─────────────
+   Replaces the warm near-black set. The change that matters is
+   --ink-dim: it carries every artist line, duration, count and label
+   in the app, and at the old #9a907f it sat at 6.2:1 against the
+   ground — the reason the UI washed out in sunlight. It is now
+   10.8:1. Body text 17.2:1, amber 11.4:1, green 10.1:1 (all AAA).
+   The amber accent is kept: it's the app's identity and reads better
+   on navy than it did on the warm black.
+   --ink-dim-soft is the ONLY sub-AAA ink, for decorative micro-labels
+   that are never the sole carrier of information.                    */
+:root{
+  --ink:#F4F8FF;          /* 17.2:1 on --bg */
+  --ink-dim:#B4C9E6;      /* 10.8:1 on --bg — was #9a907f @ 6.2:1 */
+  --ink-dim-soft:#8DA5C6; /*  6.6:1 — decorative labels only */
+  --bg:#0A1526;
+  --surface:#122139;
+  --raised:#1B2F4D;
+  --border:#2A4066;
+  --border-hi:#31507F;
+  --amber:#FFC24A;        /* 11.4:1 */
+  --amber-d:#C98F1E;
+  --red:#FF8478;          /*  7.7:1 */
+  --green:#4FD98C;        /* 10.1:1 */
+  --r:6px;
+  --fh:'Syne',sans-serif;
+  --fm:'DM Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* Secondary/tertiary type sizes. Raised one step from 11px: thin
+     small type is what actually disappears outdoors, so contrast alone
+     wasn't enough. Nothing in the app is set below weight 400 either
+     — DM Mono 300 was the old default for small print. */
+  --fs-sub:12px;          /* was 11px — row subtitles, times, counts */
+  --fs-micro:11px;        /* was 10px — uppercase eyebrow labels */
+}
 html,body{height:100%;overflow:hidden}
-body{background:var(--bg);color:var(--ink);font-family:var(--fm);font-size:13px;display:flex;flex-direction:column}
+body{background:var(--bg);color:var(--ink);font-family:var(--fm);font-size:13px;font-weight:400;display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:12px;padding:0 16px;height:52px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
 .logo{font-family:var(--fh);font-weight:800;font-size:15px;letter-spacing:-.03em;color:var(--amber)}
-.logo sup{font-size:9px;color:var(--ink-dim);vertical-align:super}
+.logo sup{font-size:10px;color:var(--ink-dim);vertical-align:super}
 .sep{width:1px;height:24px;background:var(--border)}
 .disc-wrap{display:flex;align-items:center;gap:7px}
 .disc-dot{width:7px;height:7px;border-radius:50%;background:var(--border);transition:background .4s,box-shadow .4s}
 .disc-dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
-.disc-label{font-size:11px;color:var(--ink-dim)}
+.disc-label{font-size:var(--fs-sub);color:var(--ink-dim)}
 #server-sel{flex:1;max-width:260px;background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:5px 8px;border-radius:var(--r);cursor:pointer;outline:none}
 #server-sel:focus{border-color:var(--amber)}
+/* SRC / OUT pickers. The styling moved out of inline attributes so the
+   responsive rules can actually reach it (an inline style beats any
+   selector short of !important). */
+.hdr-pick{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.hdr-pick-label{font-size:var(--fs-micro);color:var(--ink-dim);letter-spacing:.05em;font-weight:500}
+#source-sel,#output-sel{background:var(--raised);border:1px solid var(--border);color:var(--ink);
+  font-family:var(--fm);font-size:12px;padding:5px 8px;border-radius:var(--r);cursor:pointer;outline:none}
+#source-sel:focus,#output-sel:focus{border-color:var(--amber)}
 /* search bar in header */
 .search-wrap{display:flex;align-items:center;gap:6px;flex:1;max-width:300px}
+/* The collapse-to-a-button treatment is phone-only; everywhere else the
+   field is always open and the toggle is not needed. */
+#search-toggle{display:none}
 #search-input{flex:1;background:var(--raised);border:1px solid var(--border);color:var(--ink);font-family:var(--fm);font-size:12px;padding:5px 10px;border-radius:var(--r);outline:none}
 #search-input:focus{border-color:var(--amber)}
 #search-input::placeholder{color:var(--ink-dim)}
-.hdr-right{margin-left:auto;font-size:11px;color:var(--ink-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hdr-right{margin-left:auto;font-size:var(--fs-sub);color:var(--ink-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* tab bar under header */
 .tab-bar{display:flex;gap:0;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 16px}
-.tab{padding:7px 16px;font-size:11px;cursor:pointer;color:var(--ink-dim);border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.tab{padding:7px 16px;font-size:var(--fs-sub);cursor:pointer;color:var(--ink-dim);border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
 .tab.active{color:var(--amber);border-bottom-color:var(--amber)}
 .tab:hover{color:var(--ink)}
 .workspace{display:flex;flex:1;overflow:hidden}
 #browser{width:360px;min-width:240px;flex-shrink:0;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--border)}
 #breadcrumb{display:flex;align-items:center;gap:4px;padding:7px 14px;min-height:34px;border-bottom:1px solid var(--border);flex-wrap:wrap;flex-shrink:0}
-.crumb{color:var(--amber);cursor:pointer;font-size:11px}
+.crumb{color:var(--amber);cursor:pointer;font-size:var(--fs-sub)}
 .crumb:hover{text-decoration:underline}
-.crumb-sep{color:var(--ink-dim);font-size:10px}
-.crumb-cur{font-size:11px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.crumb-sep{color:var(--ink-dim);font-size:var(--fs-micro)}
+.crumb-cur{font-size:var(--fs-sub);color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
 #item-list{flex:1;overflow-y:auto}
 #item-list::-webkit-scrollbar{width:5px}
 #item-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;position:relative}
 .row:hover{background:var(--raised)}
-.row.active{background:rgba(212,168,67,.08)}
+.row.active{background:rgba(255,194,74,.10)}
 .row.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--amber)}
+/* Browse-row artwork. Sized here rather than inline so the cover-grid
+   rules can reach it — an inline width/height beats any selector. */
+.row-art{width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0}
 .row-icon{font-size:15px;width:20px;text-align:center;flex-shrink:0}
 .row-body{flex:1;min-width:0}
 .row-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
-.row-sub{font-size:11px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-.row-dur{font-size:11px;color:var(--ink-dim);flex-shrink:0;font-variant-numeric:tabular-nums}
+.row-sub{font-size:var(--fs-sub);color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.row-dur{font-size:var(--fs-sub);color:var(--ink-dim);flex-shrink:0;font-variant-numeric:tabular-nums}
 .row-actions{display:flex;gap:4px;flex-shrink:0;opacity:0;transition:opacity .15s}
 .row:hover .row-actions{opacity:1}
-.icon-btn{background:none;border:1px solid var(--border);border-radius:4px;color:var(--ink-dim);cursor:pointer;font-size:11px;padding:3px 6px;line-height:1;transition:color .1s,background .1s}
+.icon-btn{background:none;border:1px solid var(--border);border-radius:4px;color:var(--ink-dim);cursor:pointer;font-size:var(--fs-sub);padding:3px 6px;line-height:1;transition:color .1s,background .1s}
 .icon-btn:hover{color:var(--ink);background:var(--raised)}
 .icon-btn.fav{color:var(--amber)}
 .msg{text-align:center;color:var(--ink-dim);padding:36px 20px;font-size:12px;line-height:1.8}
-.msg code{color:var(--amber);font-size:11px}
+.msg code{color:var(--amber);font-size:var(--fs-sub)}
 .spinner-wrap{display:flex;justify-content:center;padding:36px}
 .spinner{width:26px;height:26px;border:2px solid var(--border);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* player panel */
 #player{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 40px 36px;background:var(--bg);position:relative;overflow:hidden}
-#player::before{content:'';position:absolute;top:10%;left:50%;transform:translateX(-50%);width:300px;height:300px;border-radius:50%;background:radial-gradient(circle,rgba(212,168,67,.07) 0%,transparent 70%);pointer-events:none;opacity:0;transition:opacity .8s}
+#player::before{content:'';position:absolute;top:10%;left:50%;transform:translateX(-50%);width:300px;height:300px;border-radius:50%;background:radial-gradient(circle,rgba(255,194,74,.09) 0%,transparent 70%);pointer-events:none;opacity:0;transition:opacity .8s}
 #player.playing::before{opacity:1}
 .art-wrap{width:160px;height:160px;margin-bottom:20px}
 .art{width:100%;height:100%;border-radius:12px;background:var(--raised);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:48px;box-shadow:0 20px 50px rgba(0,0,0,.6);transition:box-shadow .5s;overflow:hidden}
-#player.playing .art{box-shadow:0 20px 70px rgba(212,168,67,.18),0 6px 24px rgba(0,0,0,.6)}
+#player.playing .art{box-shadow:0 20px 70px rgba(255,194,74,.20),0 6px 24px rgba(0,0,0,.6)}
 #player.playing.is-audio .art{animation:vinyl 8s linear infinite}
 @keyframes vinyl{to{transform:rotate(360deg)}}
 .np-title{font-family:var(--fh);font-size:17px;font-weight:700;text-align:center;max-width:420px;letter-spacing:-.02em;margin-bottom:5px;line-height:1.2}
@@ -72,13 +118,13 @@ header{display:flex;align-items:center;gap:12px;padding:0 16px;height:52px;backg
 .seek-track.dragging .seek-fill{transition:none}
 .seek-thumb{position:absolute;top:50%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:var(--amber);pointer-events:none;opacity:0;transition:opacity .2s;left:0%}
 .seek-track.seekable:hover .seek-thumb,.seek-track.seekable.dragging .seek-thumb{opacity:1}
-.seek-times{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+.seek-times{display:flex;justify-content:space-between;font-size:var(--fs-sub);color:var(--ink-dim);font-variant-numeric:tabular-nums}
 .controls{display:flex;align-items:center;gap:8px;margin-bottom:16px}
 .btn{display:flex;align-items:center;justify-content:center;background:none;border:1px solid var(--border);border-radius:var(--r);color:var(--ink-dim);cursor:pointer;transition:color .15s,background .15s,border-color .15s;font-size:13px;padding:7px 12px;font-family:var(--fm)}
 .btn:hover{color:var(--ink);background:var(--raised);border-color:var(--amber-d)}
 .btn.primary{background:var(--amber);border-color:var(--amber);color:#000;font-weight:600;padding:8px 20px;font-size:14px}
 .btn.primary:hover{background:#e8b84e}
-.vol-row{display:flex;align-items:center;gap:6px;color:var(--ink-dim);font-size:11px;flex-wrap:wrap;justify-content:center}
+.vol-row{display:flex;align-items:center;gap:6px;color:var(--ink-dim);font-size:var(--fs-sub);flex-wrap:wrap;justify-content:center}
 input[type=range].vol{width:64px;-webkit-appearance:none;height:3px;background:var(--border);border-radius:2px;outline:none;cursor:pointer}
 input[type=range].vol::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--ink-dim);cursor:pointer}
 input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
@@ -91,21 +137,21 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 .pl-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .pl-item{padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s}
 .pl-item:hover{background:var(--raised)}
-.pl-item.active{background:rgba(212,168,67,.07)}
+.pl-item.active{background:rgba(255,194,74,.09)}
 .pl-item-name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pl-item-count{font-size:11px;color:var(--ink-dim);margin-top:2px}
+.pl-item-count{font-size:var(--fs-sub);color:var(--ink-dim);margin-top:2px}
 .pl-actions{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;align-items:center}
 .pl-tracks{flex:1;overflow-y:auto;display:none}
 .pl-tracks.visible{display:block}
 .pl-track{display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--border);font-size:12px}
 .pl-remove{flex-shrink:0;width:22px;height:22px;border:none;background:none;color:var(--red);font-size:15px;cursor:pointer;border-radius:4px;display:flex;align-items:center;justify-content:center;opacity:.7;transition:opacity .15s,background .15s;padding:0}
-.pl-remove:hover{opacity:1;background:rgba(200,75,60,.15)}
+.pl-remove:hover{opacity:1;background:rgba(255,132,120,.16)}
 .pl-track-body{flex:1;min-width:0}
 .pl-track-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pl-track-sub{font-size:11px;color:var(--ink-dim)}
+.pl-track-sub{font-size:var(--fs-sub);color:var(--ink-dim)}
 /* statusbar */
 #statusbar{height:26px;background:var(--surface);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:16px;flex-shrink:0}
-.sb-item{font-size:11px;color:var(--ink-dim)}
+.sb-item{font-size:var(--fs-sub);color:var(--ink-dim)}
 .sb-item span{color:var(--ink)}
 .sb-dot{width:5px;height:5px;border-radius:50%;background:var(--border);flex-shrink:0}
 .sb-dot.playing{background:var(--green)}
@@ -122,7 +168,7 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 #mini-art{width:38px;height:38px;border-radius:5px;background:var(--raised);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;overflow:hidden}
 #mini-info{flex:1;min-width:0}
 #mini-title{font-size:12.5px;font-family:var(--fh);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#mini-artist{font-size:11px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mini-artist{font-size:var(--fs-sub);color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #mini-pp{padding:5px 12px;flex-shrink:0;font-size:16px}
 #mini-next{padding:5px 10px;flex-shrink:0}
 /* progress stripe under mini player */
@@ -133,25 +179,42 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 .bnav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:none;border:none;color:var(--ink-dim);cursor:pointer;padding:4px 0;font-family:var(--fm);transition:color .15s}
 .bnav-btn.active{color:var(--amber)}
 .bnav-btn span:first-child{font-size:18px;line-height:1}
-.bnav-btn span:last-child{font-size:9px;letter-spacing:.03em}
+.bnav-btn span:last-child{font-size:10px;letter-spacing:.03em}
 
 /* ── Mobile responsive ────────────────────────────────────────── */
-@media (max-width:768px){
+@media (max-width:767px){
   /* ── Base ──────────────────────────────────────────────────── */
   html,body{overflow:auto;height:auto}
   body{padding-bottom:116px;font-size:14px}
 
-  /* ── Header ────────────────────────────────────────────────── */
-  header{flex-wrap:wrap;height:auto;padding:10px 14px;gap:8px}
+  /* ── Header — ONE row (was two) ────────────────────────────────
+     The header used to wrap: pickers on row 1, a full-width search
+     field on row 2. Together with the mode bar and the letter bar
+     that left the list barely half the screen. Now everything sits
+     on one line — the two pickers share the width and search is a
+     tap-to-expand button (#search-toggle, wired in app.js) that only
+     becomes a field when you want it. Worth ~44px of list on every
+     phone screen. */
+  header{flex-wrap:nowrap;height:auto;padding:9px 12px;gap:7px}
   .sep{display:none}
   .hdr-right{display:none}
-  /* Server selector full width */
+  /* The wordmark costs ~90px that the SRC/OUT pickers need to show a
+     readable name instead of "Asse…". In a standalone home-screen PWA you
+     already know which app you are in. */
+  .logo,#app-version{display:none}
+  /* The SRC/OUT eyebrow labels are redundant next to their icons */
+  .hdr-pick-label{display:none}
+  .hdr-pick{flex:1 1 0;min-width:0}
+  #source-sel,#output-sel{width:100%;max-width:none;font-size:13px;padding:8px 9px;
+    text-overflow:ellipsis}
   #server-sel{max-width:100%;flex:1;font-size:13px;padding:8px 10px}
-  /* Output selector compact next to server selector */
-  #output-sel{font-size:13px;padding:8px 10px}
-  /* Search bar full width on second row */
-  .search-wrap{max-width:100%;flex:0 0 100%;order:10}
-  #search-input{padding:10px 14px;font-size:14px;border-radius:20px}
+  /* Collapsed by default; .expanded takes the full second row when open */
+  .search-wrap{flex:0 0 auto;max-width:none;order:0}
+  #search-toggle{display:flex;align-items:center;justify-content:center;
+    width:38px;height:38px;font-size:16px;padding:0;flex-shrink:0}
+  #search-input{display:none;padding:10px 14px;font-size:14px;border-radius:20px}
+  .search-wrap.expanded{flex:0 0 100%;order:10}
+  .search-wrap.expanded #search-input{display:block;width:100%}
 
   /* ── Hide desktop chrome ───────────────────────────────────── */
   .tab-bar{display:none}
@@ -244,7 +307,7 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 
 /* ── Safe area for iPhone notch / home indicator ───────────────── */
 @supports(padding-bottom:env(safe-area-inset-bottom)){
-  @media(max-width:768px){
+  @media(max-width:767px){
     #bottom-nav{padding-bottom:env(safe-area-inset-bottom)}
     body{padding-bottom:calc(116px + env(safe-area-inset-bottom))}
   }
@@ -254,17 +317,17 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 .modal-overlay.open{opacity:1;pointer-events:all}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;min-width:300px;max-width:420px;width:90%}
 .modal h2{font-family:var(--fh);font-size:15px;font-weight:700;margin:0 0 6px;color:var(--amber)}
-.modal .modal-sub{font-size:11px;color:var(--ink-dim);margin:0 0 18px}
+.modal .modal-sub{font-size:var(--fs-sub);color:var(--ink-dim);margin:0 0 18px}
 .player-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
 .player-row:last-of-type{border-bottom:none}
 .player-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--amber);cursor:pointer;flex-shrink:0}
 .player-row label{flex:1;cursor:pointer}
 .player-row .pl-name{font-size:13px;color:var(--ink)}
-.player-row .pl-desc{font-size:11px;color:var(--ink-dim);margin-top:2px}
-.player-row .pl-platform{font-size:10px;color:var(--ink-dim);background:var(--raised);border-radius:4px;padding:1px 5px;flex-shrink:0}
+.player-row .pl-desc{font-size:var(--fs-sub);color:var(--ink-dim);margin-top:2px}
+.player-row .pl-platform{font-size:var(--fs-micro);color:var(--ink-dim);background:var(--raised);border-radius:4px;padding:1px 5px;flex-shrink:0}
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
 .edit-field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
-.edit-field label{font-size:10px;color:var(--ink-dim);letter-spacing:.06em;text-transform:uppercase}
+.edit-field label{font-size:var(--fs-micro);color:var(--ink-dim);letter-spacing:.06em;text-transform:uppercase}
 .edit-field input{background:var(--raised);border:1px solid var(--border);border-radius:var(--r);color:var(--ink);font-family:var(--fm);font-size:12px;padding:7px 10px;outline:none;width:100%;box-sizing:border-box}
 .edit-field input:focus{border-color:var(--amber)}
 /* ── Browse mode bar ─────────────────────────────────────────── */
@@ -274,21 +337,231 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 /* ── Letter picker ───────────────────────────────────────────── */
 .letter-bar{display:flex;overflow-x:auto;gap:3px;padding:7px 10px;border-bottom:1px solid var(--border);flex-shrink:0;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .letter-bar::-webkit-scrollbar{display:none}
-.letter-btn{flex-shrink:0;min-width:28px;height:28px;padding:0 4px;font-size:11px;font-family:var(--fh);font-weight:700;border:1px solid var(--border);border-radius:5px;background:var(--raised);color:var(--ink-dim);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .12s;-webkit-tap-highlight-color:transparent}
+.letter-btn{flex-shrink:0;min-width:28px;height:28px;padding:0 4px;font-size:var(--fs-sub);font-family:var(--fh);font-weight:700;border:1px solid var(--border);border-radius:5px;background:var(--raised);color:var(--ink-dim);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .12s;-webkit-tap-highlight-color:transparent}
 .letter-btn.active{background:var(--amber);border-color:var(--amber);color:var(--bg)}
 /* Desktop (>768px): the letter bar lives in the fixed 360px #browser sidebar
    and the 29 letters overflow past ~H. A mouse can't swipe a hidden-scrollbar
    row, so reveal a thin scrollbar here. Mobile (<=768px) keeps the clean
    single-row touch-swipe (scrollbar-width:none on .letter-bar above). */
-@media (min-width:769px){
+@media (min-width:768px){
   .letter-bar{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
   .letter-bar::-webkit-scrollbar{display:block;height:6px}
   .letter-bar::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
   .letter-bar::-webkit-scrollbar-track{background:transparent}
 }
 /* ── Browse pagination ───────────────────────────────────────── */
-.browse-pager{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:1px solid var(--border);flex-shrink:0;font-size:11px;color:var(--ink-dim)}
+.browse-pager{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:1px solid var(--border);flex-shrink:0;font-size:var(--fs-sub);color:var(--ink-dim)}
 .browse-pager.hidden{display:none}
 /* ── Browse drill-down ───────────────────────────────────────── */
-.browse-back{padding:9px 14px;font-size:11px;color:var(--amber);cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;flex-shrink:0}
+.browse-back{padding:9px 14px;font-size:var(--fs-sub);color:var(--amber);cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;flex-shrink:0}
 .browse-section-hdr{padding:8px 14px 6px;font-family:var(--fh);font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);flex-shrink:0}
+/* ══════════════════════════════════════════════════════════════════
+   Album cover grid
+   ══════════════════════════════════════════════════════════════════
+   Every album-producing view (Albums browse mode, the artist / genre /
+   decade drill-downs, and the ⭐ favourites list) renders through
+   renderAlbumRows() in app.js, which puts `grid` on #item-list. The
+   markup is deliberately UNCHANGED — still .row / .row-art / .row-body /
+   .row-title / .row-sub / .row-actions > .icon-btn — so every existing
+   selector, click handler and test keeps working; only the layout
+   changes. One text row per album at every screen size was the app's
+   biggest waste of width: this gives 2 covers across on a phone, 4 on an
+   upright iPad, 6 sideways. Artists and tracks stay lists — those are
+   text-first and a cover adds nothing.
+   auto-fill + minmax means the column count follows the container, so it
+   works in the narrow desktop sidebar and the wide tablet pane alike
+   with no per-breakpoint rules. */
+#item-list.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
+  gap:15px 12px;padding:13px;align-content:start;
+  /* grid-auto-rows is NOT optional. #item-list is a scroll container with a
+     bounded height, and a cover sized `width:100%` + `aspect-ratio:1`
+     contributes no intrinsic HEIGHT — so with more than one row of cards the
+     auto rows were squeezed to share the visible height (114px rows around
+     129px covers, titles spilling over the card below). It only looked right
+     while everything fit on one row. max-content sizes each row from its
+     content and lets the container scroll, which is the whole point. */
+  grid-auto-rows:max-content;
+}
+/* Full-width children: the empty/error message and the spinner must span
+   the grid rather than becoming a lone narrow cell. */
+#item-list.grid>.msg,#item-list.grid>.spinner-wrap{grid-column:1/-1}
+/* display:BLOCK, not a flex column. A square cover is `width:100%` +
+   `aspect-ratio:1`, and as a flex item that is circular: the flex line's
+   height is wanted before the width the ratio depends on is known, so the
+   card measured 114px tall around a 129px cover and the title spilled out
+   of it. In normal block layout the width resolves first and the ratio
+   follows, which is exactly what a cover card wants. */
+#item-list.grid .row{
+  display:block;padding:0;border-bottom:0;min-height:0;border-radius:8px;
+}
+#item-list.grid .row:hover{background:none}
+#item-list.grid .row.active{background:none}
+/* The active marker is a left bar in list mode; as a card it's a ring. */
+#item-list.grid .row.active::before{
+  left:0;right:0;top:0;bottom:0;width:auto;background:none;
+  border:2px solid var(--amber);border-radius:8px;pointer-events:none;
+}
+#item-list.grid .row-art{
+  width:100%;height:auto;aspect-ratio:1;border-radius:8px;
+  display:block;background:var(--raised);
+  box-shadow:0 6px 18px rgba(0,0,0,.45);
+}
+/* No-art fallback: same square, the emoji centred in it. Flex is fine
+   HERE — this box is a block-level child of a block card, so its width
+   is already resolved when the ratio is applied. */
+#item-list.grid .row-icon{
+  width:100%;height:auto;aspect-ratio:1;border-radius:8px;
+  background:var(--raised);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;font-size:34px;
+  box-shadow:0 6px 18px rgba(0,0,0,.45);
+}
+#item-list.grid .row-body{display:block;margin-top:8px}
+/* Titles wrap to two lines in a card — an ellipsed single line wastes
+   the width a grid just bought us. */
+#item-list.grid .row-title{
+  white-space:normal;overflow:hidden;font-size:13px;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+#item-list.grid .row-sub{
+  white-space:normal;overflow:hidden;margin-top:3px;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+/* Play button overlays the cover, pinned top-right. Top rather than
+   bottom because the card's children are flat siblings — there is no
+   wrapper whose height equals the cover's, so "bottom of the cover" has
+   nothing to anchor to, while the top edge is always exact.
+   No backdrop-filter: a blur layer per card is a real compositing cost
+   on iOS, which is the opposite of what the battery work just bought. */
+#item-list.grid .row-actions{
+  position:absolute;top:7px;right:7px;opacity:0;transition:opacity .15s;
+}
+#item-list.grid .row-actions .icon-btn{
+  background:rgba(10,21,38,.86);border-color:var(--border-hi);
+  color:var(--ink);font-size:13px;padding:6px 9px;border-radius:6px;
+}
+#item-list.grid .row:hover .row-actions{opacity:1}
+/* Touch has no hover — the control has to be visible to be usable. */
+@media (hover:none){#item-list.grid .row-actions{opacity:1}}
+
+/* ══════════════════════════════════════════════════════════════════
+   Zone: tablet upright — 768–1023px
+   ══════════════════════════════════════════════════════════════════
+   Was the worst layout in the app. An iPad Air/Pro 11 upright is
+   820–834px, which cleared the old single 768px breakpoint and got the
+   full DESKTOP three-column layout: #browser 360px + #pl-panel 260px =
+   620px of fixed chrome, leaving the player ~200px — too narrow for the
+   six transport buttons, and narrower than .np-title's own max-width.
+   Two columns instead: browse beside the player. Playlists and
+   Favourites move into the tab bar (showTab handles them already) so
+   they don't hold a permanent 260px column. */
+/* Hidden by default; the tablet block below turns them on. This default
+   MUST come first — a media query adds no specificity, so the same
+   selector declared afterwards would simply win and hide them everywhere. */
+.tab.tablet-only{display:none}
+@media (min-width:768px) and (max-width:1023px){
+  #browser{width:clamp(320px,48%,470px);min-width:0}
+  #player{padding:22px 20px 26px}
+  .art-wrap{width:min(210px,26vw);height:min(210px,26vw)}
+  .np-title{font-size:19px;max-width:100%}
+  .np-meta{max-width:100%}
+  .seek-section{max-width:100%}
+  /* The playlist column is a tab here, not a permanent pane. */
+  #pl-panel{display:none;width:100%;border-left:none}
+  body.t-pl #pl-panel,body.t-fav #pl-panel{
+    display:flex;width:clamp(320px,48%,470px);
+    border-left:1px solid var(--border);border-right:none
+  }
+  body.t-pl #browser,body.t-fav #browser{display:none}
+  /* These two tabs only exist at this width — above it the panel is
+     always on screen, below it the bottom nav owns navigation. */
+  .tab.tablet-only{display:block}
+  /* Roomier hit targets: this is a touch screen, not a mouse. */
+  .row{padding:11px 14px;min-height:50px}
+  .row-actions{opacity:1}
+  .pl-item{padding:11px 14px}
+  .letter-btn{min-width:32px;height:32px}
+  .browse-mode{padding:12px 6px}
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Zone: desktop / tablet sideways — ≥1024px
+   ══════════════════════════════════════════════════════════════════
+   Three columns is right here; the sidebars were just frozen at 360px
+   and 260px at every width, so extra screen went into empty space
+   around a 160px cover instead of into the content. Fluid now, and the
+   cover scales with its panel. */
+@media (min-width:1024px){
+  #browser{width:clamp(360px,32vw,620px);min-width:0}
+  #pl-panel{width:clamp(240px,19vw,360px)}
+  .art-wrap{width:clamp(160px,17vw,300px);height:clamp(160px,17vw,300px)}
+  .np-title{font-size:clamp(17px,1.7vw,24px);max-width:min(560px,90%)}
+  .seek-section{max-width:min(560px,90%)}
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Zone: phone on its side — short viewport
+   ══════════════════════════════════════════════════════════════════
+   MUST stay last: a landscape iPhone is 852px wide (932 on a Pro Max),
+   so it also matches the tablet query above and has to override it.
+   Keyed on HEIGHT, not width, so it catches every model — and only
+   phones, since an iPad sideways is 1024×768 and never this short.
+   Before this rule a landscape phone got the whole desktop layout —
+   three columns and a status bar — inside 393px of height.
+   Layout is list beside player, the bottom nav becomes a slim side
+   rail, and the vertical chrome (tab bar, status bar, mini player) is
+   dropped since there is no height to spend on it. */
+@media (max-height:500px) and (min-width:768px){
+  html,body{overflow:hidden;height:100%}
+  body{padding-bottom:0;font-size:13px}
+  header{height:44px;padding:0 10px;gap:8px;flex-wrap:nowrap}
+  .logo,#app-version,.hdr-right,.sep{display:none}
+  .tab-bar,#statusbar,#mini-player{display:none}
+  .hdr-pick-label{display:none}
+  #source-sel,#output-sel{font-size:12px;padding:5px 7px}
+  .search-wrap{max-width:220px}
+
+  .workspace{flex-direction:row;overflow:hidden;margin-left:54px}
+  /* Side rail replaces the bottom nav — vertical space is the scarce
+     resource when the phone is on its side.
+     It stays position:FIXED. #bottom-nav is a sibling of .workspace at the
+     end of <body>, so making it static would drop it into the body's
+     column flow as a 54px-wide block BELOW the workspace, squeezing the
+     panes to nothing (which is exactly what it did). Pinning it and
+     insetting .workspace by its width is the version that works without
+     moving the element in the DOM. */
+  #bottom-nav{
+    display:flex;position:fixed;top:44px;bottom:0;left:0;right:auto;
+    flex-direction:column;justify-content:flex-start;height:auto;width:54px;
+    border-top:none;border-right:1px solid var(--border);
+    padding-bottom:0;overflow-y:auto;z-index:60
+  }
+  .bnav-btn{flex:0 0 auto;padding:9px 0;gap:1px}
+  .bnav-btn span:first-child{font-size:17px}
+  .bnav-btn span:last-child{font-size:9px}
+
+  #browser{width:auto;flex:1 1 0;min-width:0;border-right:1px solid var(--border);display:flex}
+  #pl-panel{display:none;width:auto;flex:1 1 0;border-left:none}
+  body.m-pl #pl-panel,body.m-fav #pl-panel{display:flex}
+  body.m-pl #browser,body.m-fav #browser{display:none}
+  /* The player is always on screen here, so Now Playing is not a
+     separate destination — m-np just highlights it. */
+  #player{display:flex;flex:0 0 46%;padding:12px 16px;overflow-y:auto;
+    position:static;justify-content:center}
+  body.m-np #player{position:static;inset:auto;z-index:auto;padding:12px 16px}
+  #np-back{display:none!important}
+  .art-wrap{width:min(112px,20vh);height:min(112px,20vh);margin-bottom:8px}
+  .np-title{font-size:15px;margin-bottom:2px}
+  .np-meta{margin-bottom:8px}
+  .seek-section{margin-bottom:8px;max-width:100%}
+  .controls{gap:5px;margin-bottom:8px;display:flex}
+  body.m-np .controls{display:flex;grid-template-columns:none}
+  .btn{padding:7px 9px;font-size:13px;border-radius:7px}
+  .btn.primary{padding:7px 13px;font-size:13px}
+  #np-actions{display:none!important}
+  .vol-row{font-size:var(--fs-sub);gap:6px}
+  input[type=range].vol{width:96px}
+  /* One column of covers is plenty in a half-width pane this short. */
+  #item-list.grid{grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:11px;padding:11px}
+}

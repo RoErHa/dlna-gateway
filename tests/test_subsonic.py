@@ -325,6 +325,50 @@ class TestBrowse(_BaseDB):
         self.assertEqual(len(albums), 1)
         self.assertEqual(albums[0]["name"], "Animals")
 
+    def test_get_album_list2_pagination_no_overlap(self):
+        # SQL LIMIT/OFFSET: paging in size-2 chunks covers every album once,
+        # in order, with no gaps or dups (the seed has 3 distinct albums).
+        _, p1 = _call("getAlbumList2",
+                      {"type": "alphabeticalByName", "size": "2", "offset": "0"},
+                      db=self.db)
+        _, p2 = _call("getAlbumList2",
+                      {"type": "alphabeticalByName", "size": "2", "offset": "2"},
+                      db=self.db)
+        n1 = [a["name"] for a in p1["albumList2"]["album"]]
+        n2 = [a["name"] for a in p2["albumList2"].get("album", [])]
+        self.assertEqual(len(n1), 2)
+        combined = n1 + n2
+        self.assertEqual(combined, sorted(combined, key=str.lower))
+        self.assertEqual(len(set(combined)), len(combined))   # no dups
+
+    def test_get_album_list2_by_artist_orders_by_artist(self):
+        # Cream (Wheels of Fire) sorts before Pink Floyd (Animals, WYWH).
+        _, body = _call("getAlbumList2", {"type": "alphabeticalByArtist"},
+                        db=self.db)
+        albums = body["albumList2"]["album"]
+        artists = [a.get("artist", "") for a in albums]
+        self.assertEqual(artists, sorted(artists, key=str.lower))
+        self.assertEqual(albums[0]["name"], "Wheels of Fire")
+
+    def test_get_album_list2_tolerant_bad_size(self):
+        # A non-numeric size must not 500 — it degrades to the default.
+        _, body = _call("getAlbumList2",
+                        {"type": "alphabeticalByName", "size": "abc"},
+                        db=self.db)
+        self.assertEqual(body["status"], "ok")
+        self.assertIn("album", body["albumList2"])
+
+    def test_get_album_list2_random_pagination_covers_all(self):
+        # Day-seeded random → coherent paging: two size-2 pages cover every
+        # album with no duplicates (re-shuffling per call would not).
+        _, p1 = _call("getAlbumList2",
+                      {"type": "random", "size": "2", "offset": "0"}, db=self.db)
+        _, p2 = _call("getAlbumList2",
+                      {"type": "random", "size": "2", "offset": "2"}, db=self.db)
+        names = ([a["name"] for a in p1["albumList2"]["album"]]
+                 + [a["name"] for a in p2["albumList2"].get("album", [])])
+        self.assertEqual(len(set(names)), 3)              # all 3, no dups
+
     def test_search3_finds_tracks(self):
         _, body = _call("search3", {"query": "Sheep"}, db=self.db)
         songs = body["searchResult3"].get("song", [])

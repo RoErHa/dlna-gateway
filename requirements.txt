@@ -26,6 +26,12 @@ mutagen>=1.47
 # LocalFsProvider.watch_changes() for incremental rescans.
 watchdog>=4.0
 
+# Cover-art downscaling for Subsonic getCoverArt?size=N (Amperfy/CarPlay).
+# Optional: without Pillow the gateway serves the full-resolution embedded
+# cover (the pre-scaling behaviour), just larger/slower over the tailnet.
+# See api_playback.art_fetch_scaled.
+Pillow>=10.0
+
 # ── 2.0 transport refresh — ASGI app server (Phase 2) ─────────
 # The 2.0 line migrates the stdlib BaseHTTPRequestHandler app onto an
 # ASGI app (FastAPI) served by Hypercorn (async, HTTP/2-capable, a path

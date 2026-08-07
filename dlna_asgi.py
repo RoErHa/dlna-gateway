@@ -447,8 +447,24 @@ async def chapters_route(request: Request):
 # byte relays, served as StreamingResponse over a threadpool-driven upstream.
 
 @app.get("/art", include_in_schema=False)
-async def art(url: str = ""):
-    code, ctype, body = await run_in_threadpool(api_playback.art_fetch_cached, url)
+async def art(url: str = "", size: int = 0):
+    """Same-origin artwork proxy for the PWA (iOS won't load cross-origin art
+    on the lock screen), now with the same `size` downscaling the Subsonic
+    getCoverArt route uses.
+
+    Why it matters here too (2026-08-07): the PWA asked for the FULL-resolution
+    cover everywhere — a 36px list thumbnail and a 130px grid card both pulled
+    the multi-MB embedded original. The album cover grid made that worse by
+    putting a dozen of them on screen at once. `size` snaps to the shared
+    96/256/512/1024 bucket ladder and each bucket is scaled once and cached on
+    disk, so the original is fetched at most once no matter how many sizes are
+    asked for.
+
+    `size=0` (or absent) is exactly the old behaviour: the unmodified original.
+    Pillow is optional — without it every size serves the original, so the PWA
+    degrades to the old bandwidth, never to a broken image."""
+    code, ctype, body = await run_in_threadpool(
+        api_playback.art_fetch_scaled, url, size)
     if code != 200:
         return JSONResponse({"error": ctype}, status_code=code)
     return Response(content=body, media_type=ctype,
@@ -805,8 +821,19 @@ async def radio_stream(request: Request, url: str = ""):
 # pushes — now-playing, index progress, device changes — instead of polling.
 # Worker threads call dlna_events.EVENTS.publish({...}); the bus (bound to this
 # loop in _lifespan) fans each event to every connected subscriber's queue.
-# A 15 s comment heartbeat keeps the connection alive through proxies/idle.
-_SSE_HEARTBEAT_SEC = 15.0
+# A comment heartbeat keeps the connection alive through proxies/idle.
+#
+# 45 s, raised from 15 s (2026-08-07, iOS battery). Now that the PWA throttles
+# its polls when idle, this heartbeat is the most frequent thing left on the
+# wire in a foreground-but-idle session — at 15 s it was 240 inbound frames an
+# hour, each one a radio wake-up, purely to say "still here". Nothing needs
+# that rate: it only has to beat whatever idle timeout sits in the middle, and
+# on the tailnet there is no proxy at all. The cost of raising it is that a
+# vanished client is reaped up to 45 s later (a bounded queue, freed in the
+# `finally`) and that a dead connection is noticed one heartbeat later — both
+# harmless. Keep it comfortably under 60 s so a future reverse proxy's default
+# idle timeout can't close the stream.
+_SSE_HEARTBEAT_SEC = 45.0
 
 
 @app.get("/api/events", include_in_schema=False)
@@ -897,11 +924,20 @@ async def subsonic(request: Request, rest_path: str):
         sid = params.get("id", "")
         log.info(f"Subsonic {method} id={sid[:48]} client={_client!r} ip={_ip}")
         if method == "getcoverart":
+            # Honour the Subsonic `size` box: Amperfy asks for a thumbnail
+            # (~100–600 px) per list row, so serve a downscaled JPEG instead of
+            # the full multi-MB embedded original — the dominant cost of a
+            # library art-sync over the tailnet. Malformed size → 0 (original).
+            try:
+                _size = int(params.get("size", "0") or 0)
+            except (TypeError, ValueError):
+                _size = 0
+            _fetch = functools.partial(api_playback.art_fetch_scaled, size=_size)
             # Try every candidate art URL for the id (folder albums have one
             # per track; some files lack embedded art) and serve the first that
             # actually fetches 200 — not an arbitrary one that may 404.
             code, ctype, art_body = await run_in_threadpool(
-                api_subsonic._resolve_cover, sid, api_playback.art_fetch_cached)
+                api_subsonic._resolve_cover, sid, _fetch)
             if code != 200:
                 return Response(content=b"no art", status_code=404)
             return Response(content=art_body, media_type=ctype,
@@ -991,9 +1027,12 @@ _MANIFEST = json.dumps({
     "description": "Personal music gateway — browse, search and play your library",
     "start_url": "/",
     "display": "standalone",
-    "orientation": "portrait",
-    "background_color": "#0e0d0b",
-    "theme_color": "#0e0d0b",
+    # "any", not "portrait": an installed PWA obeys this, so the old value
+    # LOCKED the home-screen app upright — the landscape-phone layout was
+    # unreachable from the very place it matters most (2026-08-07).
+    "orientation": "any",
+    "background_color": "#0A1526",
+    "theme_color": "#0A1526",
     "icons": [
         {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
          "purpose": "any maskable"},
@@ -1027,11 +1066,11 @@ async def _manifest():
 
 
 def _make_icon_png(size: int) -> bytes:
-    """Generate a simple PNG icon: dark square with amber ♪ symbol.
+    """Generate a simple PNG icon: navy square with amber ♪ symbol.
     Relocated from dlna_server.py (retired in Cleanup C) — this app is now the
     sole server, so the only caller (the /icon routes) keeps it local."""
-    bg    = (14, 13, 11)
-    amber = (212, 168, 67)
+    bg    = (10, 21, 38)      # --bg  #0A1526
+    amber = (255, 194, 74)    # --amber #FFC24A
 
     img = [list(bg + (255,)) for _ in range(size * size)]
 

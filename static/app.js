@@ -8,11 +8,50 @@ const enc=s=>encodeURIComponent(s||"");
 // strictest) — the thumbnail and the now-playing art then load
 // inconsistently depending on whether the browser's cache has a prior
 // successful fetch. Same-origin via /art removes that whole class.
-const artUrl=raw=>raw?`/art?url=${encodeURIComponent(raw)}`:"";
+// Named sizes, snapped to the gateway's shared 96/256/512/1024 bucket ladder
+// (api_playback._ART_SIZE_BUCKETS). Fixed rather than devicePixelRatio-derived
+// on purpose: every device then asks for the SAME few URLs, so a bucket is
+// scaled once, cached on disk once, and shared — a dpr-derived size would
+// fragment the cache per device for no visible gain.
+//   THUMB  256 — 36px list rows, 44px mini-player, station logos (crisp at 3x)
+//   COVER  512 — album grid cards (130–180px, crisp at 3x)
+//   FULL  1024 — now-playing panel AND the MediaSession lock-screen artwork
+// FULL is deliberately not 0/original: iOS never displays lock-screen art
+// above ~600px, so 1024 is generous, and it keeps the now-playing panel and
+// the lock screen on ONE url — one fetch, one cache entry, per track.
+const ART_THUMB=256, ART_COVER=512, ART_FULL=1024;
+const artUrl=(raw,size=0)=>raw
+  ? `/art?url=${encodeURIComponent(raw)}${size?`&size=${size}`:""}` : "";
 const fmtSec=s=>{if(s==null||isNaN(s))return"0:00";s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60,p=n=>String(n).padStart(2,"0");return h?`${h}:${p(m)}:${p(sc)}`:`${m}:${p(sc)}`;};
 const fmtDur=d=>{if(!d)return"";const p=d.split(":").map(Number);return p.length===3?fmtSec(p[0]*3600+p[1]*60+p[2]):d;};
 async function api(url,opts){try{return await fetch(url,opts);}catch{return null;}}
 function toast(msg,ms=2400){const t=$("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),ms);}
+
+// ── Loading spinner, with a watchdog ──────────────────────────────
+// `.spinner` is an infinite CSS rotation. Every loader here follows the
+// pattern "show spinner → fetch → `if(!r) return;`", so ANY failed fetch
+// (dropped tailnet, gateway restart) used to leave that rotation running
+// at display refresh rate for as long as the app stayed open — a silent
+// GPU wake every frame, and no feedback for the user either. The watchdog
+// swaps the spinner for a static message if the fetch never replaces it.
+// The replacement keeps the `spinner-wrap` class so the existing
+// "clear the spinner before appending" checks still find and remove it.
+let _SPINNER_TIMEOUT_MS = 15000;   // `let` so the frontend tests can shrink it
+const _spinnerTimers = new WeakMap();
+function showSpinner(el){
+  if(!el) return;
+  clearTimeout(_spinnerTimers.get(el));
+  // Every view load starts here, so this is the one place that reliably
+  // resets the album cover-grid layout. Renderers that want the grid set
+  // it back on (renderAlbumRows); everything else is a list by default.
+  el.classList.remove("grid");
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  _spinnerTimers.set(el, setTimeout(()=>{
+    if(!el.querySelector(".spinner")) return;    // content arrived — done
+    el.innerHTML = '<div class="spinner-wrap" style="color:var(--ink-dim);'
+                 + 'font-size:12px;text-align:center">⚠ Couldn\'t load — try again</div>';
+  }, _SPINNER_TIMEOUT_MS));
+}
 
 // Fisher-Yates shuffle — cryptographically seeded, truly uniform distribution.
 // .sort(()=>Math.random()-0.5) is biased and produces near-identical sequences.
@@ -364,7 +403,7 @@ function _playBrowserAudio(reason){
 function _updateMediaSession(t, idx){
   if(!("mediaSession" in navigator)) return;
   // Artwork: proxy through gateway so iOS can load it (cross-origin art URLs fail on lock screen)
-  const artSrc = t.art ? `/art?url=${encodeURIComponent(t.art)}` : null;
+  const artSrc = t.art ? artUrl(t.art, ART_FULL) : null;
   const artwork = artSrc ? [{src: artSrc, sizes: "512x512", type: "image/jpeg"}] : [];
   navigator.mediaSession.metadata = new MediaMetadata({
     title:  t.title  || "Unknown track",
@@ -427,7 +466,7 @@ function _browserPlayIdx(idx){
   $("np-artist").textContent=t.artist||"";
   $("np-album").textContent=t.album||"";
   $("np-meta").textContent=`Track ${idx+1} of ${browserQueue.length}`;
-  if(t.art){$("art").innerHTML=`<img src="${artUrl(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+  if(t.art){$("art").innerHTML=`<img src="${artUrl(t.art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
   else{$("art").textContent="💿";}
   $("player").className="playing is-audio";
   $("btn-pp").textContent="⏸ Pause";
@@ -444,7 +483,7 @@ function _browserPlayIdx(idx){
 function _updateMiniPlayer(t){
   $("mini-title").textContent=t?.title||"Nothing playing";
   $("mini-artist").textContent=t?.artist||"";
-  if(t?.art){$("mini-art").innerHTML=`<img src="${artUrl(t.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px" onerror="this.parentElement.textContent='🎵'">`;}
+  if(t?.art){$("mini-art").innerHTML=`<img src="${artUrl(t.art,ART_THUMB)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px" onerror="this.parentElement.textContent='🎵'">`;}
   else{$("mini-art").textContent=t?"💿":"🎵";}
   // Pulse the now-playing nav icon when something is playing
   const icon=$("bnav-np-icon");
@@ -461,23 +500,54 @@ function mobileTab(tab){
     $("bnav-"+t)?.classList.toggle("active",t===tab));
   // Show/hide back button on Now Playing
   const nb=$("np-back");if(nb)nb.style.display=tab==="nowplaying"?"":"none";
+  // The phone header collapses search to a 🔍 button, so arriving at the
+  // Search view from the bottom nav has to open the field — otherwise the
+  // user lands on a search screen with nothing to type into. Leaving it
+  // collapses again (without the recursion of toggleSearch's own tidy-up).
+  const wrap=$("search-wrap");
+  if(wrap){
+    const wantOpen = tab==="search";
+    wrap.classList.toggle("expanded", wantOpen);
+    $("search-toggle")?.setAttribute("aria-expanded", wantOpen?"true":"false");
+  }
   if(tab==="nowplaying"){document.body.classList.add("m-np");}
   else if(tab==="playlists"){document.body.classList.add("m-pl");showTab("playlists");}
   else if(tab==="favourites"){document.body.classList.add("m-fav");showTab("favourites");}
-  else if(tab==="search"){document.body.classList.add("m-search");showTab("search");}
+  else if(tab==="search"){document.body.classList.add("m-search");showTab("search");$("search-input").focus();}
   else{document.body.classList.add("m-browse");showTab("browse");}
 }
 
 
 // ── Tabs ──────────────────────────────────────────────────────────
+// Tablet zone (768–1023px, e.g. an iPad upright). At that width the app
+// runs TWO columns — browse beside the player — because three fixed
+// columns left the player about 200px. The playlist pane is therefore not
+// permanently on screen there, and reaches the workspace through a
+// `t-*` body class instead, exactly like the phone's `m-*` classes.
+// Above 1023px the pane is always visible and these do nothing; below 768
+// the bottom nav owns navigation.
+const _tabletClasses=["t-pl","t-fav"];
+const _isTablet = () =>
+  window.matchMedia("(min-width:768px) and (max-width:1023px)").matches
+  && !window.matchMedia("(max-height:500px)").matches;   // not a landscape phone
+
+function _applyTabletPane(tab){
+  document.body.classList.remove(..._tabletClasses);
+  if(!_isTablet()) return;
+  if(tab==="playlists")      document.body.classList.add("t-pl");
+  else if(tab==="favourites")document.body.classList.add("t-fav");
+}
+
 function showTab(tab){
   curTab=tab;
-  // Only browse/search exist as desktop tab-bar buttons; playlists/favourites
-  // are mobile-only (#bnav-*). Optional-chain so calling showTab("playlists")
-  // from mobileTab() doesn't crash on the desktop layout.
+  // browse/search are the always-present tab-bar buttons; playlists and
+  // favourites exist as tab-bar buttons only in the tablet zone, and as
+  // #bnav-* buttons on the phone. Optional-chain so calling
+  // showTab("playlists") can't crash on a layout where the button is absent.
   ["browse","search","playlists","favourites"].forEach(t=>{
     $("tab-"+t)?.classList.toggle("active",t===tab);
   });
+  _applyTabletPane(tab);
   const isBrowse = tab==="browse";
   $("browse-modes").style.display = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
   $("letter-bar").style.display   = (isBrowse && !drillArtist && !drillAlbum) ? "" : "none";
@@ -544,13 +614,18 @@ function rebuildSourceSel(data){
     sel.innerHTML=`<option value="">Scanning…</option>`;
     return;
   }
-  sel.innerHTML=data.map(s=>{
+  const html=data.map(s=>{
     const icon=s.udn.startsWith("uuid:localfs-")?"💾":"🗄";
     const dim=s.online?"":" (offline)";
     const cnt=s.tracks?` · ${s.tracks.toLocaleString()} tracks`:"";
     const acnt=s.albums?` · ${s.albums.toLocaleString()} albums`:"";
     return `<option value="${esc(s.udn)}">${icon} ${esc(s.name)}${cnt}${acnt}${dim}</option>`;
   }).join("");
+  // The source list is identical on almost every refresh — reassigning
+  // innerHTML anyway destroys and rebuilds the <option> nodes, forcing a
+  // style/layout pass (and on iOS closing an open native picker) for no
+  // change at all. Skip the write when nothing differs.
+  if(sel.innerHTML!==html) sel.innerHTML=html;
   if(curServer) sel.value=curServer.udn;
 }
 
@@ -562,6 +637,7 @@ function selectSource(udn){
   abMeta=null;      // meta belongs to the previous source
   _loadAbMeta();
   updateDiscStatus();
+  if(typeof kickPoll==="function") kickPoll("index");   // bar is per-source
   // Reset browse navigation and reload the new source's library.
   if(typeof exitDrillDown==="function") exitDrillDown(false);
   browseLetter="A"; browseOffset=0;
@@ -649,7 +725,7 @@ function buildLetterBar(){
 
 async function loadBrowsePage(){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   $("browse-back").style.display        = "none";
   $("browse-section-hdr").style.display = "none";
   if($("browse-series")) $("browse-series").style.display = "none";
@@ -726,7 +802,7 @@ function renderContinueListening(positions){
     const div = document.createElement("div");
     div.className = "row";
     const artEl = p.art
-      ? `<img src="${artUrl(p.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ? `<img class="row-art" src="${artUrl(p.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="row-icon">📖</div>`;
     const pct = (p.duration_sec>0)
       ? Math.min(100, Math.round(p.position_sec/p.duration_sec*100)) : 0;
@@ -748,48 +824,93 @@ function renderContinueListening(positions){
   });
 }
 
-function renderFavouriteAlbums(favs){
+// ── Album cards ───────────────────────────────────────────────────
+// Single renderer for every album-producing view: the Albums browse mode,
+// the artist / genre / decade drill-downs, and the ⭐ favourites list.
+// Those were five near-identical copies of the same markup, which is why
+// they had drifted (different subtitle shapes, different Various-Artists
+// handling). Now one place to change.
+//
+// The element keeps class `row` and the `.row-art` / `.row-body` /
+// `.row-title` / `.row-sub` / `.row-actions > .icon-btn` structure the
+// list layout uses — putting `grid` on #item-list is what turns the same
+// markup into a cover card (see app.css). Keeping the markup identical is
+// deliberate: every existing click handler, selector and test still
+// applies, and list-vs-grid stays a pure presentation choice.
+//
+// opts.sub(a)      → subtitle text for one album (defaults to artist · N tracks)
+// opts.onOpen(a)   → click on the card
+// opts.onPlay(a)   → click on the ▶ button
+function renderAlbumRows(albums, opts={}){
   const list = $("item-list");
   list.innerHTML = "";
+  list.classList.add("grid");
+  const sub = opts.sub || (a=>`${a.artist?esc(a.artist)+" · ":""}${a.track_count||0} tracks`);
+  albums.forEach(a=>{
+    const div = document.createElement("div");
+    div.className = "row";
+    // Art sizing lives in CSS (.row-art), not an inline style — an inline
+    // width/height can't be overridden by the grid rules.
+    const artEl = a.art
+      ? `<img class="row-art" src="${artUrl(a.art,ART_COVER)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      : `<div class="row-icon">💿</div>`;
+    div.innerHTML = `${artEl}<div class="row-body">`
+      + `<div class="row-title">${esc(a.album)}</div>`
+      + `<div class="row-sub">${sub(a)}</div></div>`
+      + `<div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
+    div.querySelector(".icon-btn").addEventListener("click", e=>{
+      e.stopPropagation(); opts.onPlay?.(a);
+    });
+    div.addEventListener("click", ()=>opts.onOpen?.(a));
+    list.appendChild(div);
+  });
+}
+
+// "Various Artists" is a display name, not a real performer — album lookups
+// key on an empty artist plus the folder (album_key) instead.
+const _albumArtistArg = a => a.artist==="Various Artists" ? "" : a.artist;
+
+function renderFavouriteAlbums(favs){
+  const list = $("item-list");
   if(!favs.length){
+    list.classList.remove("grid");
     list.innerHTML='<div class="msg">No favourite albums yet — open an album and tap the ☆ in its header.</div>';
     return;
   }
-  favs.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    const _artist = a.artist==="Various Artists"?"":a.artist;
-    const _ak = a.album_key||"";
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist||"")}${a.track_count?` · ${a.track_count} tracks`:""}</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, a.album, _ak);});
-    div.addEventListener("click", ()=>showAlbumTracks(_artist, a.album, null, _ak));
-    list.appendChild(div);
+  renderAlbumRows(favs, {
+    sub:    a=>`${esc(a.artist||"")}${a.track_count?` · ${a.track_count} tracks`:""}`,
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album, null, a.album_key||""),
   });
 }
 
 function renderBrowseItems(items){
   const list = $("item-list");
+  // Albums get the cover grid; artists and tracks stay lists — those are
+  // text-first, and a cover adds nothing to a track row.
+  if(browseMode==="albums"){
+    renderAlbumRows(items, {
+      sub: a=>{
+        const ser=_abSeriesOf(a.album_key||"");
+        return `${esc(a.artist)} · ${a.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}`;
+      },
+      onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+      onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album, null, a.album_key||""),
+    });
+    return;
+  }
+  list.classList.remove("grid");
   list.innerHTML = "";
   items.forEach(item=>{
     const div = document.createElement("div");
     div.className = "row";
     const artEl = item.art
-      ? `<img src="/art?url=${encodeURIComponent(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">${browseMode==="tracks"?"🎵":browseMode==="albums"?"💿":"👤"}</div>`;
+      ? `<img class="row-art" src="${artUrl(item.art,ART_THUMB)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      : `<div class="row-icon">${browseMode==="tracks"?"🎵":"👤"}</div>`;
 
     if(browseMode==="artists"){
       div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.artist)}</div><div class="row-sub">${item.album_count} album${item.album_count!==1?"s":""} · ${item.track_count} tracks</div></div>`;
       div.addEventListener("click", ()=>showArtistAlbums(item));
-    } else if(browseMode==="albums"){
-      const ser=_abSeriesOf(item.album_key||"");
-      div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(item.album)}</div><div class="row-sub">${esc(item.artist)} · ${item.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-      const _artist = item.artist==="Various Artists"?"":item.artist;
-      const _ak = item.album_key||"";
-      div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(_artist, item.album, _ak);});
-      div.addEventListener("click", ()=>showAlbumTracks(_artist, item.album, null, _ak));
     } else {
       // tracks
       const k = regItem(item);
@@ -841,7 +962,7 @@ async function showDecadeAlbums(decadeItem){
 
 async function _showDecadeAlbumsInner(decadeItem){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   $("browse-back-title").textContent = browseNavStack.length>0
@@ -856,18 +977,11 @@ async function _showDecadeAlbumsInner(decadeItem){
   const r = await api(`/api/decade_albums?udn=${enc(curServer.udn)}&decade=${decadeItem.decade}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load decade albums.</div>'; return; }
   const albums = await r.json();
-  const list = $("item-list");
-  list.innerHTML = "";
-  albums.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album, a.album_key||"");});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}, a.album_key||""));
-    list.appendChild(div);
+  renderAlbumRows(albums, {
+    sub:    a=>`${esc(a.artist)} · ${a.track_count} tracks`,
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album,
+                               {artist:a.artist, album_count:null}, a.album_key||""),
   });
 }
 
@@ -879,7 +993,7 @@ async function showGenreAlbums(genreItem){
 
 async function _showGenreAlbumsInner(genreItem){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   $("browse-back-title").textContent = browseNavStack.length>0
@@ -894,18 +1008,11 @@ async function _showGenreAlbumsInner(genreItem){
   const r = await api(`/api/genre_albums?udn=${enc(curServer.udn)}&genre=${enc(genreItem.genre)}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load genre albums.</div>'; return; }
   const albums = await r.json();
-  const list = $("item-list");
-  list.innerHTML = "";
-  albums.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist==="Various Artists"?"":a.artist, a.album, a.album_key||"");});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist==="Various Artists"?"":a.artist, a.album, {artist:a.artist, album_count:null}, a.album_key||""));
-    list.appendChild(div);
+  renderAlbumRows(albums, {
+    sub:    a=>`${esc(a.artist)} · ${a.track_count} tracks`,
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album,
+                               {artist:a.artist, album_count:null}, a.album_key||""),
   });
 }
 
@@ -936,7 +1043,7 @@ async function showArtistAlbums(artistItem){
 
 async function _showArtistAlbumsInner(artistItem){
   if(!curServer) return;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   // Back label = one level up in the stack
@@ -956,18 +1063,11 @@ async function _showArtistAlbumsInner(artistItem){
   const r = await api(`/api/artist_albums?udn=${enc(curServer.udn)}&artist=${enc(artistItem.artist)}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load albums.</div>'; return; }
   const albums = await r.json();
-  const list = $("item-list");
-  list.innerHTML = "";
-  albums.forEach(a=>{
-    const div = document.createElement("div");
-    div.className = "row";
-    const artEl = a.art
-      ? `<img src="/art?url=${encodeURIComponent(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-      : `<div class="row-icon">💿</div>`;
-    div.innerHTML = `${artEl}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" title="Play album">▶</button></div>`;
-    div.querySelector(".icon-btn").addEventListener("click", e=>{e.stopPropagation(); playAlbumFromDB(a.artist, a.album, a.album_key||"");});
-    div.addEventListener("click", ()=>showAlbumTracks(a.artist, a.album, artistItem, a.album_key||""));
-    list.appendChild(div);
+  // Inside one artist the artist name is redundant on every card.
+  renderAlbumRows(albums, {
+    sub:    a=>`${a.track_count} tracks`,
+    onPlay: a=>playAlbumFromDB(a.artist, a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(a.artist, a.album, artistItem, a.album_key||""),
   });
 }
 
@@ -985,7 +1085,7 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   };
   browseNavStack.push(stackEntry);
   drillAlbum = album;
-  $("item-list").innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   _drillShowChrome(true);
   $("browse-pager").classList.add("hidden");
   // Back label = artist name (the level we're returning to)
@@ -1181,7 +1281,7 @@ async function browse(id){
   if(browsing)return;  // drop if already in flight
   browsing=true;
   clearTimeout(_browseRetryTimer);
-  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   try{
     const r=await api(`/api/browse?udn=${enc(curServer.udn)}&id=${enc(id)}`);
     if(!r){
@@ -1227,7 +1327,7 @@ function renderList(data,context="browse"){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img src="${artUrl(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ?`<img class="row-art" src="${artUrl(item.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
 
     const isItem = item.type !== "container";
@@ -1268,9 +1368,35 @@ $("search-input").addEventListener("keydown",e=>{
   if(e.key==="Enter"){clearTimeout(searchTimer);doSearch(e.target.value.trim());}
 });
 
+// ── Phone header: tap-to-expand search ────────────────────────────
+// The header used to wrap onto two rows because the search field always
+// claimed a full row of its own. Collapsing it to a 🔍 button (CSS shows
+// the button only below 768px) puts the whole header back on one line and
+// returns ~44px to the list on every phone screen. Expanding drops the
+// field onto a second row and focuses it; collapsing clears the query so
+// the app doesn't sit in a search result with no visible search box.
+function toggleSearch(force){
+  const wrap=$("search-wrap"), btn=$("search-toggle");
+  const open = force!==undefined ? force : !wrap.classList.contains("expanded");
+  wrap.classList.toggle("expanded", open);
+  btn?.setAttribute("aria-expanded", open ? "true" : "false");
+  if(open){ $("search-input").focus(); }
+  else{
+    $("search-input").value="";
+    clearTimeout(searchTimer);
+    if(curTab==="search") mobileTab("browse");
+  }
+}
+$("search-toggle")?.addEventListener("click", ()=>toggleSearch());
+
+// Rotating an iPad moves it between the tablet and desktop zones, which
+// changes whether the playlist pane is a tab or a permanent column — so
+// the body class has to be re-evaluated, not just set once on tap.
+window.addEventListener("resize", ()=>_applyTabletPane(curTab));
+
 async function doSearch(q){
   if(!curServer||!q)return;
-  $("item-list").innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner($("item-list"));
   const r=await api(`/api/search?udn=${enc(curServer.udn)}&q=${enc(q)}`);
   if(!r){$("item-list").innerHTML='<div class="msg">Search failed.</div>';return;}
   const data=await r.json();
@@ -1288,7 +1414,7 @@ async function doSearch(q){
       const k=regItem({id:"artist:"+a.artist,title:a.artist,type:"container",art:a.art||""});
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img src="${artUrl(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`:
         `<div class="row-icon">👤</div>`}<div class="row-body"><div class="row-title">${esc(a.artist)}</div><div class="row-sub">${a.album_count} albums · ${a.track_count} tracks</div></div>`;
       div.addEventListener("click",()=>{ showTab('browse'); showArtistAlbums({artist:a.artist, album_count:a.album_count||0}); });
       $("item-list").appendChild(div);
@@ -1303,7 +1429,7 @@ async function doSearch(q){
       const k=regItem(pseudo);
       const div=document.createElement("div");
       div.className="row";
-      div.innerHTML=`${a.art?`<img src="${artUrl(a.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:
+      div.innerHTML=`${a.art?`<img class="row-art" src="${artUrl(a.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`:
         `<div class="row-icon">💿</div>`}<div class="row-body"><div class="row-title">${esc(a.album)}</div><div class="row-sub">${esc(a.artist)} · ${a.track_count} tracks</div></div><div class="row-actions"><button class="icon-btn" data-k="${k}" data-action="fav">⭐</button><button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
       div.addEventListener("click",e=>{
         const btn=e.target.closest("[data-action]");
@@ -1392,6 +1518,10 @@ async function sendRenderQueue(udn, tracks, opts={}){
   }
   const d=await r.json().catch(()=>({}));
   if(d.error){toast("Error: "+d.error);return false;}
+  // A renderer just went live — promote the state loop to its 1 Hz tier
+  // now instead of waiting out an idle-tier tick (_upnpAlive is still
+  // false at this point; kickPoll polls first, then sizes the delay).
+  bumpPolling();
   return true;
 }
 
@@ -1411,7 +1541,7 @@ async function playTracklist(tracks, title, artist, opts={}){
   $("np-album").textContent=first?.album||"";
   $("np-meta").textContent=`${tracks.length} tracks`;
   setNpTrack(first||null);
-  if(first?.art){$("art").innerHTML=`<img src="${artUrl(first.art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+  if(first?.art){$("art").innerHTML=`<img src="${artUrl(first.art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
   else{$("art").textContent="💿";}
   $("player").className="playing is-audio";
   $("btn-pp").textContent="⏸ Pause";
@@ -1464,7 +1594,7 @@ function renderListAppend(data){
     const sub=[item.artist,item.album].filter(Boolean).join(" · ");
     div.className="row"+(curItemId===item.id?" active":"");
     const artEl=item.art
-      ?`<img src="${artUrl(item.art)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
+      ?`<img class="row-art" src="${artUrl(item.art,ART_THUMB)}" loading="lazy" onerror="this.style.display='none'">`
       :`<div class="row-icon">${icon}</div>`;
     const isItem=item.type!=="container";
     div.innerHTML=`${artEl}<div class="row-body"><div class="row-title">${esc(item.title)}</div>${sub?`<div class="row-sub">${esc(sub)}</div>`:""}</div>${item.duration?`<div class="row-dur">${fmtDur(item.duration)}</div>`:""}<div class="row-actions">${isItem?`<button class="icon-btn" data-k="${k}" data-action="fav" title="Add to Favourites">⭐</button><button class="icon-btn" data-k="${k}" data-action="add" title="Add to playlist">＋</button><button class="icon-btn" data-k="${k}" data-action="edit" title="Edit metadata">✏️</button>`:""}<button class="icon-btn" data-k="${k}" data-action="play">▶</button></div>`;
@@ -1874,7 +2004,7 @@ async function radioSearch({q="",tag=""}={}){
 async function renderRadioFavourites(){
   const list=$("radio-list");
   if(!list) return;
-  list.innerHTML='<div class="spinner-wrap"><div class="spinner"></div></div>';
+  showSpinner(list);
   if(radioFavCache===null){
     const r=await api("/api/radio/favourites");
     if(!r){ list.innerHTML='<div class="msg" style="padding:16px">Could not load.</div>'; return; }
@@ -1922,7 +2052,7 @@ function _radioRow(st,isFav){
   div.className="pl-track radio-row";
   div.dataset.uuid=st.station_uuid||"";
   const art=st.favicon
-    ? `<img src="${artUrl(st.favicon)}" style="width:32px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
+    ? `<img src="${artUrl(st.favicon,ART_THUMB)}" loading="lazy" style="width:32px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
     : `<div class="row-icon">📻</div>`;
   const genre=(st.tags||"").split(",").map(s=>s.trim()).filter(Boolean).slice(0,2).join(", ");
   const tech=[st.codec,st.bitrate?st.bitrate+"k":"",st.country].filter(Boolean).join(" ");
@@ -1988,7 +2118,7 @@ async function playStation(st){
   $("np-album").textContent="";
   $("np-meta").textContent="";
   if(st.favicon){
-    $("art").innerHTML=`<img src="${artUrl(st.favicon)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='📻'">`;
+    $("art").innerHTML=`<img src="${artUrl(st.favicon,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='📻'">`;
   } else { $("art").textContent="📻"; }
   $("player").className="playing is-audio is-radio";
   $("btn-pp").textContent="⏸ Pause";
@@ -2088,7 +2218,7 @@ async function openPlaylist(plId){
     const div=document.createElement("div");
     div.className="pl-track";
     const k2=regItem(t);
-    div.innerHTML=`${t.art?`<img src="/art?url=${encodeURIComponent(t.art)}" style="width:28px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`:""}<div class="pl-track-body"><div class="pl-track-title">${esc(t.title)}</div><div class="pl-track-sub">${esc([t.artist,t.album].filter(Boolean).join(" · "))}</div></div><button class="pl-remove" title="Remove from playlist">✕</button>`;
+    div.innerHTML=`${t.art?`<img src="${artUrl(t.art,ART_THUMB)}" loading="lazy" style="width:28px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`:""}<div class="pl-track-body"><div class="pl-track-title">${esc(t.title)}</div><div class="pl-track-sub">${esc([t.artist,t.album].filter(Boolean).join(" · "))}</div></div><button class="pl-remove" title="Remove from playlist">✕</button>`;
     div.querySelector(".pl-track-body").addEventListener("click",()=>startPlayTrack(t));
     // Wire the remove button from JS — using inline onclick with JSON.stringify(url)
     // produced HTML like onclick="…removeFromPlaylist('pl-1',"http://…")" which
@@ -2233,7 +2363,7 @@ async function PLAYER_play(url,title,art,mtype,artist,album){
   $("np-artist").textContent=artist||"";
   $("np-album").textContent=album||"";
   $("np-meta").textContent="";
-  if(art){$("art").innerHTML=`<img src="${artUrl(art)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='🎵'">`;}
+  if(art){$("art").innerHTML=`<img src="${artUrl(art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='🎵'">`;}
   else{$("art").textContent=mtype==="video"?"🎬":"🎵";}
   $("btn-pp").textContent="⏸ Pause";
   $("hdr-status").textContent=title||"";
@@ -2384,6 +2514,10 @@ async function control(cmd){
   }
   await api("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({...cmd,device:activeDevice})});
+  // Transport commands change whether the renderer is live — re-read the
+  // state at once so the loop lands in the right tier (and the UI updates
+  // without waiting for an idle-tier tick).
+  bumpPolling();
 }
 
 function resetPlayer(){
@@ -2457,6 +2591,10 @@ async function pollState(){
   const url="/api/renderer_state"+(udn?"?udn="+encodeURIComponent(udn):"");
   const r=await api(url);if(!r)return;
   const ps=await r.json();
+  // Drives the adaptive poll cadence: a live renderer earns the 1 Hz tier,
+  // a stopped one drops back to the slow tier (this endpoint costs the
+  // gateway two SOAP round-trips to the renderer per call).
+  _upnpAlive=!!ps.alive;
   $("sb-dot").className="sb-dot "+(ps.state||"stopped");
   $("sb-state").textContent=ps.state||"stopped";
   $("sb-uri").textContent=ps.media_title||ps.title||"—";
@@ -2491,6 +2629,9 @@ async function pollIndex(){
   const r=await api(`/api/index/status?udn=${enc(curServer.udn)}`);
   if(!r)return;
   const s=await r.json();
+  // Only a running rebuild needs 2 s progress updates; idle/done/error is a
+  // static line that SSE re-pushes on the next transition (see _POLL_MS).
+  _idxRunning = s.status==="running";
   const bar=$("index-bar"),lbl=$("index-label"),pb=$("index-progress-bar");
   // Indexing takes priority — it's a foreground rebuild.
   if(s.status==="running"){
@@ -2524,8 +2665,8 @@ async function reindex(){
   toast("Rebuilding index…",3000);
 }
 
-// ── Polling — paused when tab hidden to save iOS battery ─────────
-let _t_servers, _t_renderers, _t_state, _t_index;
+// ── Polling — paused when tab hidden, throttled when idle ────────
+// Timers live in the _timers map next to the _LOOPS table below.
 
 // ── SSE (R2) — instant pushes on top of the polls ───────────────
 // The 2.0 ASGI gateway pushes server-sent events on state/index/device
@@ -2533,42 +2674,123 @@ let _t_servers, _t_renderers, _t_state, _t_index;
 // fires the same refresh the interval would, so updates feel instant.
 // Polling stays as the fallback — if SSE never connects (stdlib server,
 // older browser), nothing is lost. EventSource auto-reconnects on drop.
-let _es=null;
+let _es=null, _sseUp=false;
 function initEventSource(){
   if(_es) return;                                   // open once
   if(typeof EventSource==="undefined") return;      // unsupported → polling
   try{
     _es=new EventSource("/api/events");
-    _es.addEventListener("state",   ()=>pollState());
-    _es.addEventListener("index",   ()=>pollIndex());
+    _es.onopen=()=>{ _sseUp=true; _rearmPolls(); };
+    _es.addEventListener("state",   ()=>kickPoll("state"));
+    _es.addEventListener("index",   ()=>kickPoll("index"));
     _es.addEventListener("devices", ()=>{refreshServers();refreshRenderers();});
-    _es.onerror=()=>{};   // transient drop — EventSource retries on its own
+    // Transient drop — EventSource retries on its own. Until it's back the
+    // polls must carry the load again, so drop out of the SSE-backed tier.
+    _es.onerror=()=>{ _sseUp=false; _rearmPolls(); };
   }catch(e){ /* SSE is optional; polling carries on */ }
 }
 function closeEventSource(){
+  _sseUp=false;
   if(!_es) return;
   try{ _es.close(); }catch(e){}
   _es=null;
 }
 
+// ── Adaptive poll cadence (iOS battery) ─────────────────────────
+// The four polls used to run at FIXED 1s/2s/8s/10s regardless of what the
+// app was doing. An open-but-idle PWA therefore fired ~2,600 requests/hour
+// — ~6,200/hr with a UPnP output selected, where every /api/renderer_state
+// costs the gateway two SOAP round-trips to the renderer as well. At better
+// than one request per second the iPhone's radio never reaches its low-power
+// idle state, which is the "app is open but not playing and the battery still
+// drains" report. Nothing about that traffic was useful: the library, the
+// device list and the transport state are all STATIC while idle, and SSE
+// already pushes every change that does happen.
+//
+// Cadence now follows what is actually going on:
+//   • state      — 1s while audio is genuinely playing, 20s idle.
+//   • index      — 2s while a rebuild runs, 60s otherwise.
+//   • servers    — 8s until SSE connects, 60s once it's up.
+//   • renderers  — 10s until SSE connects, 60s once it's up.
+// The slow tiers are a safety net for a missed/dropped event, not the
+// primary update path — an SSE push re-arms the affected loop immediately,
+// so a state change is still reflected instantly. If SSE never connects
+// (older browser, proxy that eats event-streams) every loop falls back to
+// its original interval and behaviour is exactly as before.
+let _pollingOn=false;
+let _idxRunning=false;   // set by pollIndex from the server's status
+let _upnpAlive=false;    // set by pollState from the renderer snapshot
+
+// Is a player actually running right now? Only then is a 1 Hz state poll
+// worth its radio wake-up. Browser output is answered locally (the <audio>
+// element IS the state), so its fast tier costs no network at all — only
+// the UPnP tier is a real request, and that one also costs the gateway two
+// SOAP round-trips to the renderer.
+function _playbackActive(){
+  if(activeDevice==="browser")
+    return !!(browserAudio.currentSrc && !browserAudio.paused && !browserAudio.ended);
+  return _upnpAlive;
+}
+
+// `hot()` decides the tier for each loop; `fast` is the pre-existing
+// interval, so a hot loop behaves exactly as it always did.
+const _LOOPS = {
+  state:     {fn:()=>pollState(),        fast: 1000, slow:20000, hot:()=>_playbackActive()},
+  // `!curServer` keeps the loop hot through boot: the first pollIndex fires
+  // before refreshServers has adopted a source and returns early, so without
+  // it the index bar would wait a full slow tick to appear.
+  index:     {fn:()=>pollIndex(),        fast: 2000, slow:60000, hot:()=>_idxRunning||!curServer},
+  servers:   {fn:()=>refreshServers(),   fast: 8000, slow:60000, hot:()=>!_sseUp},
+  renderers: {fn:()=>refreshRenderers(), fast:10000, slow:60000, hot:()=>!_sseUp},
+};
+const _timers={};
+
+function _armLoop(key){
+  clearTimeout(_timers[key]);
+  if(!_pollingOn) return;
+  const L=_LOOPS[key];
+  _timers[key]=setTimeout(()=>_runLoop(key), L.hot() ? L.fast : L.slow);
+}
+
+async function _runLoop(key){
+  if(!_pollingOn) return;
+  // A failed poll must never kill its own loop — that would silently
+  // freeze the UI until the next visibility change.
+  try{ await _LOOPS[key].fn(); }catch(e){}
+  _armLoop(key);      // re-evaluate the tier AFTER the poll refreshed it
+}
+
+// Run a loop NOW and re-arm from the fresh result. Arming without polling
+// first would size the delay off stale flags (e.g. _upnpAlive is still
+// false the instant a queue is posted), so every "something changed"
+// caller goes through here rather than _armLoop.
+function kickPoll(key){
+  if(!_pollingOn) return;
+  clearTimeout(_timers[key]);
+  _runLoop(key);
+}
+// Called from every path that starts or stops playback.
+function bumpPolling(){ kickPoll("state"); }
+// SSE connected/dropped — only the device loops key off _sseUp.
+function _rearmPolls(){ _armLoop("servers"); _armLoop("renderers"); }
+
 function startPolling(){
   stopPolling();
-  _t_servers   = setInterval(refreshServers,   8000);
-  _t_renderers = setInterval(refreshRenderers, 10000);
-  _t_state     = setInterval(pollState,        1000);
-  _t_index     = setInterval(pollIndex,        2000);
+  _pollingOn=true;
+  // Seed immediately so the UI is correct on first paint — the index bar
+  // in particular must render now, not one slow tick from now.
+  kickPoll("state"); kickPoll("index");
+  _armLoop("servers"); _armLoop("renderers");
   initEventSource();
 }
 function stopPolling(){
-  clearInterval(_t_servers);
-  clearInterval(_t_renderers);
-  clearInterval(_t_state);
-  clearInterval(_t_index);
+  _pollingOn=false;
+  Object.keys(_LOOPS).forEach(k=>clearTimeout(_timers[k]));
 }
 
 // Page Visibility API — stop polling when screen locks or tab goes background.
 // Cuts iPhone radio wake-ups from ~3600/hr to zero while hidden.
-// The SSE stream must close too: its 15s server keepalive frames would
+// The SSE stream must close too: its server keepalive frames would
 // otherwise keep the iPhone radio out of low-power state for an entire
 // locked-screen listening session (SSE is a UI accelerator — worthless
 // with the screen off). Same for the radio-mode ICY poll.
@@ -2578,8 +2800,7 @@ document.addEventListener("visibilitychange", ()=>{
     closeEventSource();
     _stopIcyPoll();
   } else {
-    startPolling();               // re-opens SSE via initEventSource()
-    pollState();
+    startPolling();               // seeds state+index, re-opens SSE
     refreshRenderers();
     if(currentRadioStation) _startIcyPoll();
   }
@@ -2589,7 +2810,28 @@ document.addEventListener("visibilitychange", ()=>{
 // When iOS interrupts audio (call, Siri), it may resume a different
 // audio session on end (podcast app, etc). Reassert our MediaSession
 // when audio pauses unexpectedly so iOS knows we own the session.
+//
+// playbackState is driven off the <audio> element's own play/pause events
+// (the single source of truth — so it's correct no matter what triggered the
+// change: a tap, autoplay, a queue advance, or a phone-call interruption).
+// A correct playbackState is what makes CarPlay / the lock screen show the
+// right control and reliably deliver the PLAY command back to us — i.e. a
+// dependable ONE-TAP resume after a call. (iOS forbids a backgrounded web
+// page from resuming audio without that user gesture, so hands-free auto-
+// resume isn't achievable here; keeping the state correct is.)
 browserAudio.addEventListener("pause", ()=>{
+  if("mediaSession" in navigator && !browserAudio.ended){
+    navigator.mediaSession.playbackState="paused";
+  }
+  // `#player.playing.is-audio .art` is an 8 s infinite rotation. Nothing
+  // used to take `playing` off in browser output (pollState only clears it
+  // on the UPnP branch), so pausing left a full-size album cover spinning
+  // at display refresh rate FOREVER — a compositor/GPU wake every frame for
+  // as long as the app stayed open. That is the single biggest non-network
+  // idle drain on iOS. Drive the class off the element's own play/pause
+  // events, the same single-source-of-truth as MediaSession.playbackState.
+  if(activeDevice==="browser") $("player").classList.remove("playing");
+  bumpPolling();          // idle now → let the state loop drop to slow tier
   setTimeout(()=>{
     if(browserAudio.paused && activeDevice==="browser" &&
        browserQueue.length && !browserAudio.ended){
@@ -2601,6 +2843,10 @@ browserAudio.addEventListener("pause", ()=>{
 
 // Reassert on resume too — locks in our session after interruption ends
 browserAudio.addEventListener("play", ()=>{
+  if("mediaSession" in navigator) navigator.mediaSession.playbackState="playing";
+  // Restore the vinyl spin the pause handler took off (see above).
+  if(activeDevice==="browser") $("player").classList.add("playing");
+  bumpPolling();          // playing again → 1 Hz seek-bar updates
   const t=browserQueue[browserIdx];
   if(t && activeDevice==="browser") _updateMediaSession(t, browserIdx);
 });
@@ -2614,6 +2860,14 @@ refreshRenderers();
 loadPlaylists().then(showPlaylists);
 startPolling();
 
+// Land on Browse. Until a nav button was tapped the body carried NO m-*
+// class, and the phone stylesheet only hides a pane when one is present —
+// so a fresh load stacked the whole playlist panel underneath the browse
+// list, below the fold, for no reason. Deferred one tick so the bottom nav
+// has been laid out (mobileTab no-ops while it is display:none, which is
+// exactly how this stays desktop- and tablet-safe).
+setTimeout(()=>mobileTab("browse"), 0);
+
 // Rebuild the output selector with browser + UPnP renderers
 function rebuildOutputSel(upnpData){
   const out=$("output-sel");
@@ -2624,7 +2878,7 @@ function rebuildOutputSel(upnpData){
       html+=`<option value="upnp:${esc(rd.udn)}">📡 ${esc(rd.name)}</option>`;
     });
   }
-  out.innerHTML=html;
+  if(out.innerHTML!==html) out.innerHTML=html;   // see rebuildSourceSel
   if(prev&&out.querySelector(`option[value="${prev}"]`)) out.value=prev;
   else out.value="browser";
   activeDevice=out.value;
