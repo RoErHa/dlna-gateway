@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """
-dlna_player.py — UPnP renderer queue and browser stream proxy.
+dlna_player.py — `RendererQueue`: sequential playback on one UPnP renderer.
+
+A queue owns ONE renderer's playback session: the track list, the position
+in it, the renderer's transport state, and the daemon thread that watches it.
+
+── Module family ────────────────────────────────────────────────────
+`RendererQueue` was a 604-line class (in an 848-line module) until
+2026-08-20. It is assembled from three mixins, one per concern:
+
+    dlna_player_policy.py     pure decision functions + tuning constants
+    dlna_player_volume.py     VolumeMixin    — RenderingControl SetVolume
+    dlna_player_transport.py  TransportMixin — AVTransport SetURI/Play/Seek
+    dlna_player_monitor.py    MonitorMixin   — the 2s state-poll loop
+    dlna_player_registry.py   QueueRegistry + the QUEUES singleton
+
+MIXINS, not collaborators, deliberately: a queue is one session and its
+fields and lock are genuinely shared, so separate objects would mean
+threading the same state through constructor arguments for no gain. The
+class's public surface is unchanged, and dlna_player re-exports every name
+(including `proxy_stream`), so callers and tests are unaffected.
+
+What stays here is the queue's own lifecycle — start/stop/pause/next/prev
+and the coalesced `snapshot()`.
 
 Standalone test:
     python dlna_player.py
@@ -11,133 +33,29 @@ import time
 
 from dlna_events import EVENTS
 
+# ── Re-exports: the family's public surface ──────────────────────────
+from dlna_player_monitor import MonitorMixin
+from dlna_player_policy import (  # noqa: F401
+    GAIN_TO_VOLUME_RATIO,
+    MAX_USER_TRIM_DB,
+    STARTUP_VOLUME,
+    UNKNOWN_ABORT_SEC,
+    WATCHDOG_GRACE_SEC,
+    _av_state_to_ui,
+    _dur_to_sec,
+    _gapless_advanced,
+    _monitor_decision,
+)
+from dlna_player_transport import TransportMixin
+from dlna_player_volume import VolumeMixin
+
 log = logging.getLogger("dlna.player")
 
-
-def _dur_to_sec(dur) -> int:
-    """Coerce a track duration to an int second count. Accepts int, float,
-    empty/None, or UPnP-style 'H:MM:SS(.fff)' / 'MM:SS' strings (how the
-    library DB actually stores them). Returns 0 when unparseable so callers
-    never raise on a malformed duration."""
-    if not dur:
-        return 0
-    if isinstance(dur, (int, float)):
-        return int(dur)
-    s = str(dur).strip()
-    if not s:
-        return 0
-    if ":" in s:
-        try:
-            total = 0.0
-            for part in s.split(":"):
-                total = total * 60 + float(part)
-            return int(total)
-        except (ValueError, TypeError):
-            return 0
-    try:
-        return int(float(s))
-    except (ValueError, TypeError):
-        return 0
-
-
-# Absolute renderer volume set ONCE at queue start. The Naim's scale is
-# 0–100; 22 is a comfortable living-room level. We deliberately do NOT
-# read the renderer's current volume first — a STOPPED Naim reports 0
-# via GetVolume, and adopting that as the baseline was the cause of the
-# "every track plays silent" bug (2026-05-30). After this one-shot set
-# we never re-assert per-track, so a manual change on the Naim's own
-# remote sticks; only the PWA slider re-sets it.
-STARTUP_VOLUME: int = 22
-
-# User-trim slider → renderer-volume-unit conversion.
-# A value of 2 means "one slider dB ≈ 2 Naim volume units" (≈ 0.5 dB
-# per unit). Approximation — the renderer's curve is logarithmic and
-# renderer-specific. Tune by ear.
-GAIN_TO_VOLUME_RATIO: int = 2
-
-# User-trim slider clamp. The slider is a relative offset around the
-# renderer's natural volume; ±5 dB caps "ear damage from accidental
-# slider flick" while still giving meaningful range. Edit the constant
-# to widen/narrow the slider.
-MAX_USER_TRIM_DB: float = 5.0
-
-# Monitor stall guards. The monitor advances a track on the normal
-# PLAYING → STOPPED transition. But when the renderer goes unreachable
-# mid-track, GetTransportInfo SOAP starts failing and the state reads
-# UNKNOWN — the PLAYING → STOPPED transition is never observed and the
-# queue would otherwise stall on one track forever (the real-world
-# 2026-05-20 incident: 'Starman' stuck for 36 minutes).
-#
-# WATCHDOG_GRACE_SEC — once wall-clock playback runs this far past the
-#   track's own declared duration while the renderer is NOT actively
-#   PLAYING/TRANSITIONING/PAUSED, advance regardless of observed state.
-# UNKNOWN_ABORT_SEC — if the renderer reads UNKNOWN continuously for
-#   this long (and the track has no duration for the watchdog to use),
-#   abort the queue rather than poll a dead renderer indefinitely.
-WATCHDOG_GRACE_SEC: float = 90.0
-UNKNOWN_ABORT_SEC:  float = 300.0
-
-
-def _monitor_decision(prev_state: str, cur_state: str,
-                      elapsed: float, dur: float,
-                      is_stream: bool = False):
-    """Pure decision helper for ``RendererQueue._monitor``.
-
-    Given the previous and current transport state, how long the
-    current track has been playing (wall-clock seconds since its Play
-    was sent), and its declared duration, decide whether to advance.
-
-    Returns ``(advance: bool, reason: str)`` — reason is ``'finished'``
-    for the normal end-of-track transition, ``'watchdog'`` when the
-    duration-based stall guard fires, and ``''`` when not advancing.
-
-    ``is_stream`` (internet radio) suppresses both: a live stream has
-    no end and no duration, and a momentary ``STOPPED`` is a rebuffer,
-    not a track ending. Radio is ended only by an explicit user stop.
-    """
-    if is_stream:
-        return False, ""
-    # Normal end-of-track: the renderer reported PLAYING and is now
-    # STOPPED (or has no media) → the track played out.
-    if (prev_state in ("PLAYING", "TRANSITIONING") and
-            cur_state in ("STOPPED", "NO_MEDIA_PRESENT")):
-        return True, "finished"
-    # Watchdog: the renderer is not observably progressing (typically
-    # UNKNOWN from a failed SOAP poll, or wedged in STOPPED) yet
-    # wall-clock playback has run past the track's own duration plus a
-    # grace margin. PAUSED_PLAYBACK is excluded so a deliberately
-    # paused queue is never skipped.
-    if (cur_state not in ("PLAYING", "TRANSITIONING", "PAUSED_PLAYBACK")
-            and elapsed > 0 and dur > 0
-            and elapsed > dur + WATCHDOG_GRACE_SEC):
-        return True, "watchdog"
-    return False, ""
-
-
-def _gapless_advanced(cur_state: str, track_uri, cur_url: str,
-                      next_url: str) -> bool:
-    """True when the renderer has auto-transitioned to the queued NEXT
-    track (gapless) — it's actively playing and its current TrackURI is
-    the next track's URL rather than the current one.
-
-    The renderer auto-plays a SetNextAVTransportURI without ever passing
-    through STOPPED, so the PLAYING→STOPPED advance never fires; the
-    monitor uses this to sync its index WITHOUT re-sending (a re-send
-    would double-play the track the renderer is already playing).
-
-    Safe-degrades to False when the renderer doesn't report a usable
-    TrackURI (None / NOT_IMPLEMENTED) — the queue then falls back to the
-    STOPPED→advance path, i.e. pre-C6 behaviour."""
-    if cur_state not in ("PLAYING", "TRANSITIONING"):
-        return False
-    if not track_uri or not next_url:
-        return False
-    return track_uri == next_url and track_uri != cur_url
 
 
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
-class RendererQueue:
+class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
     """
     Manages sequential track playback on a UPnP AVTransport renderer.
 
@@ -253,27 +171,6 @@ class RendererQueue:
             target=self._monitor, daemon=True, name="renderer-queue")
         self._thread.start()
 
-    def _seek_async(self, seconds: float):
-        """Fire the resume Seek off-thread: the renderer needs a moment
-        to reach PLAYING (a Seek during TRANSITIONING faults on the
-        Naim), so wait, seek, and retry once. Failure is non-fatal —
-        the chapter simply plays from 0:00."""
-        def _run():
-            from dlna_avtransport import avtransport_seek
-            self._stop_event.wait(1.5)
-            if self._stop_event.is_set():
-                return
-            with self._lock:
-                av_url = self._av_url
-            if not av_url:
-                return
-            if not avtransport_seek(av_url, seconds):
-                self._stop_event.wait(2.0)
-                if not self._stop_event.is_set():
-                    avtransport_seek(av_url, seconds)
-        threading.Thread(target=_run, daemon=True,
-                         name="renderer-seek").start()
-
     def stop(self):
         """Stop playback and cancel the queue."""
         from dlna_avtransport import avtransport_stop
@@ -286,41 +183,6 @@ class RendererQueue:
             avtransport_stop(url)
         self._invalidate_snap()
         EVENTS.publish({"type": "state"})       # SSE: playback stopped (R2)
-
-    def _set_volume_async(self, rc_url: str, level: int):
-        """Fire SetVolume in a daemon thread so the caller never blocks
-        on the renderer's SOAP. Naim's HTTP server is single-threaded
-        and can take >1s to respond when GetTransportInfo polls are in
-        flight; if we waited synchronously, the per-track call would
-        delay SetURI/Play and the user would perceive it as a freeze."""
-        from dlna_avtransport import set_volume
-        threading.Thread(
-            target=lambda: set_volume(rc_url, level),
-            daemon=True, name="set-volume").start()
-
-    def set_user_trim_db(self, trim_db: float):
-        """User moved the gateway volume slider (relative trim, -5..+5 dB).
-        Update the cached trim AND fire SetVolume immediately so the
-        change is audible mid-track, not deferred until the next song.
-
-        SetVolume runs in a daemon thread so the HTTP handler returns
-        instantly even when Naim's SOAP is slow."""
-        trim_db = max(-MAX_USER_TRIM_DB, min(MAX_USER_TRIM_DB, float(trim_db)))
-        with self._lock:
-            self._user_trim_db = trim_db
-            rc_url   = self._rc_url
-            baseline = self._renderer_baseline
-        if not rc_url:
-            return
-        # If we know the baseline, apply NOW so the user hears the change.
-        # Otherwise the trim is stored and applied on first play.
-        if baseline is None:
-            return
-        # Loudness gain is no longer applied (always 0), so the slider is
-        # a straight trim around the startup baseline.
-        offset = round(trim_db * GAIN_TO_VOLUME_RATIO)
-        level  = max(0, min(100, baseline + offset))
-        self._set_volume_async(rc_url, level)
 
     def pause(self):
         """Toggle pause on the renderer."""
@@ -454,360 +316,16 @@ class RendererQueue:
         if t and t.is_alive():
             t.join(timeout=3)
 
-    def _log_track_end(self, reason: str):
-        """Emit a single INFO line when the current track stops playing,
-        regardless of the reason (natural end, user-pressed button,
-        SOAP fault, queue replacement). Elapsed seconds come from the
-        monotonic clock stamped when the track's Play was sent."""
-        with self._lock:
-            start  = self._started_at
-            idx    = self._index
-            tracks = list(self._tracks)
-        if not tracks or start <= 0 or not (0 <= idx < len(tracks)):
-            return
-        elapsed = time.monotonic() - start
-        t       = tracks[idx]
-        dur     = _dur_to_sec(t.get("duration"))
-        dur_s   = f"/{dur}s" if dur else ""
-        log.info(f"RendererQueue ■ END   [{idx+1}/{len(tracks)}] "
-                 f"{t.get('title','?')!r} played {elapsed:.1f}s{dur_s} "
-                 f"reason={reason}")
-        with self._lock:
-            self._started_at = 0.0
 
-    def _apply_startup_volume(self):
-        """Set the renderer to STARTUP_VOLUME once per queue, on the FIRST
-        track only. No-op if rc_url is empty (renderer has no
-        RenderingControl URL) or the baseline is already set (i.e. this
-        isn't the first track — volume is set once per queue, never
-        re-asserted per-track, so a manual change on the Naim's own remote
-        sticks for the rest of the session; only the PWA slider re-sets it).
-
-        We deliberately do NOT read the renderer's current volume first: a
-        STOPPED Naim reports 0 via GetVolume, and adopting that as the
-        baseline silenced every track (the 2026-05-30 bug this replaces).
-        Loudness gain is no longer applied — the only offset is the user
-        trim, which defaults to 0 on a fresh queue, so the first track plays
-        at exactly STARTUP_VOLUME."""
-        with self._lock:
-            rc_url   = self._rc_url
-            baseline = self._renderer_baseline
-            trim_db  = self._user_trim_db
-        if not rc_url:
-            return
-        if baseline is not None:
-            return          # already set this queue — don't re-assert
-        baseline = STARTUP_VOLUME
-        with self._lock:
-            self._renderer_baseline = baseline
-        offset = round(trim_db * GAIN_TO_VOLUME_RATIO)
-        level  = max(0, min(100, baseline + offset))
-        # Fire-and-forget so a slow Naim SOAP (busy serving the snapshot
-        # poller) doesn't delay SetURI/Play.
-        self._set_volume_async(rc_url, level)
-        log.debug(f"RendererQueue: startup SetVolume({level}) "
-                  f"(baseline={baseline}, trim={trim_db:+.1f} dB)")
-
-    def _send_current(self) -> bool:
-        """Send SetURI + Play for tracks[_index]. Returns True on success.
-        On failure, logs the skip, auto-advances, and aborts the queue
-        after _MAX_CONSECUTIVE_FAILS failures so we don't silently chew
-        through every track when a renderer is wedged."""
-        from dlna_avtransport import avtransport_send
-        with self._lock:
-            if not self._tracks or not self._av_url:
-                return False
-            idx    = self._index
-            tracks = list(self._tracks)
-            av_url = self._av_url
-            rname  = self._rnd_name
-        if not (0 <= idx < len(tracks)):
-            return False
-
-        t = tracks[idx]
-        dur = _dur_to_sec(t.get("duration"))
-        dur_s = f" ({dur}s)" if dur else ""
-        log.info(f"RendererQueue ▶ START [{idx+1}/{len(tracks)}] "
-                 f"{t.get('title','?')!r} — "
-                 f"{t.get('artist','?')} / {t.get('album','?')}"
-                 f"{dur_s} → {rname}")
-
-        with self._lock:
-            self._started_at = time.monotonic()
-
-        # Set the startup volume BEFORE the Play (once per queue; a no-op
-        # on tracks 2+). Doing it before avoids an audible step.
-        self._apply_startup_volume()
-
-        ok = avtransport_send(av_url, t.get("url",""),
-                              t.get("title",""), t.get("mime",""))
-        if ok:
-            with self._lock:
-                self._consecutive_fails = 0
-            self._queue_next_uri()
-            EVENTS.publish({"type": "state"})   # SSE: now-playing changed (R2)
-            return True
-
-        log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "
-                    f"{t.get('title','?')!r} — SetURI/Play returned False "
-                    f"(url={t.get('url','')})")
-        self._log_track_end("send_failed")
-
-        with self._lock:
-            self._consecutive_fails += 1
-            fails = self._consecutive_fails
-            more  = self._index < len(self._tracks) - 1
-
-        if fails >= self._MAX_CONSECUTIVE_FAILS:
-            log.warning(f"RendererQueue ⚠ ABORT {fails} consecutive send "
-                        f"failures — stopping queue (renderer likely wedged; "
-                        f"kickstart the gateway if this persists)")
-            self._stop_event.set()
-            return False
-
-        if more:
-            with self._lock:
-                self._index += 1
-            return self._send_current()
-
-        log.info("RendererQueue ■ QUEUE END — all remaining tracks failed")
-        self._stop_event.set()
-        return False
-
-    def _queue_next_uri(self):
-        """Pre-queue the track after the current _index via
-        SetNextAVTransportURI so the renderer transitions to it gaplessly
-        (no re-buffer / click). On the last track, send an empty NextURI
-        to clear any previously-queued URI. Failure is non-fatal — the
-        STOPPED→advance path still works (with a small gap), as it did
-        before P4. Called after a Play, and again after a detected
-        gapless auto-advance (to queue the NEW next track)."""
-        from dlna_avtransport import avtransport_set_next_uri
-        with self._lock:
-            av_url = self._av_url
-            next_t = (dict(self._tracks[self._index + 1])
-                      if 0 <= self._index + 1 < len(self._tracks) else {})
-        if not av_url:
-            return
-        avtransport_set_next_uri(
-            av_url, next_t.get("url", ""),
-            next_t.get("title", ""), next_t.get("mime", ""))
-
-    def _monitor(self):
-        """
-        Poll GetTransportInfo every 2 s and advance the queue.
-
-        A track ends one of three ways:
-          * normal   — PLAYING/TRANSITIONING → STOPPED/NO_MEDIA_PRESENT.
-          * watchdog — wall-clock playback runs past the track's own
-            duration + WATCHDOG_GRACE_SEC while the renderer is not
-            actively PLAYING (typically UNKNOWN because GetTransportInfo
-            SOAP is failing). Without this a renderer that goes
-            unreachable mid-track strands the queue forever.
-          * abort    — the renderer reads UNKNOWN continuously for
-            UNKNOWN_ABORT_SEC with no duration for the watchdog to use;
-            the queue stops rather than poll a dead renderer.
-        """
-        from dlna_avtransport import (avtransport_probe_state,
-                                      avtransport_get_position)
-        POLL_SEC      = 2.0
-        prev_state    = "UNKNOWN"
-        unknown_since = 0.0
-        self._stop_event.wait(4.0)
-
-        while not self._stop_event.is_set():
-            with self._lock:
-                av_url = self._av_url
-                idx    = self._index
-                total  = len(self._tracks)
-                start  = self._started_at
-                cur_t  = (self._tracks[idx]
-                          if 0 <= idx < len(self._tracks) else None)
-
-            if not av_url:
-                break
-
-            cur_state, detail = avtransport_probe_state(av_url)
-            if cur_state != prev_state:
-                # UNREACHABLE means the SOAP call itself failed — name
-                # the transport error so the cause (renderer powered
-                # off, network drop, HTTP fault) is in the log, not
-                # guessed. avtransport_probe_state rate-limits the
-                # underlying WARN; this transition line fires once.
-                if cur_state == "UNREACHABLE":
-                    log.warning(f"RendererQueue: state {prev_state} → "
-                                f"UNREACHABLE [{idx+1}/{total}] — "
-                                f"{detail or 'transport failed'}")
-                else:
-                    log.info(f"RendererQueue: state {prev_state} → "
-                             f"{cur_state} [{idx+1}/{total}]")
-            else:
-                log.debug(f"RendererQueue monitor: state={cur_state} "
-                          f"[{idx+1}/{total}]")
-
-            # Audiobook queue: persist the position every ~15 s while
-            # actually playing, so a session stopped on the Naim resumes
-            # in the PWA / CarPlay at the right spot. Never fatal — a
-            # failed save just waits for the next poll.
-            if (self._is_book and cur_state == "PLAYING" and cur_t
-                    and time.monotonic() - self._last_pos_save >= 15.0):
-                self._last_pos_save = time.monotonic()
-                try:
-                    pos = avtransport_get_position(av_url)
-                    if pos.get("position"):
-                        from dlna_library import DB
-                        key = cur_t.get("album_key") or cur_t.get("url", "")
-                        DB.position_set(key, cur_t.get("url", ""),
-                                        pos["position"], pos.get("duration"))
-                except Exception as e:                        # noqa: BLE001
-                    log.debug(f"RendererQueue: book position save failed: {e}")
-
-            # Track how long the renderer has been out of contact —
-            # either genuinely UNKNOWN or UNREACHABLE (SOAP failing).
-            if cur_state in ("UNKNOWN", "UNREACHABLE"):
-                if unknown_since == 0.0:
-                    unknown_since = time.monotonic()
-            else:
-                unknown_since = 0.0
-
-            # Gapless auto-advance (C6): the renderer may move to the
-            # queued NextURI without ever reporting STOPPED, so the
-            # PLAYING→STOPPED advance never fires — _index would lag and
-            # the eventual STOPPED would re-send the already-played track
-            # (double-play). Detect via the renderer's current TrackURI
-            # and sync _index WITHOUT re-sending, then queue the new next.
-            if (cur_state in ("PLAYING", "TRANSITIONING") and cur_t is not None
-                    and not bool(cur_t.get("is_stream"))):
-                with self._lock:
-                    nxt = (self._tracks[self._index + 1]
-                           if 0 <= self._index + 1 < len(self._tracks)
-                           else None)
-                if nxt is not None:
-                    track_uri = avtransport_get_position(av_url).get("track_uri")
-                    if _gapless_advanced(cur_state, track_uri,
-                                         cur_t.get("url", ""),
-                                         nxt.get("url", "")):
-                        log.info(f"RendererQueue ⏭ GAPLESS advance "
-                                 f"[{idx+1}→{idx+2}/{total}] — renderer moved "
-                                 f"to queued URI")
-                        self._log_track_end("finished")
-                        with self._lock:
-                            self._index += 1
-                            self._started_at = time.monotonic()
-                        self._queue_next_uri()
-                        prev_state = cur_state
-                        self._stop_event.wait(POLL_SEC)
-                        continue
-
-            elapsed   = (time.monotonic() - start) if start > 0 else 0.0
-            dur       = _dur_to_sec(cur_t.get("duration")) if cur_t else 0
-            is_stream = bool(cur_t.get("is_stream")) if cur_t else False
-            advance, reason = _monitor_decision(prev_state, cur_state,
-                                                elapsed, dur, is_stream)
-            prev_state = cur_state
-
-            if advance:
-                if reason == "watchdog":
-                    log.warning(f"RendererQueue ⚠ WATCHDOG [{idx+1}/{total}] "
-                                f"{cur_t.get('title','?')!r} — renderer "
-                                f"state {cur_state!r}, {elapsed:.0f}s since "
-                                f"start vs {dur}s duration; advancing")
-                self._log_track_end(reason)
-                with self._lock:
-                    more = self._index < len(self._tracks) - 1
-                    if more:
-                        self._index += 1
-
-                if more:
-                    log.info(f"RendererQueue: advancing to next track "
-                             f"[{idx+2}/{total}]")
-                    self._send_current()
-                    self._stop_event.wait(4.0)
-                else:
-                    log.info(f"RendererQueue ■ QUEUE END — "
-                             f"playlist finished ({total} track(s))")
-                    self._stop_event.set()
-                    break
-                continue
-
-            # Renderer unreachable too long with nothing the watchdog
-            # could act on — stop instead of polling a dead device.
-            if (unknown_since and
-                    time.monotonic() - unknown_since > UNKNOWN_ABORT_SEC):
-                log.warning(f"RendererQueue ⚠ ABORT renderer out of contact "
-                            f"(state {cur_state}) for >{UNKNOWN_ABORT_SEC:.0f}s "
-                            f"[{idx+1}/{total}] — stopping queue")
-                self._log_track_end("renderer_lost")
-                self._stop_event.set()
-                break
-
-            self._stop_event.wait(POLL_SEC)
-
-
-def _av_state_to_ui(state: str) -> str:
-    return {
-        "PLAYING":          "playing",
-        "PAUSED_PLAYBACK":  "paused",
-        "STOPPED":          "stopped",
-        "NO_MEDIA_PRESENT": "stopped",
-        "TRANSITIONING":    "playing",
-    }.get(state, "stopped")
-
-
-# ── QueueRegistry — per-renderer queue owner ──────────────────────
-
-class QueueRegistry:
-    """Owns one RendererQueue per renderer UDN.
-
-    Concurrent multi-renderer playback: each physical output gets its own
-    queue. Queues are lazily created on first access and persist for the
-    lifetime of the process — there's no churn (at most a handful of
-    renderers ever exist on a LAN).
-    """
-
-    def __init__(self):
-        self._queues: dict = {}
-        self._lock = threading.Lock()
-
-    def get(self, udn: str) -> RendererQueue:
-        """Return the queue for this UDN, creating it on first use."""
-        with self._lock:
-            q = self._queues.get(udn)
-            if q is None:
-                q = RendererQueue()
-                self._queues[udn] = q
-            return q
-
-    def peek(self, udn: str) -> RendererQueue | None:
-        """Return the queue for this UDN if one exists, else None (does
-        NOT create). Use this when probing state to avoid allocating a
-        queue for an unknown UDN."""
-        with self._lock:
-            return self._queues.get(udn)
-
-    def is_busy(self, udn: str) -> bool:
-        """True iff this UDN has an active queue (renderer not stopped).
-        Step C will use this to return 409 Conflict on second-session
-        queue posts."""
-        q = self.peek(udn)
-        if q is None:
-            return False
-        return bool(q.snapshot().get("alive"))
-
-    def snapshot_all(self) -> dict:
-        """Return {udn: snapshot} for every queue that has ever been
-        created. Useful for a global 'what's playing anywhere' view."""
-        with self._lock:
-            items = list(self._queues.items())
-        return {udn: q.snapshot() for udn, q in items}
-
-
-QUEUES = QueueRegistry()
-
+# ── Registry ──────────────────────────────────────────────────────
+# Imported AFTER RendererQueue is defined: dlna_player_registry constructs
+# queues, so it imports this module — a module-level import at the top would
+# be circular. Re-exported so `from dlna_player import QUEUES` still works.
+from dlna_player_registry import QUEUES, QueueRegistry  # noqa: E402,F401
 
 # The browser-audio stream proxy lives in dlna_stream_proxy — imported
 # here so existing callers can keep `from dlna_player import proxy_stream`.
-from dlna_stream_proxy import proxy_stream, PROXY_IDLE_SEC  # noqa: F401
+from dlna_stream_proxy import PROXY_IDLE_SEC, proxy_stream  # noqa: E402,F401
 
 
 # ── Standalone test ───────────────────────────────────────────────

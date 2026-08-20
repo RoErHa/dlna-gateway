@@ -168,6 +168,7 @@ class TestEnrichedPositions(unittest.TestCase):
 
     def test_positions_payload_carries_track_fields(self):
         import api_playback
+        import api_playback_state
         fd, p = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         db = LibraryDB(db_file=p)
@@ -180,12 +181,15 @@ class TestEnrichedPositions(unittest.TestCase):
                     "'Author','The Book','A/Book','http://x/cover.jpg')")
             db.position_set("A/Book", "http://x/ch7", 754.3, 1820.0)
             db.position_set("Orphan/Book", "http://x/gone", 10)
-            orig = api_playback.DB
-            api_playback.DB = db
+            # DB is bound once in api_playback_state; rebinding the
+            # re-export on api_playback would leave the payload on the
+            # real library.db.
+            orig = api_playback_state.DB
+            api_playback_state.DB = db
             try:
                 code, body = api_playback.positions_list_payload({})
             finally:
-                api_playback.DB = orig
+                api_playback_state.DB = orig
             self.assertEqual(code, 200)
             rows = {r["album_key"]: r for r in body["positions"]}
             self.assertEqual(rows["A/Book"]["book"], "The Book")

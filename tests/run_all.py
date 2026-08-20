@@ -472,13 +472,29 @@ if os.path.isfile(browse_path):
                "genre_tracks", "artist_albums", "browse_letter"]:
         check(f"  api_browse.{fn}", f"def {fn}(" in bc)
 
-section("T2.4 — api_playback.py: all playback functions present")
-pb_path = os.path.join(PROJECT, "api_playback.py")
-if os.path.isfile(pb_path):
-    pc = open(pb_path).read()
+section("T2.4 — api_playback: playback surface present")
+# api_playback was split into a module family (2026-08-20), so grepping this
+# ONE file's text for "def <name>(" stopped proving anything the moment a
+# symbol became a re-export — the same trap that silently disabled T2.6 and
+# T3.2. Introspect the module instead.
+try:
+    import api_playback as _pb
     for fn in ["renderer_state", "index_status", "index_rebuild", "stream",
-               "render_queue", "render", "control", "edit_track"]:
-        check(f"  api_playback.{fn}", f"def {fn}(" in pc)
+               "render_queue", "render", "control", "edit_track",
+               "art", "art_fetch", "art_fetch_cached", "art_fetch_scaled",
+               "track_meta", "lyrics", "client_log"]:
+        check(f"  api_playback.{fn}", callable(getattr(_pb, fn, None)))
+    _pbfam = sorted(os.path.basename(p) for p in
+                    glob.glob(os.path.join(PROJECT, "api_playback*.py")))
+    check(f"  module family ({len(_pbfam)} modules)", len(_pbfam) >= 4, str(_pbfam))
+    _pbbind = [f for f in _pbfam
+               if "from dlna_library import DB"
+               in open(os.path.join(PROJECT, f)).read()]
+    check("  DB bound in exactly one module", _pbbind == ["api_playback_state.py"],
+          f"binders: {_pbbind} — a second binding silently points tests at "
+          f"the REAL library.db")
+except Exception as _e:
+    check("  api_playback imports", False, repr(_e))
 
 section("T2.5 — api_playlists.py: all playlist functions present")
 pl_path = os.path.join(PROJECT, "api_playlists.py")

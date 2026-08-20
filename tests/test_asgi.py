@@ -385,6 +385,8 @@ class TestArtProxy(unittest.TestCase):
         import api_playback
         from unittest import mock
 
+        import api_playback_art
+
         class _H:
             def __init__(self): self.code = None
             def send_response(self, c): self.code = c
@@ -393,11 +395,11 @@ class TestArtProxy(unittest.TestCase):
             send_error = lambda self, c, m="": setattr(self, "code", c)
             wfile = type("W", (), {"write": staticmethod(lambda b: None)})()
 
-        with mock.patch.object(api_playback, "art_fetch_scaled",
+        with mock.patch.object(api_playback_art, "art_fetch_scaled",
                                return_value=(200, "image/jpeg", b"J")) as m:
             api_playback.art(_H(), {"url": "http://x/c.jpg", "size": "512"})
             m.assert_called_once_with("http://x/c.jpg", 512)
-        with mock.patch.object(api_playback, "art_fetch_scaled",
+        with mock.patch.object(api_playback_art, "art_fetch_scaled",
                                return_value=(200, "image/jpeg", b"J")) as m:
             api_playback.art(_H(), {"url": "http://x/c.jpg", "size": "big"})
             m.assert_called_once_with("http://x/c.jpg", 0)

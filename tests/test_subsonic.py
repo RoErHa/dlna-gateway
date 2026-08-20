@@ -472,9 +472,9 @@ class TestCoverArt(unittest.TestCase):
         # The handler now PROBES each candidate via art_fetch_cached before
         # delegating to the /art proxy — mock the probe to resolve.
         with patch.object(api_subsonic_proto, "DB", self.db), \
-             patch("api_playback.art_fetch_cached",
+             patch("api_playback_art.art_fetch_cached",
                    return_value=(200, "image/jpeg", b"img")), \
-             patch("api_playback.art", side_effect=fake_art), \
+             patch("api_playback_art.art", side_effect=fake_art), \
              patch("api_subsonic_proto.SERVERS"):
             h = _MockH()
             aid = api_subsonic._album_id("Pink Floyd", "Animals")
@@ -666,13 +666,14 @@ class TestBookmarks(_BaseDB):
         _call("createBookmark", {"id": tid, "position": "300000"},
               db=self.db)
         import api_playback
-        orig = api_playback.DB
-        api_playback.DB = self.db
+        import api_playback_state
+        orig = api_playback_state.DB       # the single binding site
+        api_playback_state.DB = self.db
         try:
             code, body = api_playback.position_get_payload(
                 {"album_key": "PF/Animals"})
         finally:
-            api_playback.DB = orig
+            api_playback_state.DB = orig
         self.assertEqual(code, 200)
         self.assertAlmostEqual(body["position"]["position_sec"], 300.0)
 

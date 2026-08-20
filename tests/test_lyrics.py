@@ -101,7 +101,7 @@ class TestLyricsHandler(unittest.TestCase):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
         self.db = LibraryDB(self.tmp.name)
-        self._patch = patch("api_playback.DB", self.db)
+        self._patch = patch("api_playback_state.DB", self.db)
         self._patch.start()
 
     def tearDown(self):

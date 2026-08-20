@@ -124,7 +124,10 @@ def _get_cover_art(h, params):
     that actually fetches, then reuse the /art proxy to serve the bytes. Tries
     every candidate so a folder album with a dead-art first track still serves
     (see _cover_art_candidates)."""
-    from api_playback import art as art_handler, art_fetch_cached
+    # Import from the OWNER module, not the api_playback facade: the facade's
+    # names are re-exports, so patching them would not reach the definitions
+    # here. One consistent target keeps test injection honest.
+    from api_playback_art import art as art_handler, art_fetch_cached
     sid = params.get("id", "")
     for url in _cover_art_candidates(sid):
         code, _ct, _b = art_fetch_cached(url)   # probe (warms the cache too)
