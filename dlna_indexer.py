@@ -250,8 +250,12 @@ class Indexer:
             try:
                 from dlna_library import ART_FETCHER
                 ART_FETCHER.trigger()
-            except Exception:
-                pass   # module not yet fully initialised (test harness)
+            except Exception as e:
+                # Expected under the test harness, where dlna_library is not
+                # fully initialised. In production it means new bare albums
+                # will wait for the next startup scan instead of being looked
+                # up now — worth a line, not worth failing the crawl.
+                log.debug(f"art-fetch trigger skipped ({e})")
 
         except Exception:
             # Let everything bubble up — _run wraps this call in

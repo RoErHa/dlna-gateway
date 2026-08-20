@@ -18,6 +18,8 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 
+from dlna_config import close_quietly
+
 log = logging.getLogger("dlna.content")
 
 # Per-renderer rate limiter for "renderer unreachable" WARN lines. The
@@ -62,10 +64,7 @@ def avtransport_send(av_url: str, media_url: str, title: str,
                 return False
             return True
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
     safe_url   = _xml_esc(media_url)
     safe_title = _xml_esc(title)
@@ -185,8 +184,7 @@ def avtransport_pause(av_url: str) -> bool:
         log.error(f"avtransport_pause: {e}")
         return False
     finally:
-        try: conn.close()
-        except Exception: pass
+        close_quietly(conn)
 
 
 def _av_soap(av_url: str, action: str,
@@ -225,8 +223,7 @@ def _av_soap(av_url: str, action: str,
         log.debug(f"_av_soap {action}: {e}")
         return None, (str(e) or type(e).__name__)
     finally:
-        try: conn.close()
-        except Exception: pass
+        close_quietly(conn)
 
 
 def avtransport_probe_state(av_url: str) -> tuple[str, str]:
@@ -304,8 +301,8 @@ def avtransport_get_position(av_url: str) -> dict:
                 return parts[0]*3600 + parts[1]*60 + parts[2]
             if len(parts) == 2:
                 return parts[0]*60 + parts[1]
-        except Exception:
-            pass
+        except (ValueError, TypeError, AttributeError):
+            pass        # documented contract: unparseable → 0
         return None
 
     result: dict = {"position": None, "duration": None,
@@ -330,8 +327,10 @@ def avtransport_get_position(av_url: str) -> dict:
                         if t.tag.endswith("}title") or t.tag == "title":
                             result["title"] = t.text
                             break
-                except Exception:
-                    pass
+                except ET.ParseError as e:
+                    # A renderer that returns malformed DIDL just loses its
+                    # title; position/duration above are still usable.
+                    log.debug(f"CurrentTrackMetaData not parseable: {e}")
     except ET.ParseError:
         pass
     return result
@@ -378,8 +377,7 @@ def _rc_soap(rc_url: str, action: str, body_inner: str,
         log.debug(f"_rc_soap {action}: {e}")
         return None
     finally:
-        try: conn.close()
-        except Exception: pass
+        close_quietly(conn)
 
 
 def _sec_to_hms(sec: float) -> str:
@@ -470,7 +468,4 @@ def avtransport_stop(av_url: str) -> bool:
         log.error(f"AVTransport Stop error: {e}")
         return False
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        close_quietly(conn)

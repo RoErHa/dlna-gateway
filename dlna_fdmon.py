@@ -43,8 +43,8 @@ def fd_count() -> int:
 def soft_limit() -> int:
     try:
         return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-    except Exception:                                # noqa: BLE001
-        return -1
+    except (OSError, ValueError):
+        return -1          # diagnostics only; -1 reads as "unknown"
 
 
 def lsof_breakdown(pid: int) -> str:
@@ -57,7 +57,8 @@ def lsof_breakdown(pid: int) -> str:
         out = subprocess.run([lsof, "-nP", "-p", str(pid)],
                              capture_output=True, text=True,
                              timeout=20).stdout
-    except Exception as e:                           # noqa: BLE001
+    except (OSError, subprocess.SubprocessError) as e:
+        # The failure text IS the return value, so this is reported, not lost.
         return f"(lsof failed: {type(e).__name__}: {e})"
     types: Counter = Counter()
     peers: Counter = Counter()

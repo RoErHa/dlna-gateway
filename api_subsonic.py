@@ -19,6 +19,7 @@ JSON responses only (regardless of the ?f= param). The XML format is not
 implemented; every modern Subsonic client handles JSON.
 """
 import base64
+import binascii
 import hashlib
 import logging
 import os
@@ -99,7 +100,8 @@ def _check_auth(params: dict) -> bool:
     if p.startswith("enc:"):
         try:
             p = bytes.fromhex(p[4:]).decode("utf-8")
-        except Exception:
+        except (ValueError, UnicodeDecodeError) as e:
+            log.debug(f"Subsonic auth: malformed enc: password ({e})")
             return False
     return p == pwd and p != ""
 
@@ -234,7 +236,11 @@ def _dec(prefix: str, encoded: str) -> str | None:
     rest += "=" * (-len(rest) % 4)
     try:
         return base64.urlsafe_b64decode(rest).decode("utf-8")
-    except Exception:
+    except (ValueError, UnicodeDecodeError, binascii.Error) as e:
+        # Client sent an id we did not mint. Caller turns None into a
+        # "not found" fault; log so a systematically-mangled id from some
+        # client is diagnosable instead of silently 404-ing forever.
+        log.debug(f"Subsonic id decode failed for {encoded[:60]!r}: {e}")
         return None
 
 
@@ -288,13 +294,15 @@ def _default_udn() -> str:
         any_srv = SERVERS.all()
         if any_srv:
             return any_srv[0].udn
-    except Exception:
-        pass
+    except Exception as e:                       # registry may be mid-init
+        log.debug(f"_default_udn: server registry unavailable ({e}) — "
+                  f"falling back to the tracks table")
     try:
         with DB._pool.read() as c:
             row = c.execute("SELECT udn FROM tracks LIMIT 1").fetchone()
         return row["udn"] if row else ""
-    except Exception:
+    except Exception as e:
+        log.debug(f"_default_udn: tracks-table fallback failed ({e})")
         return ""
 
 
@@ -1099,8 +1107,8 @@ def _parse_params(query, body: bytes = b"") -> dict:
             try:
                 pairs += urllib.parse.parse_qsl(
                     body.decode("utf-8", errors="replace"))
-            except Exception:
-                pass
+            except (ValueError, AttributeError) as e:
+                log.debug(f"Subsonic: unparseable POST body ignored ({e})")
     params: dict = {}
     multi: dict[str, list[str]] = {}
     for k, v in pairs:

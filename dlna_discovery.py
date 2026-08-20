@@ -20,6 +20,7 @@ import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 
+from dlna_config import close_quietly
 from dlna_library import DEVICE_ROLES
 from dlna_registry import (  # noqa: F401 — re-exported for callers
     MediaServer, MediaRenderer,
@@ -211,8 +212,7 @@ def ssdp_discovery_thread(lan_ip: str, gw_udn: str = ""):
     except OSError as e:
         log.warning(f"Cannot bind SSDP port 1900 ({e}) — M-SEARCH only")
         if rx:
-            try: rx.close()
-            except Exception: pass
+            close_quietly(rx)
         rx = None
 
     def handle(data: bytes):
@@ -262,7 +262,8 @@ def _tcp_open(host: str, port: int, timeout: float = 0.4) -> bool:
         s.connect((host, port))
         s.close()
         return True
-    except Exception:
+    except OSError as e:
+        log.debug(f"port probe {host}:{port} closed/unreachable ({e})")
         return False
 
 
@@ -288,8 +289,8 @@ def _probe_host(host: str, stop: threading.Event, gw_udn: str):
                     threading.Thread(target=_register_location,
                                      args=(url, gw_udn), daemon=True).start()
                     return
-            except Exception:
-                pass
+            except Exception as e:                # keep scanning other hosts
+                log.debug(f"subnet scan: {url} did not answer ({e})")
 
 
 def subnet_scan(lan_ip: str, gw_udn: str = ""):
@@ -436,7 +437,8 @@ def _test():
         s.connect(("8.8.8.8", 80))
         lan_ip = s.getsockname()[0]
         s.close()
-    except Exception:
+    except OSError as e:
+        log.warning(f"LAN IP probe failed ({e}) — using 127.0.0.1")
         lan_ip = "127.0.0.1"
 
     log.info(f"LAN IP: {lan_ip}")

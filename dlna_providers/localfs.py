@@ -249,7 +249,11 @@ def _extract_art_bytes(path: Path) -> tuple[bytes, str] | None:
     import mutagen
     try:
         audio = mutagen.File(str(path))
-    except Exception:                                         # noqa: BLE001
+    except Exception as e:                                    # mutagen raises broadly
+        # A file mutagen cannot open is skipped from the index entirely, so
+        # "my album is missing" traces back to here. 163 audiobook files hit
+        # this on the first AUDIOBOOKS_ROOT scan.
+        log.debug(f"mutagen could not read {path}: {type(e).__name__}: {e}")
         return None
     if audio is None:
         return None
@@ -264,15 +268,15 @@ def _extract_art_bytes(path: Path) -> tuple[bytes, str] | None:
             apics = audio.tags.getall("APIC")
             if apics:
                 art_bytes = apics[0].data
-        except Exception:                                     # noqa: BLE001
-            pass
+        except Exception as e:                                # tag shapes vary wildly
+            log.debug(f"ID3 APIC art unreadable in {path}: {e}")
         # M4A / MP4: 'covr' atom
         try:
             covr = audio.tags.get("covr") if hasattr(audio.tags, "get") else None
             if covr:
                 art_bytes = bytes(covr[0])
-        except Exception:                                     # noqa: BLE001
-            pass
+        except Exception as e:                                # tag shapes vary wildly
+            log.debug(f"MP4 covr art unreadable in {path}: {e}")
     if not art_bytes:
         return None
     return (art_bytes, _sniff_image_mime(art_bytes))

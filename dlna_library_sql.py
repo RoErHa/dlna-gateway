@@ -154,6 +154,6 @@ def _dur_to_secs(dur: str) -> int:
             return int(parts[0] * 3600 + parts[1] * 60 + parts[2])
         if len(parts) == 2:
             return int(parts[0] * 60 + parts[1])
-    except Exception:
-        pass
+    except (ValueError, TypeError, AttributeError):
+        pass        # documented contract: unparseable → -1
     return -1

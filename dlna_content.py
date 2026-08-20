@@ -22,6 +22,8 @@ import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
 
+from dlna_config import close_quietly
+
 log = logging.getLogger("dlna.content")
 
 # UPnP XML namespaces
@@ -49,7 +51,9 @@ def _get_lan_source_ip(target_host: str) -> tuple:
         local_ip = s.getsockname()[0]
         s.close()
         return (local_ip, 0)   # (host, port) tuple for source_address
-    except Exception:
+    except OSError as e:
+        log.debug(f"source-address probe toward {target_ip} failed ({e}) — "
+                  f"letting the OS choose the interface")
         return None
 
 
@@ -75,10 +79,7 @@ def _soap_post(host: str, path: str, body: bytes, action: str) -> tuple:
             resp = conn.getresponse()
             return resp.status, resp.read().decode("utf-8", errors="replace")
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
 
 # ── ContentDirectory Browse ───────────────────────────────────────

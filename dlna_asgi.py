@@ -45,7 +45,7 @@ import api_upnp
 import dlna_routes
 import dlna_stream_proxy
 from dlna_asgi_bridge import _LegacyH, make_bridged_route, run_subsonic_sync
-from dlna_config import VERSION, raise_fd_limit
+from dlna_config import VERSION, close_quietly, raise_fd_limit
 from dlna_events import EVENTS, sse_format
 from dlna_discovery import SERVERS
 from dlna_library import DB, INDEXER
@@ -131,8 +131,8 @@ async def _lifespan(app: FastAPI):
         if started:
             try:
                 dlna_gateway.gw_ssdp_byebye(dlna_gateway.get_lan_ip(), PLAIN_PORT)
-            except Exception:                       # noqa: BLE001
-                pass
+            except Exception as e:                  # shutdown must not hang
+                log.debug(f"SSDP byebye on shutdown failed ({e}) — ignored")
         EVENTS.bind_loop(None)      # drop the (now closing) loop reference
 
 
@@ -743,8 +743,8 @@ async def _audio_relay_response(url: str, range_hdr: str, client: str = "?"):
     try:
         _pr = urllib.parse.urlsplit(url)
         _tag = f"{_pr.hostname}{_pr.path}"
-    except Exception:                                   # noqa: BLE001
-        _tag = url[:80]
+    except ValueError:
+        _tag = url[:80]        # log-tag only; a bad url must never break the relay
     log.info(f"stream ▶ START {_tag} ({status}) client={client}")
     _t0 = time.monotonic()
 
@@ -771,10 +771,7 @@ async def _audio_relay_response(url: str, range_hdr: str, client: str = "?"):
             log.info(f"stream ■ END   {_tag} sent={sent} "
                      f"in {time.monotonic()-_t0:.1f}s reason={reason} "
                      f"client={client}")
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
     return StreamingResponse(_relay(), status_code=status,
                              media_type=ctype, headers=out)
@@ -814,10 +811,7 @@ async def radio_stream(request: Request, url: str = ""):
                     break
                 yield chunk
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
     return StreamingResponse(
         _relay(), media_type=media_type,

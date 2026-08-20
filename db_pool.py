@@ -37,6 +37,8 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 
+from dlna_config import close_quietly
+
 log = logging.getLogger("dlna.db")
 
 # Default pragmas applied to every new connection
@@ -95,10 +97,7 @@ class Pool:
                 log.warning(f"DB read contention: {e}")
             raise
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
     @contextmanager
     def write(self):
@@ -113,14 +112,11 @@ class Pool:
             except Exception:
                 try:
                     conn.rollback()
-                except Exception:
-                    pass
+                except Exception as rb:          # already failing; never mask
+                    log.debug(f"rollback after write error also failed: {rb}")
                 raise
             finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                close_quietly(conn)
 
     def close(self):
         """Mark the pool closed; future read()/write() calls will raise."""
@@ -135,10 +131,7 @@ class Pool:
                 conn.executescript(sql)
                 conn.commit()
             finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                close_quietly(conn)
 
     @property
     def db_file(self) -> str:

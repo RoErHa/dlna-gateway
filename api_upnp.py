@@ -46,7 +46,11 @@ def _get_lan_ip() -> str:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except OSError as e:
+        # Falling back here means we may advertise a loopback/stale IP over
+        # SSDP, which no renderer can reach — never fail this silently.
+        log.warning(f"LAN IP probe failed ({e}) — falling back to hostname "
+                    f"resolution; SSDP may advertise an unreachable address")
         return socket.gethostbyname(socket.gethostname())
 
 
@@ -1284,7 +1288,9 @@ def _gw_msearch_replies(data: bytes, location: str) -> list:
     ContentDirectory service. Pure → unit-testable without sockets."""
     try:
         msg = data.decode("utf-8", "replace")
-    except Exception:
+    except (AttributeError, TypeError):
+        # errors="replace" cannot raise UnicodeDecodeError, so the only
+        # real failure here is a non-bytes payload from a bad caller.
         return []
     if not msg.split("\n", 1)[0].strip().upper().startswith("M-SEARCH"):
         return []

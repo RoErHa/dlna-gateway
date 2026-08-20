@@ -31,7 +31,7 @@ try:
 except ImportError:                                      # noqa: BLE001
     _PILImage = None
     _PIL_LANCZOS = None
-from dlna_config import VERSION
+from dlna_config import VERSION, close_quietly
 from dlna_discovery import RENDERERS, SERVERS
 from dlna_library import DB, INDEXER
 from dlna_player import QUEUES, proxy_stream
@@ -171,7 +171,8 @@ def art_fetch(upstream: str):
     for _hop in range(_ART_MAX_REDIRECTS + 1):
         try:
             parsed = urllib.parse.urlparse(url)
-        except Exception:
+        except (ValueError, AttributeError) as e:
+            log.debug(f"art_fetch: unparseable url {url[:120]!r}: {e}")
             return 400, "Bad url", b""
         if parsed.scheme not in ("http", "https"):
             return 400, "Bad scheme", b""
@@ -213,10 +214,7 @@ def art_fetch(upstream: str):
             return 503, str(e), b""
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                close_quietly(conn)
     return 508, "Too many redirects", b""
 
 

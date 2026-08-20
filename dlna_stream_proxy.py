@@ -25,6 +25,8 @@ import threading
 import time
 import urllib.parse
 
+from dlna_config import close_quietly
+
 log = logging.getLogger("dlna.player")
 
 
@@ -80,10 +82,7 @@ def open_stream_upstream(upstream_url: str, range_hdr: str = ""):
         log.warning(f"open_stream_upstream {host}{path}: "
                     f"{type(e).__name__}: {e}")
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
         return None, None
 
 
@@ -128,10 +127,7 @@ def open_radio_upstream(upstream_url: str):
         log.warning(f"open_radio_upstream {host}{path[:60]}: "
                     f"{type(e).__name__}: {e}")
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
         return None, None, 0, ""
 
 
@@ -247,18 +243,15 @@ def proxy_stream(upstream_url: str, handler):
         log.warning(f"proxy_stream error: {e}")
         try:
             handler.send_error(502, str(e))
-        except Exception:
-            pass
+        except Exception as se:      # client already gone — nothing to send to
+            log.debug(f"could not deliver 502 to client ({se})")
     finally:
         elapsed = time.monotonic() - t_start
         log.info(f"proxy_stream ■ END   {host}{path} "
                  f"upstream={upstream_status} sent={sent_bytes} bytes "
                  f"in {elapsed:.1f}s reason={reason}")
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
 
 # ── Internet-radio ICY metadata ───────────────────────────────────
@@ -442,15 +435,12 @@ def proxy_radio_stream(upstream_url: str, handler):
         log.warning(f"proxy_radio_stream error: {e}")
         try:
             handler.send_error(502, str(e))
-        except Exception:
-            pass
+        except Exception as se:      # client already gone — nothing to send to
+            log.debug(f"could not deliver 502 to client ({se})")
     finally:
         elapsed = time.monotonic() - t_start
         log.info(f"proxy_radio_stream ■ END   {host}{path[:60]} "
                  f"sent={sent_bytes} bytes in {elapsed:.1f}s "
                  f"reason={reason}")
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)

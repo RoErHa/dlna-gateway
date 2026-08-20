@@ -378,8 +378,12 @@ class SchemaMixin:
                 with self._pool.write() as conn:
                     conn.execute(col_sql)
                 log.info(f"DB migration: {col_sql[:60]}")
-            except Exception:
-                pass  # column already exists
+            except sqlite3.OperationalError as e:
+                # Almost always "duplicate column name" — the migration is
+                # idempotent by design. Anything ELSE here is a real schema
+                # problem, so name it rather than assuming.
+                if "duplicate column" not in str(e).lower():
+                    log.warning(f"DB migration {col_sql[:60]!r} failed: {e}")
         # Loudness normalization removed (2026-05-31): peak-mode gain gave
         # negligible perceptual benefit, was already disabled in the
         # playback path, and broke bit-perfect on the browser path. Drop
@@ -389,8 +393,8 @@ class SchemaMixin:
                 conn.execute("DROP TABLE IF EXISTS track_loudness")
             log.info("DB migration: dropped track_loudness "
                      "(loudness normalization removed)")
-        except Exception:
-            pass
+        except sqlite3.Error as e:
+            log.debug(f"track_loudness drop skipped ({e})")
         # 2026-05-25: widen tracks UNIQUE to include bit_depth + sample_rate
         # so 16-bit and 24-bit copies of the same album coexist without
         # collision. Detect old schema by absence of the bit_depth column;
