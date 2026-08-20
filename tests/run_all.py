@@ -16,6 +16,7 @@ Exit code: 0 if all pass, 1 if any fail.
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
@@ -94,6 +95,27 @@ if FRONTEND_ONLY:
 # ══════════════════════════════════════════════════════════════════
 # FILE-LEVEL CHECKS (always run, no server needed)
 # ══════════════════════════════════════════════════════════════════
+
+section("T0.LINT — ruff (config: pyproject.toml)")
+# Before 2026-08-20 the repo had NO lint config and nothing enforced any
+# standard; the rule set in pyproject.toml is deliberately sized to sit at
+# ZERO violations, so any hit here is a real regression, not backlog.
+# ruff is a dev-only dep (like pytest/playwright) — absent → SKIP, never
+# a red suite, so a clean clone without it still passes.
+_ruff = os.path.join(PROJECT, ".venv", "bin", "ruff")
+if not os.path.isfile(_ruff):
+    _ruff = shutil.which("ruff")
+if _ruff:
+    _p = subprocess.run([_ruff, "check", ".", "--output-format=concise"],
+                        cwd=PROJECT, capture_output=True, text=True)
+    _hits = [ln for ln in (_p.stdout or "").splitlines()
+             if re.match(r"^\S+\.py:\d+:\d+: ", ln)]
+    check(f"ruff clean ({len(_hits)} violation(s))", _p.returncode == 0,
+          "\n      " + "\n      ".join(_hits[:12]) if _hits
+          else (_p.stderr or "").strip()[:200])
+else:
+    print("  \033[33m–\033[0m ruff not installed — skipped "
+          "(.venv/bin/pip install ruff)")
 
 section("T1.1 — Static files exist")
 check("static/index.html exists", os.path.isfile(os.path.join(STATIC, "index.html")))
@@ -333,7 +355,7 @@ except Exception as _e:
 # ══════════════════════════════════════════════════════════════════
 
 if OFFLINE:
-    print(f"\n\033[33m⚠ Skipping live server tests (--offline)\033[0m")
+    print("\n\033[33m⚠ Skipping live server tests (--offline)\033[0m")
 else:
     section("T1.1c — Static file serving (live)")
     status, body = fetch("/")

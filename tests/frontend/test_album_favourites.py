@@ -17,7 +17,6 @@ the shared StubGateway from conftest.
 """
 from __future__ import annotations
 
-import pytest
 
 
 # ── Helpers ───────────────────────────────────────────────────────

@@ -11,13 +11,12 @@ No network, no gateway. All SOAP calls are mocked. Fast (<1s).
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
-import dlna_player
 from dlna_player import (_dur_to_sec, _monitor_decision,
                          QueueRegistry, RendererQueue, WATCHDOG_GRACE_SEC)
 

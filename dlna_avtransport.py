@@ -17,7 +17,6 @@ import logging
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import Optional, Tuple
 
 log = logging.getLogger("dlna.content")
 
@@ -46,7 +45,7 @@ def avtransport_send(av_url: str, media_url: str, title: str,
             '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
             ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
             f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-        ).encode("utf-8")
+        ).encode()
         parsed = urllib.parse.urlparse(av_url)
         conn   = http.client.HTTPConnection(parsed.netloc, timeout=10)
         try:
@@ -170,7 +169,7 @@ def avtransport_pause(av_url: str) -> bool:
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
         ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         f'<s:Body>{body}</s:Body></s:Envelope>'
-    ).encode("utf-8")
+    ).encode()
     parsed = urllib.parse.urlparse(av_url)
     conn   = http.client.HTTPConnection(parsed.netloc, timeout=8)
     try:
@@ -191,7 +190,7 @@ def avtransport_pause(av_url: str) -> bool:
 
 
 def _av_soap(av_url: str, action: str,
-             body_inner: str) -> Tuple[Optional[str], Optional[str]]:
+             body_inner: str) -> tuple[str | None, str | None]:
     """Generic AVTransport SOAP helper.
 
     Returns ``(text, err)``:
@@ -208,7 +207,7 @@ def _av_soap(av_url: str, action: str,
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
         ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-    ).encode("utf-8")
+    ).encode()
     parsed = urllib.parse.urlparse(av_url)
     conn   = http.client.HTTPConnection(parsed.netloc, timeout=6)
     try:
@@ -230,7 +229,7 @@ def _av_soap(av_url: str, action: str,
         except Exception: pass
 
 
-def avtransport_probe_state(av_url: str) -> Tuple[str, str]:
+def avtransport_probe_state(av_url: str) -> tuple[str, str]:
     """Query CurrentTransportState, distinguishing a lost renderer from
     a renderer that genuinely reports UNKNOWN.
 
@@ -295,7 +294,7 @@ def avtransport_get_position(av_url: str) -> dict:
         '<u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
         '<InstanceID>0</InstanceID></u:GetPositionInfo>')
 
-    def _parse_time(s: str) -> Optional[float]:
+    def _parse_time(s: str) -> float | None:
         """'H:MM:SS' or 'MM:SS' → float seconds, None if NOT_IMPLEMENTED."""
         if not s or s in ("NOT_IMPLEMENTED", "0:00:00", "00:00:00"):
             return None
@@ -346,7 +345,7 @@ def avtransport_get_position(av_url: str) -> dict:
 # ─────────────────────────────────────────────────────────────────
 
 def _rc_soap(rc_url: str, action: str, body_inner: str,
-             timeout: float = 6.0) -> Optional[str]:
+             timeout: float = 6.0) -> str | None:
     """Generic RenderingControl SOAP helper. Returns response body
     text on 2xx, None otherwise. Catches connection errors so callers
     don't have to."""
@@ -355,7 +354,7 @@ def _rc_soap(rc_url: str, action: str, body_inner: str,
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
         ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-    ).encode("utf-8")
+    ).encode()
     parsed = urllib.parse.urlparse(rc_url)
     try:
         conn = http.client.HTTPConnection(parsed.netloc, timeout=timeout)
@@ -419,7 +418,7 @@ def set_volume(rc_url: str, level: int) -> bool:
     return raw is not None
 
 
-def get_volume(rc_url: str) -> Optional[int]:
+def get_volume(rc_url: str) -> int | None:
     """Read the renderer's current volume on Master channel. Returns None
     on fault or garbled response — callers should treat None as
     "unknown, fall back to a sensible default" rather than fail-fast."""
@@ -447,14 +446,14 @@ def get_volume(rc_url: str) -> Optional[int]:
 def avtransport_stop(av_url: str) -> bool:
     """Send Stop to a renderer."""
     envelope = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
-        ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-        '<s:Body>'
-        '<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
-        '<InstanceID>0</InstanceID></u:Stop>'
-        '</s:Body></s:Envelope>'
-    ).encode("utf-8")
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+        b' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        b'<s:Body>'
+        b'<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+        b'<InstanceID>0</InstanceID></u:Stop>'
+        b'</s:Body></s:Envelope>'
+    )
     parsed = urllib.parse.urlparse(av_url)
     conn   = http.client.HTTPConnection(parsed.netloc, timeout=8)
     try:

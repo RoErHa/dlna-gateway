@@ -53,7 +53,7 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 _REPO = Path(__file__).resolve().parent.parent
 _DEFAULT_DB = _REPO / "library.db"

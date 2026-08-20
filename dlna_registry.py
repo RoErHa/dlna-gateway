@@ -11,7 +11,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 log = logging.getLogger("dlna.discovery")
 
@@ -57,7 +56,7 @@ class MediaRenderer:
 
 class ServerRegistry:
     def __init__(self):
-        self._d: Dict[str, MediaServer] = {}
+        self._d: dict[str, MediaServer] = {}
         self._lock = threading.Lock()
 
     def add(self, srv: MediaServer):
@@ -73,19 +72,19 @@ class ServerRegistry:
             if udn in self._d:
                 self._d[udn].last_seen = time.time()
 
-    def get(self, udn: str) -> Optional[MediaServer]:
+    def get(self, udn: str) -> MediaServer | None:
         """Always returns the server if ever discovered — regardless of staleness."""
         with self._lock:
             return self._d.get(udn)
 
-    def all(self) -> List[MediaServer]:
+    def all(self) -> list[MediaServer]:
         """Return all known servers; online ones first."""
         now = time.time()
         with self._lock:
             return sorted(self._d.values(),
                           key=lambda s: now - s.last_seen)
 
-    def online(self) -> List[MediaServer]:
+    def online(self) -> list[MediaServer]:
         """Return only recently-seen servers."""
         now = time.time()
         with self._lock:
@@ -106,7 +105,7 @@ class ServerRegistry:
 
 class RendererRegistry:
     def __init__(self):
-        self._d: Dict[str, MediaRenderer] = {}
+        self._d: dict[str, MediaRenderer] = {}
         self._lock = threading.Lock()
 
     def add(self, rnd: MediaRenderer):
@@ -116,12 +115,12 @@ class RendererRegistry:
             rnd.last_seen = time.time()
             self._d[rnd.udn] = rnd
 
-    def get(self, udn: str) -> Optional[MediaRenderer]:
+    def get(self, udn: str) -> MediaRenderer | None:
         """Always returns if ever discovered."""
         with self._lock:
             return self._d.get(udn)
 
-    def all(self) -> List[MediaRenderer]:
+    def all(self) -> list[MediaRenderer]:
         now = time.time()
         with self._lock:
             return sorted(self._d.values(),

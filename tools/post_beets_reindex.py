@@ -56,15 +56,15 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 # Reuse the reindex helpers from beets_enrich (same tools/ dir). Support both
 # `python3 tools/post_beets_reindex.py` (tools/ on sys.path[0]) and a
 # `tools.post_beets_reindex` package import (tests / -m).
 try:
-    from beets_enrich import pick_localfs_udn, trigger_reindex
+    from beets_enrich import trigger_reindex
 except ImportError:                                  # pragma: no cover
-    from tools.beets_enrich import pick_localfs_udn, trigger_reindex
+    from tools.beets_enrich import trigger_reindex
 
 _DEFAULT_DB = Path(__file__).resolve().parent.parent / "library.db"
 _DEFAULT_GATEWAY = "http://127.0.0.1:8765"
@@ -119,7 +119,7 @@ def _backup_db(db_path: Path) -> Path:
     return bak
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Iterable[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Post-beets: drop AcoustID metadata_overrides (so beets' "
                     "fresh tags aren't masked) and reindex the LocalFs "

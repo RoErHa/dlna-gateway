@@ -160,7 +160,7 @@ class TestAuth(unittest.TestCase):
     def test_correct_hex_encoded_password(self):
         h = _MockH()
         api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
-        hex_pw = "enc:" + "rightpwd".encode().hex()
+        hex_pw = "enc:" + b"rightpwd".hex()
         api_subsonic.handle(h, "GET", "/rest/ping",
                             {"u": "user", "p": hex_pw})
         api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None

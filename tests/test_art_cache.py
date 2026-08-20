@@ -281,7 +281,7 @@ class TestArtFetchScaled(_CacheBase):
 
     def test_non_200_not_scaled_or_cached(self):
         with mock.patch.object(api_playback, "art_fetch",
-                               return_value=(404, "not found", b"")) as m:
+                               return_value=(404, "not found", b"")):
             code, _ct, body = api_playback.art_fetch_scaled("http://x/bad", 200)
         self.assertEqual(code, 404)
         self.assertEqual(body, b"")

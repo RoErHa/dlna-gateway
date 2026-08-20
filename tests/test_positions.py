@@ -77,7 +77,6 @@ class TestPositionsDB(unittest.TestCase):
         self.assertFalse(self.db.position_clear(BOOK))   # already gone
 
     def test_list_newest_first(self):
-        import time
         self.db.position_set("book-a", CH7, 10)
         # updated_at has second resolution — force distinct timestamps
         with self.db._pool.write() as c:

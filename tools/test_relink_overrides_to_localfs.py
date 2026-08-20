@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.relink_overrides_to_localfs import (
-    _FANOUT_CAP, _norm, apply_plan, plan_relink)
+    _FANOUT_CAP, apply_plan, plan_relink)
 
 UDN = "uuid:localfs-testtesttest"
 BASE = "http://192.168.1.125:8200/localfs/stream/"

@@ -60,7 +60,6 @@ import sqlite3
 import sys
 import time
 import unicodedata
-from typing import Optional
 
 _LOCALFS_STREAM_RE = re.compile(r"/localfs/stream/([0-9a-f]+)$")
 
@@ -71,7 +70,7 @@ _FANOUT_CAP = 25
 _YEAR_MIN, _YEAR_MAX = 1000, 2100
 
 
-def _norm(s: Optional[str]) -> str:
+def _norm(s: str | None) -> str:
     """Diacritic-strip + smart-quote→ASCII + lower + whitespace-collapse.
     Mirrors dlna_library._norm_title so AcoustID-corrected vs beets-raw
     tags match."""

@@ -45,10 +45,9 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
 from urllib.parse import unquote
 
-from dlna_providers.localfs import _MIME_BY_EXT, _extract_art_bytes
+from dlna_providers.localfs import _extract_art_bytes
 
 log = logging.getLogger("dlna.localfs.server")
 
@@ -90,11 +89,11 @@ def _dlna_headers_for_mime(mime: str) -> dict:
         pn = "FLAC"
     elif mime.startswith("audio/mpeg"):
         pn = "MP3"
-    elif mime.startswith("audio/aac") or mime.startswith("audio/mp4"):
+    elif mime.startswith(("audio/aac", "audio/mp4")):
         pn = "AAC_ISO_320"
-    elif mime.startswith("audio/x-wav") or mime.startswith("audio/wav"):
+    elif mime.startswith(("audio/x-wav", "audio/wav")):
         pn = "LPCM"
-    elif mime.startswith("audio/ogg") or mime.startswith("audio/opus"):
+    elif mime.startswith(("audio/ogg", "audio/opus")):
         pn = "OGG"
     elif "dsd" in mime or "dsf" in mime or "dff" in mime:
         pn = "DSD"           # non-standard; Naim/MinimServer accept it
@@ -108,7 +107,7 @@ def _dlna_headers_for_mime(mime: str) -> dict:
     }
 
 
-def _parse_range_header(value: str, file_size: int) -> Optional[tuple[int, int]]:
+def _parse_range_header(value: str, file_size: int) -> tuple[int, int] | None:
     """Parse `bytes=N-M`, `bytes=N-`, `bytes=-N`. Returns (start, end)
     inclusive, or None when the header is malformed / unsatisfiable.
     Multipart ranges are not supported — the Naim doesn't use them.

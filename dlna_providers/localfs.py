@@ -40,14 +40,13 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
+from typing import Any
+from collections.abc import Callable, Iterator
 
 from . import (
     Album,
     Artist,
-    LibraryProvider,
     Track,
     register_provider,
 )
@@ -137,7 +136,7 @@ def _require_mutagen():
         ) from e
 
 
-def _read_tags(path: Path) -> Optional[dict]:
+def _read_tags(path: Path) -> dict | None:
     """Read tags + technical info via mutagen, returning a dict in
     the shape `LibraryDB.upsert_tracks` expects. Returns None when
     mutagen can't open the file (corrupt / unrecognized format);
@@ -165,7 +164,7 @@ def _read_tags(path: Path) -> Optional[dict]:
     # Year: mutagen-easy gives a 'date' field, often 'YYYY' or
     # 'YYYY-MM-DD'. Take just the first 4 digits if plausible.
     raw_date = _first("date") or _first("year")
-    year: Optional[int] = None
+    year: int | None = None
     if raw_date:
         m = re.match(r"^(\d{4})", raw_date)
         if m:
@@ -241,7 +240,7 @@ def _sniff_image_mime(data: bytes) -> str:
     return "image/jpeg"
 
 
-def _extract_art_bytes(path: Path) -> Optional[tuple[bytes, str]]:
+def _extract_art_bytes(path: Path) -> tuple[bytes, str] | None:
     """Return `(picture_bytes, mime)` for the first embedded cover, or
     None if the file has no embedded art / can't be read. Single source
     of cover bytes: used by `_extract_art_hash` (stable marker at scan
@@ -254,7 +253,7 @@ def _extract_art_bytes(path: Path) -> Optional[tuple[bytes, str]]:
         return None
     if audio is None:
         return None
-    art_bytes: Optional[bytes] = None
+    art_bytes: bytes | None = None
     # FLAC: .pictures
     pics = getattr(audio, "pictures", None)
     if pics:
@@ -279,7 +278,7 @@ def _extract_art_bytes(path: Path) -> Optional[tuple[bytes, str]]:
     return (art_bytes, _sniff_image_mime(art_bytes))
 
 
-def _extract_art_hash(path: Path) -> Optional[str]:
+def _extract_art_hash(path: Path) -> str | None:
     """Return sha1(first-embedded-cover-bytes) or None. The marker lets
     the existing `_backfill_album_art` propagate a consistent value
     across the album's siblings; the actual bytes are served on demand
@@ -314,7 +313,7 @@ class LocalFsProvider:
         self._library = library_db
         self._root = Path(music_root).expanduser().resolve()
         self.udn: str = _udn_for_root(self._root)
-        self._fs_watcher: Optional[Any] = None    # watchdog Observer
+        self._fs_watcher: Any | None = None    # watchdog Observer
         # P3: the URL prefix the file server is reachable at. Lets
         # stream_url(track_id) emit a full Naim-fetchable URL. Empty
         # means the server isn't running yet → stream_url raises.
@@ -586,7 +585,7 @@ class LocalFsProvider:
                     genre=r["genre"] or "",
                 )
 
-    def get_track(self, track_id: str) -> Optional[Track]:
+    def get_track(self, track_id: str) -> Track | None:
         with self._library._pool.read() as conn:
             r = conn.execute(
                 "SELECT obj_id, url, title, artist, album, duration, "

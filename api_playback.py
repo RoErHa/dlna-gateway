@@ -694,8 +694,8 @@ def edit_track(h, body):
         # `_YEAR_UNSET` sentinel, so it'd be mistaken for a real value and
         # fail to bind ("type 'object' is not supported") — breaking every
         # edit that doesn't change the year. (Fixed 2026-06-01.)
-        meta_kwargs = dict(artist=artist, album=album, title=title,
-                           genre=genre)
+        meta_kwargs = {"artist": artist, "album": album, "title": title,
+                       "genre": genre}
         if year_raw is not _SENTINEL:
             meta_kwargs["year"] = year_arg   # None (clear) or validated int
         ok = DB.update_track_meta(url, **meta_kwargs)

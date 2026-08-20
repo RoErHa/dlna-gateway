@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────
+# dlna-gateway — tooling config.
+#
+# There is deliberately NO build system here: the gateway is run from
+# the repo (./setup.sh --run / hypercorn dlna_asgi:app), not installed
+# as a package. This file exists so `ruff` has a single, checked-in
+# source of truth — before 2026-08-20 the repo had no lint config at
+# all and nothing enforced any standard.
+#
+# The gate is wired into `python tests/run_all.py --offline` (T0.LINT),
+# so it runs on every offline suite invocation. Keep it at ZERO
+# violations; that is the whole point of choosing an achievable rule
+# set rather than an aspirational one.
+# ─────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py311"       # floor we support; the venv runs 3.14
+line-length = 100              # advisory only — E501 is not enforced
+exclude = [".venv", "art_cache", "docs", "static"]
+
+[tool.ruff.lint]
+# ENFORCED. Chosen because every rule here catches a real defect class
+# rather than a style preference:
+#   F    pyflakes      — undefined names, unused imports/vars, shadowing
+#   E9   syntax        — actual parse/runtime errors
+#   W2/W3 whitespace   — trailing-whitespace / missing final newline
+#   B    bugbear       — mutable defaults, loop-variable closures, zip
+#                        without strict, except-in-finally …
+#   RET  return        — implicit/inconsistent returns
+#   UP   pyupgrade     — deprecated stdlib imports, legacy typing
+#   C4   comprehensions— needless list()/dict() round-trips
+#   PIE  misc-lint     — dead code, duplicate class fields
+#   ASYNC async        — blocking calls inside the event loop. This one
+#                        matters most: the whole 2.0 edge is ASGI, and a
+#                        blocking call in an `async def` silently
+#                        serialises every request on the gateway.
+select = ["F", "E9", "W", "B", "RET", "UP", "C4", "PIE", "ASYNC"]
+
+ignore = [
+    # ── Deliberate house style, not defects ──────────────────────────
+    "E501",    # line length: the codebase hand-wraps to ~78; enforcing
+               # a hard cap would churn thousands of comment lines.
+    "RET504",  # assign-then-return is used deliberately for a named
+               # intermediate that documents what the value IS.
+    "RET505",  # else-after-return reads better in the SOAP/branch
+               # dispatch tables than early-return chains.
+    "RET506", "RET507", "RET508",   # same family (else after raise etc.)
+    "B008",    # FastAPI's Depends()/Query() defaults REQUIRE call-in-
+               # default; this rule is incompatible with the framework.
+    "B024",    # Protocol classes with no abstract methods are the point
+               # of dlna_providers' structural-typing seam.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and tools legitimately manipulate sys.path before importing the
+# modules under test (they run from the repo root, uninstalled), which
+# is exactly what E402 forbids. They also hold files/servers open across
+# a fixture's lifetime rather than in a `with`.
+"tests/*"  = ["E402", "B011"]
+"tools/*"  = ["E402"]
+# The stub gateway subclasses BaseHTTPRequestHandler, whose do_GET/do_POST
+# naming and unused-arg signatures are fixed by stdlib.
+"tests/frontend/stub_gateway.py" = ["E402", "N802"]
+
+[tool.ruff.lint.flake8-bugbear]
+# api_playback.art_fetch et al. take a mutable default only where the
+# body never mutates it; nothing is registered here yet — kept explicit
+# so a future exemption has an obvious home.
+extend-immutable-calls = []

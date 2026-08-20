@@ -158,7 +158,6 @@ def test_radio_button_loads_and_plays(app, gateway):
             "duration": "0:03:00", "art": "", "type": "audio",
         })
     app.locator("#btn-radio").click()
-    req = app.evaluate("null")  # no-op; using gateway capture
     r = gateway.wait_for_request("/api/radio", timeout=3.0)
     assert r is not None
     # And the audio element should get a src

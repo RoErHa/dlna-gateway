@@ -36,7 +36,7 @@ import sys
 import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 _REPO = Path(__file__).resolve().parent.parent
 _DEFAULT_DB = _REPO / "library.db"
@@ -65,7 +65,7 @@ def _d_id(url: str):
     return m.group(1) if m else None
 
 
-def _norm(s: Optional[str]) -> str:
+def _norm(s: str | None) -> str:
     """Diacritics-stripped, bracket-removed, punctuation-flattened
     lowercase. Used as input to the fuzzy ratio."""
     if not s:

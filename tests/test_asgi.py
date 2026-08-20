@@ -25,7 +25,7 @@ import dlna_events
 import dlna_gateway
 import api_subsonic
 import api_upnp
-from dlna_asgi_bridge import run_legacy_sync, run_subsonic_sync
+from dlna_asgi_bridge import run_legacy_sync
 from dlna_config import VERSION
 
 
@@ -157,7 +157,7 @@ class TestBrowseNativePorts(unittest.TestCase):
     def test_album_tracks_wraps_and_touches(self):
         from unittest import mock
         with mock.patch.object(dlna_asgi.DB, "album_tracks",
-                               return_value=[{"t": 1}]) as mt, \
+                               return_value=[{"t": 1}]), \
              mock.patch.object(dlna_asgi.SERVERS, "touch") as mtouch:
             out = asyncio.run(dlna_asgi.album_tracks(udn="u", album="X"))
             self.assertEqual(out, {"tracks": [{"t": 1}]})
@@ -950,7 +950,6 @@ class TestFdMonitor(unittest.TestCase):
     def test_start_fd_monitor_spawns_named_daemon(self):
         import dlna_fdmon
         import threading as _t
-        before = {x.name for x in _t.enumerate()}
         dlna_fdmon.start_fd_monitor(interval=9999)   # won't tick during the test
         names = {x.name for x in _t.enumerate()}
         self.assertIn("fd-monitor", names)

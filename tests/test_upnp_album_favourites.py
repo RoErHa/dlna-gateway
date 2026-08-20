@@ -62,7 +62,7 @@ class TestAlbumIdCodec(unittest.TestCase):
     def test_decode_legacy_two_field_id(self):
         # An id minted before album_key existed decodes with key=''.
         import base64
-        raw = "Queen\x00A Night".encode("utf-8")
+        raw = b"Queen\x00A Night"
         legacy = "favalbum:" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
         self.assertEqual(api_upnp._decode_album_id(legacy),
                          ("Queen", "A Night", ""))

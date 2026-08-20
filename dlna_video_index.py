@@ -43,7 +43,7 @@ def _walk(root: Path):
 
 
 def _mtime_iso(mtime: float) -> str:
-    return _dt.datetime.fromtimestamp(mtime, _dt.timezone.utc).strftime(
+    return _dt.datetime.fromtimestamp(mtime, _dt.UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
 
 

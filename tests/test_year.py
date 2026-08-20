@@ -16,7 +16,6 @@ Run standalone:
     python3 -m unittest tests.test_year -v
 """
 import os
-import sqlite3
 import sys
 import tempfile
 import unittest

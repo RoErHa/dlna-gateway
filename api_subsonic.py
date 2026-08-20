@@ -20,13 +20,12 @@ implemented; every modern Subsonic client handles JSON.
 """
 import base64
 import hashlib
-import json
 import logging
 import os
 import time
 import urllib.parse
 import uuid
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from dlna_discovery import SERVERS
 from dlna_library import DB
@@ -42,7 +41,7 @@ log = logging.getLogger("dlna.api.subsonic")
 # os.environ directly. Module-level fall-backs only used by tests
 # that prefer to set the password via attribute (see test_subsonic.py).
 SUBSONIC_USER_DEFAULT     = "user"
-SUBSONIC_PASSWORD_OVERRIDE: Optional[str] = None  # tests may set
+SUBSONIC_PASSWORD_OVERRIDE: str | None = None  # tests may set
 
 
 def _subsonic_user() -> str:
@@ -133,18 +132,18 @@ def _wrap_error(code: int, message: str) -> dict:
     }}
 
 
-def _ok(h, payload: dict, http_code: int = 200):
+def _ok(h, payload: dict, http_code: int = 200) -> None:
     _send_response(h, _wrap(payload), http_code)
 
 
-def _fail(h, code: int, message: str, http_code: int = 200):
+def _fail(h, code: int, message: str, http_code: int = 200) -> None:
     # Subsonic clients want HTTP 200 even on logical errors; the
     # error code is in the wrapper. Use http_code=503 only for the
     # "password not configured" hard-failure.
     _send_response(h, _wrap_error(code, message), http_code)
 
 
-def _send_response(h, full_payload: dict, http_code: int):
+def _send_response(h, full_payload: dict, http_code: int) -> None:
     """Dispatch JSON or XML based on the f= param. Subsonic spec
     defaults to XML; clients must ask for JSON. Amperfy notably does
     NOT send f=json — it expects XML. Tested clients (Nautiline,
@@ -228,7 +227,7 @@ def _enc(prefix: str, payload: str) -> str:
     return prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _dec(prefix: str, encoded: str) -> Optional[str]:
+def _dec(prefix: str, encoded: str) -> str | None:
     if not encoded.startswith(prefix):
         return None
     rest = encoded[len(prefix):]
@@ -240,7 +239,7 @@ def _dec(prefix: str, encoded: str) -> Optional[str]:
 
 
 def _track_id(url: str) -> str:           return _enc("tr:", url)
-def _track_id_decode(s: str) -> Optional[str]: return _dec("tr:", s)
+def _track_id_decode(s: str) -> str | None: return _dec("tr:", s)
 
 def _album_id(artist: str, album: str, album_key: str = "") -> str:
     # album_key (LocalFs folder identity) is appended ONLY when set, so a
@@ -252,7 +251,7 @@ def _album_id(artist: str, album: str, album_key: str = "") -> str:
         payload += f"\x00{album_key}"
     return _enc("al:", payload)
 
-def _album_id_decode(s: str) -> Optional[tuple]:
+def _album_id_decode(s: str) -> tuple | None:
     """Return (artist, album, album_key). Legacy 2-field ids decode with
     album_key=''."""
     raw = _dec("al:", s)
@@ -264,13 +263,13 @@ def _album_id_decode(s: str) -> Optional[tuple]:
     return (artist, album, album_key)
 
 def _artist_id(artist: str) -> str:        return _enc("ar:", artist)
-def _artist_id_decode(s: str) -> Optional[str]: return _dec("ar:", s)
+def _artist_id_decode(s: str) -> str | None: return _dec("ar:", s)
 
 # Radio station ids are NOT base64-wrapped — radio-browser station
 # UUIDs (and our uuid4 for client-created stations) are already
 # URL/XML/JSON-safe, so a bare `rs:` prefix round-trips fine.
 def _radio_id(station_uuid: str) -> str:   return "rs:" + (station_uuid or "")
-def _radio_id_decode(s: str) -> Optional[str]:
+def _radio_id_decode(s: str) -> str | None:
     return s[3:] if s and s.startswith("rs:") else None
 
 
@@ -480,7 +479,8 @@ def _get_artist(h, params):
     aid = params.get("id", "")
     artist = _artist_id_decode(aid)
     if artist is None:
-        return _fail(h, ERR_NOT_FOUND, f"Unknown artist id: {aid}")
+        _fail(h, ERR_NOT_FOUND, f"Unknown artist id: {aid}")
+        return
     udn = _default_udn()
     albums = DB.artist_albums(udn, artist) if udn else []
     _ok(h, {"artist": {
@@ -496,7 +496,8 @@ def _get_album(h, params):
     aid = params.get("id", "")
     decoded = _album_id_decode(aid)
     if decoded is None:
-        return _fail(h, ERR_NOT_FOUND, f"Unknown album id: {aid}")
+        _fail(h, ERR_NOT_FOUND, f"Unknown album id: {aid}")
+        return
     artist, album, album_key = decoded
     udn = _default_udn()
     tracks = (DB.album_tracks(udn, artist, album, album_key=album_key)
@@ -565,10 +566,12 @@ def _get_album_list2(h, params):
 def _search3(h, params):
     q = (params.get("query") or "").strip()
     if not q:
-        return _ok(h, {"searchResult3": {}})
+        _ok(h, {"searchResult3": {}})
+        return
     udn = _default_udn()
     if not udn:
-        return _ok(h, {"searchResult3": {}})
+        _ok(h, {"searchResult3": {}})
+        return
     res = DB.search(udn, q)
     _ok(h, {"searchResult3": {
         "artist": [_so_artist({"artist": r["artist"],
@@ -601,11 +604,13 @@ def _get_playlists(h, params):
 def _get_playlist(h, params):
     pid_raw = params.get("id", "")
     if not pid_raw.startswith("pl:"):
-        return _fail(h, ERR_NOT_FOUND, f"Unknown playlist id: {pid_raw}")
+        _fail(h, ERR_NOT_FOUND, f"Unknown playlist id: {pid_raw}")
+        return
     pid = pid_raw[3:]
     pl = DB.pl_get(pid)
     if pl is None:
-        return _fail(h, ERR_NOT_FOUND, "Playlist not found")
+        _fail(h, ERR_NOT_FOUND, "Playlist not found")
+        return
     _ok(h, {"playlist": {
         "id":        pid_raw,
         "name":      pl["name"],
@@ -631,11 +636,13 @@ def _create_playlist(h, params):
         pid = pid_raw[3:]
         pl = DB.pl_get(pid)
         if pl is None:
-            return _fail(h, ERR_NOT_FOUND, "Playlist not found")
+            _fail(h, ERR_NOT_FOUND, "Playlist not found")
+            return
     elif name:
         pid = DB.pl_create(name)
     else:
-        return _fail(h, ERR_MISSING_PARAM, "Need playlistId or name")
+        _fail(h, ERR_MISSING_PARAM, "Need playlistId or name")
+        return
 
     # Replace the playlist's tracks with the given song list. Walk the
     # current track URLs vs the requested ones; remove what's not in
@@ -676,11 +683,13 @@ def _update_playlist(h, params):
     (some clients send by URL/ID rather than index)."""
     pid_raw = params.get("playlistId", "")
     if not pid_raw.startswith("pl:"):
-        return _fail(h, ERR_MISSING_PARAM, "Missing or bad playlistId")
+        _fail(h, ERR_MISSING_PARAM, "Missing or bad playlistId")
+        return
     pid = pid_raw[3:]
     pl = DB.pl_get(pid)
     if pl is None:
-        return _fail(h, ERR_NOT_FOUND, "Playlist not found")
+        _fail(h, ERR_NOT_FOUND, "Playlist not found")
+        return
 
     name = params.get("name", "")
     if name:
@@ -725,7 +734,8 @@ def _update_playlist(h, params):
 def _delete_playlist(h, params):
     pid_raw = params.get("id", "")
     if not pid_raw.startswith("pl:"):
-        return _fail(h, ERR_MISSING_PARAM, "Missing or bad id")
+        _fail(h, ERR_MISSING_PARAM, "Missing or bad id")
+        return
     pid = pid_raw[3:]
     DB.pl_delete(pid)
     _ok(h, {})
@@ -765,7 +775,8 @@ def _stream(h, params):
     sid = params.get("id", "")
     url = _track_id_decode(sid)
     if not url:
-        return _fail(h, ERR_NOT_FOUND, f"Unknown track id: {sid}")
+        _fail(h, ERR_NOT_FOUND, f"Unknown track id: {sid}")
+        return
     # Reuse the existing byte-perfect Range-aware proxy.
     proxy_stream(url, h)
 
@@ -863,11 +874,13 @@ def _scrobble(h, params):
     'finished, count it'."""
     sub = params.get("submission", "true").lower()
     if sub == "false":
-        return _ok(h, {})
+        _ok(h, {})
+        return
     sid = params.get("id", "")
     url = _track_id_decode(sid)
     if not url:
-        return _ok(h, {})  # silent ignore — don't fail the client
+        _ok(h, {})  # silent ignore — don't fail the client
+        return
     with DB._pool.write() as c:
         c.execute(
             "INSERT INTO play_counts (url, count, last_played) "
@@ -909,7 +922,8 @@ def _create_internet_radio_station(h, params):
     stream = (params.get("streamUrl") or "").strip()
     name   = (params.get("name") or "").strip()
     if not stream or not name:
-        return _fail(h, ERR_MISSING_PARAM, "streamUrl and name required")
+        _fail(h, ERR_MISSING_PARAM, "streamUrl and name required")
+        return
     result = DB.radio_fav_add({
         "station_uuid": str(uuid.uuid4()),
         "name":         name,
@@ -918,8 +932,9 @@ def _create_internet_radio_station(h, params):
         "favicon": "", "codec": "", "bitrate": 0, "country": "", "tags": "",
     })
     if result == "full":
-        return _fail(h, ERR_GENERIC,
-                     f"Radio favourites full (limit {DB.RADIO_FAV_MAX})")
+        _fail(h, ERR_GENERIC,
+              f"Radio favourites full (limit {DB.RADIO_FAV_MAX})")
+        return
     _ok(h, {})
 
 
@@ -929,8 +944,9 @@ def _update_internet_radio_station(h, params):
     stream = (params.get("streamUrl") or "").strip()
     name   = (params.get("name") or "").strip()
     if not sid or not stream or not name:
-        return _fail(h, ERR_MISSING_PARAM,
-                     "id, streamUrl and name required")
+        _fail(h, ERR_MISSING_PARAM,
+              "id, streamUrl and name required")
+        return
     DB.radio_fav_update(sid, name=name, stream_url=stream,
                         homepage=(params.get("homepageUrl") or "").strip())
     _ok(h, {})
@@ -940,7 +956,8 @@ def _delete_internet_radio_station(h, params):
     """deleteInternetRadioStation?id="""
     sid = _radio_id_decode(params.get("id", ""))
     if not sid:
-        return _fail(h, ERR_MISSING_PARAM, "valid id required")
+        _fail(h, ERR_MISSING_PARAM, "valid id required")
+        return
     DB.radio_fav_remove(sid)
     _ok(h, {})
 
@@ -958,7 +975,7 @@ def _iso(ts) -> str:
     import datetime
     try:
         return datetime.datetime.fromtimestamp(
-            int(ts), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            int(ts), datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (TypeError, ValueError, OSError):
         return "1970-01-01T00:00:00Z"
 
@@ -989,14 +1006,17 @@ def _create_bookmark(h, params):
     book's resume point at this chapter + offset."""
     url = _track_id_decode(params.get("id", ""))
     if not url:
-        return _fail(h, ERR_MISSING_PARAM, "id required")
+        _fail(h, ERR_MISSING_PARAM, "id required")
+        return
     try:
         pos_ms = max(0, int(params.get("position", "0")))
     except ValueError:
-        return _fail(h, ERR_MISSING_PARAM, "position must be an integer")
+        _fail(h, ERR_MISSING_PARAM, "position must be an integer")
+        return
     t = DB.track_by_url(url)
     if not t:
-        return _fail(h, ERR_NOT_FOUND, "track not found")
+        _fail(h, ERR_NOT_FOUND, "track not found")
+        return
     key = t.get("album_key") or url   # root-level single-file book
     DB.position_set(key, url, pos_ms / 1000.0)
     _ok(h, {})
@@ -1006,7 +1026,8 @@ def _delete_bookmark(h, params):
     """deleteBookmark?id=<track> — clear the whole book's position."""
     url = _track_id_decode(params.get("id", ""))
     if not url:
-        return _fail(h, ERR_MISSING_PARAM, "id required")
+        _fail(h, ERR_MISSING_PARAM, "id required")
+        return
     t = DB.track_by_url(url)
     key = (t.get("album_key") if t else "") or url
     DB.position_clear(key)
@@ -1107,27 +1128,31 @@ def handle(h, http_method: str, path: str, query, body: bytes = b""):
               f"u={query_params.get('u', '')!r} f={fmt_raw or '<unset>'} "
               f"→ resp={h._subsonic_format}")
     if not method:
-        return _fail(h, ERR_NOT_FOUND, "missing method", http_code=404)
+        _fail(h, ERR_NOT_FOUND, "missing method", http_code=404)
+        return
 
     fn = _METHODS.get(method)
     if fn is None:
         log.debug(f"Subsonic: unimplemented method {method!r}")
-        return _fail(h, ERR_NOT_FOUND,
-                     f"Method not implemented: {method}", http_code=404)
+        _fail(h, ERR_NOT_FOUND,
+              f"Method not implemented: {method}", http_code=404)
+        return
 
     if not _subsonic_password():
         # Distinct from auth-failure: deliberate refuse-all when env
         # not set so a misconfigured deploy doesn't accidentally
         # expose data with an empty-password match.
         log.warning("Subsonic call rejected — SUBSONIC_PASSWORD env not set")
-        return _fail(h, ERR_NOT_AUTHORIZED,
-                     "Server not configured (SUBSONIC_PASSWORD unset)",
-                     http_code=503)
+        _fail(h, ERR_NOT_AUTHORIZED,
+              "Server not configured (SUBSONIC_PASSWORD unset)",
+              http_code=503)
+        return
 
     if not _check_auth(query_params):
         log.info(f"Subsonic auth failed for user={query_params.get('u', '')!r} "
                  f"method={method}")
-        return _fail(h, ERR_WRONG_AUTH, "Wrong username or password")
+        _fail(h, ERR_WRONG_AUTH, "Wrong username or password")
+        return
 
     try:
         fn(h, query_params)

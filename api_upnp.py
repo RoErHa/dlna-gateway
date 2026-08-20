@@ -21,7 +21,6 @@ import logging
 import os
 import re
 import socket
-import struct
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -706,7 +705,7 @@ def _b64d(s: str) -> str:
 def _encode_lib_album_id(artist: str, album: str, album_key: str = "") -> str:
     """galbum:* ObjectID for a full-library album (distinct from favalbum:* —
     a galbum resolves via the primary library udn, not the favourites row)."""
-    raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
+    raw = f"{artist}\x00{album}\x00{album_key}".encode()
     return "galbum:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
@@ -723,7 +722,7 @@ def _ab_udn() -> str:
 def _encode_ab_book_id(artist: str, album: str, album_key: str = "") -> str:
     """abbook:* ObjectID — same 3-field payload as galbum:*, but resolves
     against the AUDIOBOOKS udn, not the music library."""
-    raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
+    raw = f"{artist}\x00{album}\x00{album_key}".encode()
     return "abbook:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
@@ -815,7 +814,7 @@ def _encode_album_id(artist: str, album: str, album_key: str = "") -> str:
     # NUL-delimited (artist, album, album_key). album_key (LocalFs folder
     # identity) lets a Various-Artists compilation round-trip as one album;
     # empty for (artist, album)-keyed favourites.
-    raw = f"{artist}\x00{album}\x00{album_key}".encode("utf-8")
+    raw = f"{artist}\x00{album}\x00{album_key}".encode()
     return "favalbum:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
@@ -914,7 +913,7 @@ def _soap_svc_response(ns: str, action: str, inner: str) -> bytes:
         's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
         f'<u:{action}Response xmlns:u="{ns}">{inner}'
         f'</u:{action}Response></s:Body></s:Envelope>'
-    ).encode("utf-8")
+    ).encode()
 
 
 def _soap_cd_response(action: str, inner: str) -> bytes:
@@ -948,7 +947,7 @@ def cm_control_soap(body: bytes):
         return 400, "text/html", f"<h1>Unsupported action: {action}</h1>".encode()
     except Exception as e:
         log.error(f"GW CM control error: {e}")
-        return 500, "text/html", f"<h1>error: {e}</h1>".encode("utf-8")
+        return 500, "text/html", f"<h1>error: {e}</h1>".encode()
 
 
 def _gw_cm_desc_xml() -> str:
@@ -1064,7 +1063,7 @@ def cd_control_soap(body: bytes):
         return 400, "text/html", f"<h1>Unsupported action: {action}</h1>".encode()
     except Exception as e:
         log.error(f"GW CD control error: {e}")
-        return 500, "text/html", f"<h1>error: {e}</h1>".encode("utf-8")
+        return 500, "text/html", f"<h1>error: {e}</h1>".encode()
 
 
 def cd_control(h, body):
@@ -1184,7 +1183,7 @@ def gw_event_initial_notify(callback: str, sid: str, props: dict):
                     for k, v in props.items())
     body = (f'<?xml version="1.0"?>'
             f'<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">'
-            f'{inner}</e:propertyset>').encode("utf-8")
+            f'{inner}</e:propertyset>').encode()
     try:
         u = urlparse(callback)
         conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=4)
@@ -1209,7 +1208,7 @@ def _gw_msearch_response(st: str, usn: str, location: str) -> bytes:
         "EXT:\r\n"
         f"ST: {st}\r\n"
         f"USN: {usn}\r\n\r\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _gw_msearch_replies(data: bytes, location: str) -> list:

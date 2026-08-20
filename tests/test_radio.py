@@ -318,7 +318,7 @@ class TestRadioHandlers(unittest.TestCase):
 def _icy_meta_block(title: str) -> bytes:
     """Build one ICY metadata block: 1 length byte (in 16-byte units)
     followed by `StreamTitle='…';` NUL-padded to a 16-byte multiple."""
-    raw = f"StreamTitle='{title}';".encode("utf-8")
+    raw = f"StreamTitle='{title}';".encode()
     raw += b"\x00" * ((-len(raw)) % 16)
     return bytes([len(raw) // 16]) + raw
 

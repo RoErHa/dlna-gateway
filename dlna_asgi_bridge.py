@@ -19,7 +19,7 @@ a native FastAPI route it's dropped from the bridge; eventually the bridge is
 empty and the stdlib server (dlna_server.py) retires.
 """
 import json
-from typing import Callable, Optional, Tuple
+from collections.abc import Callable
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -69,7 +69,7 @@ class _LegacyH:
 
 
 def run_legacy_sync(handler: Callable, arg, *, headers=None, path: str = "",
-                    command: str = "GET") -> Tuple[int, bytes, str]:
+                    command: str = "GET") -> tuple[int, bytes, str]:
     """Run a legacy `(h, params|body)` handler against a capturing fake `h`
     and return `(status, body-bytes, content-type)`. Pure + sync → directly
     unit-testable without an HTTP client."""
@@ -80,7 +80,7 @@ def run_legacy_sync(handler: Callable, arg, *, headers=None, path: str = "",
 
 
 def run_subsonic_sync(http_method: str, path: str, query, body: bytes = b"",
-                      *, headers=None) -> Tuple[int, bytes, str]:
+                      *, headers=None) -> tuple[int, bytes, str]:
     """Run `api_subsonic.handle()` against the capturing fake `h` and return
     `(status, body-bytes, content-type)`. Subsonic's JSON/XML methods respond
     via `h._json` / `h._xml_response` (both captured) and set

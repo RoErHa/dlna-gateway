@@ -17,10 +17,9 @@ changes:
 import math
 import os
 
-from reportlab.lib.colors import HexColor, black, white
+from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
 from reportlab.platypus import (SimpleDocTemplate, PageBreak, Paragraph,
                                 Spacer, Table, TableStyle, KeepTogether)
@@ -624,7 +623,7 @@ def list_pages():
          "--restart --no-browser --debug --probe URL --list-devices "
          "--reset-devices. See the setup.sh options reference.", GREY),
     ]
-    for c, n, r, col in de:
+    for c, n, r, _col in de:
         de_rows.append([C(c), P(n), P(r)])
     story.append(make_table(de_rows, [40, 200, 820], GREEN))
     story.append(PageBreak())
@@ -664,7 +663,7 @@ def list_pages():
          "table above)"),
     ]
     for ctx, cmd in cmds:
-        cmd_rows.append([P("<b>%s</b>" % ctx, body), C(cmd)])
+        cmd_rows.append([P(f"<b>{ctx}</b>", body), C(cmd)])
     story.append(make_table(cmd_rows, [150, 910], INK))
     story.append(Spacer(1, 8))
     story.append(P("Ports (2.0): 8443 HTTPS — Hypercorn TLS + HTTP/2 (ALPN), "

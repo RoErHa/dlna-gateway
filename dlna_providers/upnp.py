@@ -39,7 +39,8 @@ phase plan.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Iterator, Optional
+from typing import Any
+from collections.abc import Callable, Iterator
 
 # The ONE allowed import of dlna_content's ContentDirectory surface.
 # Any code outside dlna_providers/upnp.py that needs to browse a UPnP
@@ -49,7 +50,6 @@ import dlna_content as _wire
 from . import (
     Album,
     Artist,
-    LibraryProvider,
     Track,
     register_provider,
 )
@@ -129,7 +129,7 @@ class UpnpProvider:
             "UpnpProvider.list_tracks not implemented yet (see "
             "list_artists docstring).")
 
-    def get_track(self, track_id: str) -> Optional[Track]:
+    def get_track(self, track_id: str) -> Track | None:
         raise NotImplementedError(
             "UpnpProvider.get_track not implemented yet — current "
             "callers fetch track rows from LibraryDB by URL/obj_id.")

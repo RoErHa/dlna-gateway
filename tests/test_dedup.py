@@ -445,7 +445,7 @@ class TestUniqueUrlMigration(unittest.TestCase):
         self._build_widened_schema_with_url_dupes()
         db = LibraryDB(db_file=self._path)
         # Re-insert via upsert_tracks — should INSERT OR IGNORE on (udn,url).
-        n = db.upsert_tracks("uuid:test", [
+        db.upsert_tracks("uuid:test", [
             {"id": "new", "url": "http://x/sameurl.flac",
              "title": "Different Title", "artist": "X", "album": "Y"}])
         with db._pool.read() as conn:

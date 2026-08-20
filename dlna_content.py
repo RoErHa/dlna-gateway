@@ -21,7 +21,6 @@ import socket
 import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import Optional
 
 log = logging.getLogger("dlna.content")
 
@@ -119,7 +118,7 @@ def cd_browse(control_url: str, object_id: str = "0",
             '</u:Browse>'
             '</s:Body>'
             '</s:Envelope>'
-        ).encode("utf-8")
+        ).encode()
 
     try:
         # First attempt with specific filter

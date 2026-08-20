@@ -33,7 +33,6 @@ import json
 import os
 import random
 import ssl
-import statistics
 import sys
 import time
 import urllib.parse
@@ -215,7 +214,7 @@ def main():
             # folder-derived display name, so name equality is too strict.
             ak = a.get("album_key") or ""
 
-            def _hit(x):
+            def _hit(x, ak=ak, a=a):
                 if ak:
                     try:
                         b = (x.get("id") or "")[3:]

@@ -24,9 +24,9 @@ Usage:
 """
 from __future__ import annotations
 
-from typing import Callable, Iterator, Optional
+from collections.abc import Callable, Iterator
 
-from . import Album, Artist, LibraryProvider, Track, register_provider
+from . import Album, Artist, Track, register_provider
 
 
 @register_provider("mock")
@@ -82,7 +82,7 @@ class MockProvider:
         relevant.sort(key=lambda t: (t.track_number or 0, t.id))
         yield from relevant
 
-    def get_track(self, track_id: str) -> Optional[Track]:
+    def get_track(self, track_id: str) -> Track | None:
         return self._tracks.get(track_id)
 
     def stream_url(self, track_id: str) -> str:

@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
-from typing import Callable, Iterator, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+from collections.abc import Callable, Iterator
 
 
 # ── Dataclasses ───────────────────────────────────────────────────
@@ -39,7 +40,7 @@ class Album:
     name: str
     artist_id: str = ""
     artist_name: str = ""
-    year: Optional[int] = None
+    year: int | None = None
     art_url: str = ""
     track_count: int = 0
 
@@ -54,12 +55,12 @@ class Track:
     album_name: str = ""
     track_number: int = 0
     duration_sec: float = 0.0
-    year: Optional[int] = None
+    year: int | None = None
     art_url: str = ""
     mime: str = ""
     file_path: str = ""              # LocalFs only; "" for UPnP/Plex/Jellyfin
-    bit_depth: Optional[int] = None
-    sample_rate: Optional[int] = None
+    bit_depth: int | None = None
+    sample_rate: int | None = None
     genre: str = ""
 
 
@@ -94,7 +95,7 @@ class LibraryProvider(Protocol):
         """All tracks on a given album, in track-number order if known."""
         ...
 
-    def get_track(self, track_id: str) -> Optional[Track]:
+    def get_track(self, track_id: str) -> Track | None:
         """Single track by id, or None if not found."""
         ...
 
@@ -154,7 +155,7 @@ def register_provider(name: str) -> Callable[[type], type]:
     return wrap
 
 
-def get_provider_class(name: str) -> Optional[type]:
+def get_provider_class(name: str) -> type | None:
     """Class registered under NAME, or None."""
     with _LOCK:
         return _PROVIDER_CLASSES.get(name)
@@ -174,13 +175,13 @@ def bind_provider(udn: str, provider: LibraryProvider) -> None:
         _PROVIDER_INSTANCES[udn] = provider
 
 
-def get_provider(udn: str) -> Optional[LibraryProvider]:
+def get_provider(udn: str) -> LibraryProvider | None:
     """Provider bound to UDN, or None if no binding exists."""
     with _LOCK:
         return _PROVIDER_INSTANCES.get(udn)
 
 
-def unbind_provider(udn: str) -> Optional[LibraryProvider]:
+def unbind_provider(udn: str) -> LibraryProvider | None:
     """Drop the binding for UDN. Returns the previous provider, or None."""
     with _LOCK:
         return _PROVIDER_INSTANCES.pop(udn, None)

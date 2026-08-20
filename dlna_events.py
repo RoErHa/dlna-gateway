@@ -24,7 +24,6 @@ import asyncio
 import json
 import logging
 import threading
-from typing import Optional
 
 log = logging.getLogger("dlna.events")
 
@@ -40,10 +39,10 @@ class EventBus:
     def __init__(self, max_queue: int = 256):
         self._subs: set = set()
         self._lock = threading.Lock()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._max_queue = max_queue
 
-    def bind_loop(self, loop: Optional[asyncio.AbstractEventLoop]) -> None:
+    def bind_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
         """Bind (or clear) the event loop publish() marshals onto."""
         self._loop = loop
 

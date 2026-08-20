@@ -147,7 +147,7 @@ def _register_location(location: str, gw_udn: str = ""):
             return
         _seen_locations.add(location)
     time.sleep(1.5)   # let AssetUPnP finish booting if just started
-    before_servers = set(s.udn for s in SERVERS.all())
+    before_servers = {s.udn for s in SERVERS.all()}
     _fetch_device(location, SERVERS, RENDERERS, gw_udn)
     # Call indexer hook for any newly added servers
     if _on_server_found:
@@ -242,7 +242,7 @@ def ssdp_discovery_thread(lan_ip: str, gw_udn: str = ""):
             try:
                 data, _ = s.recvfrom(4096)
                 handle(data)
-            except socket.timeout:
+            except TimeoutError:
                 pass
             except Exception as e:
                 log.debug(f"SSDP recv: {e}")
@@ -427,7 +427,7 @@ def probe_url(location: str, gw_udn: str = ""):
 def _test():
     import sys
     from dlna_config import setup_logging
-    log_root = setup_logging(debug=True)
+    setup_logging(debug=True)
     log.info("=== dlna_discovery self-test (20 s SSDP) ===")
 
     # Use LAN IP

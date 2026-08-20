@@ -11,7 +11,6 @@ on any machine — no Trash side-effects.
 Run standalone:
     python3 -m unittest tools.test_prune_empty_music_dirs -v
 """
-import os
 import shutil
 import sys
 import tempfile

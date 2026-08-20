@@ -8,7 +8,6 @@ Standalone test:
 import logging
 import threading
 import time
-from typing import Optional
 
 from dlna_events import EVENTS
 
@@ -160,14 +159,14 @@ class RendererQueue:
         self._rc_url: str   = ""   # RenderingControl SOAP endpoint (volume)
         self._rnd_name: str = ""
         self._stop_event    = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._started_at: float = 0.0
         self._consecutive_fails: int = 0
         # Renderer baseline — the renderer's natural volume when the
         # queue first started. Read once via GetVolume on first play,
         # so we adopt whatever the user has on the Naim's own remote
         # rather than overriding it. None means "not yet read".
-        self._renderer_baseline: Optional[int] = None
+        self._renderer_baseline: int | None = None
         # User trim — relative offset from baseline applied to every
         # track in this queue. The PWA volume slider sets this; default
         # 0 means "play at renderer's natural volume" (no surprise jolt
@@ -311,8 +310,6 @@ class RendererQueue:
             self._user_trim_db = trim_db
             rc_url   = self._rc_url
             baseline = self._renderer_baseline
-            tracks   = list(self._tracks)
-            idx      = self._index
         if not rc_url:
             return
         # If we know the baseline, apply NOW so the user hears the change.
@@ -781,7 +778,7 @@ class QueueRegistry:
                 self._queues[udn] = q
             return q
 
-    def peek(self, udn: str) -> Optional[RendererQueue]:
+    def peek(self, udn: str) -> RendererQueue | None:
         """Return the queue for this UDN if one exists, else None (does
         NOT create). Use this when probing state to avoid allocating a
         queue for an unknown UDN."""

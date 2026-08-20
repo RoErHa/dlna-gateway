@@ -30,7 +30,6 @@ import threading
 import time
 import urllib.parse
 import zlib
-from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
@@ -480,6 +479,16 @@ async def art(url: str = "", size: int = 0):
 _VIDEO_UDN = "uuid:localfs-movies"
 
 
+async def _isfile(path: str) -> bool:
+    """`os.path.isfile` off the event loop.
+
+    The video/poster roots live on an EXTERNAL volume (SAMDATA). A stat()
+    against a spun-down USB disk blocks for seconds, and inside an
+    `async def` that stalls the whole gateway — every other request plus
+    the SSE stream — not just this one. Ruff ASYNC240 guards this."""
+    return await run_in_threadpool(os.path.isfile, path)
+
+
 def _video_payload(v: dict, people=None) -> dict:
     return {
         "id": v["id"], "title": v.get("title"), "folder": v.get("folder"),
@@ -516,7 +525,7 @@ async def video_meta(id: str = ""):
 @app.get("/video/{vid}", include_in_schema=False)
 async def video_file(vid: str):
     v = await run_in_threadpool(DB.video_by_id, vid)
-    if not v or not v.get("file_path") or not os.path.isfile(v["file_path"]):
+    if not v or not v.get("file_path") or not await _isfile(v["file_path"]):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(v["file_path"], media_type=(v.get("mime") or "video/mp4"))
 
@@ -525,7 +534,7 @@ async def video_file(vid: str):
 async def video_poster(id: str = ""):
     import dlna_ffmpeg
     p = os.path.join(dlna_ffmpeg.POSTER_DIR, f"{os.path.basename(id)}.jpg")
-    if not id or not os.path.isfile(p):
+    if not id or not await _isfile(p):
         return JSONResponse({"error": "no poster"}, status_code=404)
     return FileResponse(p, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
@@ -539,7 +548,7 @@ async def video_transcode(vid: str):
     Range/seek yet — HLS is the future upgrade)."""
     import dlna_ffmpeg
     v = await run_in_threadpool(DB.video_by_id, vid)
-    if not v or not v.get("file_path") or not os.path.isfile(v["file_path"]):
+    if not v or not v.get("file_path") or not await _isfile(v["file_path"]):
         return JSONResponse({"error": "not found"}, status_code=404)
     if not dlna_ffmpeg.find_ffmpeg():
         return JSONResponse({"error": "ffmpeg not available"}, status_code=503)
@@ -576,7 +585,7 @@ async def video_hls(vid: str, seg: str):
     import dlna_ffmpeg
     import re as _re
     v = await run_in_threadpool(DB.video_by_id, vid)
-    if not v or not v.get("file_path") or not os.path.isfile(v["file_path"]):
+    if not v or not v.get("file_path") or not await _isfile(v["file_path"]):
         return JSONResponse({"error": "not found"}, status_code=404)
     if not dlna_ffmpeg.find_ffmpeg():
         return JSONResponse({"error": "ffmpeg not available"}, status_code=503)
@@ -849,7 +858,7 @@ async def events(request: Request):
                 try:
                     ev = await asyncio.wait_for(q.get(), _SSE_HEARTBEAT_SEC)
                     yield sse_format(ev)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keepalive\n\n"      # SSE comment frame
         finally:
             EVENTS.unsubscribe(q)
@@ -885,7 +894,7 @@ def _subsonic_fail_response(query, body, code: int, message: str,
                     media_type=h._cap.ctype)
 
 
-def _subsonic_auth_gate(query, body) -> Optional[Response]:
+def _subsonic_auth_gate(query, body) -> Response | None:
     """Return a refusal Response (password unset → 503; bad credentials →
     wrong-auth) or None when the call is authorised. Mirrors handle()'s gate
     so the native byte routes enforce the same auth as the bridged methods."""

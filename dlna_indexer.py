@@ -15,7 +15,6 @@ and re-exported from there for backward compat.
 """
 import logging
 import threading
-from typing import Optional
 
 from dlna_events import EVENTS
 
@@ -67,7 +66,7 @@ class Indexer:
     def __init__(self, library):
         self.library   = library
         self.state     = IndexState()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._cancelled_udns: set = set()
         self._lock = threading.Lock()
 

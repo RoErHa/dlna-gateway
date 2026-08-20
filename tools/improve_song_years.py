@@ -86,7 +86,6 @@ Usage
 import argparse
 import json
 import re
-import socket
 import sqlite3
 import sys
 import time
@@ -95,7 +94,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 _REPO = Path(__file__).resolve().parent.parent
 _DEFAULT_DB = _REPO / "library.db"
@@ -103,7 +102,7 @@ _DEFAULT_DB = _REPO / "library.db"
 
 # ── Normalisation (mirrors dlna_library._norm_title) ─────────────
 
-def _norm(s: Optional[str]) -> str:
+def _norm(s: str | None) -> str:
     if not s:
         return ""
     s = unicodedata.normalize("NFKD", s)
@@ -148,7 +147,7 @@ class TransientError(Exception):
     pass
 
 
-def _mb_get(url: str) -> Optional[dict]:
+def _mb_get(url: str) -> dict | None:
     """GET a MB endpoint, returning parsed JSON or None on permanent
     failure. Raises TransientError on 5xx/network errors so the caller
     can decide whether to retry / bail / skip."""
@@ -165,11 +164,11 @@ def _mb_get(url: str) -> Optional[dict]:
         if 500 <= e.code < 600:
             raise TransientError(f"HTTP {e.code}") from e
         return None      # 4xx, garbled etc.
-    except (socket.timeout, urllib.error.URLError, OSError) as e:
+    except (TimeoutError, urllib.error.URLError, OSError) as e:
         raise TransientError(str(e)) from e
 
 
-def search_song_year(artist: str, title: str) -> tuple[Optional[int], int]:
+def search_song_year(artist: str, title: str) -> tuple[int | None, int]:
     """Search MB for all recordings of (artist, title), return
     (MIN_year, n_matches). MIN_year is None when no recording has a
     usable first-release-date."""
@@ -270,7 +269,7 @@ def run_lookup(conn: sqlite3.Connection, candidates: list, limit: int,
           f"at MB's 1.1s rate limit.")
     print()
     t_start = time.time()
-    for i, (artist, title) in enumerate(candidates[:n]):
+    for _i, (artist, title) in enumerate(candidates[:n]):
         ka, kt = _norm(artist), _norm(title)
         if not ka or not kt:
             continue
@@ -308,7 +307,7 @@ def run_lookup(conn: sqlite3.Connection, candidates: list, limit: int,
 
 # ── Apply phase ──────────────────────────────────────────────────
 
-def _eff_year_now(conn: sqlite3.Connection, url: str) -> Optional[int]:
+def _eff_year_now(conn: sqlite3.Connection, url: str) -> int | None:
     """MIN(file_year, mb_year) with NULLs treated as missing."""
     r = conn.execute(
         "SELECT t.year file_y, m.year mb_y "

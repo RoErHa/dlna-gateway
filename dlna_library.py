@@ -8,18 +8,14 @@ Class Indexer crawls a MediaServer and populates the DB.
 Standalone test:
     python dlna_library.py
 """
-import http.client
 import json
 import logging
 import os
 import random
 import re
 import sqlite3
-import threading
 import time
-import urllib.parse
 import uuid
-from typing import Optional
 
 from dlna_config import DB_FILE
 from db_pool import Pool
@@ -209,7 +205,7 @@ class LibraryDB:
                     UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
                 );
                 -- Genre migration: add column if upgrading from older schema
-                
+
                 CREATE TABLE IF NOT EXISTS metadata_overrides (
                     url       TEXT PRIMARY KEY,
                     artist    TEXT,
@@ -943,7 +939,6 @@ class LibraryDB:
 
     def _migrate_json(self, conn: sqlite3.Connection):
         """One-time import from old playlists.json if present."""
-        import json
         old = os.path.join(os.path.dirname(self._pool.db_file), "playlists.json")
         if not os.path.exists(old):
             return
@@ -1128,23 +1123,23 @@ class LibraryDB:
             bd_in = t.get("bit_depth")
             sr_in = t.get("sample_rate")
             bd_url, sr_url = _parse_audio_params(url)
-            return dict(
-                udn=udn,
-                obj_id=t.get("id", ""),
-                url=url,
-                title=t.get("title", ""),
-                artist=t.get("artist", ""),
-                album=t.get("album", ""),
-                duration=t.get("duration", ""),
-                art=t.get("art", ""),
-                mime=t.get("mime", ""),
-                genre=t.get("genre", ""),
-                file_path=t.get("file_path", ""),
-                bit_depth=bd_in if bd_in is not None else bd_url,
-                sample_rate=sr_in if sr_in is not None else sr_url,
-                year=t.get("year"),
-                album_key=t.get("album_key", ""),
-            )
+            return {
+                "udn": udn,
+                "obj_id": t.get("id", ""),
+                "url": url,
+                "title": t.get("title", ""),
+                "artist": t.get("artist", ""),
+                "album": t.get("album", ""),
+                "duration": t.get("duration", ""),
+                "art": t.get("art", ""),
+                "mime": t.get("mime", ""),
+                "genre": t.get("genre", ""),
+                "file_path": t.get("file_path", ""),
+                "bit_depth": bd_in if bd_in is not None else bd_url,
+                "sample_rate": sr_in if sr_in is not None else sr_url,
+                "year": t.get("year"),
+                "album_key": t.get("album_key", ""),
+            }
         rows_raw = [_make_row(t) for t in tracks if t.get("url")]
         # Mass INSERTs fire the FTS triggers; heal-and-retry on the
         # recurring shadow-table corruption. Body is retry-safe
@@ -1190,7 +1185,6 @@ class LibraryDB:
                          f"{n_aliased} alias row(s) "
                          f"(same d-id + title via different browse path)")
 
-            before = conn.execute("SELECT changes()").fetchone()[0]
             # Step 1: insert new tracks (skip duplicates)
             conn.executemany(
                 "INSERT OR IGNORE INTO tracks "
@@ -2207,11 +2201,11 @@ class LibraryDB:
         return (row["file_path"] or "") if row else ""
 
     def metadata_override_set(self, url: str, source: str,
-                              artist: Optional[str] = None,
-                              album: Optional[str] = None,
-                              title: Optional[str] = None,
-                              genre: Optional[str] = None,
-                              year: Optional[int] = None,
+                              artist: str | None = None,
+                              album: str | None = None,
+                              title: str | None = None,
+                              genre: str | None = None,
+                              year: int | None = None,
                               update_tracks: bool = True) -> bool:
         """Write a metadata_overrides row from a non-user source (e.g.
         AcoustID match) AND apply it onto `tracks` so the UI sees it
@@ -2319,7 +2313,7 @@ class LibraryDB:
             """, (url,)).fetchone()
         return dict(row) if row else None
 
-    def track_by_url(self, url: str) -> Optional[dict]:
+    def track_by_url(self, url: str) -> dict | None:
         """Full tracks row for one URL — the Subsonic bookmark methods
         need the complete song shape (album_key, mime, art, …), not the
         display subset track_meta_by_url returns."""
@@ -2409,7 +2403,7 @@ class LibraryDB:
                    ORDER BY p.sort_order, p.name""").fetchall()
         return [dict(r) for r in rows]
 
-    def pl_get(self, pl_id: str) -> Optional[dict]:
+    def pl_get(self, pl_id: str) -> dict | None:
         with self._pool.read() as conn:
             pl = conn.execute(
                 "SELECT id, name FROM playlists WHERE id=?",
@@ -2468,7 +2462,7 @@ class LibraryDB:
         return cur.rowcount > 0
 
     def pl_to_m3u(self, pl_id: str, shuffle: bool = False,
-                  output_path: str = "/tmp/dlna-gw-pl.m3u") -> Optional[str]:
+                  output_path: str = "/tmp/dlna-gw-pl.m3u") -> str | None:
         pl = self.pl_get(pl_id)
         if not pl or not pl["tracks"]:
             return None
@@ -2719,6 +2713,9 @@ class LibraryDB:
                     self.repair_fts()
                     continue
                 raise
+        # Unreachable: attempt 2 either returns or re-raises. Explicit so
+        # the control flow is obvious at the tail (and RET503-clean).
+        return None
 
     def radio_fav_update(self, station_uuid: str, *, name: str = None,
                          stream_url: str = None,
@@ -2772,7 +2769,7 @@ class LibraryDB:
                 (album_key, url, pos, dur, 1 if finished else 0))
         return True
 
-    def position_get(self, album_key: str) -> Optional[dict]:
+    def position_get(self, album_key: str) -> dict | None:
         if not album_key:
             return None
         with self._pool.read() as conn:
@@ -2814,7 +2811,7 @@ class LibraryDB:
                 (album_key, author, title, series, series_seq, source))
         return True
 
-    def book_meta_get(self, album_key: str) -> Optional[dict]:
+    def book_meta_get(self, album_key: str) -> dict | None:
         if not album_key:
             return None
         with self._pool.read() as conn:
@@ -2900,7 +2897,7 @@ def _test():
             "SELECT udn, COUNT(*) as n FROM tracks GROUP BY udn").fetchall()
 
     if udns:
-        log.info(f"Track index:")
+        log.info("Track index:")
         for row in udns:
             log.info(f"  {row['udn'][:40]}  → {row['n']} tracks")
             log.info(f"    Albums: {db.album_count(row['udn'])}")

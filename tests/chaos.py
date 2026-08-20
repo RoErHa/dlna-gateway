@@ -450,7 +450,7 @@ def _stderr_size():
 # ── Main loop ─────────────────────────────────────────────────────
 
 def run(base, iterations, workers, seed, quiet):
-    rng = random.Random(seed)
+    _rng = random.Random(seed)
     target = Target(base)
     print(f"chaos: {target.describe()}")
     print(f"chaos: base={base}  iterations={iterations}  workers={workers}  seed={seed}")

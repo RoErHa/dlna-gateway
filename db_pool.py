@@ -211,8 +211,8 @@ if __name__ == "__main__":
     with pool.read() as conn:
         count = conn.execute("SELECT COUNT(*) FROM test").fetchone()[0]
 
-    print(f"\nResults:")
-    print(f"  Threads: 3 writers + 5 readers")
+    print("\nResults:")
+    print("  Threads: 3 writers + 5 readers")
     print(f"  Rows written: {count} (expected 150)")
     print(f"  Read samples: {len(results)}")
     print(f"  Errors: {len(errors)}")
@@ -224,4 +224,3 @@ if __name__ == "__main__":
 
     pool.close()
     os.unlink(db_path)
-    

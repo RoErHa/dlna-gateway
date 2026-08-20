@@ -13,7 +13,6 @@ re-exported from there for backward compat.
 """
 import logging
 import threading
-from typing import Optional
 
 log = logging.getLogger("dlna.library")
 
@@ -95,7 +94,7 @@ class DeviceRoleCache:
         with self._lock:
             return self._cache.get(udn, {}).get("is_server", False)
 
-    def get(self, udn: str) -> Optional[dict]:
+    def get(self, udn: str) -> dict | None:
         with self._lock:
             return self._cache.get(udn)
 

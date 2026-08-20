@@ -50,12 +50,11 @@ import sqlite3
 import sys
 import time
 import unicodedata
-from typing import Optional
 
 _LOCALFS_MARK = "/localfs/stream/"
 
 
-def _norm(s: Optional[str]) -> str:
+def _norm(s: str | None) -> str:
     """Diacritic-strip + smart-quote→ASCII + lower + whitespace-collapse.
     Mirrors dlna_library._norm_title so AcoustID-corrected vs raw tags
     match."""

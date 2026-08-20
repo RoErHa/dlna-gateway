@@ -73,7 +73,7 @@ def copy_table(src: sqlite3.Connection, dst: sqlite3.Connection, table: str,
     if not scols or not dcols:
         return {"table": table, "skipped": "missing in src or dst"}
     cols = [c for c in scols if c in dcols]          # intersection, by NAME
-    rows = [dict(zip(scols, r)) for r in
+    rows = [dict(zip(scols, r, strict=True)) for r in
             src.execute(f"SELECT {','.join(scols)} FROM {table}")]
     if rewrite:
         old, new = rewrite

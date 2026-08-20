@@ -26,7 +26,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 # Pure-audio extensions per the project default. .mp4 deliberately
 # excluded — music-video MP4s aren't part of this scan.
@@ -42,7 +42,7 @@ DEFAULT_EXTS = {
 # ID3 tags prepended to files that aren't supposed to have them — some
 # tagging tools do this; we don't want false positives.
 def _v_flac(h: bytes) -> bool:
-    return h.startswith(b"fLaC") or h.startswith(b"ID3")
+    return h.startswith((b"fLaC", b"ID3"))
 
 def _v_mp3(h: bytes) -> bool:
     if h.startswith(b"ID3"):
@@ -111,7 +111,7 @@ class Stats:
         self.limit_reached: bool = False
 
 
-def _classify(path: Path) -> Optional[str]:
+def _classify(path: Path) -> str | None:
     """Return a corruption reason string, or None if file looks valid.
 
     Reasons:
@@ -306,7 +306,7 @@ def main(argv: Iterable[str] = None) -> int:
             return 1
 
     ok = fail = 0
-    for path, reason in stats.files_corrupt:
+    for path, _reason in stats.files_corrupt:
         try:
             if args.hard_delete:
                 path.unlink()
