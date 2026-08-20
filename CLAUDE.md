@@ -277,6 +277,13 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_gateway.py` | Module wiring + `start_background_services()` (spawns the daemon threads). **2.0:** no longer the process entry — the `dlna_asgi` lifespan calls it so `hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib HTTP edge + TLS were removed. |
 | `dlna_asgi.py` | **2.0 — THE server (Hypercorn owns the whole edge).** FastAPI app; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, the Subsonic byte methods, and the **Naim-facing `/gw/*` UPnP surface** (device.xml/desc.xml/events/control on the plain `:8765` bind — Cleanup C folded it in here, retiring the separate `dlna_server.py` device server + `run-2.0.sh`). Remaining legacy handlers run via the bridge. Lifespan boots `start_background_services`. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
 | `dlna_asgi_bridge.py` | Shim that runs the legacy `(h, params)` handlers unchanged inside the ASGI app (fake `h` captures `_json`/`_html`/`_xml_response`/`send_error`; runs in a threadpool). Routes are rewritten native one batch at a time, then dropped from the bridge. |
+| `dlna_asgi_state.py` | The shared runtime handles every ASGI route module binds against. Split from `dlna_asgi.py` 2026-08-20 (it had reached 1,156 lines). |
+| `dlna_asgi_browse.py` | The JSON read API: library navigation, index status, playlists, favourites, radio, lyrics, audiobook positions, and the SSE stream. |
+| `dlna_asgi_media.py` | The byte relays — cover art and the audio proxies. |
+| `dlna_asgi_static.py` | PWA shell serving + the generated manifest/icons. |
+| `dlna_asgi_subsonic.py` | The `/rest/*` Subsonic surface (Amperfy/CarPlay). |
+| `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
+| `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
 | `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
 | `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
@@ -284,7 +291,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_discovery_ssdp.py` | The SSDP multicast side — periodic M-SEARCH + the NOTIFY listener. Owns the SSDP wire constants. |
 | `dlna_discovery_probe.py` | The non-SSDP fallbacks — TCP/HTTP subnet sweep + the "only scan if SSDP found nothing" guard. Both this and the SSDP module reach `_register_location` through a **deliberately lazy import** (it reads the `_on_server_found` hook the gateway injects at runtime, so the binding must resolve at call time). |
 | `dlna_registry.py` | Data classes + `ServerRegistry` / `RendererRegistry` thread-safe stores |
-| `dlna_library.py` | **Composition root only (~150 lines).** `LibraryDB` is assembled from six mixins (below) and the `DB`/`INDEXER`/`DEVICE_ROLES`/`ART_FETCHER` singletons are wired here. Until 2026-08-20 this file was **2,912 lines** and `LibraryDB` a 95-method God Object; the split is MIXIN-based precisely so the public `DB.<method>` surface is byte-identical and none of the ~240 call sites changed. |
+| `dlna_library.py` | **Composition root only (~150 lines).** `LibraryDB` is assembled from six mixins (below) — each of which may itself inherit one more after the 2026-08-20 size split, ten in the MRO and still disjoint. The `DB`/`INDEXER`/`DEVICE_ROLES`/`ART_FETCHER` singletons are wired here. Until 2026-08-20 this file was **2,912 lines** and `LibraryDB` a 95-method God Object; the split is MIXIN-based precisely so the public `DB.<method>` surface is byte-identical and none of the ~240 call sites changed. |
 | `dlna_library_sql.py` | Pure helpers shared by the mixins — `_norm_title`, `_dedup_clause`, `_parse_audio_params`, `_is_localfs`, the `_localfs_album_*` SQL fragments, `_dur_to_secs`. Dependency-free ON PURPOSE: a mixin importing them from `dlna_library` would be circular AND would fire the `DB = LibraryDB()` module-level singleton (hence every pending migration on the live DB) as a side effect. `dlna_library` re-exports them all, so `from dlna_library import _dedup_clause` still works. |
 | `dlna_library_schema.py` | `SchemaMixin` — the startup sequence (create → alter → migrate → seed) + the Phase-A album-art sibling backfill. Regenerate `schema.sql` after changes. |
 | `dlna_library_ddl.py` | The literal DDL as DATA — `SCHEMA_DDL` (every CREATE TABLE/INDEX/TRIGGER) + `ADD_COLUMN_SQL`. No logic, no imports. |
@@ -309,16 +316,40 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position/seek) |
 | `dlna_rendering_control.py` | UPnP **RenderingControl** SOAP client (`SetVolume`/`GetVolume`) — a genuinely separate service with its own control URL, so the split follows the protocol boundary. Re-exported from `dlna_avtransport`. |
-| `dlna_player.py` | `RendererQueue` (sequential playback per renderer) + `QueueRegistry` (one queue per UDN) |
+| `dlna_player.py` | `RendererQueue` composition root — sequential playback per renderer. Split 2026-08-20 (was 847 lines). |
+| `dlna_player_policy.py` | The PURE decision functions behind renderer playback (`_monitor_decision`, `_dur_to_sec`, `_gapless_advanced`) + the tuning constants. Pure = directly unit-testable, which is why the stall guards live here. |
+| `dlna_player_monitor.py` | `MonitorMixin` — the per-queue 2-second state-poll loop that advances tracks and enforces the stall guards. |
+| `dlna_player_transport.py` | `TransportMixin` — SetURI/Play/Seek and the consecutive-send-failure abort. |
+| `dlna_player_volume.py` | `VolumeMixin` — startup volume + user trim, via RenderingControl SOAP. |
+| `dlna_player_registry.py` | `QueueRegistry` + the process-wide `QUEUES` singleton (one `RendererQueue` per renderer UDN). |
 | `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout — the **byte-perfect** Range pass-through. |
 | `dlna_radio_proxy.py` | The internet-radio relay (`/radio_stream`): opens an ICY upstream and **de-interleaves** the metadata out of the audio (a browser `<audio>` cannot handle it), parking `StreamTitle` for `/api/radio/nowplaying`. Split from the byte-perfect path on purpose — this one must rewrite the stream. |
 | `dlna_proxy_common.py` | The constants both relays need (`PROXY_IDLE_SEC`, `_MIME_MAP`, `normalize_audio_ctype`). Exists to keep that split acyclic; dependency-free. |
 | `api_browse.py` | Browse/search API endpoints |
-| `api_playback.py` | Playback, stream proxy route, `/art`, `/api/client_log`, state, indexer management |
+| `api_playback.py` | Playback control, the stream-proxy route, `/api/client_log`, indexer management. Split 2026-08-20 (was 748 lines). |
+| `api_playback_art.py` | The cover-art subsystem behind `/art` and Subsonic `getCoverArt`: fetch, disk cache, downscale, serve. |
+| `api_playback_meta.py` | Per-track metadata, lyrics, audiobook positions, OpenLibrary book metadata. |
+| `api_playback_state.py` | Shared runtime handles + request helpers for the `api_playback` family. |
+| `api_radio.py` | Internet-radio API handlers (`/api/radio/*` — search, favourites, nowplaying). |
+| `dlna_lyrics.py` | On-demand lyrics fetch via lrclib.net (the network half; the cache lives in `LibraryDB`). |
+| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. |
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
 | `api_upnp.py` | The gateway-as-MediaServer (Browse is a **dispatch table** since 2026-08-20 — `_BROWSE_EXACT` + `_BROWSE_PREFIX` → one `_br_*` handler per container, sharing a `_Browse` context that owns the DIDL envelope and the "`count == 0` means unlimited" pagination rule; `_gw_browse` itself went 491 lines/~99 branches → 10 lines. Adding a container = one handler + one table entry.): a **complete DLNA Media Server** the Naim/LG browse. Device descriptor (`MediaServer:1` + `X_DLNADOC` + icons + ContentDirectory **and** ConnectionManager), both service SCPDs, SOAP `ContentDirectory#Browse` over the full library (`_gw_browse`) + the pre-browse handshake actions, `ConnectionManager#GetProtocolInfo` etc., GENA SUBSCRIBE + initial NOTIFY, and SSDP announce + **M-SEARCH responder**. See "UPnP exposure (Naim)". |
+| `api_upnp_ids.py` | Gateway UPnP identity, the ObjectID codecs, the junk-name display filter, and the LibraryDB reads the browse tree needs. |
+| `api_upnp_didl.py` | DIDL-Lite renderers + the `_Browse` request context shared by every ContentDirectory handler. |
+| `api_upnp_descriptors.py` | The device descriptor and the two service SCPDs that make strict DLNA clients willing to browse us at all. |
+| `api_upnp_browse.py` | ContentDirectory Browse — the music, audiobook, playlist and favourite-album handlers, the dispatch tables, and `_gw_browse`. |
+| `api_upnp_browse_video.py` | The 📹 Videos tree (GWMovies) as browsed by the LG WebOS TV. |
+| `api_upnp_ssdp.py` | SSDP presence (NOTIFY + M-SEARCH) and GENA eventing for the gateway-as-MediaServer. |
+| `api_subsonic.py` | Subsonic API composition root. Split 2026-08-20 (was 1,174 lines across auth, wire format, id codecs and 33 handlers). |
+| `api_subsonic_proto.py` | The Subsonic wire protocol: authentication, the response envelope, the JSON→XML serialiser. |
+| `api_subsonic_ids.py` | Opaque id codecs, source-udn resolution, and the builders turning LibraryDB rows into Subsonic objects. |
+| `api_subsonic_browse.py` | The read/browse endpoints: ping, license, music folders, artists, albums, album lists, search, genres, OpenSubsonic capability probes. |
+| `api_subsonic_playlists.py` | Playlists, album starring, scrobble. |
+| `api_subsonic_media.py` | The byte endpoints: stream and cover art. |
+| `api_subsonic_extras.py` | Internet radio stations and audiobook bookmarks. |
 
 ### Key Module-Level Singletons
 
@@ -523,11 +554,11 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 
 ### Browser-audio stream proxy
 
-`proxy_stream()` in `dlna_player.py` relays bytes from the media server to the browser over a single HTTP connection with Range support.
+`proxy_stream()` (defined in `dlna_stream_proxy.py`, re-exported from `dlna_player`) relays bytes from the media server to the browser over a single HTTP connection with Range support.
 
 - `PROXY_IDLE_SEC = 300` (module-level so tests can monkey-patch) — if the browser stops consuming bytes for 5 minutes (laptop suspended, tab closed without clean FIN), the proxy tears down the upstream connection. On laptop wake, the user starts playback again from the beginning; there's no resume.
 - Every session logs `proxy_stream ▶ START host/path` and `proxy_stream ■ END host/path sent=N bytes in Xs reason=<r>` with reason ∈ `{upstream_eof, client_idle_timeout, client_closed, error:<Type>}`.
-- The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from AssetUPnP); the proxy only matters for browser-audio playback.
+- The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from the file server — RoHaLocalFS on `:8200` since the 2026-05-31 migration); the proxy only matters for browser-audio playback.
 - No HTTP keep-alive — `Connection: close` on both ends. Each browser Range request opens a new upstream TCP connection. On LAN this is ~1ms; on Tailscale it's ~50-100ms per seek. Acceptable for current load; would need a connection pool if users start complaining about seek latency over the tailnet.
 
 ### `/art` — lock-screen artwork proxy
@@ -581,7 +612,7 @@ iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PW
 
 ### UI — navy palette, per-device layouts, album grid (2026-08-07)
 
-Guarded by `tests/frontend/test_layout.py` (24 tests). Design proposal that
+Guarded by `tests/frontend/test_layout.py` (26 tests). Design proposal that
 was approved: the artifact linked from that session; the numbers below are
 measured, not estimated.
 
@@ -896,7 +927,7 @@ One index, owned by us, scanned on our terms.
 1. **Bit-perfect.** Serve the **original file bytes, unmodified.
    Never transcode.** A checksum of served bytes must equal the
    source file. The same rule that applies to the existing browser
-   `/stream` proxy (`dlna_stream_proxy.py:45-138`) applies to the
+   `/stream` proxy (`dlna_stream_proxy.proxy_stream`) applies to the
    new file server.
 2. **Additive & parallel.** The new backend runs *alongside*
    AssetUPnP against the same (read-only) music folder, on its own
@@ -1259,7 +1290,7 @@ Regression-guarded by `tests/test_player.py::TestMonitorDecision` (advance logic
 
 ### Why SEND FAILED matters
 
-Previously `_send_current()` ignored the return value of `avtransport_send()`. When SetURI failed, the renderer stayed STOPPED, the monitor saw STOPPED, called `_advance()`, sent the next track, which also failed — silently chewing through every track in the queue until the user hit kickstart. The symptom was "all 35 songs skipped, nothing in the log, only a restart fixes it."
+Previously `_send_current()` ignored the return value of `avtransport_send()`. When SetURI failed, the renderer stayed STOPPED, the monitor saw STOPPED, advanced the queue, sent the next track, which also failed — silently chewing through every track in the queue until the user hit kickstart. The symptom was "all 35 songs skipped, nothing in the log, only a restart fixes it."
 
 The fix has two parts:
 1. `_send_current()` now checks the SOAP return and emits `✗ SEND FAILED` with the track URL for every failure.
@@ -1654,22 +1685,25 @@ immediately and is sticky for the rest of the queue.
 No resampler, EQ, mixer, or DSP exists anywhere in the playback
 code. Confirmed by audit on 2026-05-11.
 
-**Naim / UPnP path.** The gateway is not in the audio path. AssetUPnP
+**Naim / UPnP path.** The gateway is not in the audio path. The file
+server (RoHaLocalFS since the 2026-05-31 migration; AssetUPnP before it)
 serves bytes directly to the renderer; the gateway only sends
 `AVTransport::SetURI` + `Play` SOAP. The startup volume and the user
 trim slider are applied via `RenderingControl::SetVolume` SOAP, which
 adjusts the renderer's **hardware volume** — never PCM modification.
-See `RendererQueue` in `dlna_player.py:57-591` and
-`dlna_avtransport.py:29-94`/`278-287`.
+See `RendererQueue` in `dlna_player.py` (its transport/volume/monitor
+mixins live in `dlna_player_transport.py` / `_volume.py` / `_monitor.py`),
+`dlna_avtransport.avtransport_send` and
+`dlna_rendering_control.set_volume`.
 
 **Browser stream proxy (`/stream`).** Byte-perfect Range pass-through.
-`dlna_stream_proxy.proxy_stream` (`dlna_stream_proxy.py:45-138`)
-relays bytes verbatim; the only mutation is a `Content-Type` header
+`dlna_stream_proxy.proxy_stream` relays bytes verbatim; the only mutation is a `Content-Type` header
 normalisation (`audio/x-flac` → `audio/flac`) for Safari quirks.
 
 **Browser `<audio>` caveat (not a gateway behaviour).** In
 browser-output mode the trim slider sets
-`browserAudio.volume = 10^(db/20)` (`static/app.js:1396-1403`). When
+`browserAudio.volume = 10^(db/20)` (the `volume` branch of `control()` in
+`static/app.js`). When
 non-zero, the **browser** scales every PCM sample by that factor —
 HTML5 `<audio>` behaviour, not the gateway. Default = 0 dB
 (volume = 1.0 = no scaling), so unmodified playback is the default.
@@ -1681,12 +1715,12 @@ hardware.
 ## Bit-perfect on macOS
 
 **Best chain.** Play to the Naim via UPnP. Gateway is not in the
-audio path; macOS / CoreAudio is not in the audio path; AssetUPnP
+audio path; macOS / CoreAudio is not in the audio path; RoHaLocalFS
 serves directly to the renderer. This is the recommended setup when
 bit-perfect matters.
 
 **For browser playback on macOS,** the chain is:
-AssetUPnP → gateway `/stream` proxy → browser HTML5 `<audio>` →
+RoHaLocalFS → gateway `/stream` proxy → browser HTML5 `<audio>` →
 CoreAudio → output device. macOS still applies sample-rate conversion
 if the output device's rate doesn't match the source.
 
@@ -1987,7 +2021,7 @@ After trashing duplicate files:
 
 #### Tests
 
-`tools/test_find_duplicate_audio.py` — 17 tests over a throw-away DB
+`tools/test_find_duplicate_audio.py` — 24 tests over a throw-away DB
 + tempdir. Cover: duplicate-group identification (only acoustid source,
 only ≥2 members, NULL/empty metadata excluded), ranking algorithm
 (bit_depth wins > sample_rate within bit-depth > file size within
@@ -2126,7 +2160,7 @@ migrations on the live DB); creates `book_meta` itself if missing.
 python3 tools/openlibrary_books.py                # dry-run preview
 python3 tools/openlibrary_books.py --apply -v     # fetch + write
 python3 tools/openlibrary_books.py --refetch --apply   # redo non-manual
-python3 -m unittest tools.test_openlibrary_books -v    # 27 tests
+python3 -m unittest tools.test_openlibrary_books -v    # 36 tests
 # retry one book:
 sqlite3 library.db "DELETE FROM book_meta WHERE source='notfound' AND album_key='…'"
 ```
@@ -2682,9 +2716,10 @@ tagged files in place. Two things must happen for the gateway to show the
 new tags, and this tool does both in the right order:
 
 1. **Clear the AcoustID `metadata_overrides`.** LocalFs track URLs are
-   PATH-based (`sha1(rel_path)`, see `dlna_providers/localfs.py:97`), so a
+   PATH-based (`sha1(rel_path)`, see `_track_id_for` in
+   `dlna_providers/localfs_tags.py`), so a
    beets-tagged file keeps the SAME url. The COALESCE pass in
-   `LibraryDB.upsert_tracks` (dlna_library.py:940-945) therefore re-lays
+   `LibraryDB.upsert_tracks` (`dlna_library_tracks.py`) therefore re-lays
    the old `source='acoustid'` override straight back on top of beets'
    fresh tags and masks them. Deleting the acoustid rows lets the file
    tags show through.
@@ -2713,13 +2748,12 @@ year-drift / `improve_song_years` corrections) is NEVER touched — those
 legitimately win over beets. `notfound` / `video_skip` rows carry NULL
 metadata so they mask nothing and are left alone.
 
-**ACOUSTID_API_KEY guard.** Refuses to clear while the AcoustID worker is
-live (checks this process's env AND `launchctl getenv` — the gateway
-inherits the launchd-domain env). Clearing then would be futile: the 120s
-startup scan re-fingerprints every now-bare track and re-creates the
-overrides, re-masking beets. Under **Option A** (beets is the sole
-metadata authority) the key stays unset, so this never trips; override
-with `--ignore-acoustid-key` if you must.
+**The old ACOUSTID_API_KEY guard is GONE (2.0).** It used to refuse to
+clear while the in-process AcoustID worker was live, because that
+worker's 120 s startup scan would re-fingerprint every now-bare track and
+re-create the overrides, re-masking beets. The worker was removed in 2.0,
+so the clear is now unconditionally safe — the guard and its
+`--ignore-acoustid-key` escape hatch were both deleted with it.
 
 DRY-RUN by default (prints the override breakdown + planned actions);
 `--apply` deletes + reindexes, auto-backing-up `library.db` first.
@@ -2733,11 +2767,11 @@ python3 -m unittest tools.test_post_beets_reindex -v
 ```
 
 Flags: `--apply` / `-n`/`--dry-run` · `--no-clean` · `--no-reindex` ·
-`--no-backup` · `--ignore-acoustid-key` · `--udn` · `--gateway` · `--db` ·
-`-y`/`--yes`. Tests: `tools/test_post_beets_reindex.py` — 12 tests
-(delete-only-acoustid, manual/notfound/video_skip survival, dry-run no-op,
-backup-on-apply, the key guard + `--ignore-acoustid-key` override + skip
-under `--no-clean`).
+`--no-backup` · `--udn` · `--gateway` · `--db` · `-y`/`--yes`.
+Tests: `tools/test_post_beets_reindex.py` — 9 tests (delete-only-acoustid,
+dry-run no-op, default-is-dry-run, backup-on-apply, clean-only under
+`--no-reindex`, `--no-clean`+`--no-reindex` rejected, missing DB fails
+cleanly).
 
 ### beets vs the AcoustID worker — Option A (chosen 2026-06-03)
 
