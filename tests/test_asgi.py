@@ -374,10 +374,21 @@ class TestArtProxy(unittest.TestCase):
         self.assertEqual(next(iter(seen))[0], 502)
 
     def test_art_route_maps_success(self):
+        """Patches `art_fetch_scaled` — the function the ROUTE calls.
+
+        It used to patch `art_fetch`, which the route reaches only via
+        art_fetch_scaled → art_fetch_cached, where the name resolves in
+        api_playback_art's namespace — so the patch never took effect and
+        the assertion was in fact being satisfied by a HIT in the on-disk
+        art cache. That cache is gitignored and populated by the live
+        gateway, so the test passed on this machine and failed on any
+        clean checkout. Found by running the suite in a fresh worktree
+        while merging 2.0 → main.
+        """
         from unittest import mock
-        with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
+        with mock.patch.object(dlna_asgi.api_playback, "art_fetch_scaled",
                                return_value=(200, "image/png", b"PNGDATA")):
-            r = asyncio.run(dlna_asgi.art(url="x"))
+            r = asyncio.run(dlna_asgi.art(url="http://x/c.jpg"))
             self.assertEqual((r.status_code, r.media_type), (200, "image/png"))
             self.assertEqual(bytes(r.body), b"PNGDATA")
             self.assertEqual(r.headers.get("Access-Control-Allow-Origin"), "*")
