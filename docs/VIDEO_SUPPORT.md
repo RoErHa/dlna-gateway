@@ -169,6 +169,17 @@ store it in `videos.title` so browse/sort/search are simple.
   **reverse-geocode cache** (mocked Nominatim: hit cached once, sticky, offline
   → coords); schema-sync gate.
 
+> **PRIVACY (added after the 2026-08-20 security audit).** Reverse-geocoding
+> means your clips' **GPS coordinates leave the machine automatically** —
+> every video scan, at ~1 m precision, with the contact email from `.env` in
+> the User-Agent as Nominatim's ToS requires. For home videos that is your
+> home and holiday locations, correlatable with an identifying email, held by
+> a third party. It is inherent to turning coordinates into place names, and
+> it is bounded (cache-first, so one lookup per distinct coordinate ever;
+> ~1 req/sec). The opt-out is not enabling video at all — leave
+> `LOCALFS_VIDEO_ROOT` unset — or pre-tagging locations manually via
+> `video_location_overrides` and never letting a GPS-bearing file be scanned.
+>
 > **New outbound host:** Nominatim/OSM (`nominatim.openstreetmap.org`) for
 > reverse-geocoding — add it to CLAUDE.md's "External services" table at V5 docs,
 > with the contact-UA + 1 req/sec usage-policy note.

@@ -10,7 +10,7 @@ Built because the manufacturer apps (Focal & Naim, etc.) are slow,
 flaky, or platform-locked. This one runs anywhere Python runs and is
 usable from any device with a browser.
 
-**2.0** — the gateway is a **FastAPI ASGI app served by Hypercorn**, which
+**2.1** — the gateway is a **FastAPI ASGI app served by Hypercorn**, which
 terminates **TLS + HTTP/2** natively (HTTP/3 ready) using a `tailscale cert`.
 A LAN-only plain-HTTP device tier (`/gw/*`) and the RoHaLocalFS file server
 stay un-encrypted for UPnP renderers that can't do HTTPS. See
@@ -77,6 +77,44 @@ stay un-encrypted for UPnP renderers that can't do HTTPS. See
   during rebuild-index instead of dying.
 - **Observability.** Greppable per-track playback logs; client-side
   errors POST to `/api/client_log` and land in the same log.
+
+## Security
+
+**The gateway is designed for a LAN / tailnet, not the public internet.**
+It binds `0.0.0.0` on 8765/8443 (plus 8200 for the file server) and, apart
+from the Subsonic `/rest/*` surface, the API is **unauthenticated** — access
+control is the network (Tailscale), not a login. Do not port-forward it.
+
+A security audit on 2026-08-20 fixed four issues; see CLAUDE.md →
+"Security posture" for the detail and for the things that must not be undone:
+
+- **SSRF.** `/art`, `/stream` and `/radio_stream` take a caller-supplied
+  `?url=`. They now go through `dlna_ssrf.py`, which refuses private,
+  loopback and link-local destinations unless the host is a device already
+  discovered (so the LocalFs file server still works), refuses non-http(s)
+  schemes, and re-checks **every redirect hop**. Before this, `/stream`
+  would relay the body of any internal HTTP service verbatim.
+- **Error responses are uniform.** They used to forward the upstream status
+  and error text, which made `/art` a working open/closed/filtered port
+  oracle. Every failure now looks identical; detail goes to the log.
+- **TLS certificates are verified** on all outbound fetches (they weren't).
+- **Untrusted device text is escaped**, in the PWA and again server-side —
+  a UDN comes straight from a discovered device's description XML.
+
+**Can a media file make the gateway phone home? No.** The tag reader takes a
+fixed allowlist of scalar fields and never reads ID3 URL frames, and embedded
+cover art is typed by **sniffing magic bytes rather than trusting the
+declared MIME**. That is what makes an ID3 `APIC` with MIME `-->` (whose
+payload is a URL) inert opaque bytes, and stops an SVG "cover" being parsed
+as SVG. It is deliberate and test-pinned — see `tests/test_art_safety.py`.
+
+**What does leave your machine**, all over TLS: artist/album tags go to
+MusicBrainz + Cover Art Archive while indexing; lyrics lookups send
+title/artist/album/duration to lrclib on demand; and if you enable video,
+**GPS coordinates from your clips are sent to Nominatim automatically** to
+turn them into place names. That last one is the privacy-relevant one — it
+is inherent to reverse-geocoding, cached per coordinate, and opt-out by
+leaving `LOCALFS_VIDEO_ROOT` unset.
 
 ## Cross-platform notes
 

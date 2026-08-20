@@ -41,11 +41,21 @@ than editing the argument that produced it.
 | R13 — config consolidation | ✅ shipped | `.env` is the single source (2026-07-13). |
 | R14 — native iOS app | ❌ open (low priority) | Amperfy still covers CarPlay. |
 
-**Not in the proposal but shipped in the 2.0 line:** audiobooks as a second
-library with cross-device resume, home-video indexing + DLNA browse, the
-Subsonic surface's growth (bookmarks, radio, size-bucketed art), the PWA
-navy/responsive redesign, and the code-quality gates (ruff, the module-size
-ratchet, lock-sync, no-silent-swallows).
+**Not in the proposal but shipped in the 2.0/2.1 line:** audiobooks as a
+second library with cross-device resume, home-video indexing + DLNA browse,
+the Subsonic surface's growth (bookmarks, radio, size-bucketed art), the PWA
+navy/responsive redesign, the code-quality gates (ruff, the module-size
+ratchet, lock-sync, no-silent-swallows), and — in **2.1** — the security
+hardening from the 2026-08-20 audit: the `dlna_ssrf` outbound-fetch guard on
+the three `?url=` endpoints, uniform error responses (the old ones were a
+port oracle), TLS certificate verification on outbound fetches, and escaping
+of untrusted device text. See CLAUDE.md → "Security posture".
+
+**A note on §2.4/R12 in light of that audit:** the proposal framed
+observability as a performance concern. The audit added a second reason —
+the SSRF guard's refusals are logged precisely so a probe is visible to
+whoever runs the gateway, which is the only signal there is on an
+unauthenticated LAN surface.
 
 See `CLAUDE.md → "HTTP/2 · HTTP/3 · TLS — DONE in 2.0 (roadmap retained
 for history)"` for the protocol-level detail this document summarises, and

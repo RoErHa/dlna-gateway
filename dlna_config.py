@@ -60,7 +60,7 @@ _load_env_file(os.path.join(_BASE_DIR, ".env"))
 # docs/BUILDING_2.0.md). Surfaced at /api/version and in the
 # PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
 # Set via $APP_VERSION (.env).
-VERSION = os.environ.get("APP_VERSION", "2.0.0-alpha.1")
+VERSION = os.environ.get("APP_VERSION", "2.1.0")
 # Ensure the base directory exists as soon as this module is imported.
 # LibraryDB is a module-level singleton that calls _connect() before
 # setup_logging() runs, so we cannot rely on setup_logging to create it.

@@ -1774,7 +1774,8 @@ serves bytes directly to the renderer; the gateway only sends
 trim slider are applied via `RenderingControl::SetVolume` SOAP, which
 adjusts the renderer's **hardware volume** — never PCM modification.
 See `RendererQueue` in `dlna_player.py` (its transport/volume/monitor
-mixins live in `dlna_player_transport.py` / `_volume.py` / `_monitor.py`),
+mixins live in `dlna_player_transport.py`, `dlna_player_volume.py` and
+`dlna_player_monitor.py`),
 `dlna_avtransport.avtransport_send` and
 `dlna_rendering_control.set_volume`.
 
