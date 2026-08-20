@@ -13,6 +13,7 @@ Usage:
 
 Exit code: 0 if all pass, 1 if any fail.
 """
+import glob
 import json
 import os
 import re
@@ -499,27 +500,73 @@ if os.path.isfile(pool_path):
     check("Pool sets busy_timeout", "busy_timeout" in pool_code)
 
 section("T3.2 — LibraryDB uses pool")
-lib_path = os.path.join(PROJECT, "dlna_library.py")
-if os.path.isfile(lib_path):
-    lib_code = open(lib_path).read()
-    lib_start = lib_code.find("class LibraryDB:")
-    lib_end = lib_code.find("\nclass ", lib_start + 10)
-    lib_class = lib_code[lib_start:lib_end] if lib_end > 0 else lib_code[lib_start:]
+# LibraryDB was split out of one 2,912-line module into per-responsibility
+# mixins (2026-08-20), so "the LibraryDB source" is now the whole
+# dlna_library*.py family, not one class body. This used to slice the text
+# between "class LibraryDB:" and the next "class " — which silently matched
+# nothing the moment the class gained base classes. Scanning the family is
+# both correct and no longer position-dependent.
+lib_paths = sorted(glob.glob(os.path.join(PROJECT, "dlna_library*.py")))
+lib_files = {os.path.basename(p): open(p).read() for p in lib_paths}
+mixin_src = "\n".join(v for k, v in lib_files.items()
+                      if k not in ("dlna_library.py", "dlna_library_sql.py"))
+root_src = lib_files.get("dlna_library.py", "")
+lib_all = "\n".join(lib_files.values())
 
-    check("LibraryDB imports Pool", "from db_pool import Pool" in lib_code)
-    check("LibraryDB creates Pool", "Pool(" in lib_class)
-    check("No self._lock in LibraryDB", "self._lock" not in lib_class)
-    check("No self._connect in LibraryDB", "self._connect" not in lib_class)
-    check("No self._db_file in LibraryDB", "self._db_file" not in lib_class,
+if lib_files:
+    check(f"LibraryDB family present ({len(lib_files)} modules)", len(lib_files) >= 7,
+          f"found {sorted(lib_files)}")
+    check("LibraryDB imports Pool", "from db_pool import Pool" in root_src)
+    check("LibraryDB creates Pool", "Pool(" in root_src)
+    check("No self._lock in LibraryDB", "self._lock" not in lib_all)
+    check("No self._connect in LibraryDB", "self._connect" not in lib_all)
+    check("No self._db_file in LibraryDB", "self._db_file" not in mixin_src,
           "stale attribute — use self._pool.db_file instead")
-    check("No self._local in LibraryDB", "self._local" not in lib_class,
+    check("No self._local in LibraryDB", "self._local" not in lib_all,
           "stale attribute — pool handles thread-local connections")
-    check("Uses pool.read()", "self._pool.read()" in lib_class)
-    check("Uses pool.write()", "self._pool.write()" in lib_class)
+    check("Uses pool.read()", "self._pool.read()" in mixin_src)
+    check("Uses pool.write()", "self._pool.write()" in mixin_src)
 
-    reads = lib_class.count("self._pool.read()")
-    writes = lib_class.count("self._pool.write()")
+    reads = mixin_src.count("self._pool.read()")
+    writes = mixin_src.count("self._pool.write()")
     check(f"Read/write balance ({reads}r/{writes}w)", reads > 0 and writes > 0)
+
+section("T3.2b — LibraryDB composition (mixin split)")
+# Guards the split itself: the composed class must keep the FULL public
+# surface (every DB.<method> call site depends on it) and the mixins must
+# stay disjoint — a name defined by two of them would make behaviour
+# depend on MRO order, which is exactly what this layout must not do.
+try:
+    import inspect as _inspect
+
+    import dlna_library as _L
+    _mixins = [c for c in _L.LibraryDB.__mro__
+               if c.__name__.endswith("Mixin")]
+    check(f"LibraryDB composed from mixins ({len(_mixins)})", len(_mixins) >= 6)
+
+    _own = {}
+    _dupes = []
+    for _c in _mixins:
+        for _n, _f in vars(_c).items():
+            if callable(_f) and not _n.startswith("__"):
+                if _n in _own:
+                    _dupes.append(f"{_n} ({_own[_n]} + {_c.__name__})")
+                _own[_n] = _c.__name__
+    check("Mixins define no overlapping methods", not _dupes, ", ".join(_dupes))
+
+    _methods = [m for m, _ in _inspect.getmembers(_L.LibraryDB, _inspect.isfunction)]
+    check(f"LibraryDB public surface intact ({len(_methods)} methods)",
+          len(_methods) >= 95, f"got {len(_methods)}, expected >= 95")
+    check("Helper re-exports still importable",
+          all(hasattr(_L, _h) for _h in
+              ("_dedup_clause", "_parse_audio_params", "_norm_title",
+               "_dur_to_secs", "FAVOURITES_ID")))
+    check("Every mixin module under 600 lines",
+          all(len(v.split("\n")) < 600 for k, v in lib_files.items()),
+          ", ".join(f"{k}={len(v.split(chr(10)))}" for k, v in lib_files.items()
+                    if len(v.split(chr(10))) >= 600))
+except Exception as _e:                       # import failure is a real fail
+    check("LibraryDB composition importable", False, repr(_e))
 
 section("T3.3 — Pool concurrent test (standalone)")
 if os.path.isfile(pool_path):
