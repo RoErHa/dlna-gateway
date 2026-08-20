@@ -43,9 +43,8 @@ pydantic==2.13.4
 pydantic-core==2.46.4
 pygments==2.19.2
 python-dotenv==1.2.2        # direct
-python-json-logger==4.0.0        # direct
 rich==14.3.3        # direct
-starlette==1.2.1
+starlette==1.2.1        # direct
 typing-extensions==4.15.0
 typing-inspection==0.4.2
 watchdog==6.0.0        # direct

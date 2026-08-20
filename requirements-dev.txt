@@ -26,6 +26,9 @@
 #               also needs `safaridriver --enable`).
 #   Appium    → tests/frontend/ios_sim_smoke.py (iOS Simulator, opt-in;
 #               also needs a running `appium` server + a booted sim).
+#   reportlab → tools/gen_architecture_pdf.py, which GENERATES
+#               docs/ARCHITECTURE.PDF. Doc tooling, never imported by the
+#               gateway; regenerate the PDF after architecture changes.
 #
 # Pinned like requirements.lock: a Playwright minor bump can change
 # selector/timing behaviour and turn the UI suite red for reasons that
@@ -42,3 +45,6 @@ playwright==1.62.0        # browsers: chromium r1234 (151), webkit r2336 (26.5)
 # "not installed" message rather than failing the suite).
 selenium==4.45.0
 Appium-Python-Client==5.3.1
+
+# Doc generation (tools/gen_architecture_pdf.py → docs/ARCHITECTURE.PDF).
+reportlab==4.5.1
