@@ -33,6 +33,69 @@ launchd-correct restart (a bare `kill` races launchd's respawn; see
 LaunchAgent isn't loaded. `--restart` takes precedence over `--run` if
 both are passed.
 
+## Code quality gates (added 2026-08-20)
+
+Before this date the repo had **no lint, format, or type configuration
+and no CI** — nothing enforced any standard. Four gates now run inside
+`python tests/run_all.py --offline`, each sized to sit at **zero
+violations** so any hit is a real regression rather than backlog:
+
+| Gate | Config / data | Fix when it fails |
+|---|---|---|
+| **T0.LINT** — ruff | `pyproject.toml` | `.venv/bin/ruff check . --fix` |
+| **T0.SIZE** — per-module line ratchet | `tests/module_size_budget.json` | split the code, or `python3 tools/regen_size_budget.py` to lock in a shrink |
+| `tests/test_lock_sync.py` — dependency pins | `requirements.lock` | `python3 tools/regen_lock.py` |
+| `tests/test_no_silent_swallows.py` — observability | — | log the exception, or narrow the `except` |
+
+**ruff** (`pyproject.toml`): rules chosen because each catches a defect
+class, not a style preference — `F, E9, W, B, RET, UP, C4, PIE, ASYNC`.
+**ASYNC matters most here**: the whole 2.0 edge is an ASGI app, and one
+blocking call inside an `async def` serialises every request. It already
+caught four real ones — `os.path.isfile()` on the **external SAMDATA
+volume** inside the video routes, where a spun-down USB disk stalls the
+event loop (and the SSE stream) for seconds. Blocking work belongs in
+`run_in_threadpool`; `dlna_asgi._isfile()` is the helper.
+Rules the codebase deliberately diverges from (E501, RET504-508, B008 for
+FastAPI's `Depends()`-in-default, B024 for the provider Protocol) are
+ignored with the reason inline. `tests/` and `tools/` get E402 relief —
+they set `sys.path` before importing what they test.
+ruff is a **dev-only dep**: absent → the gate SKIPS, never reddens a
+clean clone. `pip install -r requirements-dev.txt`.
+
+**Module size is a RATCHET, not a flat limit.** Every application module
+carries a ceiling in `tests/module_size_budget.json`: it may shrink
+freely, never grow. A **new** module is held to the 400-line target from
+birth — legacy modules get an allowance, new ones do not. A module that
+drops well below its ceiling makes the budget *stale* and the suite says
+so, so the gain is locked in instead of silently spent again. The count
+of over-target modules is itself capped, so splitting one big file into
+three still-big files cannot pass. A flat 400-line rule was rejected
+because it would fail on day one for 15 modules and be switched off
+within a week. Currently **29/44 modules within target**; the 15 over it
+are pre-existing debt, listed explicitly so it stays visible and bounded.
+`tests/` and `tools/` are excluded on purpose — gating test-file growth
+puts a thumb on the scale against writing tests.
+
+**Dependencies are pinned in two layers.** `requirements.txt` is the
+SPEC (loose `>=`, every dep optional, graceful degradation);
+`requirements.lock` is the INSTALL (exact transitive closure, 26
+packages). `setup.sh` installs from the **lock by default** —
+`./setup.sh --unpinned` deliberately resolves the ranges when testing
+newer upstreams. fastapi/hypercorn additionally carry `<1.0` caps because
+setup.sh falls back to the spec when no lock is present. Dev tooling
+lives in `requirements-dev.txt` and is never in the lock, so a production
+install doesn't pull a browser engine.
+
+**No exception may be caught broadly AND discarded silently.** A handler
+may be broad, or silent, but not both — `except Exception as e:
+log.debug(...)` or `except ValueError: return 0`, never
+`except Exception: pass`. Cleanup paths use
+**`dlna_config.close_quietly(resource)`**, which is broad on purpose (it
+runs while another exception is propagating and must never replace it)
+and logs at debug, so a suspected socket leak is greppable under
+`GATEWAY_DEBUG=1`. Use it instead of writing another
+`try: conn.close() / except: pass` — the gate rejects those by shape.
+
 ## Running Tests
 
 Four complementary layers:
@@ -184,7 +247,7 @@ Each core module also has a standalone self-test:
 python dlna_config.py              # config/logging
 python dlna_discovery.py           # SSDP discovery (20s live scan)
 python dlna_content.py <control-url>  # UPnP SOAP
-python dlna_library.py             # DB operations
+python dlna_library.py             # DB operations (composition + pool smoke test)
 python db_pool.py                  # concurrent DB stress test
 python dlna_player.py              # QueueRegistry + duration-parser self-test
 ```
@@ -214,7 +277,14 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
 | `dlna_discovery.py` | SSDP listener, probe, subnet scanner, server heartbeat |
 | `dlna_registry.py` | Data classes + `ServerRegistry` / `RendererRegistry` thread-safe stores |
-| `dlna_library.py` | `LibraryDB` — SQLite index + FTS5 search + playlists; composition root for DB-owning singletons |
+| `dlna_library.py` | **Composition root only (~150 lines).** `LibraryDB` is assembled from six mixins (below) and the `DB`/`INDEXER`/`DEVICE_ROLES`/`ART_FETCHER` singletons are wired here. Until 2026-08-20 this file was **2,912 lines** and `LibraryDB` a 95-method God Object; the split is MIXIN-based precisely so the public `DB.<method>` surface is byte-identical and none of the ~240 call sites changed. |
+| `dlna_library_sql.py` | Pure helpers shared by the mixins — `_norm_title`, `_dedup_clause`, `_parse_audio_params`, `_is_localfs`, the `_localfs_album_*` SQL fragments, `_dur_to_secs`. Dependency-free ON PURPOSE: a mixin importing them from `dlna_library` would be circular AND would fire the `DB = LibraryDB()` module-level singleton (hence every pending migration on the live DB) as a side effect. `dlna_library` re-exports them all, so `from dlna_library import _dedup_clause` still works. |
+| `dlna_library_schema.py` | `SchemaMixin` — every CREATE TABLE/INDEX + the Phase-A album-art sibling backfill. Regenerate `schema.sql` after changes. |
+| `dlna_library_migrations.py` | `MigrationsMixin` — the in-place migrations + `repair_fts`/`run_with_fts_heal` (the FTS5 shadow-table corruption recovery). |
+| `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads, the indexer upsert path (incl. the d-id alias dedup), `metadata_overrides`. |
+| `dlna_library_browse.py` | `BrowseMixin` — artists/albums/genres/decades/letter-bar/FTS5 search + the play-count-biased radio picker. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
+| `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
+| `dlna_library_collections.py` | `CollectionsMixin` — playlists, album + radio favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
 | `dlna_indexer.py` | `Indexer` — background crawler that walks a MediaServer and populates LibraryDB |
 | `dlna_art_fetcher.py` | `AlbumArtFetcher` — Phase B MusicBrainz + Cover Art Archive lookup |
 | `dlna_devices.py` | `DeviceRoleCache` — in-memory mirror of device_roles for zero-latency classification |
@@ -232,7 +302,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
-| `api_upnp.py` | The gateway-as-MediaServer: a **complete DLNA Media Server** the Naim/LG browse. Device descriptor (`MediaServer:1` + `X_DLNADOC` + icons + ContentDirectory **and** ConnectionManager), both service SCPDs, SOAP `ContentDirectory#Browse` over the full library (`_gw_browse`) + the pre-browse handshake actions, `ConnectionManager#GetProtocolInfo` etc., GENA SUBSCRIBE + initial NOTIFY, and SSDP announce + **M-SEARCH responder**. See "UPnP exposure (Naim)". |
+| `api_upnp.py` | The gateway-as-MediaServer (Browse is a **dispatch table** since 2026-08-20 — `_BROWSE_EXACT` + `_BROWSE_PREFIX` → one `_br_*` handler per container, sharing a `_Browse` context that owns the DIDL envelope and the "`count == 0` means unlimited" pagination rule; `_gw_browse` itself went 491 lines/~99 branches → 10 lines. Adding a container = one handler + one table entry.): a **complete DLNA Media Server** the Naim/LG browse. Device descriptor (`MediaServer:1` + `X_DLNADOC` + icons + ContentDirectory **and** ConnectionManager), both service SCPDs, SOAP `ContentDirectory#Browse` over the full library (`_gw_browse`) + the pre-browse handshake actions, `ConnectionManager#GetProtocolInfo` etc., GENA SUBSCRIBE + initial NOTIFY, and SSDP announce + **M-SEARCH responder**. See "UPnP exposure (Naim)". |
 
 ### Key Module-Level Singletons
 
@@ -378,7 +448,7 @@ etc.).
 
 ### Frontend
 
-`static/index.html` + `static/app.js` (PWA, ~71K lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
+`static/index.html` + `static/app.js` (PWA, ~3,000 lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
 
 **Service Worker cache tiers (`static/sw.js`).** Three caches: `APP_CACHE`
 (app shell — **network-first** as of 2026-06-27, was stale-while-revalidate),
