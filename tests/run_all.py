@@ -157,6 +157,39 @@ features = {
 for label, needle in features.items():
     check(f"JS: {label}", needle in js)
 
+section("T0.SIZE — Module line budget (ratchet)")
+# Was a single hardcoded "dlna_gateway.py < 350" check — the discipline
+# existed but covered exactly one file out of ~40, while dlna_library.py
+# grew to 2,912 lines. Now every application module carries a ceiling in
+# tests/module_size_budget.json that can only ratchet DOWN; the
+# dlna_gateway.py rule survives as one entry among them.
+# Full enforcement (incl. new-module target + staleness) lives in
+# tests/test_module_size.py; this surfaces the numbers in the suite output.
+try:
+    import json as _json
+
+    import tools.regen_size_budget as _budget
+    _spec = _json.loads(_budget.BUDGET_PATH.read_text(encoding="utf-8"))
+    _sizes = _budget.app_modules()
+    _target = _spec["target_lines"]
+    _over = [f"{m} ({n} > {_spec['budgets'][m]})"
+             for m, n in sorted(_sizes.items())
+             if m in _spec["budgets"] and n > _spec["budgets"][m]]
+    _new = [m for m in _sizes if m not in _spec["budgets"]]
+    _debt = _spec["over_target"]
+    check(f"No module over its budget ({len(_sizes)} modules checked)",
+          not _over, ", ".join(_over))
+    check("Every module is in the budget", not _new,
+          f"unbudgeted: {_new} — run tools/regen_size_budget.py")
+    check(f"Modules within the {_target}-line target: "
+          f"{len(_sizes) - len(_debt)}/{len(_sizes)}", True)
+    if _debt:
+        print(f"    \033[2mpre-existing debt over {_target} lines: "
+              f"{', '.join(_debt[:5])}"
+              f"{' …' if len(_debt) > 5 else ''}\033[0m")
+except Exception as _e:
+    check("Module size budget readable", False, repr(_e))
+
 section("T1.EXTRA — Gateway is slim")
 gw_path = os.path.join(PROJECT, "dlna_gateway.py")
 if os.path.isfile(gw_path):
