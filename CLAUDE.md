@@ -1660,7 +1660,11 @@ are now named explicitly in `.env` and read by `hypercorn_conf.py`:
 
 This closed two real exposures: a **second LAN interface** (`192.168.1.238`)
 that nobody intended to serve, and TLS on the LAN address where the cert
-never matched anyway. **Loopback must stay bound** — `tests/run_all.py` and
+never matched anyway. The LAN address is **DHCP-reserved** on the router
+(Netgear @ `192.168.1.1`, against the Ethernet MAC `d0:11:e5:ed:76:35`,
+2026-08-20) — which is what makes naming a literal IP in `.env` reasonable
+rather than fragile. Note the Wi-Fi interface carries a macOS *randomized*
+MAC, so it could never have been reserved reliably; it is no longer served. **Loopback must stay bound** — `tests/run_all.py` and
 the beets tools reach the gateway at `127.0.0.1`. If a configured address
 stops existing the gateway FAILS TO START; that is deliberate, because the
 alternative is silently falling back to `0.0.0.0`. Changing an address is an
