@@ -21,6 +21,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_asgi
+import dlna_asgi_state
 import dlna_events
 import dlna_gateway
 import api_subsonic
@@ -1172,7 +1173,7 @@ class TestVideoApi(unittest.TestCase):
     def setUp(self):
         import dlna_ffmpeg
         self._patches = [
-            mock.patch.object(dlna_asgi, "DB", self.db),
+            mock.patch.object(dlna_asgi_state, "DB", self.db),
             mock.patch.object(dlna_ffmpeg, "POSTER_DIR", self.posters),
         ]
         for p in self._patches:
@@ -1274,3 +1275,69 @@ class TestVideoApi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRouterComposition(unittest.TestCase):
+    """dlna_asgi was split into per-surface APIRouter modules on 2026-08-20.
+
+    Two properties make that split safe, and neither is self-evident, so both
+    are asserted rather than assumed."""
+
+    def test_no_two_routes_can_match_the_same_request(self):
+        """Router include ORDER is not load-bearing — but only while the route
+        set stays unambiguous. FastAPI matches in registration order, so the
+        day someone adds a catch-all (or a `/video/{vid}`-shaped overlap),
+        grouping routes by surface would start changing behaviour. This test
+        is what lets the module docstrings claim order is free."""
+        import re as _re
+
+        def _to_re(path):
+            out = _re.escape(path)
+            out = _re.sub(r"\\\{([a-zA-Z_]\w*)\\:path\\\}", r"(?P<\1>.+)", out)
+            out = _re.sub(r"\\\{([a-zA-Z_]\w*)\\\}", r"(?P<\1>[^/]+)", out)
+            return _re.compile("^" + out + "$")
+
+        routes = [(getattr(r, "path", ""), tuple(sorted(getattr(r, "methods", []) or [])))
+                  for r in dlna_asgi.app.routes]
+        clashes = set()
+        for i, (p1, m1) in enumerate(routes):
+            for p2, m2 in routes[i + 1:]:
+                if p1 == p2:            # same path, different methods — fine
+                    continue
+                if m1 and m2 and not (set(m1) & set(m2)):
+                    continue
+                for src, other in ((p1, p2), (p2, p1)):
+                    concrete = _re.sub(r"\{[^}]+\}", "X", src)
+                    if _to_re(other).match(concrete):
+                        clashes.add(tuple(sorted((p1, p2))))
+        self.assertEqual(
+            clashes, set(),
+            "two routes can match the same request, so include ORDER now "
+            f"decides which wins: {sorted(clashes)}")
+
+    def test_shared_state_bound_in_exactly_one_module(self):
+        """`DB`/`SERVERS`/`INDEXER` live in dlna_asgi_state. A second binding
+        would leave that module on the real library.db while a test patched
+        the owner — TestVideoApi caught exactly this during the split."""
+        import pathlib
+        family = sorted(pathlib.Path(PROJECT).glob("dlna_asgi*.py"))
+        for imp in ("from dlna_library import DB",
+                    "from dlna_discovery import SERVERS"):
+            binders = [p.name for p in family
+                       if imp in p.read_text(encoding="utf-8")]
+            self.assertEqual(
+                binders, ["dlna_asgi_state.py"],
+                f"{imp!r} must appear ONLY in dlna_asgi_state; got {binders}")
+
+    def test_every_router_is_included(self):
+        """An APIRouter that is never included is a set of dead routes."""
+        import importlib
+        import pathlib
+        entry = (pathlib.Path(PROJECT) / "dlna_asgi.py").read_text(encoding="utf-8")
+        for p in sorted(pathlib.Path(PROJECT).glob("dlna_asgi_*.py")):
+            mod = importlib.import_module(p.stem)
+            if not hasattr(mod, "router"):
+                continue
+            with self.subTest(module=p.stem):
+                self.assertIn(f"app.include_router({p.stem}.router)", entry,
+                              f"{p.stem} defines a router that is never included")
