@@ -24,6 +24,7 @@ import dlna_asgi
 import dlna_events
 import dlna_gateway
 import api_subsonic
+import api_subsonic_proto
 import api_upnp
 from dlna_asgi_bridge import run_legacy_sync
 from dlna_config import VERSION
@@ -568,14 +569,14 @@ class TestSubsonicAsgi(unittest.TestCase):
 
     def setUp(self):
         self._prev = api_subsonic.SUBSONIC_PASSWORD_OVERRIDE
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "pw"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "pw"
         # The dlna_config import loads .env, which on the dev machine sets a
         # real SUBSONIC_USER — but these tests authenticate as the default
         # "user". Strip it (same guard as tests/test_subsonic.py).
         self._prev_user = os.environ.pop("SUBSONIC_USER", None)
 
     def tearDown(self):
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = self._prev
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = self._prev
         if self._prev_user is not None:
             os.environ["SUBSONIC_USER"] = self._prev_user
 
@@ -618,7 +619,7 @@ class TestSubsonicAsgi(unittest.TestCase):
                          "failed")
 
     def test_byte_method_password_unset_503(self):
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = ""
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = ""
         tid = api_subsonic._track_id("http://x/a.flac")
         r = self._call("stream", {"u": "user", "p": "pw", "id": tid,
                                   "f": "json"})

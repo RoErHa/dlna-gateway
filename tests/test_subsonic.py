@@ -23,6 +23,7 @@ if PROJECT not in sys.path:
 
 from dlna_library import LibraryDB
 import api_subsonic
+import api_subsonic_proto
 
 
 # Strip SUBSONIC_USER so api_subsonic._subsonic_user() falls back to the
@@ -98,16 +99,16 @@ def _call(method: str, params: dict, *, db, password="testpwd"):
     """Drive api_subsonic.handle() with auth + DB patched in. Returns
     (mock_handler, response_body)."""
     h = _MockH()
-    api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = password
-    with patch.object(api_subsonic, "DB", db), \
-         patch("api_subsonic.SERVERS") as mock_servers:
+    api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = password
+    with patch.object(api_subsonic_proto, "DB", db), \
+         patch("api_subsonic_proto.SERVERS") as mock_servers:
         mock_servers.online.return_value = []
         mock_servers.all.return_value = []
         full_params = {"u": "user", "p": password, "v": "1.16.1",
                        "c": "test", "f": "json"}
         full_params.update(params)
         api_subsonic.handle(h, "GET", f"/rest/{method}", full_params)
-    api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+    api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
     return h, (h.last_payload.get("subsonic-response") if h.last_payload
                else None)
 
@@ -130,7 +131,7 @@ class TestAuth(unittest.TestCase):
 
     def test_no_password_env_returns_503(self):
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = ""
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = ""
         with patch.dict(os.environ, {"SUBSONIC_PASSWORD": ""}, clear=False):
             os.environ.pop("SUBSONIC_PASSWORD", None)
             api_subsonic.handle(h, "GET", "/rest/ping",
@@ -141,47 +142,47 @@ class TestAuth(unittest.TestCase):
 
     def test_wrong_password_returns_failed(self):
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
         api_subsonic.handle(h, "GET", "/rest/ping",
                             {"u": "user", "p": "WRONGpwd"})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         body = h.last_payload["subsonic-response"]
         self.assertEqual(body["status"], "failed")
         self.assertEqual(body["error"]["code"], 40)
 
     def test_correct_plaintext_password(self):
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
         api_subsonic.handle(h, "GET", "/rest/ping",
                             {"u": "user", "p": "rightpwd"})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertEqual(h.last_payload["subsonic-response"]["status"], "ok")
 
     def test_correct_hex_encoded_password(self):
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
         hex_pw = "enc:" + b"rightpwd".hex()
         api_subsonic.handle(h, "GET", "/rest/ping",
                             {"u": "user", "p": hex_pw})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertEqual(h.last_payload["subsonic-response"]["status"], "ok")
 
     def test_correct_token_salt_password(self):
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
         salt = "abcd1234"
         token = hashlib.md5(("rightpwd" + salt).encode()).hexdigest()
         api_subsonic.handle(h, "GET", "/rest/ping",
                             {"u": "user", "t": token, "s": salt})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertEqual(h.last_payload["subsonic-response"]["status"], "ok")
 
     def test_wrong_username(self):
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "rightpwd"
         api_subsonic.handle(h, "GET", "/rest/ping",
                             {"u": "NOTuser", "p": "rightpwd"})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertEqual(h.last_payload["subsonic-response"]["status"], "failed")
 
 
@@ -259,10 +260,10 @@ class TestSimpleEndpoints(_BaseDB):
     def test_dot_view_suffix_handled(self):
         # Legacy clients send /rest/ping.view — must route the same.
         h = _MockH()
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
         api_subsonic.handle(h, "GET", "/rest/ping.view",
                             {"u": "user", "p": "testpwd"})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertEqual(h.last_payload["subsonic-response"]["status"], "ok")
 
 
@@ -467,30 +468,30 @@ class TestCoverArt(unittest.TestCase):
         captured = {}
         def fake_art(h, params):
             captured["url"] = params.get("url")
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
         # The handler now PROBES each candidate via art_fetch_cached before
         # delegating to the /art proxy — mock the probe to resolve.
-        with patch.object(api_subsonic, "DB", self.db), \
+        with patch.object(api_subsonic_proto, "DB", self.db), \
              patch("api_playback.art_fetch_cached",
                    return_value=(200, "image/jpeg", b"img")), \
              patch("api_playback.art", side_effect=fake_art), \
-             patch("api_subsonic.SERVERS"):
+             patch("api_subsonic_proto.SERVERS"):
             h = _MockH()
             aid = api_subsonic._album_id("Pink Floyd", "Animals")
             api_subsonic.handle(h, "GET", "/rest/getCoverArt",
                                 {"u": "user", "p": "testpwd", "id": aid})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertEqual(captured.get("url"), "http://srv/cover.jpg")
 
     def test_unknown_id_404s(self):
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
-        with patch.object(api_subsonic, "DB", self.db), \
-             patch("api_subsonic.SERVERS"):
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
+        with patch.object(api_subsonic_proto, "DB", self.db), \
+             patch("api_subsonic_proto.SERVERS"):
             h = _MockH()
             aid = api_subsonic._album_id("Nobody", "Nothing")
             api_subsonic.handle(h, "GET", "/rest/getCoverArt",
                                 {"u": "user", "p": "testpwd", "id": aid})
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.assertTrue(any(code == 404 for code, _ in h.errors))
 
 
@@ -505,10 +506,10 @@ class TestXmlFormat(unittest.TestCase):
         self.tmp.close()
         self.db = LibraryDB(self.tmp.name)
         _seed(self.db)
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "testpwd"
 
     def tearDown(self):
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = None
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
         self.db._pool.close()
         os.unlink(self.tmp.name)
 
@@ -516,8 +517,8 @@ class TestXmlFormat(unittest.TestCase):
         """Drive handle() without forcing f=json — preserves whatever
         f= the test set (or None)."""
         h = _MockH()
-        with patch.object(api_subsonic, "DB", self.db), \
-             patch("api_subsonic.SERVERS") as mock_servers:
+        with patch.object(api_subsonic_proto, "DB", self.db), \
+             patch("api_subsonic_proto.SERVERS") as mock_servers:
             mock_servers.online.return_value = []
             mock_servers.all.return_value = []
             full = {"u": "user", "p": "testpwd", "v": "1.16.1", "c": "test"}
@@ -844,7 +845,7 @@ class TestCoverArtResolution(unittest.TestCase):
     def test_candidates_folder_album_returns_all_distinct_track_arts(self):
         aid = api_subsonic._album_id("Camel", "The Snow Goose",
                                      "Camel/The Snow Goose (Deluxe)")
-        with patch.object(api_subsonic, "DB", self.db):
+        with patch.object(api_subsonic_proto, "DB", self.db):
             cands = api_subsonic._cover_art_candidates(aid)
         self.assertIn("http://localfs/art/DEAD", cands)
         self.assertIn("http://localfs/art/LIVE2", cands)
@@ -852,7 +853,7 @@ class TestCoverArtResolution(unittest.TestCase):
 
     def test_candidates_single_for_track_id(self):
         tid = api_subsonic._track_id("http://srv/2.flac")
-        with patch.object(api_subsonic, "DB", self.db):
+        with patch.object(api_subsonic_proto, "DB", self.db):
             cands = api_subsonic._cover_art_candidates(tid)
         self.assertEqual(cands, ["http://localfs/art/LIVE2"])
 
@@ -865,7 +866,7 @@ class TestCoverArtResolution(unittest.TestCase):
                 return 404, "Upstream 404", b""
             return 200, "image/jpeg", b"REALCOVER" + b"x" * 100
 
-        with patch.object(api_subsonic, "DB", self.db):
+        with patch.object(api_subsonic_proto, "DB", self.db):
             code, ctype, body = api_subsonic._resolve_cover(aid, fake_fetch)
         self.assertEqual(code, 200)
         self.assertEqual(ctype, "image/jpeg")
@@ -874,17 +875,99 @@ class TestCoverArtResolution(unittest.TestCase):
     def test_resolve_cover_all_dead_returns_404(self):
         aid = api_subsonic._album_id("Camel", "The Snow Goose",
                                      "Camel/The Snow Goose (Deluxe)")
-        with patch.object(api_subsonic, "DB", self.db):
+        with patch.object(api_subsonic_proto, "DB", self.db):
             code, _ctype, body = api_subsonic._resolve_cover(
                 aid, lambda u: (404, "Upstream 404", b""))
         self.assertEqual(code, 404)
         self.assertEqual(body, b"")
 
     def test_resolve_cover_no_candidates_returns_404(self):
-        with patch.object(api_subsonic, "DB", self.db):
+        with patch.object(api_subsonic_proto, "DB", self.db):
             code, _ctype, _body = api_subsonic._resolve_cover(
                 "al:bogus", lambda u: (200, "image/jpeg", b"x" * 100))
         self.assertEqual(code, 404)
+
+
+class TestFamilyStateBinding(unittest.TestCase):
+    """api_subsonic was split into seven modules on 2026-08-20. `DB`,
+    `SERVERS` and `SUBSONIC_PASSWORD_OVERRIDE` are bound in exactly ONE of
+    them (api_subsonic_proto); siblings reach them as `_proto.<name>`,
+    resolved at call time.
+
+    Why this is asserted rather than trusted: if a second module ever does
+    `from dlna_library import DB`, every test here keeps passing while THAT
+    module talks to the real library.db. A false pass against production
+    data is much worse than a crash."""
+
+    FAMILY_GLOB = "api_subsonic*.py"
+
+    def _family(self):
+        import pathlib
+        return sorted(pathlib.Path(PROJECT).glob(self.FAMILY_GLOB))
+
+    def test_db_and_servers_bound_in_exactly_one_module(self):
+        for imp in ("from dlna_library import DB",
+                    "from dlna_discovery import SERVERS"):
+            binders = [p.name for p in self._family()
+                       if imp in p.read_text(encoding="utf-8")]
+            self.assertEqual(
+                binders, ["api_subsonic_proto.py"],
+                f"{imp!r} must appear ONLY in api_subsonic_proto; "
+                f"found in {binders}")
+
+    def test_patching_the_owner_reaches_the_handler_modules(self):
+        import api_subsonic_browse
+        import api_subsonic_extras
+        import api_subsonic_playlists
+        import api_subsonic_proto
+
+        seen = []
+
+        class _Spy:
+            def __getattr__(self, name):
+                def _rec(*_a, **_k):
+                    seen.append(name)
+                    return []
+                return _rec
+
+        for label, fn in (("playlists", api_subsonic_playlists._get_playlists),
+                          ("extras",
+                           api_subsonic_extras._get_internet_radio_stations)):
+            seen.clear()
+            with patch.object(api_subsonic_proto, "DB", _Spy()):
+                fn(_MockH(), {})
+            with self.subTest(module=label):
+                self.assertTrue(
+                    seen, f"{label} did not see the patched DB — it is "
+                          f"using the REAL library")
+
+        # browse resolves its udn through SERVERS first
+        seen.clear()
+
+        class _SrvSpy:
+            def online(self):
+                seen.append("online")
+                return []
+
+            def all(self):
+                seen.append("all")
+                return []
+
+        with patch.object(api_subsonic_proto, "DB", _Spy()), \
+             patch.object(api_subsonic_proto, "SERVERS", _SrvSpy()):
+            api_subsonic_browse._get_artists(_MockH(), {})
+        self.assertTrue(seen, "browse did not see the patched SERVERS/DB")
+
+    def test_password_override_forwards_from_the_entry_module(self):
+        """Reading api_subsonic.SUBSONIC_PASSWORD_OVERRIDE must see the
+        CURRENT value in the owner, not an import-time snapshot."""
+        import api_subsonic_proto
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "sentinel-pw"
+        try:
+            self.assertEqual(api_subsonic.SUBSONIC_PASSWORD_OVERRIDE,
+                             "sentinel-pw")
+        finally:
+            api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
 
 
 if __name__ == "__main__":
