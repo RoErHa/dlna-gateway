@@ -244,7 +244,10 @@ store it in `videos.title` so browse/sort/search are simple.
   `python tests/run_all.py --offline` + `.venv/bin/pytest tests/frontend`.
 - ffprobe/ffmpeg stay **optional** — every path must degrade gracefully when
   they're absent (no hard dependency; the gateway is audio-first).
-- Commit on `2.0`, merge to `main`, deploy via `launchctl kickstart -k`.
+- Commit on `main`, deploy via `launchctl kickstart -k`. (Until 2026-08-20
+  work happened on a `2.0` branch that was merged to `main`; that branch was
+  retired at v2.1.0 — its name had become misleading and `main` was identical
+  to it. Everything it carried is in `main`'s history.)
 - Keep videos entirely out of the **Naim** path (UPnP `/gw` + audio renderers).
 
 ## First-session starting point

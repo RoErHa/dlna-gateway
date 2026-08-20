@@ -14,6 +14,25 @@ DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPn
 > the in-process LocalFs backend. See **[Library backend — LocalFs](#library-backend--localfs-migration-complete)**
 > below for the architecture; phase history is in `docs/MIGRATION_PLAN.md`.
 
+## Branching
+
+**Work happens on `main`.** There is one branch and one checkout
+(`~/dlna-gateway-2.0` — the directory name is vestigial; there is no sibling
+1.x tree any more). Commit on `main`, run the gates, deploy with
+`launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway`.
+
+Until 2026-08-20 the model was "develop on a `2.0` branch, merge to `main`",
+which is why ~93 `merge 2.0:` commits sit in the history and why the older
+runbooks under `docs/` describe that flow. At v2.1.0 the branch was retired:
+`main` was byte-identical to it, the name had become misleading (the shipping
+version is 2.1.0), and a single-developer repo gained nothing from the
+indirection. Nothing was lost — every commit it carried is reachable from
+`main`.
+
+Releases are tagged (`v2.1.0`). Tags are cheap and mark points worth
+returning to; the pre-release and 1.x markers were pruned once 1.x was fully
+decommissioned.
+
 ## Running the Gateway
 
 ```bash

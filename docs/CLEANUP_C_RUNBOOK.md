@@ -121,6 +121,7 @@ loop (it's native now, not bridged).
 
 **B6 — gate + commit + DEPLOY + 🔴 NAIM VERIFY (gate before Phase C).**
 - Full gate (`run_all.py --offline` + `pytest tests/frontend`). Commit on `2.0`, merge to `main`.
+  *(Historical: the `2.0` branch was retired at v2.1.0 — work is on `main` now.)*
 - Restart: `launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway`.
 - **Naim (user):** the "DLNA Gateway (IINA)" MediaServer re-discovers at `:8765`; browse **Playlists** (incl. the 3 Billboard ones) + **Favourite Albums**; **play one track** (gapless if a segued album). If the Naim cached `:8770`, re-select the server / re-browse (no GENA push). **Only proceed to C once this passes.**
 
