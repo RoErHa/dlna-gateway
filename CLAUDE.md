@@ -71,8 +71,13 @@ so, so the gain is locked in instead of silently spent again. The count
 of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
-within a week. Currently **29/44 modules within target**; the 15 over it
-are pre-existing debt, listed explicitly so it stays visible and bounded.
+within a week. As of 2026-08-20 the debt is **paid off: 84/84 modules
+within target** and `over_target` is empty — so the ratchet now behaves
+as a flat 400-line limit in practice, without ever having needed a
+flag-day. Every module above the line was split in the refactor series
+that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
+in each new module's docstring, so a future reader learns why the file
+exists rather than just that it is small.
 `tests/` and `tools/` are excluded on purpose — gating test-file growth
 puts a thumb on the scale against writing tests.
 
@@ -275,28 +280,39 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
 | `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
-| `dlna_discovery.py` | SSDP listener, probe, subnet scanner, server heartbeat |
+| `dlna_discovery.py` | Device-description fetch/registration + the server heartbeat. Composition point: re-exports the SSDP and probe surfaces so `dlna_discovery.<name>` resolves as it always has. |
+| `dlna_discovery_ssdp.py` | The SSDP multicast side — periodic M-SEARCH + the NOTIFY listener. Owns the SSDP wire constants. |
+| `dlna_discovery_probe.py` | The non-SSDP fallbacks — TCP/HTTP subnet sweep + the "only scan if SSDP found nothing" guard. Both this and the SSDP module reach `_register_location` through a **deliberately lazy import** (it reads the `_on_server_found` hook the gateway injects at runtime, so the binding must resolve at call time). |
 | `dlna_registry.py` | Data classes + `ServerRegistry` / `RendererRegistry` thread-safe stores |
 | `dlna_library.py` | **Composition root only (~150 lines).** `LibraryDB` is assembled from six mixins (below) and the `DB`/`INDEXER`/`DEVICE_ROLES`/`ART_FETCHER` singletons are wired here. Until 2026-08-20 this file was **2,912 lines** and `LibraryDB` a 95-method God Object; the split is MIXIN-based precisely so the public `DB.<method>` surface is byte-identical and none of the ~240 call sites changed. |
 | `dlna_library_sql.py` | Pure helpers shared by the mixins — `_norm_title`, `_dedup_clause`, `_parse_audio_params`, `_is_localfs`, the `_localfs_album_*` SQL fragments, `_dur_to_secs`. Dependency-free ON PURPOSE: a mixin importing them from `dlna_library` would be circular AND would fire the `DB = LibraryDB()` module-level singleton (hence every pending migration on the live DB) as a side effect. `dlna_library` re-exports them all, so `from dlna_library import _dedup_clause` still works. |
-| `dlna_library_schema.py` | `SchemaMixin` — every CREATE TABLE/INDEX + the Phase-A album-art sibling backfill. Regenerate `schema.sql` after changes. |
+| `dlna_library_schema.py` | `SchemaMixin` — the startup sequence (create → alter → migrate → seed) + the Phase-A album-art sibling backfill. Regenerate `schema.sql` after changes. |
+| `dlna_library_ddl.py` | The literal DDL as DATA — `SCHEMA_DDL` (every CREATE TABLE/INDEX/TRIGGER) + `ADD_COLUMN_SQL`. No logic, no imports. |
 | `dlna_library_migrations.py` | `MigrationsMixin` — the in-place migrations + `repair_fts`/`run_with_fts_heal` (the FTS5 shadow-table corruption recovery). |
-| `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads, the indexer upsert path (incl. the d-id alias dedup), `metadata_overrides`. |
-| `dlna_library_browse.py` | `BrowseMixin` — artists/albums/genres/decades/letter-bar/FTS5 search + the play-count-biased radio picker. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
+| `dlna_library_unique.py` | `UniqueMigrationsMixin` — the three migrations that WIDEN the `tracks` UNIQUE by rebuilding the table. Grouped because each DROPs the FTS triggers and must recreate them, and all three must run before `tracks_au` is added on top. |
+| `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads + the indexer upsert path (incl. the d-id alias dedup). |
+| `dlna_library_overrides.py` | `OverridesMixin` — the `metadata_overrides` display layer. Protects the two invariants: `manual` always wins, and its `year` is display-only (never COALESCEd back into `tracks`). |
+| `dlna_library_browse.py` | `BrowseMixin` — artists/albums/letter-bar/FTS5 search. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
+| `dlna_library_facets.py` | `FacetsMixin` — the tag-sliced facets (genres, decades), their flat track listings, and the play-count-biased radio picker. Owns `_EFFECTIVE_YEAR`. |
 | `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
-| `dlna_library_collections.py` | `CollectionsMixin` — playlists, album + radio favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
+| `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
+| `dlna_library_radio.py` | `RadioFavouritesMixin` — the saved internet-radio stations. Enforces the 25-station cap SERVER-side (`DB.RADIO_FAV_MAX`); same `clear(udn)` survival contract. |
 | `dlna_indexer.py` | `Indexer` — background crawler that walks a MediaServer and populates LibraryDB |
 | `dlna_art_fetcher.py` | `AlbumArtFetcher` — Phase B MusicBrainz + Cover Art Archive lookup |
 | `dlna_devices.py` | `DeviceRoleCache` — in-memory mirror of device_roles for zero-latency classification |
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
-| `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
+| `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (pure per-file helpers — the album-key folder identity and the namespace-salted track id), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
+| `dlna_localfs_http.py` | The two PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, and parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
 | `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`; gated on `$LOCALFS_MUSIC_ROOT` / `localfs.root` in `config.json`. Starts the file server, creates a `LocalFsProvider` with the LAN-IP `base_url`, binds it via `dlna_providers.bind_provider`, adds a synthetic `MediaServer` entry to `SERVERS`, kicks off the initial scan in the background. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
-| `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position) |
+| `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position/seek) |
+| `dlna_rendering_control.py` | UPnP **RenderingControl** SOAP client (`SetVolume`/`GetVolume`) — a genuinely separate service with its own control URL, so the split follows the protocol boundary. Re-exported from `dlna_avtransport`. |
 | `dlna_player.py` | `RendererQueue` (sequential playback per renderer) + `QueueRegistry` (one queue per UDN) |
-| `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout |
+| `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout — the **byte-perfect** Range pass-through. |
+| `dlna_radio_proxy.py` | The internet-radio relay (`/radio_stream`): opens an ICY upstream and **de-interleaves** the metadata out of the audio (a browser `<audio>` cannot handle it), parking `StreamTitle` for `/api/radio/nowplaying`. Split from the byte-perfect path on purpose — this one must rewrite the stream. |
+| `dlna_proxy_common.py` | The constants both relays need (`PROXY_IDLE_SEC`, `_MIME_MAP`, `normalize_audio_ctype`). Exists to keep that split acyclic; dependency-free. |
 | `api_browse.py` | Browse/search API endpoints |
 | `api_playback.py` | Playback, stream proxy route, `/art`, `/api/client_log`, state, indexer management |
 | `api_playlists.py` | Playlist CRUD endpoints |

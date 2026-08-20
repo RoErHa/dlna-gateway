@@ -329,8 +329,10 @@ class TestICYDeinterleave(unittest.TestCase):
     """
 
     def setUp(self):
-        import dlna_stream_proxy
-        self.sp = dlna_stream_proxy
+        # The ICY relay moved to its own module (2026-08-20); these are
+        # its private helpers, so bind the module that owns them.
+        import dlna_radio_proxy
+        self.sp = dlna_radio_proxy
 
     def test_parse_title_plain(self):
         block = _icy_meta_block("Bowie - Starman")

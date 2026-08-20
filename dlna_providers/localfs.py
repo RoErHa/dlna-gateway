@@ -35,270 +35,42 @@ What's deliberately NOT in P2:
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
+from .localfs_read import ReadMixin
+# Pure helpers moved to localfs_tags 2026-08-20; re-exported here
+# so existing imports (and the tests that patch these names on
+# this module) keep working unchanged.
+from .localfs_tags import (  # noqa: F401
+    _AUDIO_EXTENSIONS,
+    _album_key_for,
+    _extract_art_bytes,
+    _extract_art_hash,
+    _format_duration,
+    _is_audio_file,
+    _mime_for,
+    _read_tags,
+    _require_mutagen,
+    _sniff_image_mime,
+    _track_id_for,
+    _udn_for_root,
+)
 from . import (
-    Album,
-    Artist,
-    Track,
     register_provider,
 )
 
 log = logging.getLogger("dlna.providers.localfs")
 
 
-# ── Audio file detection ────────────────────────────────────────
-# Reuses the extension set from tools/find_corrupt_audio.py +
-# tools/prune_empty_music_dirs.py. mp4 is deliberately excluded
-# (music-video case — see "prune_empty_music_dirs.py" section in
-# CLAUDE.md).
-_AUDIO_EXTENSIONS = frozenset((
-    ".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac",
-    ".wav", ".aiff", ".aif", ".alac",
-    ".dsf", ".dff", ".ape", ".wma",
-    ".m4b",   # audiobooks (MP4 container, same as .m4a)
-))
-
-
-def _is_audio_file(path: Path) -> bool:
-    return path.suffix.lower() in _AUDIO_EXTENSIONS
-
-
-# A trailing disc subfolder (CD1 / "Disc 2" / Disk_3 / "Side A") is
-# folded into its parent so a multi-disc release groups as ONE album.
-_DISC_SUBDIR_RE = re.compile(r"^(cd|disc|disk|side)[\s._-]*\d+[a-z]?$", re.I)
-
-
-def _album_key_for(rel_path: str) -> str:
-    """Folder-based album identity for a track, relative to the music
-    root. An album == its containing folder; a trailing disc subfolder
-    is folded into the parent (multi-disc releases group as one album).
-
-    This is the grouping key the browse layer uses instead of the
-    per-track (artist, album): a compilation lives in ONE folder so it
-    groups as a single album even though every track's `artist` is a
-    different performer, while two distinct albums that merely share a
-    name ("Greatest Hits") live in different folders and stay separate.
-
-    Returns "" for a root-level loose file (no containing folder)."""
-    parent = os.path.dirname(rel_path)
-    if _DISC_SUBDIR_RE.match(os.path.basename(parent)):
-        parent = os.path.dirname(parent)
-    return parent
-
-
-def _track_id_for(rel_path: str, namespace: str = "") -> str:
-    """Stable per-file identifier — survives rescans. The lesson
-    from AssetUPnP's `d-<id>` was: NEVER auto-increment. Use a
-    content-derived hash of the relative path so renaming a file
-    legitimately produces a new id while a re-walk produces the same
-    id.
-
-    `namespace` (2026-07-13, audiobooks): a SECOND provider root can
-    contain the same rel_path as the music root, and the file server
-    resolves `/localfs/stream/<id>` by obj_id across ALL localfs UDNs
-    — so ids from secondary roots are salted with a namespace. The
-    music root keeps namespace='' so every existing URL/playlist row
-    stays byte-identical."""
-    key = f"{namespace}\x00{rel_path}" if namespace else rel_path
-    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
-
-
-def _udn_for_root(root: Path) -> str:
-    """Synthesise a stable UDN per music root path so multiple
-    LocalFs providers (different roots) coexist."""
-    h = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()
-    return f"uuid:localfs-{h[:32]}"
-
-
-# ── mutagen-backed tag reader ───────────────────────────────────
-# All mutagen access lives behind these helpers so the rest of the
-# module can be tested with mocks. Importing mutagen lazily lets
-# `dlna_providers.localfs` be imported in environments where mutagen
-# isn't installed (e.g. CI containers running the UPnP-only path) —
-# only `rescan()` will then raise.
-
-def _require_mutagen():
-    try:
-        import mutagen          # noqa: F401
-    except ImportError as e:
-        raise RuntimeError(
-            "LocalFsProvider needs `mutagen` — install with "
-            "`pip install -r requirements.txt`. See CLAUDE.md → "
-            "'Library backend migration' for the dependency story."
-        ) from e
-
-
-def _read_tags(path: Path) -> dict | None:
-    """Read tags + technical info via mutagen, returning a dict in
-    the shape `LibraryDB.upsert_tracks` expects. Returns None when
-    mutagen can't open the file (corrupt / unrecognized format);
-    the caller should log this as a malformed-file warning."""
-    import mutagen
-    try:
-        audio = mutagen.File(str(path), easy=True)
-    except Exception as e:                                    # noqa: BLE001
-        log.warning(f"LocalFs: mutagen failed to open {path!s}: {e}")
-        return None
-    if audio is None:
-        log.warning(f"LocalFs: mutagen does not recognise {path!s}")
-        return None
-
-    def _first(key: str) -> str:
-        vals = audio.get(key, [])
-        return (vals[0] if vals else "").strip()
-
-    duration_sec = getattr(audio.info, "length", 0.0) or 0.0
-    info = audio.info
-    bit_depth = (getattr(info, "bits_per_sample", None)
-                 or getattr(info, "bits_per_raw_sample", None))
-    sample_rate = getattr(info, "sample_rate", None)
-
-    # Year: mutagen-easy gives a 'date' field, often 'YYYY' or
-    # 'YYYY-MM-DD'. Take just the first 4 digits if plausible.
-    raw_date = _first("date") or _first("year")
-    year: int | None = None
-    if raw_date:
-        m = re.match(r"^(\d{4})", raw_date)
-        if m:
-            y = int(m.group(1))
-            if 1900 <= y <= 2100:
-                year = y
-
-    # Track number — strip the "/totaltracks" suffix some tags carry
-    raw_tn = _first("tracknumber")
-    tn_match = re.match(r"^(\d+)", raw_tn)
-    track_number = int(tn_match.group(1)) if tn_match else 0
-
-    return {
-        "title":       _first("title")  or path.stem,
-        "artist":      _first("artist") or _first("albumartist"),
-        "album":       _first("album"),
-        "genre":       _first("genre"),
-        "duration":    _format_duration(duration_sec),
-        "bit_depth":   int(bit_depth) if bit_depth else None,
-        "sample_rate": int(sample_rate) if sample_rate else None,
-        "year":        year,
-        "track_number": track_number,
-        "mime":        _mime_for(path.suffix),
-    }
-
-
-def _format_duration(seconds: float) -> str:
-    """Render seconds → AssetUPnP-shaped `H:MM:SS.fff` string so
-    `dlna_player._dur_to_sec` accepts it identically."""
-    if not seconds or seconds < 0:
-        return ""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds % 60
-    return f"{h}:{m:02d}:{s:06.3f}"
-
-
-_MIME_BY_EXT = {
-    ".flac": "audio/flac",
-    ".mp3":  "audio/mpeg",
-    ".ogg":  "audio/ogg",
-    ".opus": "audio/opus",
-    ".m4a":  "audio/mp4",
-    ".m4b":  "audio/mp4",
-    ".aac":  "audio/aac",
-    ".wav":  "audio/x-wav",
-    ".aiff": "audio/x-aiff",
-    ".aif":  "audio/x-aiff",
-    ".alac": "audio/mp4",
-    ".dsf":  "audio/x-dsf",
-    ".dff":  "audio/x-dff",
-    ".ape":  "audio/x-ape",
-    ".wma":  "audio/x-ms-wma",
-}
-
-
-def _mime_for(suffix: str) -> str:
-    return _MIME_BY_EXT.get(suffix.lower(), "application/octet-stream")
-
-
-def _sniff_image_mime(data: bytes) -> str:
-    """Best-effort image MIME from magic bytes. Embedded-art metadata
-    sometimes lies about (or omits) its MIME, so sniff the bytes rather
-    than trust the container. Falls back to image/jpeg."""
-    if data[:3] == b"\xff\xd8\xff":
-        return "image/jpeg"
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
-        return "image/png"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return "image/jpeg"
-
-
-def _extract_art_bytes(path: Path) -> tuple[bytes, str] | None:
-    """Return `(picture_bytes, mime)` for the first embedded cover, or
-    None if the file has no embedded art / can't be read. Single source
-    of cover bytes: used by `_extract_art_hash` (stable marker at scan
-    time) AND the file server's `/localfs/art/<id>` route (serve on
-    demand). All mutagen access is funnelled here so tests can mock it."""
-    import mutagen
-    try:
-        audio = mutagen.File(str(path))
-    except Exception as e:                                    # mutagen raises broadly
-        # A file mutagen cannot open is skipped from the index entirely, so
-        # "my album is missing" traces back to here. 163 audiobook files hit
-        # this on the first AUDIOBOOKS_ROOT scan.
-        log.debug(f"mutagen could not read {path}: {type(e).__name__}: {e}")
-        return None
-    if audio is None:
-        return None
-    art_bytes: bytes | None = None
-    # FLAC: .pictures
-    pics = getattr(audio, "pictures", None)
-    if pics:
-        art_bytes = pics[0].data
-    # ID3 (MP3): tags.getall('APIC')
-    if not art_bytes and getattr(audio, "tags", None):
-        try:
-            apics = audio.tags.getall("APIC")
-            if apics:
-                art_bytes = apics[0].data
-        except Exception as e:                                # tag shapes vary wildly
-            log.debug(f"ID3 APIC art unreadable in {path}: {e}")
-        # M4A / MP4: 'covr' atom
-        try:
-            covr = audio.tags.get("covr") if hasattr(audio.tags, "get") else None
-            if covr:
-                art_bytes = bytes(covr[0])
-        except Exception as e:                                # tag shapes vary wildly
-            log.debug(f"MP4 covr art unreadable in {path}: {e}")
-    if not art_bytes:
-        return None
-    return (art_bytes, _sniff_image_mime(art_bytes))
-
-
-def _extract_art_hash(path: Path) -> str | None:
-    """Return sha1(first-embedded-cover-bytes) or None. The marker lets
-    the existing `_backfill_album_art` propagate a consistent value
-    across the album's siblings; the actual bytes are served on demand
-    by the file server's `/localfs/art/<id>` route, and `rescan()` heals
-    the marker into a real `<base_url>/localfs/art/<id>` URL when
-    base_url is set."""
-    got = _extract_art_bytes(path)
-    if not got:
-        return None
-    return hashlib.sha1(got[0]).hexdigest()[:24]
-
-
 # ── The provider ───────────────────────────────────────────────
 
 @register_provider("localfs")
-class LocalFsProvider:
+class LocalFsProvider(ReadMixin):
     """LibraryProvider backed by a local filesystem walk + mutagen.
 
     Construct with `LocalFsProvider(library_db, music_root)`. The
@@ -542,132 +314,6 @@ class LocalFsProvider:
                 conn.executemany(
                     "UPDATE tracks SET album_key=? WHERE id=?", ak_writes)
                 log.info(f"LocalFs backfilled {len(ak_writes)} album_key(s)")
-
-    # ── LibraryProvider Protocol — high-level surface ────────────
-    # Wired through LibraryDB so the existing browse layer works
-    # transparently for LocalFs UDNs. stream_url is intentionally
-    # NotImplemented per the P2 spec; watch_changes goes through
-    # watchdog when available.
-
-    def list_artists(self) -> Iterator[Artist]:
-        for row in self._library.all_artists(self.udn):
-            yield Artist(id=row["artist"], name=row["artist"],
-                         album_count=row.get("album_count", 0))
-
-    def list_albums(self, artist_id: str) -> Iterator[Album]:
-        for row in self._library.artist_albums(self.udn, artist_id):
-            yield Album(id=row["album"], name=row["album"],
-                        artist_id=artist_id, artist_name=artist_id,
-                        track_count=row.get("track_count", 0),
-                        art_url=row.get("art") or "")
-
-    def list_tracks(self, album_id: str) -> Iterator[Track]:
-        # album_id maps onto the album name (LibraryDB's natural key).
-        # Without an artist_id we lean on the LibraryDB browse method
-        # by inferring artist from the row.
-        with self._library._pool.read() as conn:
-            cur = conn.execute(
-                "SELECT obj_id, url, title, artist, album, duration, "
-                "       art, mime, genre, file_path, bit_depth, "
-                "       sample_rate, year "
-                "  FROM tracks "
-                " WHERE udn=? AND album=? "
-                " ORDER BY title COLLATE NOCASE",
-                (self.udn, album_id))
-            for r in cur.fetchall():
-                yield Track(
-                    id=r["obj_id"],
-                    title=r["title"] or "",
-                    artist_name=r["artist"] or "",
-                    album_name=r["album"] or "",
-                    year=r["year"],
-                    art_url=r["art"] or "",
-                    mime=r["mime"] or "",
-                    file_path=r["file_path"] or "",
-                    bit_depth=r["bit_depth"],
-                    sample_rate=r["sample_rate"],
-                    genre=r["genre"] or "",
-                )
-
-    def get_track(self, track_id: str) -> Track | None:
-        with self._library._pool.read() as conn:
-            r = conn.execute(
-                "SELECT obj_id, url, title, artist, album, duration, "
-                "       art, mime, genre, file_path, bit_depth, "
-                "       sample_rate, year "
-                "  FROM tracks WHERE udn=? AND obj_id=?",
-                (self.udn, track_id)).fetchone()
-        if not r:
-            return None
-        return Track(
-            id=r["obj_id"],
-            title=r["title"] or "",
-            artist_name=r["artist"] or "",
-            album_name=r["album"] or "",
-            year=r["year"],
-            art_url=r["art"] or "",
-            mime=r["mime"] or "",
-            file_path=r["file_path"] or "",
-            bit_depth=r["bit_depth"],
-            sample_rate=r["sample_rate"],
-            genre=r["genre"] or "",
-        )
-
-    def set_base_url(self, base_url: str) -> None:
-        """P3: tell the provider where its file server is reachable.
-        Called by `dlna_localfs_server.start_server` (or by tests).
-        Once set, `stream_url(track_id)` returns a full URL the Naim
-        can fetch from."""
-        self._base_url = base_url.rstrip("/")
-
-    def stream_url(self, track_id: str) -> str:
-        # P3: real URLs are emitted once the file server is up and
-        # its base URL has been bound via set_base_url(). Until then,
-        # signal that the streaming half isn't wired yet.
-        if not self._base_url:
-            raise NotImplementedError(
-                "LocalFsProvider.stream_url needs a base URL — the "
-                "file server (dlna_localfs_server) hasn't been started "
-                "yet. Call set_base_url() after start_server().")
-        return f"{self._base_url}/localfs/stream/{track_id}"
-
-    def search(self, q: str, limit: int = 50) -> Iterator[Track]:
-        # Delegate to LibraryDB FTS5 search, filtered by this UDN.
-        for row in self._library.search(self.udn, q):
-            tracks_section = row.get("tracks", [])
-            for r in tracks_section[:limit]:
-                yield Track(
-                    id=r.get("id", ""),
-                    title=r.get("title", ""),
-                    artist_name=r.get("artist", ""),
-                    album_name=r.get("album", ""),
-                    art_url=r.get("art", ""),
-                )
-
-    def watch_changes(self, on_change: Callable[[], None]) -> None:
-        """FSEvents-based incremental change subscription. Optional —
-        raises NotImplementedError if `watchdog` isn't installed."""
-        try:
-            from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler
-        except ImportError as e:
-            raise NotImplementedError(
-                "LocalFsProvider.watch_changes needs `watchdog` — "
-                "install with `pip install watchdog`."
-            ) from e
-
-        class _Handler(FileSystemEventHandler):
-            def on_any_event(self, event):
-                if not event.is_directory:
-                    src = getattr(event, "src_path", "")
-                    if Path(src).suffix.lower() in _AUDIO_EXTENSIONS:
-                        on_change()
-
-        obs = Observer()
-        obs.schedule(_Handler(), str(self._root), recursive=True)
-        obs.daemon = True
-        obs.start()
-        self._fs_watcher = obs
 
     # ── Internal helpers ─────────────────────────────────────────
 
