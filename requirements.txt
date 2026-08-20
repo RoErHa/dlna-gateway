@@ -1,4 +1,4 @@
-# dlna_gateway — Python 3.9+
+# dlna_gateway — Python 3.14+
 # The gateway works with zero third-party packages for core DLNA.
 # These are optional quality-of-life additions.
 

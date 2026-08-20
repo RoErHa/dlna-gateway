@@ -51,14 +51,14 @@ class EventBus:
         with self._lock:
             return len(self._subs)
 
-    def subscribe(self) -> "asyncio.Queue":
+    def subscribe(self) -> asyncio.Queue:
         """Register a new subscriber queue (call on the loop)."""
         q: asyncio.Queue = asyncio.Queue(maxsize=self._max_queue)
         with self._lock:
             self._subs.add(q)
         return q
 
-    def unsubscribe(self, q: "asyncio.Queue") -> None:
+    def unsubscribe(self, q: asyncio.Queue) -> None:
         with self._lock:
             self._subs.discard(q)
 
@@ -77,7 +77,7 @@ class EventBus:
                 pass            # loop is closed/closing — drop
 
     @staticmethod
-    def _offer(q: "asyncio.Queue", event: dict) -> None:
+    def _offer(q: asyncio.Queue, event: dict) -> None:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:

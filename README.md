@@ -87,7 +87,8 @@ On Linux use a systemd unit instead of the LaunchAgent; on Windows
 use WSL2 (easy) or run native with a service wrapper like NSSM.
 Hard requirements:
 
-- Python 3.9+
+- Python 3.14+ (what the project is developed and run on; `setup.sh`
+  creates the venv, so the system Python is untouched)
 - (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
   on macOS) — used by the beets enrichment tool (`tools/beets_enrich.py`,
   via pyacoustid) for fingerprint matching.

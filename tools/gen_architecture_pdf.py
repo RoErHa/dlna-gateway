@@ -856,7 +856,7 @@ def list_pages():
         ("-y / --yes", "Skip the confirmation prompt."),
      ]),
      ("J/4", "setup.sh",
-      "Bootstrap + run the gateway. Finds Python 3.9+, creates/repairs the "
+      "Bootstrap + run the gateway. Finds Python 3.14+, creates/repairs the "
       ".venv, installs requirements.txt, then either runs the gateway "
       "(--run, exec in the foreground), restarts the launchd-managed copy "
       "(--restart), or just finishes setup. Unknown flags after --run are "

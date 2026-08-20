@@ -36,7 +36,7 @@ GATEWAY="$SCRIPT_DIR/dlna_gateway.py"
 REQS="$SCRIPT_DIR/requirements.txt"
 LOCK="$SCRIPT_DIR/requirements.lock"
 LAUNCHD_LABEL="com.roha.dlna-gateway"
-MIN_MINOR=9
+MIN_MINOR=14
 PYTHON=""
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -46,9 +46,9 @@ info() { echo -e "${C}›${N}  $*"; }
 warn() { echo -e "${Y}!${N}  $*"; }
 die()  { echo -e "${R}✗${N}  $*" >&2; exit 1; }
 
-# ── Find Python 3.9+ ─────────────────────────────────────────────────────────
+# ── Find Python 3.14+ ────────────────────────────────────────────────────────
 find_python() {
-    for cand in python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+    for cand in python3.15 python3.14 python3; do
         if command -v "$cand" &>/dev/null; then
             minor=$("$cand" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)
             if [ "$minor" -ge "$MIN_MINOR" ]; then

@@ -14,7 +14,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 [tool.ruff]
-target-version = "py311"       # floor we support; the venv runs 3.14
+target-version = "py314"       # floor we support; matches the venv (3.14)
 line-length = 100              # advisory only — E501 is not enforced
 exclude = [".venv", "art_cache", "docs", "static"]
 
