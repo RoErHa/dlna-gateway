@@ -187,499 +187,565 @@ def _fmt_duration(sec) -> str:
 
 
 # ── ContentDirectory Browse ───────────────────────────────────────
+#
+# `_gw_browse` was a single 491-line function with 26 sequential
+# `if obj_id == …: return` branches and ~99 branch points — the least
+# reviewable function in the repo. Split (2026-08-20) into:
+#
+#   * four module-level DIDL-Lite renderers (they were nested closures
+#     that captured nothing, so nesting bought nothing and cost testability)
+#   * one `_Browse` context carrying (obj_id, flag, start, count) plus the
+#     pagination + envelope logic that all 26 branches repeated verbatim
+#   * one handler per container type, registered in two dispatch tables
+#
+# `_gw_browse` itself is now the table lookup. Behaviour is byte-identical:
+# `tests/test_upnp_browse_dispatch.py` replays the whole tree and compares
+# XML against the pre-split implementation's captured output.
+
+_DIDL_OPEN  = ('<?xml version="1.0" encoding="UTF-8"?>'
+               '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+               'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+               'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">')
+_DIDL_CLOSE = '</DIDL-Lite>'
+
+
+def _didl_container(cid, parent, title, child_count):
+    return (f'<container id="{_xml_esc(cid)}" parentID="{_xml_esc(parent)}" '
+            f'restricted="1" childCount="{child_count}">'
+            f'<dc:title>{_xml_esc(title)}</dc:title>'
+            f'<upnp:class>object.container.playlistContainer</upnp:class>'
+            f'</container>')
+
+
+def _didl_track(t, parent_id):
+    url   = _xml_esc(t.get("url", ""))
+    title = _xml_esc(t.get("title", ""))
+    art   = _xml_esc(t.get("art", ""))
+    dur   = t.get("duration", "")
+    mime  = _xml_esc(t.get("mime", "") or "audio/x-flac")
+    art_tag = f'<upnp:albumArtURI>{art}</upnp:albumArtURI>' if art else ""
+    return (
+        f'<item id="tr:{_xml_esc(t.get("url",""))}" '
+        f'parentID="{_xml_esc(parent_id)}" restricted="1">'
+        f'<dc:title>{title}</dc:title>'
+        f'<dc:creator>{_xml_esc(t.get("artist",""))}</dc:creator>'
+        f'<upnp:artist>{_xml_esc(t.get("artist",""))}</upnp:artist>'
+        f'<upnp:album>{_xml_esc(t.get("album",""))}</upnp:album>'
+        f'{art_tag}'
+        f'<upnp:class>object.item.audioItem.musicTrack</upnp:class>'
+        f'<res protocolInfo="http-get:*:{mime}:*" '
+        f'duration="{dur}">{url}</res>'
+        f'</item>')
+
+
+def _didl_album(r, parent):
+    """A galbum:* container from an album row (all_albums / artist_albums /
+    genre_albums shape: artist, album, album_key, track_count)."""
+    artist = r.get("artist", "")
+    album  = r.get("album", "")
+    cid    = _encode_lib_album_id(artist, album, r.get("album_key", ""))
+    show_artist = bool(artist) and not _is_junk_name(artist)
+    if album and show_artist:
+        title = f"{album} — {artist}"
+    else:                       # avoid a leading " — " when one side is blank
+        title = album or (artist if show_artist else "") or "(album)"
+    return _didl_container(cid, parent, title, r.get("track_count", 0))
+
+
+def _didl_video(v, parent_id):
+    url   = _xml_esc(v.get("url", ""))
+    title = _xml_esc(v.get("title", ""))
+    mime  = v.get("mime") or "video/mp4"
+    dur   = _fmt_duration(v.get("duration"))
+    attrs = [f'protocolInfo="http-get:*:{_xml_esc(mime)}:'
+             'DLNA.ORG_OP=01;'
+             'DLNA.ORG_FLAGS=01700000000000000000000000000000"']
+    if v.get("width") and v.get("height"):
+        attrs.append(f'resolution="{v["width"]}x{v["height"]}"')
+    if v.get("size"):
+        attrs.append(f'size="{v["size"]}"')
+    if dur:
+        attrs.append(f'duration="{dur}"')
+    art = ""
+    if v.get("poster"):
+        poster_url = v.get("url", "").replace("/localfs/video/",
+                                              "/localfs/poster/")
+        art = f'<upnp:albumArtURI>{_xml_esc(poster_url)}</upnp:albumArtURI>'
+    return (f'<item id="vid:{_xml_esc(v.get("id", ""))}" '
+            f'parentID="{_xml_esc(parent_id)}" restricted="1">'
+            f'<dc:title>{title}</dc:title>{art}'
+            f'<upnp:class>object.item.videoItem.movie</upnp:class>'
+            f'<res {" ".join(attrs)}>{url}</res>'
+            f'</item>')
+
+
+class _Browse:
+    """One Browse request. Carries the SOAP arguments and the three
+    response shapes every handler needs, so the 26 handlers stop
+    re-implementing the same envelope + slice arithmetic.
+
+    `count == 0` means "no limit" in the ContentDirectory spec, which is
+    why the slice is conditional rather than a plain [start:start+count]."""
+
+    __slots__ = ("obj_id", "flag", "start", "count")
+
+    def __init__(self, obj_id: str, flag: str, start: int, count: int):
+        self.obj_id, self.flag, self.start, self.count = obj_id, flag, start, count
+
+    @property
+    def is_meta(self) -> bool:
+        return self.flag == "BrowseMetadata"
+
+    def page(self, rows: list) -> list:
+        return (rows[self.start:self.start + self.count] if self.count
+                else rows[self.start:])
+
+    def meta(self, parent: str, title: str, total: int, cid: str = None) -> tuple:
+        """The BrowseMetadata answer: this container describing itself."""
+        return (_DIDL_OPEN
+                + _didl_container(self.obj_id if cid is None else cid,
+                                  parent, title, total)
+                + _DIDL_CLOSE, 1, 1)
+
+    def listing(self, items: list, total: int) -> tuple:
+        return _DIDL_OPEN + "".join(items) + _DIDL_CLOSE, len(items), total
+
+    def empty(self) -> tuple:
+        """Garbled / unresolvable id → an empty container, never a 500.
+        A Naim control point handles '0 results' gracefully; a fault makes
+        it abandon the whole browse."""
+        return _DIDL_OPEN + _DIDL_CLOSE, 0, 0
+
+
+# ── Handlers: root ────────────────────────────────────────────────
+
+def _br_root(ctx: _Browse) -> tuple:
+    n_videos = len(DB.all_videos(_VIDEO_UDN))
+    ab_udn   = _ab_udn()
+    n_books  = len(_lib_artists(ab_udn)) if ab_udn else 0
+    if ctx.is_meta:
+        return ctx.meta("-1", GW_NAME,
+                        5 + (1 if n_videos else 0) + (1 if n_books else 0))
+    udn       = DB.primary_udn()
+    n_artists = len(_lib_artists(udn))   if udn else 0
+    n_albums  = len(_album_letters(udn)) if udn else 0   # # of letter buckets
+    n_genres  = len(_lib_genres(udn))    if udn else 0
+    items = [
+        _didl_container("artists",   "0", "Artists",            n_artists),
+        _didl_container("albums",    "0", "Albums",             n_albums),
+        _didl_container("genres",    "0", "Genres",             n_genres),
+        _didl_container("favalbums", "0", "⭐ Favourite Albums", len(DB.album_fav_list())),
+        _didl_container("playlists", "0", "Playlists",          len(DB.pl_list())),
+    ]
+    # Videos folder — only when there ARE videos (so it never clutters the
+    # Naim's view unless GWMovies is enabled + populated).
+    if n_videos:
+        items.append(_didl_container("videos", "0", "\U0001F4F9 Videos", n_videos))
+    # Audiobooks — only when the audiobooks source exists + has authors
+    # (P5). Authors → books → chapters, resolved via the AB udn.
+    if n_books:
+        items.append(_didl_container("abooks", "0", "\U0001F4D6 Audiobooks", n_books))
+    return ctx.listing(items, len(items))
+
+
+# ── Handlers: audiobooks tree (P5) — abooks → authors → books → chapters ──
+
+def _br_abooks(ctx: _Browse) -> tuple:
+    ab_udn = _ab_udn()
+    rows   = _lib_artists(ab_udn) if ab_udn else []
+    if ctx.is_meta:
+        return ctx.meta("0", "\U0001F4D6 Audiobooks", len(rows))
+    items = [_didl_container("abauthor:" + _b64e(r["artist"]), "abooks",
+                             r["artist"], r.get("album_count", 0))
+             for r in ctx.page(rows)]
+    return ctx.listing(items, len(rows))
+
+
+def _br_abauthor(ctx: _Browse) -> tuple:
+    author = _b64d(ctx.obj_id[len("abauthor:"):])
+    ab_udn = _ab_udn()
+    rows   = [r for r in DB.artist_albums(ab_udn, author)
+              if not _is_junk_name(r.get("album"))] if ab_udn else []
+    if ctx.is_meta:
+        return ctx.meta("abooks", author or "(author)", len(rows))
+    items = []
+    for r in ctx.page(rows):
+        cid   = _encode_ab_book_id(r.get("artist", ""), r.get("album", ""),
+                                   r.get("album_key", ""))
+        title = r.get("album", "") or "(book)"
+        # Series overlay when OpenLibrary knows the book.
+        meta = DB.book_meta_get(r.get("album_key", "")) \
+            if r.get("album_key") else None
+        if meta and meta.get("series"):
+            seq = meta.get("series_seq")
+            seq_s = f" #{seq:g}" if seq is not None else ""
+            title = f"{title}  \U0001F4DA {meta['series']}{seq_s}"
+        items.append(_didl_container(cid, ctx.obj_id, title,
+                                     r.get("track_count", 0)))
+    return ctx.listing(items, len(rows))
+
+
+def _br_abbook(ctx: _Browse) -> tuple:
+    artist, album, album_key = _decode_ab_book_id(ctx.obj_id)
+    ab_udn = _ab_udn()
+    tracks = DB.album_tracks(ab_udn, artist, album, album_key=album_key) \
+        if ab_udn and (artist or album or album_key) else []
+    if ctx.is_meta:
+        return ctx.meta("abooks", album or "(book)", len(tracks))
+    items = [_didl_track(t, ctx.obj_id) for t in ctx.page(tracks)]
+    return ctx.listing(items, len(tracks))
+
+
+# ── Handlers: full-library tree (Artists / Albums / Genres) ────────
+# Backed by LibraryDB on the primary library udn (the LocalFs backend).
+# Each list paginates via StartingIndex/RequestedCount; album rows carry
+# album_key so a LocalFs folder-album (incl. Various-Artists comps)
+# resolves correctly through album_tracks.
+
+def _br_artists(ctx: _Browse) -> tuple:
+    udn  = DB.primary_udn()
+    rows = _lib_artists(udn) if udn else []
+    if ctx.is_meta:
+        return ctx.meta("0", "Artists", len(rows))
+    items = [_didl_container("gartist:" + _b64e(r["artist"]), "artists",
+                             r["artist"], r.get("album_count", 0))
+             for r in ctx.page(rows)]
+    return ctx.listing(items, len(rows))
+
+
+def _br_gartist(ctx: _Browse) -> tuple:
+    artist = _b64d(ctx.obj_id[len("gartist:"):])
+    udn    = DB.primary_udn()
+    rows   = [r for r in DB.artist_albums(udn, artist)
+              if not _is_junk_name(r.get("album"))] if udn else []
+    if ctx.is_meta:
+        return ctx.meta("artists", artist or "(artist)", len(rows))
+    items = [_didl_album(r, ctx.obj_id) for r in ctx.page(rows)]
+    return ctx.listing(items, len(rows))
+
+
+def _br_albums(ctx: _Browse) -> tuple:
+    """"Albums" is a #-0-A..Z letter index (not one flat 2,000-entry list)."""
+    udn     = DB.primary_udn()
+    letters = _album_letters(udn) if udn else []
+    if ctx.is_meta:
+        return ctx.meta("0", "Albums", len(letters))
+    items = [_didl_container("albumltr:" + L, "albums", L, cnt)
+             for L, cnt in ctx.page(letters)]
+    return ctx.listing(items, len(letters))
+
+
+def _br_albumltr(ctx: _Browse) -> tuple:
+    letter = ctx.obj_id[len("albumltr:"):]
+    udn    = DB.primary_udn()
+    rows   = [r for r in _lib_albums(udn)
+              if _letter_of(r.get("album")) == letter] if udn else []
+    if ctx.is_meta:
+        return ctx.meta("albums", letter, len(rows))
+    items = [_didl_album(r, ctx.obj_id) for r in ctx.page(rows)]
+    return ctx.listing(items, len(rows))
+
+
+def _br_galbum(ctx: _Browse) -> tuple:
+    artist, album, album_key = _decode_lib_album_id(ctx.obj_id)
+    udn    = DB.primary_udn()
+    tracks = DB.album_tracks(udn, artist, album, album_key=album_key) if udn else []
+    if ctx.is_meta:
+        return ctx.meta("albums", album or "(album)", len(tracks))
+    items = [_didl_track(t, ctx.obj_id) for t in ctx.page(tracks)]
+    return ctx.listing(items, len(tracks))
+
+
+def _br_genres(ctx: _Browse) -> tuple:
+    udn  = DB.primary_udn()
+    rows = _lib_genres(udn) if udn else []
+    if ctx.is_meta:
+        return ctx.meta("0", "Genres", len(rows))
+    items = [_didl_container("ggenre:" + _b64e(r["genre"]), "genres",
+                             r["genre"], r.get("album_count", 0))
+             for r in ctx.page(rows)]
+    return ctx.listing(items, len(rows))
+
+
+def _br_ggenre(ctx: _Browse) -> tuple:
+    genre = _b64d(ctx.obj_id[len("ggenre:"):])
+    udn   = DB.primary_udn()
+    rows  = [r for r in DB.genre_albums(udn, genre)
+             if not _is_junk_name(r.get("album"))] if udn else []
+    if ctx.is_meta:
+        return ctx.meta("genres", genre or "(genre)", len(rows))
+    items = [_didl_album(r, ctx.obj_id) for r in ctx.page(rows)]
+    return ctx.listing(items, len(rows))
+
+
+# ── Handlers: videos tree (2026-07-06) ────────────────────────────
+# The flat ~3,000-item list was unbrowsable with a TV remote. "videos"
+# now holds three sub-containers: date drill-down (year → month),
+# location A-Z (geocoded location_name; "(no location)" bucket last),
+# and the old flat list under "vidall".
+
+def _br_videos(ctx: _Browse) -> tuple:
+    if ctx.is_meta:
+        return ctx.meta("0", "\U0001F4F9 Videos", len(DB.all_videos(_VIDEO_UDN)))
+    years  = DB.video_years(_VIDEO_UDN)
+    locs   = DB.video_locations(_VIDEO_UDN)
+    people = DB.video_people_list(_VIDEO_UDN)
+    n      = len(DB.all_videos(_VIDEO_UDN))
+    kids = [
+        _didl_container("viddates", "videos", "\U0001F4C5 By date", len(years)),
+        _didl_container("vidlocs", "videos", "\U0001F4CD By location", len(locs)),
+    ]
+    # "👤 By person" only when the Immich people sync has run — an
+    # always-empty folder would just be noise for non-Immich setups.
+    if people:
+        kids.append(_didl_container("vidpeople", "videos",
+                                    "\U0001F464 By person", len(people)))
+    kids.append(_didl_container("vidall", "videos", "\U0001F39E All videos", n))
+    # NOTE: deliberately NOT paginated — four fixed entries.
+    return _DIDL_OPEN + "".join(kids) + _DIDL_CLOSE, len(kids), len(kids)
+
+
+def _br_vidall(ctx: _Browse) -> tuple:
+    vids = DB.all_videos(_VIDEO_UDN)
+    if ctx.is_meta:
+        return ctx.meta("videos", "\U0001F39E All videos", len(vids))
+    items = [_didl_video(v, "vidall") for v in ctx.page(vids)]
+    return ctx.listing(items, len(vids))
+
+
+def _br_viddates(ctx: _Browse) -> tuple:
+    years = DB.video_years(_VIDEO_UDN)
+    if ctx.is_meta:
+        return ctx.meta("videos", "\U0001F4C5 By date", len(years))
+    items = [_didl_container(f"viddate:{y['year']}", "viddates",
+                             y["year"], y["count"]) for y in ctx.page(years)]
+    return ctx.listing(items, len(years))
+
+
+def _br_viddate(ctx: _Browse) -> tuple:
+    key = ctx.obj_id[len("viddate:"):]
+    if len(key) == 4:                       # a year → its months
+        months = DB.video_months(_VIDEO_UDN, key)
+        if ctx.is_meta:
+            return ctx.meta("viddates", key, len(months))
+        items = [_didl_container(f"viddate:{m['month']}", ctx.obj_id,
+                                 m["month"], m["count"]) for m in ctx.page(months)]
+        return ctx.listing(items, len(months))
+    vids = DB.videos_by_month(_VIDEO_UDN, key)    # 'YYYY-MM' → items
+    if ctx.is_meta:
+        return ctx.meta(f"viddate:{key[:4]}", key, len(vids))
+    items = [_didl_video(v, ctx.obj_id) for v in ctx.page(vids)]
+    return ctx.listing(items, len(vids))
+
+
+def _br_vidlocs(ctx: _Browse) -> tuple:
+    # 2026-07-06 v2: COUNTRY blocks first (A-Z by ISO code), then
+    # "(no country)" for located-but-unknown-country videos, then the
+    # "(no location)" bucket for GPS-less videos — each country drills
+    # down to its locations (country_location, like the titles).
+    countries = DB.video_countries(_VIDEO_UDN)
+    no_loc = [r for r in DB.video_locations(_VIDEO_UDN)
+              if not r["location_name"]]
+    entries = []
+    # selection level shows FULL country names (2026-07-08); the ids
+    # (and titles/filenames elsewhere) keep the ISO code
+    for c in countries:
+        entries.append(("vidcountry-none" if not c["country"]
+                        else f"vidcountry:{c['country']}",
+                        country_name(c["country"]) or "(no country)",
+                        c["count"]))
+    for r in no_loc:
+        entries.append(("vidloc-none", "(no location)", r["count"]))
+    if ctx.is_meta:
+        return ctx.meta("videos", "\U0001F4CD By location", len(entries))
+    items = [_didl_container(cid, "vidlocs", title, n)
+             for cid, title, n in ctx.page(entries)]
+    return ctx.listing(items, len(entries))
+
+
+def _br_vidcountry(ctx: _Browse) -> tuple:
+    cc = ("" if ctx.obj_id == "vidcountry-none"
+          else ctx.obj_id[len("vidcountry:"):])
+    locs = DB.video_locations_for_country(_VIDEO_UDN, cc)
+    if ctx.is_meta:
+        return ctx.meta("vidlocs", country_name(cc) or "(no country)", len(locs))
+    # '' location = the "(no city)" bucket — country-only videos
+    # (Plan A inferred country, no specific place).
+    items = [_didl_container(
+        "vidcloc:" + _b64e(cc + "\x00" + r["location_name"]), ctx.obj_id,
+        r["location_name"] or "(no city)", r["count"]) for r in ctx.page(locs)]
+    return ctx.listing(items, len(locs))
+
+
+def _br_vidcloc(ctx: _Browse) -> tuple:
+    raw = _b64d(ctx.obj_id[len("vidcloc:"):])
+    if "\x00" not in raw:
+        return ctx.empty()
+    cc, loc = raw.split("\x00", 1)
+    vids = DB.videos_by_country_location(_VIDEO_UDN, cc, loc)
+    if ctx.is_meta:
+        return ctx.meta("vidcountry-none" if not cc else f"vidcountry:{cc}",
+                        loc or "(no city)", len(vids))
+    items = [_didl_video(v, ctx.obj_id) for v in ctx.page(vids)]
+    return ctx.listing(items, len(vids))
+
+
+def _br_vidpeople(ctx: _Browse) -> tuple:
+    people = DB.video_people_list(_VIDEO_UDN)
+    if ctx.is_meta:
+        return ctx.meta("videos", "\U0001F464 By person", len(people))
+    items = [_didl_container("vidperson:" + _b64e(p["person"]), "vidpeople",
+                             p["person"], p["count"]) for p in ctx.page(people)]
+    return ctx.listing(items, len(people))
+
+
+def _br_vidperson(ctx: _Browse) -> tuple:
+    person = _b64d(ctx.obj_id[len("vidperson:"):])
+    if not person:
+        return ctx.empty()
+    vids = DB.videos_by_person(_VIDEO_UDN, person)
+    if ctx.is_meta:
+        return ctx.meta("vidpeople", person, len(vids))
+    if not vids:
+        return ctx.empty()
+    items = [_didl_video(v, ctx.obj_id) for v in ctx.page(vids)]
+    return ctx.listing(items, len(vids))
+
+
+def _br_vidloc(ctx: _Browse) -> tuple:
+    if ctx.obj_id == "vidloc-none":
+        loc = ""
+    else:
+        loc = _b64d(ctx.obj_id[len("vidloc:"):])
+        if not loc:
+            return ctx.empty()
+    vids = DB.videos_by_location(_VIDEO_UDN, loc)
+    if ctx.is_meta:
+        return ctx.meta("vidlocs", loc or "(no location)", len(vids))
+    items = [_didl_video(v, ctx.obj_id) for v in ctx.page(vids)]
+    return ctx.listing(items, len(vids))
+
+
+def _br_vid(ctx: _Browse) -> tuple:
+    v = DB.video_by_id(ctx.obj_id[len("vid:"):])
+    if not v:
+        return ctx.empty()
+    # Both flags answer with the item itself — a leaf has no children.
+    return _DIDL_OPEN + _didl_video(v, "vidall") + _DIDL_CLOSE, 1, 1
+
+
+# ── Handlers: playlists + favourite albums ────────────────────────
+
+def _br_playlists(ctx: _Browse) -> tuple:
+    pls = DB.pl_list()
+    if ctx.is_meta:
+        return ctx.meta("0", "Playlists", len(pls))
+    items = [_didl_container(f"pl:{p['id']}", "playlists", p["name"], p["count"])
+             for p in ctx.page(pls)]
+    return ctx.listing(items, len(pls))
+
+
+def _br_playlist(ctx: _Browse) -> tuple:
+    pl = DB.pl_get(ctx.obj_id[3:])
+    if not pl:
+        return ctx.empty()
+    tracks = pl["tracks"]
+    if ctx.is_meta:
+        return ctx.meta("playlists", pl["name"], len(tracks))
+    items = [_didl_track(t, ctx.obj_id) for t in ctx.page(tracks)]
+    return ctx.listing(items, len(tracks))
+
+
+def _br_favalbums(ctx: _Browse) -> tuple:
+    favs = DB.album_fav_list()
+    if ctx.is_meta:
+        return ctx.meta("0", "⭐ Favourite Albums", len(favs))
+    items = [_didl_container(_encode_album_id(f["artist"], f["album"],
+                                              f.get("album_key", "")),
+                             "favalbums",
+                             f"{f['album']} — {f['artist']}" if f["artist"]
+                                                             else f["album"],
+                             f["track_count"])
+             for f in ctx.page(favs)]
+    return ctx.listing(items, len(favs))
+
+
+def _br_favalbum(ctx: _Browse) -> tuple:
+    artist, album, album_key = _decode_album_id(ctx.obj_id)
+    # Resolve the udn lazily — the favourite is keyed by album_key
+    # (LocalFs folder) when present, else (artist, album), not by
+    # server. If the album isn't in any indexed library we silently
+    # return an empty container rather than 500 — a Naim control point
+    # handles "0 results" gracefully.
+    if album_key:
+        fav = next((f for f in DB.album_fav_list()
+                    if f.get("album_key") == album_key), None)
+    else:
+        fav = next((f for f in DB.album_fav_list()
+                    if f["artist"] == artist and f["album"] == album
+                    and not f.get("album_key")), None)
+    if not fav or not fav["udn"]:
+        return ctx.empty()
+    tracks = DB.album_tracks(fav["udn"], artist, album, album_key=album_key)
+    if ctx.is_meta:
+        return ctx.meta("favalbums", album or "(album)", len(tracks))
+    items = [_didl_track(t, ctx.obj_id) for t in ctx.page(tracks)]
+    return ctx.listing(items, len(tracks))
+
+
+# ── Dispatch ──────────────────────────────────────────────────────
+# Exact ids are matched first, then prefixes. The two sets are disjoint
+# by construction — every prefix ends in ':' and no exact id contains one
+# — so "vidlocs" can never be captured by "vidloc:", and "favalbums"
+# can never be captured by "favalbum:".
+
+_BROWSE_EXACT = {
+    "0":               _br_root,
+    "abooks":          _br_abooks,
+    "artists":         _br_artists,
+    "albums":          _br_albums,
+    "genres":          _br_genres,
+    "videos":          _br_videos,
+    "vidall":          _br_vidall,
+
+    "viddates":        _br_viddates,
+    "vidlocs":         _br_vidlocs,
+    "vidpeople":       _br_vidpeople,
+    "vidcountry-none": _br_vidcountry,
+    "vidloc-none":     _br_vidloc,
+    "playlists":       _br_playlists,
+    "favalbums":       _br_favalbums,
+}
+
+_BROWSE_PREFIX = (
+    ("abauthor:",   _br_abauthor),
+    ("abbook:",     _br_abbook),
+    ("gartist:",    _br_gartist),
+    ("albumltr:",   _br_albumltr),
+    ("galbum:",     _br_galbum),
+    ("ggenre:",     _br_ggenre),
+    ("viddate:",    _br_viddate),
+    ("vidcountry:", _br_vidcountry),
+    ("vidcloc:",    _br_vidcloc),
+    ("vidperson:",  _br_vidperson),
+    ("vidloc:",     _br_vidloc),
+    ("vid:",        _br_vid),
+    ("pl:",         _br_playlist),
+    ("favalbum:",   _br_favalbum),
+)
+
 
 def _gw_browse(obj_id: str, browse_flag: str,
                start: int, count: int) -> tuple:
     """Returns (DIDL-Lite XML, number_returned, total_matches)."""
-    def container(cid, parent, title, child_count):
-        return (f'<container id="{_xml_esc(cid)}" parentID="{_xml_esc(parent)}" '
-                f'restricted="1" childCount="{child_count}">'
-                f'<dc:title>{_xml_esc(title)}</dc:title>'
-                f'<upnp:class>object.container.playlistContainer</upnp:class>'
-                f'</container>')
-
-    def track_item(t, parent_id):
-        url   = _xml_esc(t.get("url", ""))
-        title = _xml_esc(t.get("title", ""))
-        art   = _xml_esc(t.get("art", ""))
-        dur   = t.get("duration", "")
-        mime  = _xml_esc(t.get("mime", "") or "audio/x-flac")
-        art_tag = f'<upnp:albumArtURI>{art}</upnp:albumArtURI>' if art else ""
-        return (
-            f'<item id="tr:{_xml_esc(t.get("url",""))}" '
-            f'parentID="{_xml_esc(parent_id)}" restricted="1">'
-            f'<dc:title>{title}</dc:title>'
-            f'<dc:creator>{_xml_esc(t.get("artist",""))}</dc:creator>'
-            f'<upnp:artist>{_xml_esc(t.get("artist",""))}</upnp:artist>'
-            f'<upnp:album>{_xml_esc(t.get("album",""))}</upnp:album>'
-            f'{art_tag}'
-            f'<upnp:class>object.item.audioItem.musicTrack</upnp:class>'
-            f'<res protocolInfo="http-get:*:{mime}:*" '
-            f'duration="{dur}">{url}</res>'
-            f'</item>')
-
-    def album_container(r, parent):
-        """A galbum:* container from an album row (all_albums / artist_albums /
-        genre_albums shape: artist, album, album_key, track_count)."""
-        artist = r.get("artist", "")
-        album  = r.get("album", "")
-        cid    = _encode_lib_album_id(artist, album, r.get("album_key", ""))
-        show_artist = bool(artist) and not _is_junk_name(artist)
-        if album and show_artist:
-            title = f"{album} — {artist}"
-        else:                       # avoid a leading " — " when one side is blank
-            title = album or (artist if show_artist else "") or "(album)"
-        return container(cid, parent, title, r.get("track_count", 0))
-
-    def video_item(v, parent_id):
-        url   = _xml_esc(v.get("url", ""))
-        title = _xml_esc(v.get("title", ""))
-        mime  = v.get("mime") or "video/mp4"
-        dur   = _fmt_duration(v.get("duration"))
-        attrs = [f'protocolInfo="http-get:*:{_xml_esc(mime)}:'
-                 'DLNA.ORG_OP=01;'
-                 'DLNA.ORG_FLAGS=01700000000000000000000000000000"']
-        if v.get("width") and v.get("height"):
-            attrs.append(f'resolution="{v["width"]}x{v["height"]}"')
-        if v.get("size"):
-            attrs.append(f'size="{v["size"]}"')
-        if dur:
-            attrs.append(f'duration="{dur}"')
-        art = ""
-        if v.get("poster"):
-            poster_url = v.get("url", "").replace("/localfs/video/",
-                                                  "/localfs/poster/")
-            art = f'<upnp:albumArtURI>{_xml_esc(poster_url)}</upnp:albumArtURI>'
-        return (f'<item id="vid:{_xml_esc(v.get("id", ""))}" '
-                f'parentID="{_xml_esc(parent_id)}" restricted="1">'
-                f'<dc:title>{title}</dc:title>{art}'
-                f'<upnp:class>object.item.videoItem.movie</upnp:class>'
-                f'<res {" ".join(attrs)}>{url}</res>'
-                f'</item>')
-
-    OPEN  = ('<?xml version="1.0" encoding="UTF-8"?>'
-             '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
-             'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-             'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">')
-    CLOSE = '</DIDL-Lite>'
-
-    if obj_id == "0":
-        n_videos = len(DB.all_videos(_VIDEO_UDN))
-        ab_udn   = _ab_udn()
-        n_books  = len(_lib_artists(ab_udn)) if ab_udn else 0
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("0", "-1", GW_NAME,
-                                     5 + (1 if n_videos else 0)
-                                       + (1 if n_books else 0)) + CLOSE, 1, 1)
-        udn       = DB.primary_udn()
-        n_artists = len(_lib_artists(udn))   if udn else 0
-        n_albums  = len(_album_letters(udn)) if udn else 0   # # of letter buckets
-        n_genres  = len(_lib_genres(udn))    if udn else 0
-        n_favs    = len(DB.album_fav_list())
-        n_pls     = len(DB.pl_list())
-        items  = [
-            container("artists",   "0", "Artists",            n_artists),
-            container("albums",    "0", "Albums",             n_albums),
-            container("genres",    "0", "Genres",             n_genres),
-            container("favalbums", "0", "⭐ Favourite Albums", n_favs),
-            container("playlists", "0", "Playlists",          n_pls),
-        ]
-        # Videos folder — only when there ARE videos (so it never clutters the
-        # Naim's view unless GWMovies is enabled + populated).
-        if n_videos:
-            items.append(container("videos", "0", "\U0001F4F9 Videos", n_videos))
-        # Audiobooks — only when the audiobooks source exists + has authors
-        # (P5). Authors → books → chapters, resolved via the AB udn.
-        if n_books:
-            items.append(container("abooks", "0",
-                                   "\U0001F4D6 Audiobooks", n_books))
-        n = len(items)
-        return OPEN + "".join(items) + CLOSE, n, n
-
-    # ── Audiobooks tree (P5): abooks → authors → books → chapters ──
-    if obj_id == "abooks":
-        ab_udn = _ab_udn()
-        rows   = _lib_artists(ab_udn) if ab_udn else []
-        total  = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("abooks", "0", "\U0001F4D6 Audiobooks",
-                                     total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = [container("abauthor:" + _b64e(r["artist"]), "abooks",
-                           r["artist"], r.get("album_count", 0))
-                 for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("abauthor:"):
-        author = _b64d(obj_id[len("abauthor:"):])
-        ab_udn = _ab_udn()
-        rows   = [r for r in DB.artist_albums(ab_udn, author)
-                  if not _is_junk_name(r.get("album"))] if ab_udn else []
-        total  = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "abooks",
-                                     author or "(author)", total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = []
-        for r in page:
-            cid   = _encode_ab_book_id(r.get("artist", ""), r.get("album", ""),
-                                       r.get("album_key", ""))
-            title = r.get("album", "") or "(book)"
-            # Series overlay when OpenLibrary knows the book.
-            meta = DB.book_meta_get(r.get("album_key", "")) \
-                if r.get("album_key") else None
-            if meta and meta.get("series"):
-                seq = meta.get("series_seq")
-                seq_s = f" #{seq:g}" if seq is not None else ""
-                title = f"{title}  \U0001F4DA {meta['series']}{seq_s}"
-            items.append(container(cid, obj_id, title,
-                                   r.get("track_count", 0)))
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("abbook:"):
-        artist, album, album_key = _decode_ab_book_id(obj_id)
-        ab_udn = _ab_udn()
-        tracks = DB.album_tracks(ab_udn, artist, album, album_key=album_key) \
-            if ab_udn and (artist or album or album_key) else []
-        total  = len(tracks)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "abooks",
-                                     album or "(book)", total) + CLOSE, 1, 1)
-        page  = tracks[start:start + count] if count else tracks[start:]
-        items = [track_item(t, obj_id) for t in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    # ── Full-library tree (Artists / Albums / Genres) ──────────────
-    # Backed by LibraryDB on the primary library udn (the LocalFs backend).
-    # Each list paginates via StartingIndex/RequestedCount; album rows carry
-    # album_key so a LocalFs folder-album (incl. Various-Artists comps)
-    # resolves correctly through album_tracks.
-    if obj_id == "artists":
-        udn   = DB.primary_udn()
-        rows  = _lib_artists(udn) if udn else []
-        total = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("artists", "0", "Artists", total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = [container("gartist:" + _b64e(r["artist"]), "artists",
-                           r["artist"], r.get("album_count", 0))
-                 for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("gartist:"):
-        artist = _b64d(obj_id[len("gartist:"):])
-        udn    = DB.primary_udn()
-        rows   = [r for r in DB.artist_albums(udn, artist)
-                  if not _is_junk_name(r.get("album"))] if udn else []
-        total  = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "artists",
-                                     artist or "(artist)", total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = [album_container(r, obj_id) for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    # "Albums" is a #-0-A..Z letter index (not one flat 2,000-entry list).
-    if obj_id == "albums":
-        udn     = DB.primary_udn()
-        letters = _album_letters(udn) if udn else []
-        total   = len(letters)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("albums", "0", "Albums", total) + CLOSE, 1, 1)
-        page  = letters[start:start + count] if count else letters[start:]
-        items = [container("albumltr:" + L, "albums", L, cnt) for L, cnt in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("albumltr:"):
-        letter = obj_id[len("albumltr:"):]
-        udn    = DB.primary_udn()
-        rows   = [r for r in _lib_albums(udn)
-                  if _letter_of(r.get("album")) == letter] if udn else []
-        total  = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "albums", letter, total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = [album_container(r, obj_id) for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("galbum:"):
-        artist, album, album_key = _decode_lib_album_id(obj_id)
-        udn    = DB.primary_udn()
-        tracks = DB.album_tracks(udn, artist, album, album_key=album_key) if udn else []
-        total  = len(tracks)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "albums",
-                                     album or "(album)", total) + CLOSE, 1, 1)
-        page  = tracks[start:start + count] if count else tracks[start:]
-        items = [track_item(t, obj_id) for t in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id == "genres":
-        udn   = DB.primary_udn()
-        rows  = _lib_genres(udn) if udn else []
-        total = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("genres", "0", "Genres", total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = [container("ggenre:" + _b64e(r["genre"]), "genres",
-                           r["genre"], r.get("album_count", 0))
-                 for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("ggenre:"):
-        genre = _b64d(obj_id[len("ggenre:"):])
-        udn   = DB.primary_udn()
-        rows  = [r for r in DB.genre_albums(udn, genre)
-                 if not _is_junk_name(r.get("album"))] if udn else []
-        total = len(rows)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "genres",
-                                     genre or "(genre)", total) + CLOSE, 1, 1)
-        page  = rows[start:start + count] if count else rows[start:]
-        items = [album_container(r, obj_id) for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    # ── Videos tree (2026-07-06) ─────────────────────────────────────
-    # The flat ~3,000-item list was unbrowsable with a TV remote. "videos"
-    # now holds three sub-containers: date drill-down (year → month),
-    # location A-Z (geocoded location_name; "(no location)" bucket last),
-    # and the old flat list under "vidall".
-    if obj_id == "videos":
-        if browse_flag == "BrowseMetadata":
-            n = len(DB.all_videos(_VIDEO_UDN))
-            return (OPEN + container("videos", "0", "\U0001F4F9 Videos", n)
-                    + CLOSE, 1, 1)
-        years  = DB.video_years(_VIDEO_UDN)
-        locs   = DB.video_locations(_VIDEO_UDN)
-        people = DB.video_people_list(_VIDEO_UDN)
-        n      = len(DB.all_videos(_VIDEO_UDN))
-        kids = [
-            container("viddates", "videos", "\U0001F4C5 By date", len(years)),
-            container("vidlocs", "videos", "\U0001F4CD By location", len(locs)),
-        ]
-        # "👤 By person" only when the Immich people sync has run — an
-        # always-empty folder would just be noise for non-Immich setups.
-        if people:
-            kids.append(container("vidpeople", "videos",
-                                  "\U0001F464 By person", len(people)))
-        kids.append(container("vidall", "videos", "\U0001F39E All videos", n))
-        return OPEN + "".join(kids) + CLOSE, len(kids), len(kids)
-
-    if obj_id == "vidall":
-        vids  = DB.all_videos(_VIDEO_UDN)
-        total = len(vids)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("vidall", "videos",
-                                     "\U0001F39E All videos", total)
-                    + CLOSE, 1, 1)
-        page  = vids[start:start + count] if count else vids[start:]
-        items = [video_item(v, "vidall") for v in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id == "viddates":
-        years = DB.video_years(_VIDEO_UDN)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("viddates", "videos",
-                                     "\U0001F4C5 By date", len(years))
-                    + CLOSE, 1, 1)
-        page  = years[start:start + count] if count else years[start:]
-        items = [container(f"viddate:{y['year']}", "viddates",
-                           y["year"], y["count"]) for y in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(years)
-
-    if obj_id.startswith("viddate:"):
-        key = obj_id[len("viddate:"):]
-        if len(key) == 4:                       # a year → its months
-            months = DB.video_months(_VIDEO_UDN, key)
-            if browse_flag == "BrowseMetadata":
-                return (OPEN + container(obj_id, "viddates", key,
-                                         len(months)) + CLOSE, 1, 1)
-            page  = months[start:start + count] if count else months[start:]
-            items = [container(f"viddate:{m['month']}", obj_id,
-                               m["month"], m["count"]) for m in page]
-            return OPEN + "".join(items) + CLOSE, len(items), len(months)
-        vids = DB.videos_by_month(_VIDEO_UDN, key)    # 'YYYY-MM' → items
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, f"viddate:{key[:4]}", key,
-                                     len(vids)) + CLOSE, 1, 1)
-        page  = vids[start:start + count] if count else vids[start:]
-        items = [video_item(v, obj_id) for v in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
-
-    if obj_id == "vidlocs":
-        # 2026-07-06 v2: COUNTRY blocks first (A-Z by ISO code), then
-        # "(no country)" for located-but-unknown-country videos, then the
-        # "(no location)" bucket for GPS-less videos — each country drills
-        # down to its locations (country_location, like the titles).
-        countries = DB.video_countries(_VIDEO_UDN)
-        no_loc = [r for r in DB.video_locations(_VIDEO_UDN)
-                  if not r["location_name"]]
-        entries = []
-        # selection level shows FULL country names (2026-07-08); the ids
-        # (and titles/filenames elsewhere) keep the ISO code
-        for c in countries:
-            entries.append(("vidcountry-none" if not c["country"]
-                            else f"vidcountry:{c['country']}",
-                            country_name(c["country"]) or "(no country)",
-                            c["count"]))
-        for r in no_loc:
-            entries.append(("vidloc-none", "(no location)", r["count"]))
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("vidlocs", "videos",
-                                     "\U0001F4CD By location", len(entries))
-                    + CLOSE, 1, 1)
-        page  = entries[start:start + count] if count else entries[start:]
-        items = [container(cid, "vidlocs", title, n)
-                 for cid, title, n in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(entries)
-
-    if obj_id == "vidcountry-none" or obj_id.startswith("vidcountry:"):
-        cc = ("" if obj_id == "vidcountry-none"
-              else obj_id[len("vidcountry:"):])
-        locs = DB.video_locations_for_country(_VIDEO_UDN, cc)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "vidlocs",
-                                     country_name(cc) or "(no country)",
-                                     len(locs))
-                    + CLOSE, 1, 1)
-        page  = locs[start:start + count] if count else locs[start:]
-        # '' location = the "(no city)" bucket — country-only videos
-        # (Plan A inferred country, no specific place).
-        items = [container(
-            "vidcloc:" + _b64e(cc + "\x00" + r["location_name"]), obj_id,
-            r["location_name"] or "(no city)", r["count"]) for r in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(locs)
-
-    if obj_id.startswith("vidcloc:"):
-        raw = _b64d(obj_id[len("vidcloc:"):])
-        if "\x00" not in raw:
-            return OPEN + CLOSE, 0, 0   # garbled id → empty, never 500
-        cc, loc = raw.split("\x00", 1)
-        vids = DB.videos_by_country_location(_VIDEO_UDN, cc, loc)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "vidcountry-none" if not cc
-                                     else f"vidcountry:{cc}",
-                                     loc or "(no city)",
-                                     len(vids)) + CLOSE, 1, 1)
-        page  = vids[start:start + count] if count else vids[start:]
-        items = [video_item(v, obj_id) for v in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
-
-    if obj_id == "vidpeople":
-        people = DB.video_people_list(_VIDEO_UDN)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("vidpeople", "videos",
-                                     "\U0001F464 By person", len(people))
-                    + CLOSE, 1, 1)
-        page  = people[start:start + count] if count else people[start:]
-        items = [container("vidperson:" + _b64e(p["person"]), "vidpeople",
-                           p["person"], p["count"]) for p in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(people)
-
-    if obj_id.startswith("vidperson:"):
-        person = _b64d(obj_id[len("vidperson:"):])
-        if not person:
-            return OPEN + CLOSE, 0, 0   # garbled id → empty, never 500
-        vids = DB.videos_by_person(_VIDEO_UDN, person)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "vidpeople", person,
-                                     len(vids)) + CLOSE, 1, 1)
-        if not vids:
-            return OPEN + CLOSE, 0, 0
-        page  = vids[start:start + count] if count else vids[start:]
-        items = [video_item(v, obj_id) for v in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
-
-    if obj_id == "vidloc-none" or obj_id.startswith("vidloc:"):
-        if obj_id == "vidloc-none":
-            loc = ""
-        else:
-            loc = _b64d(obj_id[len("vidloc:"):])
-            if not loc:
-                return OPEN + CLOSE, 0, 0   # garbled id → empty, never 500
-        vids = DB.videos_by_location(_VIDEO_UDN, loc)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "vidlocs",
-                                     loc or "(no location)", len(vids))
-                    + CLOSE, 1, 1)
-        page  = vids[start:start + count] if count else vids[start:]
-        items = [video_item(v, obj_id) for v in page]
-        return OPEN + "".join(items) + CLOSE, len(items), len(vids)
-
-    if obj_id.startswith("vid:"):
-        v = DB.video_by_id(obj_id[len("vid:"):])
-        if not v:
-            return OPEN + CLOSE, 0, 0
-        return OPEN + video_item(v, "vidall") + CLOSE, 1, 1
-
-    if obj_id == "playlists":
-        pls   = DB.pl_list()
-        total = len(pls)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container("playlists", "0", "Playlists", total) + CLOSE, 1, 1)
-        page  = pls[start:start + count] if count else pls[start:]
-        items = [container(f"pl:{p['id']}", "playlists", p["name"], p["count"])
-                 for p in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("pl:"):
-        pl_id  = obj_id[3:]
-        pl     = DB.pl_get(pl_id)
-        if not pl:
-            return OPEN + CLOSE, 0, 0
-        tracks = pl["tracks"]
-        total  = len(tracks)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN + container(obj_id, "playlists", pl["name"], total) + CLOSE, 1, 1)
-        page  = tracks[start:start + count] if count else tracks[start:]
-        items = [track_item(t, obj_id) for t in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id == "favalbums":
-        favs  = DB.album_fav_list()
-        total = len(favs)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN
-                    + container("favalbums", "0", "⭐ Favourite Albums", total)
-                    + CLOSE, 1, 1)
-        page  = favs[start:start + count] if count else favs[start:]
-        items = [container(_encode_album_id(f["artist"], f["album"],
-                                            f.get("album_key", "")),
-                           "favalbums",
-                           f"{f['album']} — {f['artist']}" if f["artist"]
-                                                          else f["album"],
-                           f["track_count"])
-                 for f in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    if obj_id.startswith("favalbum:"):
-        artist, album, album_key = _decode_album_id(obj_id)
-        # Resolve the udn lazily — the favourite is keyed by album_key
-        # (LocalFs folder) when present, else (artist, album), not by
-        # server. If the album isn't in any indexed library we silently
-        # return an empty container rather than 500 — a Naim control point
-        # handles "0 results" gracefully.
-        if album_key:
-            fav = next((f for f in DB.album_fav_list()
-                        if f.get("album_key") == album_key), None)
-        else:
-            fav = next((f for f in DB.album_fav_list()
-                        if f["artist"] == artist and f["album"] == album
-                        and not f.get("album_key")), None)
-        if not fav or not fav["udn"]:
-            return OPEN + CLOSE, 0, 0
-        tracks = DB.album_tracks(fav["udn"], artist, album, album_key=album_key)
-        total  = len(tracks)
-        if browse_flag == "BrowseMetadata":
-            return (OPEN
-                    + container(obj_id, "favalbums",
-                                album or "(album)", total)
-                    + CLOSE, 1, 1)
-        page  = tracks[start:start + count] if count else tracks[start:]
-        items = [track_item(t, obj_id) for t in page]
-        return OPEN + "".join(items) + CLOSE, len(items), total
-
-    return OPEN + CLOSE, 0, 0
+    ctx = _Browse(obj_id, browse_flag, start, count)
+    handler = _BROWSE_EXACT.get(obj_id)
+    if handler is None:
+        handler = next((h for p, h in _BROWSE_PREFIX if obj_id.startswith(p)),
+                       None)
+    if handler is None:
+        return ctx.empty()
+    return handler(ctx)
 
 
 # ── Album-favourite ObjectID encoding ────────────────────────────
