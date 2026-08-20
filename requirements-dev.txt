@@ -6,6 +6,14 @@
 #     .venv/bin/pip install -r requirements-dev.txt
 #     .venv/bin/playwright install chromium webkit    # one-time, after the above
 #
+# The playwright PACKAGE version and the BROWSER revisions are coupled:
+# each release pins exact revisions, and launching with a mismatched cache
+# fails with "Executable doesn't exist at …" rather than falling back. That
+# bit on 2026-08-20 — the package had been downgraded to 1.59.0 while the
+# cache held 1.62.0's browsers, so the whole 227-test UI suite errored out
+# at fixture setup. After changing the pin below, ALWAYS re-run
+# `playwright install`.
+#
 # Which layer needs what — see CLAUDE.md → "Running Tests":
 #
 #   ruff      → the T0.LINT gate in `tests/run_all.py --offline`. Config
@@ -26,9 +34,9 @@
 ruff==0.16.3
 
 pytest==9.0.3
-pytest-playwright==0.7.2
+pytest-playwright==0.9.0
 pytest-base-url==2.1.0
-playwright==1.59.0
+playwright==1.62.0        # browsers: chromium r1234 (151), webkit r2336 (26.5)
 
 # Opt-in smoke layers (safe to omit — the scripts exit with a clear
 # "not installed" message rather than failing the suite).
