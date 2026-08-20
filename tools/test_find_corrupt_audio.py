@@ -10,7 +10,6 @@ default scan-only mode. Safe to run on any machine.
 Run standalone:
     python3 -m unittest tools.test_find_corrupt_audio -v
 """
-import os
 import shutil
 import sys
 import tempfile

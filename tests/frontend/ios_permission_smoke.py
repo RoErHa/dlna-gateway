@@ -49,7 +49,7 @@ APPIUM_URL = os.environ.get("APPIUM_URL", "http://127.0.0.1:4723")
 SAFARI_BUNDLE = "com.apple.mobilesafari"
 
 
-def _fail(msg: str) -> "NoReturn":  # noqa: F821
+def _fail(msg: str) -> NoReturn:  # noqa: F821
     print(f"✗ {msg}")
     sys.exit(2)
 

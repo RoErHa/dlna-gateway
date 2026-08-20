@@ -318,7 +318,7 @@ class TestRadioHandlers(unittest.TestCase):
 def _icy_meta_block(title: str) -> bytes:
     """Build one ICY metadata block: 1 length byte (in 16-byte units)
     followed by `StreamTitle='…';` NUL-padded to a 16-byte multiple."""
-    raw = f"StreamTitle='{title}';".encode("utf-8")
+    raw = f"StreamTitle='{title}';".encode()
     raw += b"\x00" * ((-len(raw)) % 16)
     return bytes([len(raw) // 16]) + raw
 
@@ -329,8 +329,10 @@ class TestICYDeinterleave(unittest.TestCase):
     """
 
     def setUp(self):
-        import dlna_stream_proxy
-        self.sp = dlna_stream_proxy
+        # The ICY relay moved to its own module (2026-08-20); these are
+        # its private helpers, so bind the module that owns them.
+        import dlna_radio_proxy
+        self.sp = dlna_radio_proxy
 
     def test_parse_title_plain(self):
         block = _icy_meta_block("Bowie - Starman")

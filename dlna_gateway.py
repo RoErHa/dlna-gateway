@@ -50,7 +50,11 @@ def get_lan_ip() -> str:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except OSError as e:
+        # 127.0.0.1 is unreachable from any renderer — this is a total
+        # outage for UPnP playback, so it must never be silent.
+        log.warning(f"LAN IP probe failed ({e}) — falling back to 127.0.0.1; "
+                    f"renderers will NOT be able to reach this gateway")
         return "127.0.0.1"
 
 

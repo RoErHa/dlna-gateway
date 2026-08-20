@@ -13,6 +13,7 @@ from unittest import mock
 
 import dlna_art_cache as ac
 import api_playback
+import api_playback_art
 
 
 class _CacheBase(unittest.TestCase):
@@ -113,14 +114,14 @@ class TestArtFetchCached(_CacheBase):
     def test_hit_short_circuits_fetch(self):
         import api_playback
         ac.put("http://x/cov", "image/png", b"CACHED")
-        with mock.patch.object(api_playback, "art_fetch") as m:
+        with mock.patch.object(api_playback_art, "art_fetch") as m:
             code, ctype, body = api_playback.art_fetch_cached("http://x/cov")
         m.assert_not_called()                      # served from disk, no fetch
         self.assertEqual((code, ctype, body), (200, "image/png", b"CACHED"))
 
     def test_miss_fetches_and_caches(self):
         import api_playback
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(200, "image/jpeg", b"FRESH")) as m:
             r1 = api_playback.art_fetch_cached("http://x/new")
             r2 = api_playback.art_fetch_cached("http://x/new")
@@ -131,14 +132,14 @@ class TestArtFetchCached(_CacheBase):
 
     def test_non_200_not_in_positive_cache(self):
         import api_playback
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(502, "Not an image", b"")):
             api_playback.art_fetch_cached("http://x/bad")
         self.assertIsNone(ac.get("http://x/bad"))   # never a positive entry
 
     def test_deterministic_failure_negative_cached(self):
         import api_playback
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(404, "Upstream 404", b"")) as m:
             r1 = api_playback.art_fetch_cached("http://x/noart")
             r2 = api_playback.art_fetch_cached("http://x/noart")
@@ -150,7 +151,7 @@ class TestArtFetchCached(_CacheBase):
 
     def test_transient_503_not_negative_cached(self):
         import api_playback
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(503, "timed out", b"")) as m:
             api_playback.art_fetch_cached("http://x/down")
             api_playback.art_fetch_cached("http://x/down")
@@ -160,7 +161,7 @@ class TestArtFetchCached(_CacheBase):
     def test_negative_marker_ttl_expiry(self):
         import api_playback
         ac.NEG_TTL_SEC = 3600
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(404, "gone", b"")):
             api_playback.art_fetch_cached("http://x/exp")
         p = ac._path("http://x/exp", ac._NEG_VARIANT)
@@ -175,7 +176,7 @@ class TestArtFetchCached(_CacheBase):
         import api_playback
         ac.put_negative("http://x/heal", 404, "was gone")
         ac.put("http://x/heal", "image/png", b"NOWHERE")
-        with mock.patch.object(api_playback, "art_fetch") as m:
+        with mock.patch.object(api_playback_art, "art_fetch") as m:
             code, ctype, body = api_playback.art_fetch_cached("http://x/heal")
         m.assert_not_called()
         self.assertEqual((code, ctype, body), (200, "image/png", b"NOWHERE"))
@@ -238,7 +239,7 @@ class TestArtFetchScaled(_CacheBase):
 
     def test_size_zero_is_original_passthrough(self):
         orig = _jpeg(1500, 1500)
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(200, "image/jpeg", orig)):
             code, ctype, body = api_playback.art_fetch_scaled("http://x/c", 0)
         self.assertEqual(code, 200)
@@ -246,7 +247,7 @@ class TestArtFetchScaled(_CacheBase):
 
     def test_scales_down_to_bucket(self):
         orig = _jpeg(1500, 1500)
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(200, "image/jpeg", orig)):
             code, ctype, body = api_playback.art_fetch_scaled("http://x/c", 200)
         self.assertEqual(code, 200)
@@ -256,7 +257,7 @@ class TestArtFetchScaled(_CacheBase):
 
     def test_second_request_served_from_variant_cache(self):
         orig = _jpeg(1500, 1500)
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(200, "image/jpeg", orig)) as m:
             b1 = api_playback.art_fetch_scaled("http://x/c", 200)[2]
             b2 = api_playback.art_fetch_scaled("http://x/c", 200)[2]
@@ -265,7 +266,7 @@ class TestArtFetchScaled(_CacheBase):
 
     def test_new_bucket_reuses_original_cache_no_refetch(self):
         orig = _jpeg(1500, 1500)
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(200, "image/jpeg", orig)) as m:
             api_playback.art_fetch_scaled("http://x/c", 200)   # bucket 256
             b512 = api_playback.art_fetch_scaled("http://x/c", 500)[2]  # bucket 512
@@ -274,14 +275,14 @@ class TestArtFetchScaled(_CacheBase):
 
     def test_already_small_image_passthrough(self):
         orig = _jpeg(120, 120)
-        with mock.patch.object(api_playback, "art_fetch",
+        with mock.patch.object(api_playback_art, "art_fetch",
                                return_value=(200, "image/jpeg", orig)):
             body = api_playback.art_fetch_scaled("http://x/c", 256)[2]
         self.assertEqual(body, orig)    # already within box → original bytes
 
     def test_non_200_not_scaled_or_cached(self):
-        with mock.patch.object(api_playback, "art_fetch",
-                               return_value=(404, "not found", b"")) as m:
+        with mock.patch.object(api_playback_art, "art_fetch",
+                               return_value=(404, "not found", b"")):
             code, _ct, body = api_playback.art_fetch_scaled("http://x/bad", 200)
         self.assertEqual(code, 404)
         self.assertEqual(body, b"")

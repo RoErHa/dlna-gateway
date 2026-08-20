@@ -16,7 +16,6 @@ Run standalone:
     python3 -m unittest tests.test_year -v
 """
 import os
-import sqlite3
 import sys
 import tempfile
 import unittest
@@ -332,12 +331,13 @@ class TestEditTrackHandlerYearSentinel(unittest.TestCase):
         import json
         from unittest.mock import patch
         import api_playback
+        import api_playback_state
 
         class _H:
             def __init__(s): s.last = None
             def _json(s, code, payload): s.last = (code, payload)
         h = _H()
-        with patch.object(api_playback, "DB", self.db):
+        with patch.object(api_playback_state, "DB", self.db):
             api_playback.edit_track(h, json.dumps(body_dict))
         return h.last
 

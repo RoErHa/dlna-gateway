@@ -13,9 +13,11 @@ Usage:
 
 Exit code: 0 if all pass, 1 if any fail.
 """
+import glob
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
@@ -95,6 +97,27 @@ if FRONTEND_ONLY:
 # FILE-LEVEL CHECKS (always run, no server needed)
 # ══════════════════════════════════════════════════════════════════
 
+section("T0.LINT — ruff (config: pyproject.toml)")
+# Before 2026-08-20 the repo had NO lint config and nothing enforced any
+# standard; the rule set in pyproject.toml is deliberately sized to sit at
+# ZERO violations, so any hit here is a real regression, not backlog.
+# ruff is a dev-only dep (like pytest/playwright) — absent → SKIP, never
+# a red suite, so a clean clone without it still passes.
+_ruff = os.path.join(PROJECT, ".venv", "bin", "ruff")
+if not os.path.isfile(_ruff):
+    _ruff = shutil.which("ruff")
+if _ruff:
+    _p = subprocess.run([_ruff, "check", ".", "--output-format=concise"],
+                        cwd=PROJECT, capture_output=True, text=True)
+    _hits = [ln for ln in (_p.stdout or "").splitlines()
+             if re.match(r"^\S+\.py:\d+:\d+: ", ln)]
+    check(f"ruff clean ({len(_hits)} violation(s))", _p.returncode == 0,
+          "\n      " + "\n      ".join(_hits[:12]) if _hits
+          else (_p.stderr or "").strip()[:200])
+else:
+    print("  \033[33m–\033[0m ruff not installed — skipped "
+          "(.venv/bin/pip install ruff)")
+
 section("T1.1 — Static files exist")
 check("static/index.html exists", os.path.isfile(os.path.join(STATIC, "index.html")))
 check("static/app.css exists", os.path.isfile(os.path.join(STATIC, "app.css")))
@@ -133,6 +156,39 @@ features = {
 }
 for label, needle in features.items():
     check(f"JS: {label}", needle in js)
+
+section("T0.SIZE — Module line budget (ratchet)")
+# Was a single hardcoded "dlna_gateway.py < 350" check — the discipline
+# existed but covered exactly one file out of ~40, while dlna_library.py
+# grew to 2,912 lines. Now every application module carries a ceiling in
+# tests/module_size_budget.json that can only ratchet DOWN; the
+# dlna_gateway.py rule survives as one entry among them.
+# Full enforcement (incl. new-module target + staleness) lives in
+# tests/test_module_size.py; this surfaces the numbers in the suite output.
+try:
+    import json as _json
+
+    import tools.regen_size_budget as _budget
+    _spec = _json.loads(_budget.BUDGET_PATH.read_text(encoding="utf-8"))
+    _sizes = _budget.app_modules()
+    _target = _spec["target_lines"]
+    _over = [f"{m} ({n} > {_spec['budgets'][m]})"
+             for m, n in sorted(_sizes.items())
+             if m in _spec["budgets"] and n > _spec["budgets"][m]]
+    _new = [m for m in _sizes if m not in _spec["budgets"]]
+    _debt = _spec["over_target"]
+    check(f"No module over its budget ({len(_sizes)} modules checked)",
+          not _over, ", ".join(_over))
+    check("Every module is in the budget", not _new,
+          f"unbudgeted: {_new} — run tools/regen_size_budget.py")
+    check(f"Modules within the {_target}-line target: "
+          f"{len(_sizes) - len(_debt)}/{len(_sizes)}", True)
+    if _debt:
+        print(f"    \033[2mpre-existing debt over {_target} lines: "
+              f"{', '.join(_debt[:5])}"
+              f"{' …' if len(_debt) > 5 else ''}\033[0m")
+except Exception as _e:
+    check("Module size budget readable", False, repr(_e))
 
 section("T1.EXTRA — Gateway is slim")
 gw_path = os.path.join(PROJECT, "dlna_gateway.py")
@@ -333,7 +389,7 @@ except Exception as _e:
 # ══════════════════════════════════════════════════════════════════
 
 if OFFLINE:
-    print(f"\n\033[33m⚠ Skipping live server tests (--offline)\033[0m")
+    print("\n\033[33m⚠ Skipping live server tests (--offline)\033[0m")
 else:
     section("T1.1c — Static file serving (live)")
     status, body = fetch("/")
@@ -416,13 +472,29 @@ if os.path.isfile(browse_path):
                "genre_tracks", "artist_albums", "browse_letter"]:
         check(f"  api_browse.{fn}", f"def {fn}(" in bc)
 
-section("T2.4 — api_playback.py: all playback functions present")
-pb_path = os.path.join(PROJECT, "api_playback.py")
-if os.path.isfile(pb_path):
-    pc = open(pb_path).read()
+section("T2.4 — api_playback: playback surface present")
+# api_playback was split into a module family (2026-08-20), so grepping this
+# ONE file's text for "def <name>(" stopped proving anything the moment a
+# symbol became a re-export — the same trap that silently disabled T2.6 and
+# T3.2. Introspect the module instead.
+try:
+    import api_playback as _pb
     for fn in ["renderer_state", "index_status", "index_rebuild", "stream",
-               "render_queue", "render", "control", "edit_track"]:
-        check(f"  api_playback.{fn}", f"def {fn}(" in pc)
+               "render_queue", "render", "control", "edit_track",
+               "art", "art_fetch", "art_fetch_cached", "art_fetch_scaled",
+               "track_meta", "lyrics", "client_log"]:
+        check(f"  api_playback.{fn}", callable(getattr(_pb, fn, None)))
+    _pbfam = sorted(os.path.basename(p) for p in
+                    glob.glob(os.path.join(PROJECT, "api_playback*.py")))
+    check(f"  module family ({len(_pbfam)} modules)", len(_pbfam) >= 4, str(_pbfam))
+    _pbbind = [f for f in _pbfam
+               if "from dlna_library import DB"
+               in open(os.path.join(PROJECT, f)).read()]
+    check("  DB bound in exactly one module", _pbbind == ["api_playback_state.py"],
+          f"binders: {_pbbind} — a second binding silently points tests at "
+          f"the REAL library.db")
+except Exception as _e:
+    check("  api_playback imports", False, repr(_e))
 
 section("T2.5 — api_playlists.py: all playlist functions present")
 pl_path = os.path.join(PROJECT, "api_playlists.py")
@@ -432,15 +504,31 @@ if os.path.isfile(pl_path):
                "playlist_delete", "playlist_add", "playlist_remove"]:
         check(f"  api_playlists.{fn}", f"def {fn}(" in plc)
 
-section("T2.6 — api_upnp.py: UPnP gateway present")
-upnp_path = os.path.join(PROJECT, "api_upnp.py")
-if os.path.isfile(upnp_path):
-    uc = open(upnp_path).read()
-    check("  GW_UDN defined", "GW_UDN" in uc)
-    check("  GW_NAME defined", "GW_NAME" in uc)
+section("T2.6 — api_upnp: UPnP gateway surface")
+# api_upnp was split into seven modules (2026-08-20), so grepping ONE file's
+# text for "def <name>(" no longer proves anything — the symbols are
+# re-exported from siblings. Introspect the module instead: that is what the
+# check always meant, and it survives any further reshuffling.
+try:
+    import api_upnp as _u
+    check("  GW_UDN defined", isinstance(getattr(_u, "GW_UDN", None), str))
+    check("  GW_NAME defined", isinstance(getattr(_u, "GW_NAME", None), str))
     for fn in ["device_xml", "cd_desc_xml", "cd_events", "cd_control",
-               "gw_ssdp_announcer", "gw_ssdp_byebye"]:
-        check(f"  api_upnp.{fn}", f"def {fn}(" in uc)
+               "cm_control_soap", "cd_control_soap",
+               "gw_ssdp_announcer", "gw_ssdp_byebye", "gw_ssdp_responder",
+               "gw_event_subscribe", "gw_event_initial_notify", "_gw_browse"]:
+        check(f"  api_upnp.{fn}", callable(getattr(_u, fn, None)))
+    _fam = sorted(os.path.basename(p) for p in
+                  glob.glob(os.path.join(PROJECT, "api_upnp*.py")))
+    check(f"  module family ({len(_fam)} modules)", len(_fam) >= 7, str(_fam))
+    _binders = [f for f in _fam
+                if "from dlna_library import DB"
+                in open(os.path.join(PROJECT, f)).read()]
+    check("  DB bound in exactly one module", _binders == ["api_upnp_ids.py"],
+          f"binders: {_binders} — a second binding silently points tests at "
+          f"the REAL library.db")
+except Exception as _e:
+    check("  api_upnp imports", False, repr(_e))
 
 section("T2.8 — dlna_routes.py endpoint routing")
 if os.path.isfile(routes_path):
@@ -477,27 +565,73 @@ if os.path.isfile(pool_path):
     check("Pool sets busy_timeout", "busy_timeout" in pool_code)
 
 section("T3.2 — LibraryDB uses pool")
-lib_path = os.path.join(PROJECT, "dlna_library.py")
-if os.path.isfile(lib_path):
-    lib_code = open(lib_path).read()
-    lib_start = lib_code.find("class LibraryDB:")
-    lib_end = lib_code.find("\nclass ", lib_start + 10)
-    lib_class = lib_code[lib_start:lib_end] if lib_end > 0 else lib_code[lib_start:]
+# LibraryDB was split out of one 2,912-line module into per-responsibility
+# mixins (2026-08-20), so "the LibraryDB source" is now the whole
+# dlna_library*.py family, not one class body. This used to slice the text
+# between "class LibraryDB:" and the next "class " — which silently matched
+# nothing the moment the class gained base classes. Scanning the family is
+# both correct and no longer position-dependent.
+lib_paths = sorted(glob.glob(os.path.join(PROJECT, "dlna_library*.py")))
+lib_files = {os.path.basename(p): open(p).read() for p in lib_paths}
+mixin_src = "\n".join(v for k, v in lib_files.items()
+                      if k not in ("dlna_library.py", "dlna_library_sql.py"))
+root_src = lib_files.get("dlna_library.py", "")
+lib_all = "\n".join(lib_files.values())
 
-    check("LibraryDB imports Pool", "from db_pool import Pool" in lib_code)
-    check("LibraryDB creates Pool", "Pool(" in lib_class)
-    check("No self._lock in LibraryDB", "self._lock" not in lib_class)
-    check("No self._connect in LibraryDB", "self._connect" not in lib_class)
-    check("No self._db_file in LibraryDB", "self._db_file" not in lib_class,
+if lib_files:
+    check(f"LibraryDB family present ({len(lib_files)} modules)", len(lib_files) >= 7,
+          f"found {sorted(lib_files)}")
+    check("LibraryDB imports Pool", "from db_pool import Pool" in root_src)
+    check("LibraryDB creates Pool", "Pool(" in root_src)
+    check("No self._lock in LibraryDB", "self._lock" not in lib_all)
+    check("No self._connect in LibraryDB", "self._connect" not in lib_all)
+    check("No self._db_file in LibraryDB", "self._db_file" not in mixin_src,
           "stale attribute — use self._pool.db_file instead")
-    check("No self._local in LibraryDB", "self._local" not in lib_class,
+    check("No self._local in LibraryDB", "self._local" not in lib_all,
           "stale attribute — pool handles thread-local connections")
-    check("Uses pool.read()", "self._pool.read()" in lib_class)
-    check("Uses pool.write()", "self._pool.write()" in lib_class)
+    check("Uses pool.read()", "self._pool.read()" in mixin_src)
+    check("Uses pool.write()", "self._pool.write()" in mixin_src)
 
-    reads = lib_class.count("self._pool.read()")
-    writes = lib_class.count("self._pool.write()")
+    reads = mixin_src.count("self._pool.read()")
+    writes = mixin_src.count("self._pool.write()")
     check(f"Read/write balance ({reads}r/{writes}w)", reads > 0 and writes > 0)
+
+section("T3.2b — LibraryDB composition (mixin split)")
+# Guards the split itself: the composed class must keep the FULL public
+# surface (every DB.<method> call site depends on it) and the mixins must
+# stay disjoint — a name defined by two of them would make behaviour
+# depend on MRO order, which is exactly what this layout must not do.
+try:
+    import inspect as _inspect
+
+    import dlna_library as _L
+    _mixins = [c for c in _L.LibraryDB.__mro__
+               if c.__name__.endswith("Mixin")]
+    check(f"LibraryDB composed from mixins ({len(_mixins)})", len(_mixins) >= 6)
+
+    _own = {}
+    _dupes = []
+    for _c in _mixins:
+        for _n, _f in vars(_c).items():
+            if callable(_f) and not _n.startswith("__"):
+                if _n in _own:
+                    _dupes.append(f"{_n} ({_own[_n]} + {_c.__name__})")
+                _own[_n] = _c.__name__
+    check("Mixins define no overlapping methods", not _dupes, ", ".join(_dupes))
+
+    _methods = [m for m, _ in _inspect.getmembers(_L.LibraryDB, _inspect.isfunction)]
+    check(f"LibraryDB public surface intact ({len(_methods)} methods)",
+          len(_methods) >= 95, f"got {len(_methods)}, expected >= 95")
+    check("Helper re-exports still importable",
+          all(hasattr(_L, _h) for _h in
+              ("_dedup_clause", "_parse_audio_params", "_norm_title",
+               "_dur_to_secs", "FAVOURITES_ID")))
+    check("Every mixin module under 600 lines",
+          all(len(v.split("\n")) < 600 for k, v in lib_files.items()),
+          ", ".join(f"{k}={len(v.split(chr(10)))}" for k, v in lib_files.items()
+                    if len(v.split(chr(10))) >= 600))
+except Exception as _e:                       # import failure is a real fail
+    check("LibraryDB composition importable", False, repr(_e))
 
 section("T3.3 — Pool concurrent test (standalone)")
 if os.path.isfile(pool_path):

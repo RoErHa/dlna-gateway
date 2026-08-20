@@ -77,7 +77,6 @@ class TestPositionsDB(unittest.TestCase):
         self.assertFalse(self.db.position_clear(BOOK))   # already gone
 
     def test_list_newest_first(self):
-        import time
         self.db.position_set("book-a", CH7, 10)
         # updated_at has second resolution — force distinct timestamps
         with self.db._pool.write() as c:
@@ -104,15 +103,19 @@ class TestPositionPayloads(unittest.TestCase):
 
     def setUp(self):
         import api_playback
+        import api_playback_state
         self._fd, self._path = tempfile.mkstemp(suffix=".db")
         os.close(self._fd)
         self.db = LibraryDB(db_file=self._path)
         self._mod = api_playback
-        self._orig_db = api_playback.DB
-        api_playback.DB = self.db
+        # DB is bound once, in api_playback_state; rebinding the re-export
+        # on api_playback would leave the handlers on the real library.db.
+        self._state = api_playback_state
+        self._orig_db = api_playback_state.DB
+        api_playback_state.DB = self.db
 
     def tearDown(self):
-        self._mod.DB = self._orig_db
+        self._state.DB = self._orig_db
         os.unlink(self._path)
 
     def test_save_and_get(self):
@@ -215,15 +218,18 @@ class TestBookMeta(unittest.TestCase):
 
     def test_payload(self):
         import api_playback
-        orig = api_playback.DB
-        api_playback.DB = self.db
+        import api_playback_state
+        # Bind the OWNER: api_playback.DB is only a re-export, so rebinding
+        # it would leave book_meta_all_payload on the real library.db.
+        orig = api_playback_state.DB
+        api_playback_state.DB = self.db
         try:
             self.db.book_meta_set(BOOK, series="S", series_seq=1)
             code, body = api_playback.book_meta_all_payload({})
             self.assertEqual(code, 200)
             self.assertIn(BOOK, body["books"])
         finally:
-            api_playback.DB = orig
+            api_playback_state.DB = orig
 
 
 class TestAudiobooksRootConfig(unittest.TestCase):

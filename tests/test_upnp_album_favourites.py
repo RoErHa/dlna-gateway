@@ -32,6 +32,7 @@ if PROJECT not in sys.path:
 
 from dlna_library import LibraryDB
 import api_upnp
+import api_upnp_ids
 
 
 class TestAlbumIdCodec(unittest.TestCase):
@@ -62,7 +63,7 @@ class TestAlbumIdCodec(unittest.TestCase):
     def test_decode_legacy_two_field_id(self):
         # An id minted before album_key existed decodes with key=''.
         import base64
-        raw = "Queen\x00A Night".encode("utf-8")
+        raw = b"Queen\x00A Night"
         legacy = "favalbum:" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
         self.assertEqual(api_upnp._decode_album_id(legacy),
                          ("Queen", "A Night", ""))
@@ -91,7 +92,7 @@ class TestBrowse(unittest.TestCase):
                      f"Track {i}", "Pink Floyd", "Animals",
                      "0:04:00", "", "audio/flac", "", ""))
         self.db.album_fav_add("Pink Floyd", "Animals")
-        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch = patch.object(api_upnp_ids, "DB", self.db)
         self._patch.start()
 
     def tearDown(self):
@@ -171,7 +172,7 @@ class TestBrowseByAlbumKey(unittest.TestCase):
              "file_path": "/m/VA/Comp/02.flac", "mime": "audio/flac"},
         ])
         self.db.album_fav_add("Various Artists", "Comp", album_key="VA/Comp")
-        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch = patch.object(api_upnp_ids, "DB", self.db)
         self._patch.start()
 
     def tearDown(self):
@@ -239,7 +240,7 @@ class TestFullLibraryBrowse(unittest.TestCase):
              "genre": "Jazz", "file_path": "/m/Bob/Beta/01.flac",
              "mime": "audio/flac", "duration": "0:04:00"},
         ])
-        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch = patch.object(api_upnp_ids, "DB", self.db)
         self._patch.start()
 
     def tearDown(self):
@@ -384,7 +385,7 @@ class TestVideoBrowse(unittest.TestCase):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
         self.db = LibraryDB(self.tmp.name)
-        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch = patch.object(api_upnp_ids, "DB", self.db)
         self._patch.start()
 
     def tearDown(self):

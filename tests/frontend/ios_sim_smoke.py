@@ -44,7 +44,7 @@ if str(ROOT) not in sys.path:
 APPIUM_URL = os.environ.get("APPIUM_URL", "http://127.0.0.1:4723")
 
 
-def _fail(msg: str) -> "NoReturn":  # noqa: F821
+def _fail(msg: str) -> NoReturn:  # noqa: F821
     print(f"✗ {msg}")
     sys.exit(2)
 

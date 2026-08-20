@@ -52,7 +52,6 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from difflib import SequenceMatcher
-from typing import Optional
 
 _OL = "https://openlibrary.org"
 _RATE_SEC = 1.0
@@ -68,7 +67,7 @@ def _user_agent() -> str:
     return f"DLNAGateway/1.0 ( {email} )"
 
 
-def _norm(s: Optional[str]) -> str:
+def _norm(s: str | None) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.replace("’", "'").replace("‘", "'")
@@ -134,7 +133,7 @@ _SERIES_PATTERNS = (
 )
 
 
-def parse_series(s: str) -> tuple[str, Optional[float]]:
+def parse_series(s: str) -> tuple[str, float | None]:
     """One OpenLibrary edition `series` string → (name, number|None).
     Unparseable number → bare name; empty → ('', None)."""
     s = re.sub(r"\s+", " ", (s or "").strip())
@@ -188,7 +187,7 @@ def _ascii_ratio(s: str) -> float:
     return sum(1 for c in s if ord(c) < 128) / max(1, len(s))
 
 
-def extract_series(editions: list) -> tuple[str, Optional[float]]:
+def extract_series(editions: list) -> tuple[str, float | None]:
     """Majority-vote a series (name, number) out of a work's editions.
     Editions carry `series` as a list of strings; numbered entries beat
     bare names; the most common normalised name wins; its most common
@@ -245,7 +244,7 @@ def extract_series(editions: list) -> tuple[str, Optional[float]]:
 
 # ── OpenLibrary HTTP ────────────────────────────────────────────────
 
-def _http_json(url: str) -> Optional[dict]:
+def _http_json(url: str) -> dict | None:
     """Rate-limited GET → parsed JSON, None on any failure (the caller
     treats None as a transient error: NOT cached, retried next run)."""
     global _last_call
@@ -262,7 +261,7 @@ def _http_json(url: str) -> Optional[dict]:
         return None
 
 
-def ol_search(title: str, author: str) -> Optional[list]:
+def ol_search(title: str, author: str) -> list | None:
     """None = transport failure (transient — do NOT cache as notfound);
     [] = OpenLibrary answered and genuinely has no match."""
     q = {"title": title, "limit": "10",
@@ -283,7 +282,7 @@ def ol_editions(work_key: str) -> list:
 
 
 def pick_best_doc(docs: list, title: str, author: str,
-                  floor: float = _FUZZY_FLOOR) -> Optional[dict]:
+                  floor: float = _FUZZY_FLOOR) -> dict | None:
     """Best search doc passing the fuzzy floor on title; when we have an
     author guess, some author token must overlap too (guards 'The
     Reality Dysfunction' the novel vs an unrelated same-title work)."""
@@ -362,7 +361,7 @@ def write_meta(conn: sqlite3.Connection, album_key: str, author, title,
 
 
 def lookup_book(album_key: str, tag_artist: str, tag_album: str,
-                verbose: bool = False) -> Optional[dict]:
+                verbose: bool = False) -> dict | None:
     """Full OL lookup for one book. Returns
     {author, title, series, series_seq} on a confident match,
     {} for a confident MISS (cache as notfound), None on transient

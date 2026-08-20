@@ -17,7 +17,15 @@ import logging
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import Optional, Tuple
+
+from dlna_config import close_quietly
+# RenderingControl (volume) moved to its own module 2026-08-20; re-exported
+# here so existing `from dlna_avtransport import set_volume` imports work.
+from dlna_rendering_control import (  # noqa: F401
+    _rc_soap,
+    get_volume,
+    set_volume,
+)
 
 log = logging.getLogger("dlna.content")
 
@@ -46,7 +54,7 @@ def avtransport_send(av_url: str, media_url: str, title: str,
             '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
             ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
             f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-        ).encode("utf-8")
+        ).encode()
         parsed = urllib.parse.urlparse(av_url)
         conn   = http.client.HTTPConnection(parsed.netloc, timeout=10)
         try:
@@ -63,10 +71,7 @@ def avtransport_send(av_url: str, media_url: str, title: str,
                 return False
             return True
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            close_quietly(conn)
 
     safe_url   = _xml_esc(media_url)
     safe_title = _xml_esc(title)
@@ -170,7 +175,7 @@ def avtransport_pause(av_url: str) -> bool:
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
         ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         f'<s:Body>{body}</s:Body></s:Envelope>'
-    ).encode("utf-8")
+    ).encode()
     parsed = urllib.parse.urlparse(av_url)
     conn   = http.client.HTTPConnection(parsed.netloc, timeout=8)
     try:
@@ -186,12 +191,11 @@ def avtransport_pause(av_url: str) -> bool:
         log.error(f"avtransport_pause: {e}")
         return False
     finally:
-        try: conn.close()
-        except Exception: pass
+        close_quietly(conn)
 
 
 def _av_soap(av_url: str, action: str,
-             body_inner: str) -> Tuple[Optional[str], Optional[str]]:
+             body_inner: str) -> tuple[str | None, str | None]:
     """Generic AVTransport SOAP helper.
 
     Returns ``(text, err)``:
@@ -208,7 +212,7 @@ def _av_soap(av_url: str, action: str,
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
         ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-    ).encode("utf-8")
+    ).encode()
     parsed = urllib.parse.urlparse(av_url)
     conn   = http.client.HTTPConnection(parsed.netloc, timeout=6)
     try:
@@ -226,11 +230,10 @@ def _av_soap(av_url: str, action: str,
         log.debug(f"_av_soap {action}: {e}")
         return None, (str(e) or type(e).__name__)
     finally:
-        try: conn.close()
-        except Exception: pass
+        close_quietly(conn)
 
 
-def avtransport_probe_state(av_url: str) -> Tuple[str, str]:
+def avtransport_probe_state(av_url: str) -> tuple[str, str]:
     """Query CurrentTransportState, distinguishing a lost renderer from
     a renderer that genuinely reports UNKNOWN.
 
@@ -295,7 +298,7 @@ def avtransport_get_position(av_url: str) -> dict:
         '<u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
         '<InstanceID>0</InstanceID></u:GetPositionInfo>')
 
-    def _parse_time(s: str) -> Optional[float]:
+    def _parse_time(s: str) -> float | None:
         """'H:MM:SS' or 'MM:SS' → float seconds, None if NOT_IMPLEMENTED."""
         if not s or s in ("NOT_IMPLEMENTED", "0:00:00", "00:00:00"):
             return None
@@ -305,8 +308,8 @@ def avtransport_get_position(av_url: str) -> dict:
                 return parts[0]*3600 + parts[1]*60 + parts[2]
             if len(parts) == 2:
                 return parts[0]*60 + parts[1]
-        except Exception:
-            pass
+        except (ValueError, TypeError, AttributeError):
+            pass        # documented contract: unparseable → 0
         return None
 
     result: dict = {"position": None, "duration": None,
@@ -331,56 +334,13 @@ def avtransport_get_position(av_url: str) -> dict:
                         if t.tag.endswith("}title") or t.tag == "title":
                             result["title"] = t.text
                             break
-                except Exception:
-                    pass
+                except ET.ParseError as e:
+                    # A renderer that returns malformed DIDL just loses its
+                    # title; position/duration above are still usable.
+                    log.debug(f"CurrentTrackMetaData not parseable: {e}")
     except ET.ParseError:
         pass
     return result
-
-
-# ─────────────────────────────────────────────────────────────────
-# RenderingControl — volume helpers (the startup volume + user trim).
-# This is a *separate* UPnP service from AVTransport; the SOAP endpoint
-# URL on the renderer is different (sourced from the device description
-# during discovery and stashed as `_RendererInfo.rc_url`).
-# ─────────────────────────────────────────────────────────────────
-
-def _rc_soap(rc_url: str, action: str, body_inner: str,
-             timeout: float = 6.0) -> Optional[str]:
-    """Generic RenderingControl SOAP helper. Returns response body
-    text on 2xx, None otherwise. Catches connection errors so callers
-    don't have to."""
-    envelope = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
-        ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-        f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-    ).encode("utf-8")
-    parsed = urllib.parse.urlparse(rc_url)
-    try:
-        conn = http.client.HTTPConnection(parsed.netloc, timeout=timeout)
-    except Exception as e:
-        log.debug(f"_rc_soap {action}: connect failed: {e}")
-        return None
-    try:
-        conn.request("POST", parsed.path, envelope, {
-            "Content-Type":   "text/xml; charset=utf-8",
-            "SOAPAction":     f'"urn:schemas-upnp-org:service:RenderingControl:1#{action}"',
-            "Content-Length": str(len(envelope)),
-            "User-Agent":     "DLNAGateway/1.0",
-        })
-        resp = conn.getresponse()
-        text = resp.read().decode("utf-8", errors="replace")
-        if resp.status not in (200, 204):
-            log.debug(f"_rc_soap {action} → HTTP {resp.status}: {text[:200]}")
-            return None
-        return text
-    except Exception as e:
-        log.debug(f"_rc_soap {action}: {e}")
-        return None
-    finally:
-        try: conn.close()
-        except Exception: pass
 
 
 def _sec_to_hms(sec: float) -> str:
@@ -407,54 +367,17 @@ def avtransport_seek(av_url: str, seconds: float) -> bool:
     return raw is not None
 
 
-def set_volume(rc_url: str, level: int) -> bool:
-    """Set the renderer's volume on Master channel. Clamped 0-100."""
-    level = max(0, min(100, int(level)))
-    raw = _rc_soap(rc_url, "SetVolume",
-        '<u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
-        '<InstanceID>0</InstanceID>'
-        '<Channel>Master</Channel>'
-        f'<DesiredVolume>{level}</DesiredVolume>'
-        '</u:SetVolume>')
-    return raw is not None
-
-
-def get_volume(rc_url: str) -> Optional[int]:
-    """Read the renderer's current volume on Master channel. Returns None
-    on fault or garbled response — callers should treat None as
-    "unknown, fall back to a sensible default" rather than fail-fast."""
-    raw = _rc_soap(rc_url, "GetVolume",
-        '<u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
-        '<InstanceID>0</InstanceID>'
-        '<Channel>Master</Channel>'
-        '</u:GetVolume>')
-    if not raw:
-        return None
-    try:
-        root = ET.fromstring(raw)
-    except ET.ParseError:
-        return None
-    for el in root.iter():
-        tag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
-        if tag == "CurrentVolume" and el.text:
-            try:
-                return int(el.text.strip())
-            except ValueError:
-                return None
-    return None
-
-
 def avtransport_stop(av_url: str) -> bool:
     """Send Stop to a renderer."""
     envelope = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
-        ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-        '<s:Body>'
-        '<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
-        '<InstanceID>0</InstanceID></u:Stop>'
-        '</s:Body></s:Envelope>'
-    ).encode("utf-8")
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+        b' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        b'<s:Body>'
+        b'<u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+        b'<InstanceID>0</InstanceID></u:Stop>'
+        b'</s:Body></s:Envelope>'
+    )
     parsed = urllib.parse.urlparse(av_url)
     conn   = http.client.HTTPConnection(parsed.netloc, timeout=8)
     try:
@@ -471,7 +394,4 @@ def avtransport_stop(av_url: str) -> bool:
         log.error(f"AVTransport Stop error: {e}")
         return False
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        close_quietly(conn)

@@ -64,8 +64,8 @@ class TestCutoverCopy(unittest.TestCase):
         self._t("INSERT INTO album_art VALUES('A','Al3','http://cover3','sibling',1)")
         self._s("INSERT INTO album_art VALUES('A','Al3','','notfound',1)")  # src notfound for Al3
         self._apply()
-        got = dict(((a, al), (url, src)) for a, al, url, src in
-                   self._q(self.dst, "SELECT artist,album,art_url,source FROM album_art"))
+        got = {(a, al): (url, src) for a, al, url, src in
+               self._q(self.dst, "SELECT artist,album,art_url,source FROM album_art")}
         self.assertEqual(got[("A", "Al1")], ("http://cover1", "musicbrainz"))  # real wins
         self.assertEqual(got[("A", "Al2")], ("", "notfound"))                  # filled
         self.assertEqual(got[("A", "Al3")], ("http://cover3", "sibling"))      # cover kept

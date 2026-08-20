@@ -34,8 +34,9 @@ VENV_DIR="$SCRIPT_DIR/.venv"
 VENV_PY="$VENV_DIR/bin/python"
 GATEWAY="$SCRIPT_DIR/dlna_gateway.py"
 REQS="$SCRIPT_DIR/requirements.txt"
+LOCK="$SCRIPT_DIR/requirements.lock"
 LAUNCHD_LABEL="com.roha.dlna-gateway"
-MIN_MINOR=9
+MIN_MINOR=14
 PYTHON=""
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -45,9 +46,9 @@ info() { echo -e "${C}›${N}  $*"; }
 warn() { echo -e "${Y}!${N}  $*"; }
 die()  { echo -e "${R}✗${N}  $*" >&2; exit 1; }
 
-# ── Find Python 3.9+ ─────────────────────────────────────────────────────────
+# ── Find Python 3.14+ ────────────────────────────────────────────────────────
 find_python() {
-    for cand in python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+    for cand in python3.15 python3.14 python3; do
         if command -v "$cand" &>/dev/null; then
             minor=$("$cand" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)
             if [ "$minor" -ge "$MIN_MINOR" ]; then
@@ -97,7 +98,20 @@ setup_venv() {
     "$VENV_PY" -m pip install --quiet --upgrade pip
     ok "pip ready"
 
-    if [ -f "$REQS" ]; then
+    # Prefer the lock: `>=` ranges in requirements.txt would let a fresh
+    # setup silently pull a breaking upstream (fastapi + hypercorn own the
+    # whole TLS/HTTP-2 edge), with no known-good set to roll back to.
+    if [ "$UNPINNED" = false ] && [ -f "$LOCK" ]; then
+        info "Installing from requirements.lock (pinned) …"
+        "$VENV_PY" -m pip install --quiet -r "$LOCK"
+        ok "Dependencies installed (pinned — ./setup.sh --unpinned for latest)"
+    elif [ -f "$REQS" ]; then
+        if [ "$UNPINNED" = true ]; then
+            warn "--unpinned: resolving requirements.txt ranges, ignoring the lock"
+            warn "after verifying, re-pin with: python3 tools/regen_lock.py"
+        else
+            warn "requirements.lock not found — falling back to unpinned install"
+        fi
         info "Installing from requirements.txt …"
         "$VENV_PY" -m pip install --quiet -r "$REQS"
         ok "Dependencies installed"
@@ -119,6 +133,7 @@ print_done() {
     echo "  Options:"
     echo "    --port 8765       HTTP port (default 8765)"
     echo "    --no-browser      don't open browser automatically"
+    echo "    --unpinned        install from requirements.txt ranges, not the lock"
     echo "    --debug           verbose logging"
     echo
     echo "  Local:   http://localhost:8765/"
@@ -146,13 +161,19 @@ restart_gateway() {
 # ── Argument parsing ──────────────────────────────────────────────────────────
 RUN=false
 RESTART=false
+# Install from requirements.lock (exact, reproducible) by default; pass
+# --unpinned to resolve requirements.txt's `>=` ranges instead, which is
+# how you deliberately pick up newer upstreams. See requirements.txt →
+# "Pinning model".
+UNPINNED=false
 FWD=()
 
 for arg in "$@"; do
     case "$arg" in
-        --run)     RUN=true ;;
-        --restart) RESTART=true ;;
-        *)         FWD+=("$arg") ;;
+        --run)      RUN=true ;;
+        --restart)  RESTART=true ;;
+        --unpinned) UNPINNED=true ;;
+        *)          FWD+=("$arg") ;;
     esac
 done
 

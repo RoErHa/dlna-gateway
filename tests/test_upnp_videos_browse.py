@@ -31,6 +31,7 @@ if PROJECT not in sys.path:
 
 from dlna_library import LibraryDB
 import api_upnp
+import api_upnp_ids
 
 UDN = api_upnp._VIDEO_UDN
 
@@ -83,7 +84,7 @@ class _Base(unittest.TestCase):
                     "VALUES (?,?,?,?,?,?,?,?,1)",
                     (vid, UDN, f"http://h/localfs/video/{vid}", title,
                      f"/m/{vid}.mov", created, loc, cc))
-        self._patch = patch.object(api_upnp, "DB", self.db)
+        self._patch = patch.object(api_upnp_ids, "DB", self.db)
         self._patch.start()
 
     def tearDown(self):

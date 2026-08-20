@@ -23,7 +23,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 # Pure-audio extensions per user spec — .mp4 deliberately excluded so
 # music-video MP4s do NOT mark a folder as "kept".
@@ -64,7 +64,7 @@ def _subtree_has_music(dir_path: Path, exts: set) -> bool:
     subtree handles the multi-disc case where music lives one level
     deeper (Album/CD1/track.flac) but cover art sits at album level
     (Album/scans/cover.jpg)."""
-    for dirpath, _dirnames, filenames in os.walk(dir_path, followlinks=False):
+    for _dirpath, _dirnames, filenames in os.walk(dir_path, followlinks=False):
         for name in filenames:
             if Path(name).suffix.lower() in exts:
                 return True

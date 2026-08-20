@@ -84,7 +84,6 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 DEFAULT_MUSIC_ROOT = "/Volumes/SAMDATA/Music"
 DEFAULT_GATEWAY = "http://127.0.0.1:8765"
@@ -106,7 +105,7 @@ FPCALC_FALLBACKS = ("/opt/homebrew/bin/fpcalc", "/usr/local/bin/fpcalc")
 DSD_EXTS = (".dsf", ".dff")
 
 
-def find_binary(name: str, fallbacks: Tuple[str, ...] = ()) -> Optional[str]:
+def find_binary(name: str, fallbacks: tuple[str, ...] = ()) -> str | None:
     """shutil.which + explicit Homebrew/user fallbacks → path or None."""
     found = shutil.which(name)
     if found:
@@ -183,14 +182,14 @@ def parse_import_flags(config_text: str) -> dict:
     return out
 
 
-def verify_inplace(config_text: str) -> Tuple[bool, List[str]]:
+def verify_inplace(config_text: str) -> tuple[bool, list[str]]:
     """Enforce the tag-in-place invariant: write:yes, copy:no, move:no.
 
     A missing key is treated as a problem (not a safe default) so the
     user is pushed to --write-config rather than relying on beets'
     defaults (copy defaults to yes — that would NOT be in place)."""
     flags = parse_import_flags(config_text)
-    problems: List[str] = []
+    problems: list[str] = []
     if flags["write"] is not True:
         problems.append("import.write must be 'yes' (write tags into files)")
     if flags["copy"] is not False:
@@ -214,11 +213,11 @@ def config_has_musicbrainz_plugin(config_text: str) -> bool:
     return bool(m) and "musicbrainz" in m.group(1).split()
 
 
-def beet_python(beet_path: str) -> Optional[str]:
+def beet_python(beet_path: str) -> str | None:
     """The interpreter a `beet` console-script runs under, from its shebang
     (so we can probe beets' OWN environment, not whatever runs this tool)."""
     try:
-        with open(beet_path, "r", errors="replace") as f:
+        with open(beet_path, errors="replace") as f:
             first = f.readline()
         if first.startswith("#!"):
             interp = first[2:].strip().split()[0]
@@ -239,13 +238,13 @@ def module_importable(python: str, module: str) -> bool:
         return False
 
 
-def parse_library_path(config_text: str) -> Optional[str]:
+def parse_library_path(config_text: str) -> str | None:
     """The `library:` path from the beets config (~-expanded), or None."""
     m = re.search(r"^\s*library:\s*(.+?)\s*$", config_text, re.M)
     return os.path.expanduser(m.group(1).strip()) if m else None
 
 
-def beets_lib_counts(lib_path: str) -> Optional[Tuple[int, int]]:
+def beets_lib_counts(lib_path: str) -> tuple[int, int] | None:
     """(items, albums) in the beets library.db. (0, 0) if it doesn't exist
     yet; None on any read error."""
     if not os.path.exists(lib_path):
@@ -260,7 +259,7 @@ def beets_lib_counts(lib_path: str) -> Optional[Tuple[int, int]]:
         return None
 
 
-def taghistory_count(state_path: str) -> Optional[int]:
+def taghistory_count(state_path: str) -> int | None:
     """How many dirs beets has marked done (incremental). None on error.
     taghistory is a plain set, so no beets classes are needed to unpickle."""
     if not os.path.exists(state_path):
@@ -300,7 +299,7 @@ def format_import_summary(before, after, th_before, th_after) -> str:
 
 
 def build_import_cmd(beet: str, target: str, quiet: bool = False,
-                     timid: bool = False, revisit: bool = False) -> List[str]:
+                     timid: bool = False, revisit: bool = False) -> list[str]:
     """Construct the `beet import …` argv (no beets behaviour here)."""
     cmd = [beet, "import"]
     if quiet:
@@ -314,8 +313,8 @@ def build_import_cmd(beet: str, target: str, quiet: bool = False,
 
 
 def pick_localfs_udn(servers: list,
-                     override: Optional[str] = None) -> Tuple[Optional[str],
-                                                              Optional[str]]:
+                     override: str | None = None) -> tuple[str | None,
+                                                              str | None]:
     """Choose which server to re-index. Prefer an explicit override, then
     the LocalFs server (udn 'uuid:localfs-*'), then a sole server.
     Returns (udn, error)."""
@@ -330,7 +329,7 @@ def pick_localfs_udn(servers: list,
     if not udns:
         return None, "no servers known to the gateway"
     return None, ("multiple servers and no LocalFs one found; pass --udn "
-                  "(known: %s)" % ", ".join(udns))
+                  f"(known: {', '.join(udns)})")
 
 
 # The gateway 301-redirects HTTP API calls to HTTPS, and its Tailscale cert
@@ -342,7 +341,7 @@ def pick_localfs_udn(servers: list,
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 
 
-def _gateway_ssl_context(gateway: str) -> Optional[ssl.SSLContext]:
+def _gateway_ssl_context(gateway: str) -> ssl.SSLContext | None:
     """Unverified TLS context for a loopback gateway base, else None
     (remote hosts keep normal verification)."""
     host = urllib.parse.urlsplit(gateway).hostname or ""
@@ -354,8 +353,8 @@ def _gateway_ssl_context(gateway: str) -> Optional[ssl.SSLContext]:
     return None
 
 
-def trigger_reindex(gateway: str, udn: Optional[str],
-                    timeout: float = 10.0) -> Tuple[bool, str]:
+def trigger_reindex(gateway: str, udn: str | None,
+                    timeout: float = 10.0) -> tuple[bool, str]:
     """GET /api/servers to resolve the LocalFs udn (unless given), then
     POST /api/index/rebuild?udn=… . Returns (ok, message)."""
     base = gateway.rstrip("/")
@@ -381,7 +380,7 @@ def trigger_reindex(gateway: str, udn: Optional[str],
 
 def _count_dsd(root: Path, limit: int = 5000) -> int:
     n = 0
-    for dirpath, _dirs, files in os.walk(root, followlinks=False):
+    for _dirpath, _dirs, files in os.walk(root, followlinks=False):
         for f in files:
             if f.lower().endswith(DSD_EXTS):
                 n += 1
@@ -390,7 +389,7 @@ def _count_dsd(root: Path, limit: int = 5000) -> int:
     return n
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Run the beets tag-in-place enrichment batch "
                     "(see docs/enrichment.md).")

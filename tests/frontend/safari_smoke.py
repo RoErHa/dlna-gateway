@@ -43,7 +43,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def _fail(msg: str) -> "NoReturn":  # noqa: F821
+def _fail(msg: str) -> NoReturn:  # noqa: F821
     print(f"✗ {msg}")
     sys.exit(1)
 

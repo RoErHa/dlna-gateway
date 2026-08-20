@@ -60,7 +60,7 @@ _load_env_file(os.path.join(_BASE_DIR, ".env"))
 # docs/BUILDING_2.0.md). Surfaced at /api/version and in the
 # PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
 # Set via $APP_VERSION (.env).
-VERSION = os.environ.get("APP_VERSION", "2.0.0-alpha.1")
+VERSION = os.environ.get("APP_VERSION", "2.1.0")
 # Ensure the base directory exists as soon as this module is imported.
 # LibraryDB is a module-level singleton that calls _connect() before
 # setup_logging() runs, so we cannot rely on setup_logging to create it.
@@ -103,6 +103,38 @@ def raise_fd_limit(target: int = 8192) -> None:
 
 
 # ── Logging ───────────────────────────────────────────────────────
+
+def close_quietly(resource, what: str = "connection") -> None:
+    """Close `resource`, swallowing any failure — but audibly.
+
+    This replaces ~30 anonymous `try: conn.close() / except Exception:
+    pass` blocks scattered through the SOAP, proxy and pool code
+    (2026-08-20). Every one of them sits in a `finally` or an error path
+    where the REAL error has already been logged, so a failure to close
+    an already-dead socket is genuinely uninteresting — but an
+    unexplained bare `pass` is indistinguishable from a defect being
+    swallowed, and there is no way to see the pattern is deliberate.
+
+    Named + logged at DEBUG makes the decision explicit, greppable, and
+    observable when a socket leak is actually suspected
+    (`GATEWAY_DEBUG=1`, then `grep close_quietly gateway.log`).
+
+    Deliberately catches broadly: this runs during cleanup, frequently
+    while another exception is propagating, and must never replace the
+    original failure with one of its own. It also never RAISES from the
+    logging call itself for the same reason."""
+    if resource is None:
+        return
+    try:
+        resource.close()
+    except Exception as e:                       # noqa: BLE001 — see docstring
+        try:
+            logging.getLogger("dlna.config").debug(
+                f"close_quietly: {what} close failed "
+                f"({type(e).__name__}: {e}) — ignored")
+        except (OSError, ValueError):
+            pass       # a broken logging handler must not mask the cleanup
+
 
 def setup_logging(debug: bool = False) -> logging.Logger:
     """
@@ -147,7 +179,14 @@ def load_config() -> dict:
     try:
         with open(CFG_FILE, encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
+        return {}                      # no config yet — expected, not an error
+    except (OSError, ValueError) as e:
+        # A CORRUPT config silently reading as {} is how a whole set of
+        # settings goes missing with no clue why. Never silent.
+        logging.getLogger("dlna.config").warning(
+            f"config {CFG_FILE} unreadable ({type(e).__name__}: {e}) — "
+            f"continuing with defaults; settings in it are being IGNORED")
         return {}
 
 

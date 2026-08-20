@@ -20,7 +20,6 @@ import logging
 import os
 import threading
 import urllib.parse
-from typing import Optional
 
 log = logging.getLogger("dlna.library")
 
@@ -48,7 +47,7 @@ def _lucene_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _mb_lookup_cover(artist: str, album: str) -> Optional[str]:
+def _mb_lookup_cover(artist: str, album: str) -> str | None:
     """Look up a cover art URL for (artist, album) via MusicBrainz + CAA.
     Returns a coverartarchive.org URL string on success, None otherwise.
     Chatty on purpose — every lookup is a single user-visible event."""
@@ -125,7 +124,7 @@ class AlbumArtFetcher:
     def __init__(self, db):
         self._db     = db
         self._stop   = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def bare_albums(self) -> list:
         """Albums that still have no art and have no album_art entry

@@ -24,7 +24,6 @@ import asyncio
 import json
 import logging
 import threading
-from typing import Optional
 
 log = logging.getLogger("dlna.events")
 
@@ -40,10 +39,10 @@ class EventBus:
     def __init__(self, max_queue: int = 256):
         self._subs: set = set()
         self._lock = threading.Lock()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._max_queue = max_queue
 
-    def bind_loop(self, loop: Optional[asyncio.AbstractEventLoop]) -> None:
+    def bind_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
         """Bind (or clear) the event loop publish() marshals onto."""
         self._loop = loop
 
@@ -52,14 +51,14 @@ class EventBus:
         with self._lock:
             return len(self._subs)
 
-    def subscribe(self) -> "asyncio.Queue":
+    def subscribe(self) -> asyncio.Queue:
         """Register a new subscriber queue (call on the loop)."""
         q: asyncio.Queue = asyncio.Queue(maxsize=self._max_queue)
         with self._lock:
             self._subs.add(q)
         return q
 
-    def unsubscribe(self, q: "asyncio.Queue") -> None:
+    def unsubscribe(self, q: asyncio.Queue) -> None:
         with self._lock:
             self._subs.discard(q)
 
@@ -78,7 +77,7 @@ class EventBus:
                 pass            # loop is closed/closing — drop
 
     @staticmethod
-    def _offer(q: "asyncio.Queue", event: dict) -> None:
+    def _offer(q: asyncio.Queue, event: dict) -> None:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:

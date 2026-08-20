@@ -23,6 +23,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import api_playback
+import api_playback_state
 
 
 # ── Test doubles ──────────────────────────────────────────────────
@@ -114,8 +115,8 @@ class TestRenderQueueHandler(unittest.TestCase):
         # Use a dict wrapper that exposes .get() like RendererRegistry does
         rend_ns = MagicMock()
         rend_ns.get.side_effect = fakes.get
-        with patch.object(api_playback, "RENDERERS", rend_ns), \
-             patch.object(api_playback, "QUEUES", fakeq):
+        with patch.object(api_playback_state, "RENDERERS", rend_ns), \
+             patch.object(api_playback_state, "QUEUES", fakeq):
             api_playback.render_queue(h, json.dumps(payload))
         # start() runs in a background thread; give it a moment to finish
         # so tests that assert on start_calls see the call
@@ -185,8 +186,8 @@ class TestRenderQueueHandler(unittest.TestCase):
         reg._queues["uuid:test"] = Crashing()
         rend_ns = MagicMock()
         rend_ns.get.side_effect = {"uuid:test": MockRenderer()}.get
-        with patch.object(api_playback, "RENDERERS", rend_ns), \
-             patch.object(api_playback, "QUEUES", reg), \
+        with patch.object(api_playback_state, "RENDERERS", rend_ns), \
+             patch.object(api_playback_state, "QUEUES", reg), \
              patch.object(api_playback, "log") as mlog:
             api_playback.render_queue(
                 h, json.dumps({"udn": "uuid:test",
@@ -207,7 +208,7 @@ class TestRendererStateHandler(unittest.TestCase):
     def _get(self, params, registry=None):
         h   = MockHandler()
         reg = registry or FakeRegistry()
-        with patch.object(api_playback, "QUEUES", reg):
+        with patch.object(api_playback_state, "QUEUES", reg):
             api_playback.renderer_state(h, params)
         return h
 
@@ -256,8 +257,8 @@ class TestControlHandler(unittest.TestCase):
         fakeq   = registry or FakeRegistry()
         rend_ns = MagicMock()
         rend_ns.get.side_effect = fakes.get
-        with patch.object(api_playback, "RENDERERS", rend_ns), \
-             patch.object(api_playback, "QUEUES", fakeq):
+        with patch.object(api_playback_state, "RENDERERS", rend_ns), \
+             patch.object(api_playback_state, "QUEUES", fakeq):
             api_playback.control(h, json.dumps(payload))
         return h, fakeq
 
@@ -321,8 +322,17 @@ class TestArtHandler(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._saved_cache_dir = dlna_art_cache.CACHE_DIR
         dlna_art_cache.CACHE_DIR = self._tmp.name
+        # These cases exercise art_fetch's REDIRECT / SIZE / CONTENT-TYPE
+        # logic against mocked sockets, using unresolvable placeholder hosts
+        # (fake.local, up/…). The SSRF guard added 2026-08-20 refuses those
+        # before a connection is attempted, which would make every case here
+        # test the guard instead of the thing it names. The guard has its own
+        # coverage in tests/test_ssrf.py, so neutralise it here.
+        self._guard = patch("dlna_ssrf.guard", return_value=True)
+        self._guard.start()
 
     def tearDown(self):
+        self._guard.stop()
         dlna_art_cache.CACHE_DIR = self._saved_cache_dir
         self._tmp.cleanup()
 
@@ -506,9 +516,9 @@ class TestIndexRebuildDispatch(unittest.TestCase):
             self._t()
 
     def _run(self, provider):
-        with patch.object(api_playback, "SERVERS", {"uuid:x": self._Srv()}), \
-             patch.object(api_playback, "get_provider", lambda u: provider), \
-             patch.object(api_playback, "INDEXER", MagicMock()) as idx, \
+        with patch.object(api_playback_state, "SERVERS", {"uuid:x": self._Srv()}), \
+             patch.object(api_playback_state, "get_provider", lambda u: provider), \
+             patch.object(api_playback_state, "INDEXER", MagicMock()) as idx, \
              patch.object(api_playback, "threading", MagicMock()) as thr:
             thr.Thread = self._SyncThread
             h = MockHandler()
@@ -544,7 +554,7 @@ class TestIndexRebuildDispatch(unittest.TestCase):
         idx.start.assert_called_once()
 
     def test_unknown_udn_returns_404(self):
-        with patch.object(api_playback, "SERVERS", {}):
+        with patch.object(api_playback_state, "SERVERS", {}):
             h = MockHandler()
             api_playback.index_rebuild(h, {"udn": "nope"})
         self.assertEqual(h.status, 404)
@@ -552,3 +562,64 @@ class TestIndexRebuildDispatch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPlaybackFamilyBinding(unittest.TestCase):
+    """api_playback was split into a module family on 2026-08-20.
+
+    The whole point of these assertions: `art_fetch` alone had 15 test patch
+    sites, and several fixtures rebind `DB` wholesale. If a second module
+    binds one of these names, a patch on the owner stops reaching it and the
+    tests keep passing WHILE TALKING TO THE REAL library.db / the network.
+    That happened repeatedly during this split — it is not hypothetical."""
+
+    def test_shared_handles_bound_in_exactly_one_module(self):
+        import pathlib
+        family = sorted(pathlib.Path(PROJECT).glob("api_playback*.py"))
+        for imp in ("from dlna_library import DB",
+                    "from dlna_discovery import RENDERERS, SERVERS",
+                    "from dlna_player import QUEUES"):
+            binders = [p.name for p in family
+                       if imp in p.read_text(encoding="utf-8")]
+            self.assertEqual(
+                binders, ["api_playback_state.py"],
+                f"{imp!r} must appear ONLY in api_playback_state; got {binders}")
+
+    def test_art_fetch_patch_reaches_the_whole_chain(self):
+        """art() → art_fetch_scaled() → art_fetch_cached() → art_fetch().
+        Patching the owner must intercept the chain at the bottom, or a test
+        that thinks it stubbed the network is really hitting it."""
+        import uuid
+
+        import api_playback_art
+        seen = []
+
+        def _fake(url, *_a, **_k):
+            seen.append(url)
+            return 200, "image/jpeg", b"\xff\xd8" + b"\x00" * 4096
+
+        # A URL nothing can have cached: art_fetch_cached fronts the chain
+        # with an on-disk cache, so a reused URL would legitimately skip
+        # art_fetch and make this assertion flaky under a full-suite run.
+        url = f"http://example.invalid/{uuid.uuid4().hex}.jpg"
+        with patch.object(api_playback_art, "art_fetch", side_effect=_fake):
+            code, _ct, _body = api_playback_art.art_fetch_scaled(url, 256)
+        self.assertEqual(code, 200)
+        self.assertEqual(seen, [url],
+                         "art_fetch_scaled did not go through the patched "
+                         "art_fetch — the chain is hitting the network")
+
+    def test_facade_reexports_are_the_same_objects(self):
+        """Callers and older test sites reach these through api_playback; the
+        re-export must be the identical object, not a copy."""
+        import api_playback
+        import api_playback_art
+        import api_playback_meta
+        import api_playback_state
+        pairs = [("art_fetch", api_playback_art), ("art", api_playback_art),
+                 ("edit_track", api_playback_meta),
+                 ("track_meta", api_playback_meta),
+                 ("DB", api_playback_state), ("QUEUES", api_playback_state)]
+        for name, owner in pairs:
+            with self.subTest(name=name):
+                self.assertIs(getattr(api_playback, name), getattr(owner, name))

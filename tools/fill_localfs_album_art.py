@@ -131,7 +131,7 @@ def main():
     if not args.apply:
         # Preview only — no network. Show how many are already cached vs new.
         cached_hit = cached_nf = fresh = 0
-        for ak, artist, album in cand:
+        for _ak, artist, album in cand:
             c = cached_album_art(conn, artist, album)
             if c and c["source"] == "notfound":
                 cached_nf += 1

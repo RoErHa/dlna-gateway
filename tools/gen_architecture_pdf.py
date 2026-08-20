@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.0)
+"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.1)
 DLNA Gateway architecture plus reference lists.
 
 Page 1  : the architecture drawing + colour legend.
@@ -17,10 +17,9 @@ changes:
 import math
 import os
 
-from reportlab.lib.colors import HexColor, black, white
+from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
 from reportlab.platypus import (SimpleDocTemplate, PageBreak, Paragraph,
                                 Spacer, Table, TableStyle, KeepTogether)
@@ -88,7 +87,7 @@ def build_diagram():
     d = Drawing(W, H)
 
     # title
-    txt(d, 6, H - 16, "DLNA Gateway — Architecture (2.0 · ASGI/Hypercorn)",
+    txt(d, 6, H - 16, "DLNA Gateway — Architecture (2.1 · ASGI/Hypercorn)",
         size=15, bold=True, color=INK)
     txt(d, 6, H - 30,
         "What runs where · stream colours show direction/scope · node codes "
@@ -164,7 +163,7 @@ def build_diagram():
         "P/g29 dlna_art_cache (disk bytes)",
         "P/g19 dlna_lyrics (lrclib)   P/g33 dlna_geocode (Nominatim place "
         "names, sticky cache)",
-        "P/g26 dlna_config (logging/config)",
+        "P/g26 dlna_config (logging/config)   P/g34 dlna_ssrf (outbound-fetch guard)",
     ], RED)
 
     # ── LAN DEVICES (green) ──────────────────────────────────────────
@@ -507,7 +506,19 @@ def list_pages():
          "Reverse-geocode GPS → place name via Nominatim/OSM (E/x6), "
          "cache-first in geocode_cache. UA + 1.1 s rate limit per OSM "
          "policy; failures NOT cached (retry later), definitive no-name "
-         "cached sticky as ''."),
+         "cached sticky as ''. PRIVACY: this sends your clips' GPS "
+         "coordinates off-machine automatically; opt out by not setting "
+         "LOCALFS_VIDEO_ROOT."),
+        ("P/g34", "dlna_ssrf.py",
+         "SECURITY (2.1) — the outbound-fetch guard on every "
+         "caller-supplied ?url= (/art, /stream, /radio_stream) and every "
+         "redirect hop. Refuses private / loopback / link-local "
+         "destinations unless the host is a device already in "
+         "SERVERS/RENDERERS (so the LocalFs file server on :8200 stays "
+         "reachable) and refuses non-http(s) schemes. Before it, /stream "
+         "relayed ANY internal HTTP service's body verbatim and /art's "
+         "error text was an open/closed/filtered port oracle. Refusals "
+         "are logged; the caller gets a uniform failure."),
     ]
     for c, f, r in progs:
         prog_rows.append([C(c), P(f), P(r)])
@@ -624,7 +635,7 @@ def list_pages():
          "--restart --no-browser --debug --probe URL --list-devices "
          "--reset-devices. See the setup.sh options reference.", GREY),
     ]
-    for c, n, r, col in de:
+    for c, n, r, _col in de:
         de_rows.append([C(c), P(n), P(r)])
     story.append(make_table(de_rows, [40, 200, 820], GREEN))
     story.append(PageBreak())
@@ -664,7 +675,7 @@ def list_pages():
          "table above)"),
     ]
     for ctx, cmd in cmds:
-        cmd_rows.append([P("<b>%s</b>" % ctx, body), C(cmd)])
+        cmd_rows.append([P(f"<b>{ctx}</b>", body), C(cmd)])
     story.append(make_table(cmd_rows, [150, 910], INK))
     story.append(Spacer(1, 8))
     story.append(P("Ports (2.0): 8443 HTTPS — Hypercorn TLS + HTTP/2 (ALPN), "
@@ -801,10 +812,11 @@ def list_pages():
      ]),
      ("T/a13", "beets_enrich.py",
       "Run the beets tag-in-place enrichment batch (docs/enrichment.md). "
-      "Safe wrapper around `beet import`. Deps: brew install chromaprint; "
-      "pip3 install beets pyacoustid musicbrainzngs (beets 2.x pluginized "
-      "MusicBrainz — the musicbrainz plugin + musicbrainzngs are REQUIRED or "
-      "it matches nothing).", [
+      "Safe wrapper around `beet import`. Deps: brew install chromaprint beets "
+      "(NOT pip — a Homebrew python upgrade wipes a pip install; that is how "
+      "the 2026-06 install died), then add musicbrainzngs + pyacoustid to the "
+      "keg venv (beets 2.x pluginized MusicBrainz — the musicbrainz plugin + "
+      "musicbrainzngs are REQUIRED or it matches nothing).", [
         ("(no --quiet/--timid)", "Interactive: beets prompts you per album "
          "(apply / skip / …); strong matches auto-apply."),
         ("--write-config", "Write the prog-tuned tag-in-place "
@@ -856,7 +868,7 @@ def list_pages():
         ("-y / --yes", "Skip the confirmation prompt."),
      ]),
      ("J/4", "setup.sh",
-      "Bootstrap + run the gateway. Finds Python 3.9+, creates/repairs the "
+      "Bootstrap + run the gateway. Finds Python 3.14+, creates/repairs the "
       ".venv, installs requirements.txt, then either runs the gateway "
       "(--run, exec in the foreground), restarts the launchd-managed copy "
       "(--restart), or just finishes setup. Unknown flags after --run are "

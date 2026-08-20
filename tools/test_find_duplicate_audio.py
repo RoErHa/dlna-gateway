@@ -17,7 +17,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 THIS = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS))

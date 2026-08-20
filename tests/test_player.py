@@ -11,13 +11,12 @@ No network, no gateway. All SOAP calls are mocked. Fast (<1s).
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
-import dlna_player
 from dlna_player import (_dur_to_sec, _monitor_decision,
                          QueueRegistry, RendererQueue, WATCHDOG_GRACE_SEC)
 
@@ -315,3 +314,63 @@ class TestRendererQueueSseEvents(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestQueueComposition(unittest.TestCase):
+    """RendererQueue was split into mixins on 2026-08-20. These guard the
+    split itself, not playback behaviour."""
+
+    def test_class_attributes_survived_the_split(self):
+        """Class-level CONSTANTS are easy to lose when methods are moved
+        between modules — they sit BETWEEN methods, so an extractor that
+        walks only function definitions silently drops them. That happened
+        to `_SNAP_TTL_SEC` during this split: every snapshot() call then
+        raised AttributeError, which is a total playback-state outage.
+        Pin them."""
+        from dlna_player import RendererQueue
+        self.assertEqual(RendererQueue._MAX_CONSECUTIVE_FAILS, 5)
+        self.assertEqual(RendererQueue._SNAP_TTL_SEC, 0.5)
+
+    def test_public_surface_intact(self):
+        import inspect
+
+        from dlna_player import RendererQueue
+        expected = {
+            "start", "stop", "pause", "next_track", "prev_track", "snapshot",
+            "set_user_trim_db",                       # public API
+            "_send_current", "_queue_next_uri", "_seek_async",   # transport
+            "_monitor", "_log_track_end",                        # monitor
+            "_set_volume_async", "_apply_startup_volume",        # volume
+            "_invalidate_snap", "_cancel",
+        }
+        actual = {m for m, _ in inspect.getmembers(RendererQueue,
+                                                   inspect.isfunction)}
+        self.assertEqual(expected - actual, set(),
+                         f"lost from RendererQueue: {sorted(expected - actual)}")
+
+    def test_mixins_do_not_overlap(self):
+        """Two mixins defining the same name would make behaviour depend on
+        MRO order, which this layout must not do."""
+        from dlna_player import RendererQueue
+        mixins = [c for c in RendererQueue.__mro__ if c.__name__.endswith("Mixin")]
+        self.assertGreaterEqual(len(mixins), 3)
+        owner, dupes = {}, []
+        for c in mixins:
+            for n, v in vars(c).items():
+                if callable(v) and not n.startswith("__"):
+                    if n in owner:
+                        dupes.append(f"{n} ({owner[n]} + {c.__name__})")
+                    owner[n] = c.__name__
+        self.assertEqual(dupes, [], f"overlapping mixin methods: {dupes}")
+
+    def test_policy_helpers_are_pure(self):
+        """dlna_player_policy must stay import-light: it is the layer the
+        exhaustive decision tests rely on, and pulling SOAP or threading in
+        would make it untestable without a renderer."""
+        import pathlib
+        src = (pathlib.Path(PROJECT) / "dlna_player_policy.py").read_text(
+            encoding="utf-8")
+        for banned in ("import threading", "dlna_avtransport", "dlna_events",
+                       "from dlna_library"):
+            self.assertNotIn(banned, src,
+                             f"dlna_player_policy must stay pure — found {banned!r}")

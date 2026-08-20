@@ -150,7 +150,7 @@ class TestApply(unittest.TestCase):
         called = []
         def lookup(artist, album):
             called.append(artist)
-            return None
+            return
         self._run(["--apply"], lookup)
         self.assertEqual(called, [])   # both cached notfound → no MB calls
 

@@ -1,5 +1,4 @@
 """Header bar — server status, OUT picker, search."""
-import pytest
 
 
 def test_source_dropdown_shows_server_name(page, stub, gateway):

@@ -1,0 +1,50 @@
+# requirements-dev.txt — tooling for the test/lint layers. NONE of this is
+# needed to RUN the gateway; it is deliberately kept out of
+# requirements.txt / requirements.lock so a production install stays lean
+# and `./setup.sh` does not pull a browser engine.
+#
+#     .venv/bin/pip install -r requirements-dev.txt
+#     .venv/bin/playwright install chromium webkit    # one-time, after the above
+#
+# The playwright PACKAGE version and the BROWSER revisions are coupled:
+# each release pins exact revisions, and launching with a mismatched cache
+# fails with "Executable doesn't exist at …" rather than falling back. That
+# bit on 2026-08-20 — the package had been downgraded to 1.59.0 while the
+# cache held 1.62.0's browsers, so the whole 227-test UI suite errored out
+# at fixture setup. After changing the pin below, ALWAYS re-run
+# `playwright install`.
+#
+# Which layer needs what — see CLAUDE.md → "Running Tests":
+#
+#   ruff      → the T0.LINT gate in `tests/run_all.py --offline`. Config
+#               lives in pyproject.toml and is held at ZERO violations.
+#               Absent → the gate SKIPS (never fails a clean clone).
+#   pytest    → tests/frontend (the Playwright UI suite). The behavioural
+#     +         unit tests under tests/test_*.py are stdlib `unittest` and
+#   playwright  need none of this.
+#   selenium  → tests/frontend/safari_smoke.py (real Safari, opt-in;
+#               also needs `safaridriver --enable`).
+#   Appium    → tests/frontend/ios_sim_smoke.py (iOS Simulator, opt-in;
+#               also needs a running `appium` server + a booted sim).
+#   reportlab → tools/gen_architecture_pdf.py, which GENERATES
+#               docs/ARCHITECTURE.PDF. Doc tooling, never imported by the
+#               gateway; regenerate the PDF after architecture changes.
+#
+# Pinned like requirements.lock: a Playwright minor bump can change
+# selector/timing behaviour and turn the UI suite red for reasons that
+# have nothing to do with the gateway.
+
+ruff==0.16.3
+
+pytest==9.0.3
+pytest-playwright==0.9.0
+pytest-base-url==2.1.0
+playwright==1.62.0        # browsers: chromium r1234 (151), webkit r2336 (26.5)
+
+# Opt-in smoke layers (safe to omit — the scripts exit with a clear
+# "not installed" message rather than failing the suite).
+selenium==4.45.0
+Appium-Python-Client==5.3.1
+
+# Doc generation (tools/gen_architecture_pdf.py → docs/ARCHITECTURE.PDF).
+reportlab==4.5.1

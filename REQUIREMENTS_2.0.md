@@ -17,8 +17,48 @@ work (SW caching, HTTP/1.1 keep-alive, the album-key browse index). The
 HTTP/2 + free TLS — superseded by app-owned Hypercorn TLS; everything else was
 bundled so a 2.0 was worth the churn.
 
-See `CLAUDE.md → "HTTP/2 · HTTP/3 · TLS — current state and the 2.0
-roadmap"` for the protocol-level detail this document summarises, and
+### Status ledger — what became of each item (checked 2026-08-20)
+
+The proposal below is preserved verbatim for its rationale. This table is
+the only part kept current; when an item ships, annotate it here rather
+than editing the argument that produced it.
+
+| Item | Status | Where it landed |
+|---|---|---|
+| §1 headline — h2 + TLS | ✅ **shipped, differently** | App-owned Hypercorn TLS/ALPN, not `tailscale serve` (tried, dropped). The cert machinery B5/B6 proposed deleting was therefore **kept**. |
+| R1 — ASGI rewrite | ✅ shipped | `dlna_asgi.py` + `dlna_asgi_bridge.py`; "only if pushed" turned out to be the anchor change. |
+| R2 — SSE push | ✅ shipped | `dlna_events.py`, `GET /api/events`; the PWA's polls became a two-tier fallback rather than the update path. |
+| R3 — outbound SOAP pool | ❌ open | Still one TCP connection per SOAP call (`dlna_avtransport`). ~1 ms on LAN, so it has never hurt. |
+| R4 — library completeness | ✅ shipped | 2026-07-12 audit + the `album_key` UNIQUE widening; 26,051 rows. 78 same-folder same-tag collisions remain (genuine tag ambiguities). |
+| R5 — album grouping | ✅ shipped | Folder/`album_key` identity is consistent across browse, UPnP and Subsonic. |
+| R6 — Plex / Jellyfin | ❌ open | Seam is proven; neither provider written. |
+| R7 — merged library view | ❌ open | Still separate switchable trees via the source picker. |
+| R8 — file-tag write-back | ✅ superseded | beets writes canonical tags **into the files** in place; the gateway never write-backs itself. |
+| R9 — LUFS normalization | ⛔ closed | Deliberately not tracked; would be a fresh decision. |
+| R10 — sweeps as managed jobs | ❌ open | Still CLI tools. |
+| R11 — maintenance panel | ❌ open | — |
+| R12 — metrics endpoint | ❌ open | No `/api/metrics`. |
+| R13 — config consolidation | ✅ shipped | `.env` is the single source (2026-07-13). |
+| R14 — native iOS app | ❌ open (low priority) | Amperfy still covers CarPlay. |
+
+**Not in the proposal but shipped in the 2.0/2.1 line:** audiobooks as a
+second library with cross-device resume, home-video indexing + DLNA browse,
+the Subsonic surface's growth (bookmarks, radio, size-bucketed art), the PWA
+navy/responsive redesign, the code-quality gates (ruff, the module-size
+ratchet, lock-sync, no-silent-swallows), and — in **2.1** — the security
+hardening from the 2026-08-20 audit: the `dlna_ssrf` outbound-fetch guard on
+the three `?url=` endpoints, uniform error responses (the old ones were a
+port oracle), TLS certificate verification on outbound fetches, and escaping
+of untrusted device text. See CLAUDE.md → "Security posture".
+
+**A note on §2.4/R12 in light of that audit:** the proposal framed
+observability as a performance concern. The audit added a second reason —
+the SSRF guard's refusals are logged precisely so a probe is visible to
+whoever runs the gateway, which is the only signal there is on an
+unauthenticated LAN surface.
+
+See `CLAUDE.md → "HTTP/2 · HTTP/3 · TLS — DONE in 2.0 (roadmap retained
+for history)"` for the protocol-level detail this document summarises, and
 `docs/ARCHITECTURE.PDF` for the current end-to-end picture this proposes to
 evolve.
 
@@ -166,10 +206,13 @@ Bundled so a 2.0 cutover earns its keep. Roughly ordered by value.
   rates, indexer throughput — so responsiveness work is measured, not
   guessed.
 - **R13 — Config consolidation.** Backend selection, provider config,
-  ports, and secrets are spread across `config.json`, `.env` (currently
-  inert — dotenv isn't installed, env comes from `launchctl setenv`),
-  and LaunchAgent plists. 2.0 should make `.env` actually load (add
-  `python-dotenv` to the runtime) or pick one config source of truth.
+  ports, and secrets are spread across `config.json`, `.env` (at the time
+  of writing inert — dotenv wasn't installed, env came from
+  `launchctl setenv`), and LaunchAgent plists. 2.0 should make `.env`
+  actually load or pick one config source of truth.
+  *(**Shipped 2026-07-13**: `.env` is now the single source; `dlna_config`
+  loads it with a built-in fallback parser so it works even without
+  python-dotenv, and the plist carries only `PATH` + the launch command.)*
 
 ### 2.5 Client reach
 

@@ -26,6 +26,8 @@ import dlna_stream_proxy
 from dlna_library import DB
 from dlna_player import QUEUES
 
+from dlna_config import close_quietly
+
 log = logging.getLogger("dlna.api.radio")
 
 # radio-browser.info — community station directory. Contacted over
@@ -59,8 +61,7 @@ def _radiobrowser_get(path: str):
             log.warning(f"radio-browser {host} unreachable: {e}")
             continue
         finally:
-            try: conn.close()
-            except Exception: pass
+            close_quietly(conn)
     return None
 
 

@@ -21,11 +21,13 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_asgi
+import dlna_asgi_state
 import dlna_events
 import dlna_gateway
 import api_subsonic
+import api_subsonic_proto
 import api_upnp
-from dlna_asgi_bridge import run_legacy_sync, run_subsonic_sync
+from dlna_asgi_bridge import run_legacy_sync
 from dlna_config import VERSION
 
 
@@ -157,7 +159,7 @@ class TestBrowseNativePorts(unittest.TestCase):
     def test_album_tracks_wraps_and_touches(self):
         from unittest import mock
         with mock.patch.object(dlna_asgi.DB, "album_tracks",
-                               return_value=[{"t": 1}]) as mt, \
+                               return_value=[{"t": 1}]), \
              mock.patch.object(dlna_asgi.SERVERS, "touch") as mtouch:
             out = asyncio.run(dlna_asgi.album_tracks(udn="u", album="X"))
             self.assertEqual(out, {"tracks": [{"t": 1}]})
@@ -345,15 +347,48 @@ class TestArtProxy(unittest.TestCase):
         self.assertEqual(api_playback.art_fetch("ftp://x/y")[0], 400)  # scheme
         self.assertEqual(api_playback.art_fetch("no-scheme")[0], 400)
 
-    def test_art_route_maps_fetch_result(self):
+    def test_every_failure_looks_identical_to_the_caller(self):
+        """SSRF hardening (2026-08-20): the route used to forward the
+        upstream status and the raw error text, which made /art a clean
+        open/closed/filtered oracle for any address — "Upstream 404" vs
+        "Connection refused" vs "timed out" were all distinguishable.
+        Every failure mode must now be indistinguishable: same 502, same
+        body. The detail goes to the log instead."""
         from unittest import mock
-        with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
-                               return_value=(400, "Missing url", b"")):
-            r = asyncio.run(dlna_asgi.art(url=""))
-            self.assertEqual(r.status_code, 400)
-        with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
+        seen = set()
+        for code, detail in ((400, "Missing url"),
+                             (403, "Blocked"),
+                             (404, "Upstream 404"),
+                             (502, "Not an image: text/html"),
+                             (503, "[Errno 61] Connection refused"),
+                             (503, "timed out")):
+            with mock.patch.object(dlna_asgi.api_playback, "art_fetch_scaled",
+                                   return_value=(code, detail, b"")):
+                r = asyncio.run(dlna_asgi.art(url="http://x/c.jpg"))
+            seen.add((r.status_code, bytes(r.body)))
+            # The upstream detail must not reach the caller.
+            self.assertNotIn(b"refused", bytes(r.body).lower())
+            self.assertNotIn(b"timed out", bytes(r.body).lower())
+        self.assertEqual(len(seen), 1,
+                         f"failures are distinguishable — oracle reopened: {seen}")
+        self.assertEqual(next(iter(seen))[0], 502)
+
+    def test_art_route_maps_success(self):
+        """Patches `art_fetch_scaled` — the function the ROUTE calls.
+
+        It used to patch `art_fetch`, which the route reaches only via
+        art_fetch_scaled → art_fetch_cached, where the name resolves in
+        api_playback_art's namespace — so the patch never took effect and
+        the assertion was in fact being satisfied by a HIT in the on-disk
+        art cache. That cache is gitignored and populated by the live
+        gateway, so the test passed on this machine and failed on any
+        clean checkout. Found by running the suite in a fresh worktree
+        while merging 2.0 → main.
+        """
+        from unittest import mock
+        with mock.patch.object(dlna_asgi.api_playback, "art_fetch_scaled",
                                return_value=(200, "image/png", b"PNGDATA")):
-            r = asyncio.run(dlna_asgi.art(url="x"))
+            r = asyncio.run(dlna_asgi.art(url="http://x/c.jpg"))
             self.assertEqual((r.status_code, r.media_type), (200, "image/png"))
             self.assertEqual(bytes(r.body), b"PNGDATA")
             self.assertEqual(r.headers.get("Access-Control-Allow-Origin"), "*")
@@ -383,6 +418,8 @@ class TestArtProxy(unittest.TestCase):
         import api_playback
         from unittest import mock
 
+        import api_playback_art
+
         class _H:
             def __init__(self): self.code = None
             def send_response(self, c): self.code = c
@@ -391,11 +428,11 @@ class TestArtProxy(unittest.TestCase):
             send_error = lambda self, c, m="": setattr(self, "code", c)
             wfile = type("W", (), {"write": staticmethod(lambda b: None)})()
 
-        with mock.patch.object(api_playback, "art_fetch_scaled",
+        with mock.patch.object(api_playback_art, "art_fetch_scaled",
                                return_value=(200, "image/jpeg", b"J")) as m:
             api_playback.art(_H(), {"url": "http://x/c.jpg", "size": "512"})
             m.assert_called_once_with("http://x/c.jpg", 512)
-        with mock.patch.object(api_playback, "art_fetch_scaled",
+        with mock.patch.object(api_playback_art, "art_fetch_scaled",
                                return_value=(200, "image/jpeg", b"J")) as m:
             api_playback.art(_H(), {"url": "http://x/c.jpg", "size": "big"})
             m.assert_called_once_with("http://x/c.jpg", 0)
@@ -568,14 +605,14 @@ class TestSubsonicAsgi(unittest.TestCase):
 
     def setUp(self):
         self._prev = api_subsonic.SUBSONIC_PASSWORD_OVERRIDE
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = "pw"
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "pw"
         # The dlna_config import loads .env, which on the dev machine sets a
         # real SUBSONIC_USER — but these tests authenticate as the default
         # "user". Strip it (same guard as tests/test_subsonic.py).
         self._prev_user = os.environ.pop("SUBSONIC_USER", None)
 
     def tearDown(self):
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = self._prev
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = self._prev
         if self._prev_user is not None:
             os.environ["SUBSONIC_USER"] = self._prev_user
 
@@ -618,7 +655,7 @@ class TestSubsonicAsgi(unittest.TestCase):
                          "failed")
 
     def test_byte_method_password_unset_503(self):
-        api_subsonic.SUBSONIC_PASSWORD_OVERRIDE = ""
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = ""
         tid = api_subsonic._track_id("http://x/a.flac")
         r = self._call("stream", {"u": "user", "p": "pw", "id": tid,
                                   "f": "json"})
@@ -950,7 +987,6 @@ class TestFdMonitor(unittest.TestCase):
     def test_start_fd_monitor_spawns_named_daemon(self):
         import dlna_fdmon
         import threading as _t
-        before = {x.name for x in _t.enumerate()}
         dlna_fdmon.start_fd_monitor(interval=9999)   # won't tick during the test
         names = {x.name for x in _t.enumerate()}
         self.assertIn("fd-monitor", names)
@@ -1172,7 +1208,7 @@ class TestVideoApi(unittest.TestCase):
     def setUp(self):
         import dlna_ffmpeg
         self._patches = [
-            mock.patch.object(dlna_asgi, "DB", self.db),
+            mock.patch.object(dlna_asgi_state, "DB", self.db),
             mock.patch.object(dlna_ffmpeg, "POSTER_DIR", self.posters),
         ]
         for p in self._patches:
@@ -1274,3 +1310,69 @@ class TestVideoApi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRouterComposition(unittest.TestCase):
+    """dlna_asgi was split into per-surface APIRouter modules on 2026-08-20.
+
+    Two properties make that split safe, and neither is self-evident, so both
+    are asserted rather than assumed."""
+
+    def test_no_two_routes_can_match_the_same_request(self):
+        """Router include ORDER is not load-bearing — but only while the route
+        set stays unambiguous. FastAPI matches in registration order, so the
+        day someone adds a catch-all (or a `/video/{vid}`-shaped overlap),
+        grouping routes by surface would start changing behaviour. This test
+        is what lets the module docstrings claim order is free."""
+        import re as _re
+
+        def _to_re(path):
+            out = _re.escape(path)
+            out = _re.sub(r"\\\{([a-zA-Z_]\w*)\\:path\\\}", r"(?P<\1>.+)", out)
+            out = _re.sub(r"\\\{([a-zA-Z_]\w*)\\\}", r"(?P<\1>[^/]+)", out)
+            return _re.compile("^" + out + "$")
+
+        routes = [(getattr(r, "path", ""), tuple(sorted(getattr(r, "methods", []) or [])))
+                  for r in dlna_asgi.app.routes]
+        clashes = set()
+        for i, (p1, m1) in enumerate(routes):
+            for p2, m2 in routes[i + 1:]:
+                if p1 == p2:            # same path, different methods — fine
+                    continue
+                if m1 and m2 and not (set(m1) & set(m2)):
+                    continue
+                for src, other in ((p1, p2), (p2, p1)):
+                    concrete = _re.sub(r"\{[^}]+\}", "X", src)
+                    if _to_re(other).match(concrete):
+                        clashes.add(tuple(sorted((p1, p2))))
+        self.assertEqual(
+            clashes, set(),
+            "two routes can match the same request, so include ORDER now "
+            f"decides which wins: {sorted(clashes)}")
+
+    def test_shared_state_bound_in_exactly_one_module(self):
+        """`DB`/`SERVERS`/`INDEXER` live in dlna_asgi_state. A second binding
+        would leave that module on the real library.db while a test patched
+        the owner — TestVideoApi caught exactly this during the split."""
+        import pathlib
+        family = sorted(pathlib.Path(PROJECT).glob("dlna_asgi*.py"))
+        for imp in ("from dlna_library import DB",
+                    "from dlna_discovery import SERVERS"):
+            binders = [p.name for p in family
+                       if imp in p.read_text(encoding="utf-8")]
+            self.assertEqual(
+                binders, ["dlna_asgi_state.py"],
+                f"{imp!r} must appear ONLY in dlna_asgi_state; got {binders}")
+
+    def test_every_router_is_included(self):
+        """An APIRouter that is never included is a set of dead routes."""
+        import importlib
+        import pathlib
+        entry = (pathlib.Path(PROJECT) / "dlna_asgi.py").read_text(encoding="utf-8")
+        for p in sorted(pathlib.Path(PROJECT).glob("dlna_asgi_*.py")):
+            mod = importlib.import_module(p.stem)
+            if not hasattr(mod, "router"):
+                continue
+            with self.subTest(module=p.stem):
+                self.assertIn(f"app.include_router({p.stem}.router)", entry,
+                              f"{p.stem} defines a router that is never included")

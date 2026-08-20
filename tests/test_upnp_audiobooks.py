@@ -26,6 +26,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import api_upnp
+import api_upnp_ids
 import dlna_localfs_wiring
 from dlna_library import LibraryDB
 
@@ -59,7 +60,7 @@ class _Base(unittest.TestCase):
             conn.execute(
                 "INSERT INTO tracks(udn, obj_id, url, title, artist, album) "
                 "VALUES ('uuid:localfs-music','m1','http://m/1','Song','A','Al')")
-        self._p1 = patch.object(api_upnp, "DB", self.db)
+        self._p1 = patch.object(api_upnp_ids, "DB", self.db)
         self._p1.start()
         self._p2 = patch.object(dlna_localfs_wiring, "AUDIOBOOKS_UDN", AB_UDN)
         self._p2.start()
@@ -167,6 +168,7 @@ class TestEnrichedPositions(unittest.TestCase):
 
     def test_positions_payload_carries_track_fields(self):
         import api_playback
+        import api_playback_state
         fd, p = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         db = LibraryDB(db_file=p)
@@ -179,12 +181,15 @@ class TestEnrichedPositions(unittest.TestCase):
                     "'Author','The Book','A/Book','http://x/cover.jpg')")
             db.position_set("A/Book", "http://x/ch7", 754.3, 1820.0)
             db.position_set("Orphan/Book", "http://x/gone", 10)
-            orig = api_playback.DB
-            api_playback.DB = db
+            # DB is bound once in api_playback_state; rebinding the
+            # re-export on api_playback would leave the payload on the
+            # real library.db.
+            orig = api_playback_state.DB
+            api_playback_state.DB = db
             try:
                 code, body = api_playback.positions_list_payload({})
             finally:
-                api_playback.DB = orig
+                api_playback_state.DB = orig
             self.assertEqual(code, 200)
             rows = {r["album_key"]: r for r in body["positions"]}
             self.assertEqual(rows["A/Book"]["book"], "The Book")

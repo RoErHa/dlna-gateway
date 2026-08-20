@@ -10,7 +10,7 @@ Built because the manufacturer apps (Focal & Naim, etc.) are slow,
 flaky, or platform-locked. This one runs anywhere Python runs and is
 usable from any device with a browser.
 
-**2.0** — the gateway is a **FastAPI ASGI app served by Hypercorn**, which
+**2.1** — the gateway is a **FastAPI ASGI app served by Hypercorn**, which
 terminates **TLS + HTTP/2** natively (HTTP/3 ready) using a `tailscale cert`.
 A LAN-only plain-HTTP device tier (`/gw/*`) and the RoHaLocalFS file server
 stay un-encrypted for UPnP renderers that can't do HTTPS. See
@@ -54,6 +54,19 @@ stay un-encrypted for UPnP renderers that can't do HTTPS. See
 - **Internet radio ("📡 Stations").** Search the radio-browser.info
   catalogue, favourite up to 25 stations, play with ICY now-playing
   metadata in a dedicated radio screen.
+- **Audiobooks.** Point `AUDIOBOOKS_ROOT` at a second folder and it is
+  indexed as its own source — kept out of music browse, search and radio
+  by construction (it is a separate UDN). Books remember **where you
+  stopped, server-side per book**, so every entry point resumes on every
+  device: the PWA, the Naim, and CarPlay (Subsonic bookmarks) all read
+  and write the same position. Plus per-book playback speed, a sleep
+  timer, m4b chapter marks, a "continue listening" shelf, and optional
+  series/author metadata from OpenLibrary.
+- **Home videos (optional).** Point `LOCALFS_VIDEO_ROOT` at a folder and
+  the gateway indexes it, generating titles from **metadata rather than
+  filenames** (GPS reverse-geocoded location + timestamp), and exposes a
+  browse tree by date / location / person — in the PWA and over DLNA to a
+  TV. See [docs/VIDEO_SUPPORT.md](docs/VIDEO_SUPPORT.md).
 - **Subsonic-compatible API** (`/rest/*`). Read-only-ish surface that
   lets Subsonic clients (Amperfy, substreamer, …) browse and stream.
   Designed for **CarPlay**, which the PWA can't do.
@@ -65,6 +78,44 @@ stay un-encrypted for UPnP renderers that can't do HTTPS. See
 - **Observability.** Greppable per-track playback logs; client-side
   errors POST to `/api/client_log` and land in the same log.
 
+## Security
+
+**The gateway is designed for a LAN / tailnet, not the public internet.**
+It binds `0.0.0.0` on 8765/8443 (plus 8200 for the file server) and, apart
+from the Subsonic `/rest/*` surface, the API is **unauthenticated** — access
+control is the network (Tailscale), not a login. Do not port-forward it.
+
+A security audit on 2026-08-20 fixed four issues; see CLAUDE.md →
+"Security posture" for the detail and for the things that must not be undone:
+
+- **SSRF.** `/art`, `/stream` and `/radio_stream` take a caller-supplied
+  `?url=`. They now go through `dlna_ssrf.py`, which refuses private,
+  loopback and link-local destinations unless the host is a device already
+  discovered (so the LocalFs file server still works), refuses non-http(s)
+  schemes, and re-checks **every redirect hop**. Before this, `/stream`
+  would relay the body of any internal HTTP service verbatim.
+- **Error responses are uniform.** They used to forward the upstream status
+  and error text, which made `/art` a working open/closed/filtered port
+  oracle. Every failure now looks identical; detail goes to the log.
+- **TLS certificates are verified** on all outbound fetches (they weren't).
+- **Untrusted device text is escaped**, in the PWA and again server-side —
+  a UDN comes straight from a discovered device's description XML.
+
+**Can a media file make the gateway phone home? No.** The tag reader takes a
+fixed allowlist of scalar fields and never reads ID3 URL frames, and embedded
+cover art is typed by **sniffing magic bytes rather than trusting the
+declared MIME**. That is what makes an ID3 `APIC` with MIME `-->` (whose
+payload is a URL) inert opaque bytes, and stops an SVG "cover" being parsed
+as SVG. It is deliberate and test-pinned — see `tests/test_art_safety.py`.
+
+**What does leave your machine**, all over TLS: artist/album tags go to
+MusicBrainz + Cover Art Archive while indexing; lyrics lookups send
+title/artist/album/duration to lrclib on demand; and if you enable video,
+**GPS coordinates from your clips are sent to Nominatim automatically** to
+turn them into place names. That last one is the privacy-relevant one — it
+is inherent to reverse-geocoding, cached per coordinate, and opt-out by
+leaving `LOCALFS_VIDEO_ROOT` unset.
+
 ## Cross-platform notes
 
 **Server (runs anywhere Python runs).** Tested on macOS; the Python
@@ -74,7 +125,8 @@ On Linux use a systemd unit instead of the LaunchAgent; on Windows
 use WSL2 (easy) or run native with a service wrapper like NSSM.
 Hard requirements:
 
-- Python 3.9+
+- Python 3.14+ (what the project is developed and run on; `setup.sh`
+  creates the venv, so the system Python is untouched)
 - (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
   on macOS) — used by the beets enrichment tool (`tools/beets_enrich.py`,
   via pyacoustid) for fingerprint matching.
@@ -150,8 +202,18 @@ cd dlna-gateway
 cp .env.example .env       # then edit
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python dlna_gateway.py
+hypercorn dlna_asgi:app --bind 0.0.0.0:8765
 ```
+
+Open `http://<host>:8765/`.
+
+> **The gateway IS the ASGI app.** `python dlna_gateway.py` does **not**
+> start a server any more (that changed in 2.0 / Cleanup C) — it only
+> keeps the `--list-devices` / `--reset-devices` device-DB tools. Always
+> launch via Hypercorn. For TLS + HTTP/2, add
+> `--bind 0.0.0.0:8443 --insecure-bind 0.0.0.0:8765 --certfile <host>.crt
+> --keyfile <host>.key` (that is exactly what `run-2.0-asgi.sh` does on
+> macOS, plus cert auto-discovery).
 
 For autostart, drop something like this into
 `~/.config/systemd/user/dlna-gateway.service`:
@@ -165,7 +227,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%h/dlna-gateway
 EnvironmentFile=%h/dlna-gateway/.env
-ExecStart=%h/dlna-gateway/.venv/bin/python %h/dlna-gateway/dlna_gateway.py --no-browser
+ExecStart=%h/dlna-gateway/.venv/bin/hypercorn dlna_asgi:app --bind 0.0.0.0:8765
 Restart=on-failure
 RestartSec=10
 
@@ -190,10 +252,12 @@ copy .env.example .env       # then edit
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python dlna_gateway.py
+hypercorn dlna_asgi:app --bind 0.0.0.0:8765
 ```
 
-For autostart use [NSSM](https://nssm.cc/) to wrap `dlna_gateway.py`
+(Same note as Linux: `python dlna_gateway.py` is not a server in 2.0.)
+
+For autostart use [NSSM](https://nssm.cc/) to wrap that Hypercorn command
 as a Windows Service. You may also need to allow inbound TCP
 8765/8443 and UDP 1900 in Windows Firewall.
 
@@ -219,11 +283,15 @@ to `.env` and edit. Variables:
   in beets, not here.
 
 Values set in the process environment (launchd plist, systemd
-`EnvironmentFile`, shell `export`) override `.env`. **`.env` requires
-`python-dotenv`** (in `requirements.txt`, installed automatically by
-`setup.sh` / `pip install -r requirements.txt`) — without it, the file
-is silently ignored and env vars must come from the process
-environment.
+`EnvironmentFile`, shell `export`) override `.env`, so an ad-hoc
+`export` still wins for one run. `python-dotenv` is used when present,
+but `dlna_config` also ships a **built-in fallback parser**, so `.env`
+is read even without it — the old "dotenv missing → `.env` silently
+ignored" failure mode is gone (guarded by `tests/test_env_loader.py`).
+
+> On macOS, do **not** move a config key into the LaunchAgent plist:
+> plist env *overrides* `.env`, so a stale value there silently wins.
+> The plist carries only `PATH` + the launch command.
 
 ## Serving your own files — RoHaLocalFS
 
@@ -244,7 +312,7 @@ backend shows up in the UI as the source **RoHaLocalFS**.
 ```bash
 # macOS / Linux shell:
 export LOCALFS_MUSIC_ROOT="/path/to/Music"
-./setup.sh --run          # or: python dlna_gateway.py
+./setup.sh --run          # (Linux/Windows: hypercorn dlna_asgi:app …)
 ```
 
 To persist it, put the variable wherever your autostart reads env from
@@ -344,8 +412,8 @@ This project would not exist without:
 - [MusicBrainz](https://musicbrainz.org/) + [Cover Art Archive](https://coverartarchive.org/)
   — album art lookup.
 - [AcoustID](https://acoustid.org/) + [Chromaprint](https://acoustid.org/chromaprint)
-  — automatic metadata recognition via audio fingerprinting (the
-  metadata-enrichment worker).
+  — audio-fingerprint metadata recognition, used by the beets
+  enrichment batch (`tools/beets_enrich.py`).
 - [lrclib.net](https://lrclib.net/) — on-demand lyrics.
 - [radio-browser.info](https://www.radio-browser.info/) — internet
   radio station directory.

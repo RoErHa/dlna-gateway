@@ -59,7 +59,7 @@ import sys
 import urllib.parse
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
 
 _REPO = Path(__file__).resolve().parent.parent
 _DEFAULT_DB = _REPO / "library.db"
@@ -120,7 +120,7 @@ def find_duplicate_groups(conn: sqlite3.Connection) -> list:
 
 # ── HTTP HEAD for Content-Length ──────────────────────────────────
 
-def get_url_size(url: str, timeout: float = 5.0) -> Optional[int]:
+def get_url_size(url: str, timeout: float = 5.0) -> int | None:
     """HEAD request to fetch Content-Length. Returns None on any failure
     (timeout, non-200, missing header)."""
     try:
@@ -212,7 +212,7 @@ def rank_groups(groups: list, size_tolerance: float = 0.3) -> list:
         # One representative per unique path. All URLs sharing a path
         # are aliases for the same physical file.
         unique = []
-        for path_str, ms in by_path.items():
+        for _path_str, ms in by_path.items():
             rep = dict(ms[0])
             rep["_aliased_urls"] = [m["url"] for m in ms]
             unique.append(rep)
@@ -443,7 +443,7 @@ def main(argv: Iterable[str] = None) -> int:
     # Order matters — rank_groups dedupes by resolved path (multiple
     # URLs of the same physical file collapse into one entry), so the
     # resolution must happen first.
-    print(f"\nPhase 3/4: walking disk + ranking…", flush=True)
+    print("\nPhase 3/4: walking disk + ranking…", flush=True)
     size_index = build_disk_size_index(root)
     n_disk_files = sum(len(v) for v in size_index.values())
     print(f"  disk walk: {n_disk_files:,} audio files indexed by size",
@@ -464,7 +464,7 @@ def main(argv: Iterable[str] = None) -> int:
     print(f"  size-tolerance: {args.size_tolerance}", flush=True)
 
     # Phase 4: write report
-    print(f"\nPhase 4/4: writing report…", flush=True)
+    print("\nPhase 4/4: writing report…", flush=True)
     counts = write_report(groups, Path(args.out).resolve())
     print(f"  TRASH  rows: {counts['trash']:,}", flush=True)
     print(f"  REVIEW rows: {counts['review']:,}  (size mismatch — manual)",
@@ -482,7 +482,7 @@ def main(argv: Iterable[str] = None) -> int:
     n_review = sum(len(g["review"]) for g in groups)
     n_unresolved = sum(len(g["unresolved"]) for g in groups)
     print()
-    print(f"=== Summary ===", flush=True)
+    print("=== Summary ===", flush=True)
     print(f"  duplicate groups:                {len(groups):,}")
     print(f"  actionable TRASH files:          {len(actionable_losers):,}")
     print(f"  REVIEW (size mismatch):          {n_review:,}  (manual)")
@@ -513,7 +513,7 @@ def main(argv: Iterable[str] = None) -> int:
             return 1
 
     ok = fail = 0
-    for g, m in actionable_losers:
+    for _g, m in actionable_losers:
         try:
             if args.hard_delete:
                 _hard_delete(m["path"])

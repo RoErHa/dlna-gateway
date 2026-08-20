@@ -1,0 +1,51 @@
+# requirements.lock — EXACT runtime dependency set.
+#
+# GENERATED ARTIFACT — do not hand-edit. Regenerate after any dependency
+# change:  python3 tools/regen_lock.py
+# Generated 2026-08-20 from the working .venv
+# (Python 3.14.7, Darwin/arm64) by resolving the
+# transitive closure of the direct deps in requirements.txt.
+#
+# WHY THIS FILE EXISTS. requirements.txt intentionally uses loose `>=`
+# ranges: every dep there is optional and the gateway degrades gracefully
+# when one is missing. That is the right SPEC, but it is not a reproducible
+# INSTALL — an unbounded `fastapi>=…` silently accepts a future breaking
+# release, and fastapi + hypercorn own the entire 2.0 TLS/HTTP-2 edge.
+# Without a lock there is no known-good set to roll back to when a fresh
+# `./setup.sh` picks up a bad upstream release.
+#
+# USE: reproducible / production install
+#     .venv/bin/pip install -r requirements.lock
+#   deliberately testing newer upstreams:
+#     .venv/bin/pip install -r requirements.txt
+#
+# NOT INCLUDED: dev-only tools (ruff, pytest, playwright, selenium,
+# Appium-Python-Client) — see requirements-dev.txt. Also absent are
+# exceptiongroup / taskgroup / tomli, which anyio+hypercorn require only
+# on Python < 3.11.
+
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+fastapi==0.136.3        # direct
+h11==0.16.0
+h2==4.3.0
+hpack==4.1.0
+hypercorn==0.18.0        # direct
+hyperframe==6.1.0
+idna==3.11
+markdown-it-py==4.0.0
+mdurl==0.1.2
+mutagen==1.47.0        # direct
+pillow==12.2.0        # direct
+priority==2.0.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+pygments==2.19.2
+python-dotenv==1.2.2        # direct
+rich==14.3.3        # direct
+starlette==1.2.1        # direct
+typing-extensions==4.15.0
+typing-inspection==0.4.2
+watchdog==6.0.0        # direct
+wsproto==1.3.2
