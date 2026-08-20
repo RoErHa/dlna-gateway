@@ -54,6 +54,19 @@ stay un-encrypted for UPnP renderers that can't do HTTPS. See
 - **Internet radio ("📡 Stations").** Search the radio-browser.info
   catalogue, favourite up to 25 stations, play with ICY now-playing
   metadata in a dedicated radio screen.
+- **Audiobooks.** Point `AUDIOBOOKS_ROOT` at a second folder and it is
+  indexed as its own source — kept out of music browse, search and radio
+  by construction (it is a separate UDN). Books remember **where you
+  stopped, server-side per book**, so every entry point resumes on every
+  device: the PWA, the Naim, and CarPlay (Subsonic bookmarks) all read
+  and write the same position. Plus per-book playback speed, a sleep
+  timer, m4b chapter marks, a "continue listening" shelf, and optional
+  series/author metadata from OpenLibrary.
+- **Home videos (optional).** Point `LOCALFS_VIDEO_ROOT` at a folder and
+  the gateway indexes it, generating titles from **metadata rather than
+  filenames** (GPS reverse-geocoded location + timestamp), and exposes a
+  browse tree by date / location / person — in the PWA and over DLNA to a
+  TV. See [docs/VIDEO_SUPPORT.md](docs/VIDEO_SUPPORT.md).
 - **Subsonic-compatible API** (`/rest/*`). Read-only-ish surface that
   lets Subsonic clients (Amperfy, substreamer, …) browse and stream.
   Designed for **CarPlay**, which the PWA can't do.
@@ -150,8 +163,18 @@ cd dlna-gateway
 cp .env.example .env       # then edit
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python dlna_gateway.py
+hypercorn dlna_asgi:app --bind 0.0.0.0:8765
 ```
+
+Open `http://<host>:8765/`.
+
+> **The gateway IS the ASGI app.** `python dlna_gateway.py` does **not**
+> start a server any more (that changed in 2.0 / Cleanup C) — it only
+> keeps the `--list-devices` / `--reset-devices` device-DB tools. Always
+> launch via Hypercorn. For TLS + HTTP/2, add
+> `--bind 0.0.0.0:8443 --insecure-bind 0.0.0.0:8765 --certfile <host>.crt
+> --keyfile <host>.key` (that is exactly what `run-2.0-asgi.sh` does on
+> macOS, plus cert auto-discovery).
 
 For autostart, drop something like this into
 `~/.config/systemd/user/dlna-gateway.service`:
@@ -165,7 +188,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%h/dlna-gateway
 EnvironmentFile=%h/dlna-gateway/.env
-ExecStart=%h/dlna-gateway/.venv/bin/python %h/dlna-gateway/dlna_gateway.py --no-browser
+ExecStart=%h/dlna-gateway/.venv/bin/hypercorn dlna_asgi:app --bind 0.0.0.0:8765
 Restart=on-failure
 RestartSec=10
 
@@ -190,10 +213,12 @@ copy .env.example .env       # then edit
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python dlna_gateway.py
+hypercorn dlna_asgi:app --bind 0.0.0.0:8765
 ```
 
-For autostart use [NSSM](https://nssm.cc/) to wrap `dlna_gateway.py`
+(Same note as Linux: `python dlna_gateway.py` is not a server in 2.0.)
+
+For autostart use [NSSM](https://nssm.cc/) to wrap that Hypercorn command
 as a Windows Service. You may also need to allow inbound TCP
 8765/8443 and UDP 1900 in Windows Firewall.
 
@@ -219,11 +244,15 @@ to `.env` and edit. Variables:
   in beets, not here.
 
 Values set in the process environment (launchd plist, systemd
-`EnvironmentFile`, shell `export`) override `.env`. **`.env` requires
-`python-dotenv`** (in `requirements.txt`, installed automatically by
-`setup.sh` / `pip install -r requirements.txt`) — without it, the file
-is silently ignored and env vars must come from the process
-environment.
+`EnvironmentFile`, shell `export`) override `.env`, so an ad-hoc
+`export` still wins for one run. `python-dotenv` is used when present,
+but `dlna_config` also ships a **built-in fallback parser**, so `.env`
+is read even without it — the old "dotenv missing → `.env` silently
+ignored" failure mode is gone (guarded by `tests/test_env_loader.py`).
+
+> On macOS, do **not** move a config key into the LaunchAgent plist:
+> plist env *overrides* `.env`, so a stale value there silently wins.
+> The plist carries only `PATH` + the launch command.
 
 ## Serving your own files — RoHaLocalFS
 
@@ -244,7 +273,7 @@ backend shows up in the UI as the source **RoHaLocalFS**.
 ```bash
 # macOS / Linux shell:
 export LOCALFS_MUSIC_ROOT="/path/to/Music"
-./setup.sh --run          # or: python dlna_gateway.py
+./setup.sh --run          # (Linux/Windows: hypercorn dlna_asgi:app …)
 ```
 
 To persist it, put the variable wherever your autostart reads env from
@@ -344,8 +373,8 @@ This project would not exist without:
 - [MusicBrainz](https://musicbrainz.org/) + [Cover Art Archive](https://coverartarchive.org/)
   — album art lookup.
 - [AcoustID](https://acoustid.org/) + [Chromaprint](https://acoustid.org/chromaprint)
-  — automatic metadata recognition via audio fingerprinting (the
-  metadata-enrichment worker).
+  — audio-fingerprint metadata recognition, used by the beets
+  enrichment batch (`tools/beets_enrich.py`).
 - [lrclib.net](https://lrclib.net/) — on-demand lyrics.
 - [radio-browser.info](https://www.radio-browser.info/) — internet
   radio station directory.

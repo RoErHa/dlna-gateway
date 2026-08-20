@@ -1,12 +1,39 @@
-# Video support — runbook (incl. smartphone movies)
+# Video support — design runbook + as-built record (incl. smartphone movies)
 
-> **Status: READY TO IMPLEMENT (next session).** Add video browsing + playback
-> to the gateway for **mobile, computer, and TV** clients — explicitly **NOT the
-> Naim** (audio-only renderer). Chosen approach: **Option C — hybrid,
-> capability-aware**: serve the original bytes to clients that can play them
-> (Safari, modern TVs, any H.264) and **transcode on demand only when the client
-> can't** (the iPhone-HEVC case). Video transcoding does NOT violate the
-> bit-perfect rule — that rule is about *audio* fidelity.
+> **Status: SHIPPED AND LIVE (all phases V0–V5).** This began as a
+> forward-looking runbook; the plan below is kept because its design
+> rationale is still the best explanation of *why* the feature is shaped
+> this way. **Read the phase ledger immediately below for what actually
+> landed and where** — the phase sections themselves are the original
+> plan and still use future tense.
+>
+> Video browsing + playback for **mobile, computer, and TV** clients —
+> explicitly **NOT the Naim** (audio-only renderer). The approach chosen
+> and built: **Option C — hybrid, capability-aware**: serve the original
+> bytes to clients that can play them (Safari, modern TVs, any H.264) and
+> **transcode on demand only when the client can't** (the iPhone-HEVC
+> case). Video transcoding does NOT violate the bit-perfect rule — that
+> rule is about *audio* fidelity.
+
+### As-built ledger (checked 2026-08-20)
+
+| Phase | Status | Where it landed |
+|---|---|---|
+| V0 — deps + scaffolding | ✅ | `dlna_ffmpeg.py` (ffprobe/ffmpeg helpers, both **optional** — absent degrades, never crashes). |
+| V1 — index | ✅ | `videos` table + `dlna_video_index.scan_videos`, a 5-min periodic scan kicked off from `dlna_localfs_wiring`. Enabled by `LOCALFS_VIDEO_ROOT`. |
+| V2 — serve + browser playback | ✅ | `GET /localfs/video/<id>` (Range) + the same-origin `/api/video…` routes in `dlna_asgi_video.py`, so iOS will play them. PWA player in `static/app.js`. |
+| V3 — capability-aware transcode | ✅ | On-demand HLS via `dlna_ffmpeg` + `dlna_asgi_video.py`. |
+| V4 — TV browse (DMS) | ✅ | The 📹 Videos tree in `api_upnp_browse_video.py` — by date / location / person / all — browsed by the LG WebOS TV. Kept out of the Naim's audio tree. |
+| V5 — polish | ✅ | Reverse-geocoded titles (`dlna_geocode.py`, `dlna_countries.py`), location inference for GPS-less clips (`tools/infer_video_locations.py`), Immich person tags (`tools/immich_people_sync.py`), the importer (`tools/immich_import.py`). |
+
+**Tests as built** (the names below in the phase sections were provisional):
+`tests/test_video_db.py` (10), `tests/test_video_scan.py` (21),
+`tests/test_video_loc_overrides.py` (20), `tests/test_video_people.py` (7),
+`tests/test_upnp_videos_browse.py` (29) — 87 in total, all in the offline gate.
+
+**Config:** `LOCALFS_VIDEO_ROOT` (enables the feature), `VIDEO_SCAN_INTERVAL_SEC`
+(default 300), `VIDEO_POSTER_DIR`, and — for the Immich tools only —
+`IMMICH_URL` / `IMMICH_API_KEY`. All in `.env`; see `.env.example`.
 
 **Goal:** a "📹 Videos" section in the PWA that plays your library's video —
 crucially the **iPhone/Android clips** (DCIM footage) — in the browser, with
@@ -22,7 +49,7 @@ fallback.
    metadata (resolution, codecs, capture date) and must stay out of audio
    browse + the Naim's UPnP tree.
 2. **id = `sha1(rel_path)`** — same path-stable scheme as LocalFs tracks
-   (`dlna_providers/localfs.py`).
+   (`_track_id_for` in `dlna_providers/localfs_tags.py`).
 3. **`ffprobe` + `ffmpeg` are OPTIONAL binaries** — discovered via the existing
    Homebrew-path `_find_*()` pattern (like `fpcalc`). Absent → metadata falls
    back to filename/mtime and the transcode endpoint 503s (native-only still
@@ -133,7 +160,8 @@ store it in `videos.title` so browse/sort/search are simple.
   appear without a restart and a steady library is near-free.
 - **DB methods**: `upsert_videos(udn, rows)`, `all_videos(udn)` (newest-first /
   by folder), `video_by_id(id)`, `clear_videos(udn)`.
-- **Tests** (`tests/test_video_index.py`): probe-JSON parse (h264/hevc/garbled/
+- **Tests** (planned name; shipped as `tests/test_video_db.py` +
+  `tests/test_video_scan.py`): probe-JSON parse (h264/hevc/garbled/
   no-ffprobe) incl. creation_time / duration / ISO6709 location; **display-title
   construction** (embedded title wins; else `<location>_YYYYMMDD_HHMM.ext`; coords
   fallback; no-location omits the prefix; no-creation_time → mtime); `videos`
@@ -157,7 +185,8 @@ store it in `videos.title` so browse/sort/search are simple.
 - **PWA** (`static/index.html` + `app.js`): a "📹 Videos" entry (synthetic row
   like "📡 Stations", or a new tab) → poster grid → a `<video>` modal player
   (native source `/localfs/video/<id>`, fullscreen, scrub, `MediaSession`).
-- **Tests**: `tests/test_video_serve.py` (Range 206/416, MIME, DLNA headers,
+- **Tests** (planned name; the shipped coverage lives in
+  `tests/test_video_scan.py` + `tests/test_localfs_server.py`) — Range 206/416, MIME, DLNA headers,
   unknown id 404); `tests/frontend/test_video.py` (Videos panel renders, click →
   player opens with the right `src`, requests assert).
 

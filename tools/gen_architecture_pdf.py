@@ -800,10 +800,11 @@ def list_pages():
      ]),
      ("T/a13", "beets_enrich.py",
       "Run the beets tag-in-place enrichment batch (docs/enrichment.md). "
-      "Safe wrapper around `beet import`. Deps: brew install chromaprint; "
-      "pip3 install beets pyacoustid musicbrainzngs (beets 2.x pluginized "
-      "MusicBrainz — the musicbrainz plugin + musicbrainzngs are REQUIRED or "
-      "it matches nothing).", [
+      "Safe wrapper around `beet import`. Deps: brew install chromaprint beets "
+      "(NOT pip — a Homebrew python upgrade wipes a pip install; that is how "
+      "the 2026-06 install died), then add musicbrainzngs + pyacoustid to the "
+      "keg venv (beets 2.x pluginized MusicBrainz — the musicbrainz plugin + "
+      "musicbrainzngs are REQUIRED or it matches nothing).", [
         ("(no --quiet/--timid)", "Interactive: beets prompts you per album "
          "(apply / skip / …); strong matches auto-apply."),
         ("--write-config", "Write the prog-tuned tag-in-place "
