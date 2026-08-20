@@ -35,7 +35,8 @@ patch it THERE (`patch.object(api_upnp_ids, "DB", db)`) — patching
 browse handlers pointed at the real library.db.
 """
 import logging
-import xml.etree.ElementTree as ET
+
+from dlna_xml import safe_fromstring
 
 # ── Re-exports: the family's public surface ──────────────────────────
 from api_upnp_browse import (  # noqa: F401
@@ -160,7 +161,7 @@ def cm_control_soap(body: bytes):
     never browse. We have no real connections — GetProtocolInfo advertises the
     formats we serve; the connection actions report the single static id 0."""
     try:
-        root   = ET.fromstring(body.decode("utf-8"))
+        root   = safe_fromstring(body, what="soap")
         action = _cd_action_name(root)
         if action == "GetProtocolInfo":
             inner = (f"<Source>{_xml_esc(_GW_SOURCE_PROTOCOLS)}</Source>"
@@ -193,7 +194,7 @@ def cd_control_soap(body: bytes):
     returning empty-but-valid responses, plus Browse. Without the handshake
     actions NaimUPnP got HTTP 400 and dropped the server (2026-06-12)."""
     try:
-        root   = ET.fromstring(body.decode("utf-8"))
+        root   = safe_fromstring(body, what="soap")
         action = _cd_action_name(root)
 
         if action == "Browse":

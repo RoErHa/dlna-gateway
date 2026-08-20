@@ -40,6 +40,7 @@ Two protocol details that clients genuinely depend on:
     match.
 """
 import hashlib
+import hmac
 import logging
 import os
 
@@ -121,12 +122,17 @@ def _check_auth(params: dict) -> bool:
         return False  # explicit refuse-all when env not set
     if params.get("u", "") != _subsonic_user():
         return False
-    # Modern token+salt
+    # Modern token+salt. MD5 is mandated by the Subsonic protocol, not a
+    # choice we can revisit here — but the COMPARISON is ours, so it is
+    # constant-time. `==` on a digest leaks, through timing, how many leading
+    # characters matched, which over enough samples reconstructs the token.
+    # Network jitter makes that impractical remotely; compare_digest costs
+    # nothing and removes the question.
     t = params.get("t", "")
     s = params.get("s", "")
     if t and s:
         expected = hashlib.md5((pwd + s).encode("utf-8")).hexdigest()
-        return t.lower() == expected.lower()
+        return hmac.compare_digest(t.lower(), expected.lower())
     # Legacy plaintext / hex (also reached when t is present but s isn't)
     p = params.get("p", "")
     if p.startswith("enc:"):
@@ -135,7 +141,7 @@ def _check_auth(params: dict) -> bool:
         except (ValueError, UnicodeDecodeError) as e:
             log.debug(f"Subsonic auth: malformed enc: password ({e})")
             return False
-    return p == pwd and p != ""
+    return bool(p) and hmac.compare_digest(p, pwd)
 
 
 # ── Response helpers ─────────────────────────────────────────────

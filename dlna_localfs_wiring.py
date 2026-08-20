@@ -146,11 +146,20 @@ def maybe_start_localfs(get_lan_ip):
         abpath = None
 
     try:
-        start_server(DB_FILE, port=port, host="0.0.0.0",
+        # $LOCALFS_BIND narrows the listener to one address (audit
+        # 2026-08-20). ONE only — this is a single ThreadingHTTPServer
+        # socket, unlike hypercorn's multi-bind. The LAN address is the
+        # right choice: the Naim and the TV fetch bytes from here directly,
+        # and tailnet clients reach audio through the gateway's own relay
+        # rather than this port. Default stays 0.0.0.0 so a fresh clone
+        # works unconfigured.
+        bind_host = (os.environ.get("LOCALFS_BIND", "") or "0.0.0.0").strip()
+        start_server(DB_FILE, port=port, host=bind_host,
                      allowed_roots=tuple(roots))
     except OSError as e:
-        log.error(f"LocalFs file server failed to bind :{port}: {e} — "
-                  "is the port in use? Set $LOCALFS_PORT to override.")
+        log.error(f"LocalFs file server failed to bind {bind_host}:{port}: "
+                  f"{e} — is the port in use, or has the machine's address "
+                  "changed? Set $LOCALFS_BIND / $LOCALFS_PORT.")
         return
 
     provider = LocalFsProvider(DB, root_path, base_url=base_url)

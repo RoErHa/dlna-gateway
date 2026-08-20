@@ -22,6 +22,8 @@ import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
 
+from dlna_xml import safe_fromstring
+
 from dlna_config import close_quietly
 
 log = logging.getLogger("dlna.content")
@@ -169,7 +171,7 @@ def _parse_didl(soap_xml: str) -> dict:
     """Extract containers and items from a Browse SOAP response."""
     containers, items = [], []
     try:
-        root      = ET.fromstring(soap_xml)
+        root      = safe_fromstring(soap_xml, what="cd-soap")
         result_el = next(
             (el for el in root.iter()
              if el.tag.endswith("}Result") or el.tag == "Result"),
@@ -177,7 +179,7 @@ def _parse_didl(soap_xml: str) -> dict:
         if result_el is None or not (result_el.text or "").strip():
             return {"containers": [], "items": []}
 
-        didl = ET.fromstring(result_el.text)
+        didl = safe_fromstring(result_el.text, what="didl")
 
         for child in didl:
             tag    = child.tag.split("}")[-1] if "}" in child.tag else child.tag

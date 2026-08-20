@@ -341,6 +341,8 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_player_transport.py` | `TransportMixin` — SetURI/Play/Seek and the consecutive-send-failure abort. |
 | `dlna_player_volume.py` | `VolumeMixin` — startup volume + user trim, via RenderingControl SOAP. |
 | `dlna_player_registry.py` | `QueueRegistry` + the process-wide `QUEUES` singleton (one `RendererQueue` per renderer UDN). |
+| `dlna_xml.py` | The ONE place untrusted XML is parsed. Refuses DTDs outright (entity-expansion amplification was measured at 10× per nesting level on the unauthenticated `/gw/*` SOAP endpoints) and caps input size; raises `ParseError` so existing handlers need no new branch. |
+| `hypercorn_conf.py` | The server's listen addresses, read from `.env`. Must stay PICKLABLE — hypercorn pickles the config namespace for workers, so no `def`/class/module may survive at module scope. |
 | `dlna_ssrf.py` | The outbound-fetch guard fronting every caller-supplied `?url=` (`/art`, `/stream`, `/radio_stream`) and every redirect hop. Refuses private/loopback/link-local destinations unless the host is a device already in `SERVERS`/`RENDERERS`; refuses non-http(s) schemes. See "Security posture". |
 | `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout — the **byte-perfect** Range pass-through. |
 | `dlna_radio_proxy.py` | The internet-radio relay (`/radio_stream`): opens an ICY upstream and **de-interleaves** the metadata out of the audio (a browser `<audio>` cannot handle it), parking `StreamTitle` for `/api/radio/nowplaying`. Split from the byte-perfect path on purpose — this one must rewrite the stream. |
@@ -1629,6 +1631,41 @@ characters, and `dlna_discovery._clean_udn` / `_clean_name` strip
 markup-significant and control characters server-side as a second layer.
 Guarded by `tests/frontend/test_xss.py` (the UDN case genuinely fails on the
 old `esc()`).
+
+**5. Untrusted XML cannot amplify (`dlna_xml.py`).** `ET.fromstring` was
+called on nine network-sourced documents, two of them the unauthenticated
+`/gw/*` SOAP endpoints. ElementTree expands internal entities: a
+billion-laughs body was measured expanding **10× per nesting level**, so a
+few small requests could exhaust memory. External entities were already
+refused (no file disclosure), making this DoS — but on a machine whose job is
+to keep playing music. `safe_fromstring` now refuses **any DTD** (SOAP, DIDL
+and device descriptors have no legitimate use for one) plus a 4 MB cap, and
+every parse site routes through it. Guarded by `tests/test_xml_safety.py`,
+which also asserts real SOAP still parses — a hardening that broke the Naim
+would be worse than the bug.
+
+**6. Auth comparison is constant-time.** Subsonic's MD5 token is mandated by
+the protocol and can't be revisited, but the comparison is ours:
+`hmac.compare_digest` replaces `==` on both the token and the plaintext path.
+
+**7. The gateway no longer binds `0.0.0.0` (2026-08-20).** An unauthenticated
+control API on *every* interface was the biggest thing left open. Listeners
+are now named explicitly in `.env` and read by `hypercorn_conf.py`:
+
+| Port | Addresses | Why |
+|---|---|---|
+| `8443` TLS | tailnet + loopback | The cert is for the tailnet hostname; loopback for the live suite |
+| `8765` plain | LAN + tailnet + loopback | The Naim and LG TV can't do HTTPS, so the UPnP tier lives here |
+| `8200` file server | LAN only | Renderers fetch bytes directly; a single socket, so one address |
+
+This closed two real exposures: a **second LAN interface** (`192.168.1.238`)
+that nobody intended to serve, and TLS on the LAN address where the cert
+never matched anyway. **Loopback must stay bound** — `tests/run_all.py` and
+the beets tools reach the gateway at `127.0.0.1`. If a configured address
+stops existing the gateway FAILS TO START; that is deliberate, because the
+alternative is silently falling back to `0.0.0.0`. Changing an address is an
+`.env` edit + `./setup.sh --restart` — no plist bootout, which is the whole
+reason the binds live in `.env` rather than the LaunchAgent's argv.
 
 ### Can a media file phone home? No — and here is what keeps it that way
 

@@ -18,6 +18,8 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 
+from dlna_xml import safe_fromstring
+
 from dlna_config import close_quietly
 # RenderingControl (volume) moved to its own module 2026-08-20; re-exported
 # here so existing `from dlna_avtransport import set_volume` imports work.
@@ -267,7 +269,7 @@ def avtransport_probe_state(av_url: str) -> tuple[str, str]:
     if not raw:
         return "UNKNOWN", ""
     try:
-        root = ET.fromstring(raw)
+        root = safe_fromstring(raw, what="avtransport")
         for el in root.iter():
             if el.tag.endswith("CurrentTransportState"):
                 return (el.text or "UNKNOWN").strip(), ""
@@ -317,7 +319,7 @@ def avtransport_get_position(av_url: str) -> dict:
     if not raw:
         return result
     try:
-        root = ET.fromstring(raw)
+        root = safe_fromstring(raw, what="avtransport")
         for el in root.iter():
             tag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
             if tag == "RelTime":
@@ -329,7 +331,7 @@ def avtransport_get_position(av_url: str) -> dict:
             elif tag == "TrackMetaData" and el.text:
                 # Extract title from embedded DIDL-Lite if present
                 try:
-                    didl = ET.fromstring(el.text)
+                    didl = safe_fromstring(el.text, what="didl")
                     for t in didl.iter():
                         if t.tag.endswith("}title") or t.tag == "title":
                             result["title"] = t.text

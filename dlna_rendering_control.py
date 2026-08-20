@@ -26,6 +26,8 @@ import logging
 import urllib.parse
 import xml.etree.ElementTree as ET
 
+from dlna_xml import safe_fromstring
+
 from dlna_config import close_quietly
 
 log = logging.getLogger("dlna.avtransport")
@@ -93,7 +95,7 @@ def get_volume(rc_url: str) -> int | None:
     if not raw:
         return None
     try:
-        root = ET.fromstring(raw)
+        root = safe_fromstring(raw, what="renderingcontrol")
     except ET.ParseError:
         return None
     for el in root.iter():

@@ -19,6 +19,8 @@ import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 
+from dlna_xml import safe_fromstring
+
 from dlna_discovery_probe import (  # noqa: F401 — re-exported for callers
     _PROBE_PATHS,
     _PROBE_PORTS,
@@ -95,7 +97,7 @@ def _fetch_device(location: str,
         return
 
     try:
-        root   = ET.fromstring(xml_data)
+        root   = safe_fromstring(xml_data, what="device-desc")
         ns     = {"u": "urn:schemas-upnp-org:device-1-0"}
         parsed = urllib.parse.urlparse(location)
         base   = f"{parsed.scheme}://{parsed.netloc}"

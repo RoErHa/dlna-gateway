@@ -11,7 +11,8 @@
 # first if you really want a foreground run (instructions printed below).
 #
 # Live config (matches CUTOVER_LAUNCHD.md):
-#   • Hypercorn main app   :8443 TLS+HTTP/2 (ALPN)  +  :8765 plain  (--insecure-bind)
+#   • Hypercorn main app   :8443 TLS+HTTP/2 (ALPN)  +  :8765 plain
+#     Listen addresses come from .env via hypercorn_conf.py (NOT 0.0.0.0).
 #   • /gw/* (UPnP, Naim)   served by the app on the :8765 plain bind (no HTTPS)
 #   • LocalFs file server  :8200  ($LOCALFS_PORT, plain — the Naim fetches bytes)
 #   identity: GW_UDN / GW_NAME (adopts 1.x's "DLNA Gateway (IINA)").
@@ -74,8 +75,11 @@ HYP_ARGS=(dlna_asgi:app)
 SCHEME="http"
 case "${GATEWAY_TLS:-1}" in
   0|false|no)
-    HYP_ARGS+=(--bind 0.0.0.0:8765)
-    echo "▶  2.0 ASGI gateway → http://0.0.0.0:8765 (plain, no TLS)"
+    # Plain-only: reuse the same .env-driven addresses, with the TLS
+    # listener suppressed by handing it no certificate.
+    export GATEWAY_CERTFILE="" GATEWAY_KEYFILE=""
+    HYP_ARGS+=(-c "file:${PWD}/hypercorn_conf.py")
+    echo "▶  2.0 ASGI gateway → plain only, on \$GATEWAY_BIND_PLAIN from .env"
     ;;
   *)
     # Auto-discover the tailscale cert (+ matching .key): this worktree first,
@@ -99,10 +103,14 @@ case "${GATEWAY_TLS:-1}" in
       echo "   …or run plain HTTP only: GATEWAY_TLS=0 ./run-2.0-asgi.sh" >&2
       exit 1
     fi
-    HYP_ARGS+=(--bind 0.0.0.0:8443 --insecure-bind 0.0.0.0:8765
-               --certfile "${CERTFILE}" --keyfile "${KEYFILE}")
+    # Binds + cert now come from hypercorn_conf.py, which reads .env — so a
+    # manual run listens on exactly what the launchd job does (audit
+    # 2026-08-20: no more 0.0.0.0). GATEWAY_CERTFILE/KEYFILE still win if
+    # the discovery above found something specific.
+    export GATEWAY_CERTFILE="${CERTFILE}" GATEWAY_KEYFILE="${KEYFILE}"
+    HYP_ARGS+=(-c "file:${PWD}/hypercorn_conf.py")
     SCHEME="https"
-    echo "🔒  2.0 ASGI gateway → https://0.0.0.0:8443 (TLS + HTTP/2 via ALPN) + http://0.0.0.0:8765"
+    echo "🔒  2.0 ASGI gateway → TLS+HTTP/2 on \$GATEWAY_BIND_TLS, plain on \$GATEWAY_BIND_PLAIN (.env)"
     echo "    cert ${CERTFILE}"
     ;;
 esac
