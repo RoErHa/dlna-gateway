@@ -1654,9 +1654,22 @@ are now named explicitly in `.env` and read by `hypercorn_conf.py`:
 
 | Port | Addresses | Why |
 |---|---|---|
-| `8443` TLS | tailnet + loopback | The cert is for the tailnet hostname; loopback for the live suite |
+| `8443` TLS | tailnet + LAN + loopback | Cert is for the tailnet hostname, so **only the tailnet URL validates** — see the caveat below. Loopback for the live suite |
 | `8765` plain | LAN + tailnet + loopback | The Naim and LG TV can't do HTTPS, so the UPnP tier lives here |
 | `8200` file server | LAN only | Renderers fetch bytes directly; a single socket, so one address |
+
+⚠️ **The LAN address on `:8443` serves a certificate that does not match it.**
+`192.168.1.125:8443` was added 2026-08-20 so the PWA is reachable over
+HTTPS on the LAN, but the `tailscale cert` is issued for
+`ronsmacmini.tail5be6ad.ts.net` — a browser warns on every visit
+(`curl` without `-k` fails outright; with `-k` it is a normal 200/HTTP-2).
+Consequence worth knowing before debugging a blank app: a cert-warning
+origin is **not a trusted secure context**, so an installed PWA there can
+fail to register its Service Worker and show the "full UI, no content"
+symptom — the same appearance as the 2026-06-27 SW outage, different cause.
+For a LAN-installable PWA use `http://192.168.1.125:8765` instead: plain
+HTTP on a private address *is* treated as a secure context. The clean HTTPS
+route is the tailnet hostname, which validates properly.
 
 This closed two real exposures: a **second LAN interface** (`192.168.1.238`)
 that nobody intended to serve, and TLS on the LAN address where the cert
