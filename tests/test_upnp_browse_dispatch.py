@@ -41,6 +41,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import api_upnp
+import api_upnp_ids
 from dlna_library import LibraryDB
 
 UDN = "uuid:localfs-brtest"
@@ -72,7 +73,7 @@ class _Base(unittest.TestCase):
                                    "artist": "Aphex Twin",
                                    "album": "Selected Ambient Works"})
         self.pid = pid
-        self._p = patch.object(api_upnp, "DB", self.db)
+        self._p = patch.object(api_upnp_ids, "DB", self.db)
         self._p.start()
 
     def tearDown(self):
@@ -241,6 +242,54 @@ class TestDrilldown(_Base):
         self.assertTrue(fid.startswith("favalbum:"))
         _xml, n, _t = self.browse(fid)
         self.assertEqual(n, 2)              # both Aphex tracks
+
+
+class TestDbInjectionContract(unittest.TestCase):
+    """api_upnp was split into seven modules on 2026-08-20. `DB` is bound in
+    exactly ONE of them (api_upnp_ids) and siblings reach it as `_ids.DB`,
+    resolved at call time.
+
+    This matters more than it looks. If a second module ever does
+    `from dlna_library import DB`, a test patching the owner leaves THAT
+    module pointed at the real library.db — the tests still pass, but
+    against production data. A false pass is far worse than a crash, so the
+    invariant is asserted rather than trusted."""
+
+    def test_db_is_bound_in_exactly_one_module(self):
+        import pathlib
+        family = sorted(pathlib.Path(PROJECT).glob("api_upnp*.py"))
+        binders = [p.name for p in family
+                   if "from dlna_library import DB" in p.read_text(encoding="utf-8")]
+        self.assertEqual(
+            binders, ["api_upnp_ids.py"],
+            "DB must be imported in api_upnp_ids ONLY; every other module in "
+            f"the family uses `_ids.DB`. Found binders: {binders}")
+
+    def test_patching_the_owner_reaches_every_sibling(self):
+        import api_upnp_browse
+        import api_upnp_browse_video
+        import api_upnp_didl
+        import api_upnp_ids
+
+        class _Sentinel:
+            def primary_udn(self):
+                raise _Reached()
+
+            def all_videos(self, _udn):
+                raise _Reached()
+
+        class _Reached(Exception):
+            pass
+
+        ctx = api_upnp_didl._Browse("x", "BrowseDirectChildren", 0, 0)
+        with patch.object(api_upnp_ids, "DB", _Sentinel()):
+            for name, fn in (("browse", api_upnp_browse._br_artists),
+                             ("browse_video", api_upnp_browse_video._br_vidall)):
+                with self.subTest(module=name):
+                    with self.assertRaises(_Reached,
+                                           msg=f"{name} did not see the patched DB "
+                                               f"— it is using the REAL library"):
+                        fn(ctx)
 
 
 if __name__ == "__main__":

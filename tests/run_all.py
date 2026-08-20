@@ -488,15 +488,31 @@ if os.path.isfile(pl_path):
                "playlist_delete", "playlist_add", "playlist_remove"]:
         check(f"  api_playlists.{fn}", f"def {fn}(" in plc)
 
-section("T2.6 — api_upnp.py: UPnP gateway present")
-upnp_path = os.path.join(PROJECT, "api_upnp.py")
-if os.path.isfile(upnp_path):
-    uc = open(upnp_path).read()
-    check("  GW_UDN defined", "GW_UDN" in uc)
-    check("  GW_NAME defined", "GW_NAME" in uc)
+section("T2.6 — api_upnp: UPnP gateway surface")
+# api_upnp was split into seven modules (2026-08-20), so grepping ONE file's
+# text for "def <name>(" no longer proves anything — the symbols are
+# re-exported from siblings. Introspect the module instead: that is what the
+# check always meant, and it survives any further reshuffling.
+try:
+    import api_upnp as _u
+    check("  GW_UDN defined", isinstance(getattr(_u, "GW_UDN", None), str))
+    check("  GW_NAME defined", isinstance(getattr(_u, "GW_NAME", None), str))
     for fn in ["device_xml", "cd_desc_xml", "cd_events", "cd_control",
-               "gw_ssdp_announcer", "gw_ssdp_byebye"]:
-        check(f"  api_upnp.{fn}", f"def {fn}(" in uc)
+               "cm_control_soap", "cd_control_soap",
+               "gw_ssdp_announcer", "gw_ssdp_byebye", "gw_ssdp_responder",
+               "gw_event_subscribe", "gw_event_initial_notify", "_gw_browse"]:
+        check(f"  api_upnp.{fn}", callable(getattr(_u, fn, None)))
+    _fam = sorted(os.path.basename(p) for p in
+                  glob.glob(os.path.join(PROJECT, "api_upnp*.py")))
+    check(f"  module family ({len(_fam)} modules)", len(_fam) >= 7, str(_fam))
+    _binders = [f for f in _fam
+                if "from dlna_library import DB"
+                in open(os.path.join(PROJECT, f)).read()]
+    check("  DB bound in exactly one module", _binders == ["api_upnp_ids.py"],
+          f"binders: {_binders} — a second binding silently points tests at "
+          f"the REAL library.db")
+except Exception as _e:
+    check("  api_upnp imports", False, repr(_e))
 
 section("T2.8 — dlna_routes.py endpoint routing")
 if os.path.isfile(routes_path):

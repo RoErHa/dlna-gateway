@@ -26,6 +26,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import api_upnp
+import api_upnp_ids
 import dlna_localfs_wiring
 from dlna_library import LibraryDB
 
@@ -59,7 +60,7 @@ class _Base(unittest.TestCase):
             conn.execute(
                 "INSERT INTO tracks(udn, obj_id, url, title, artist, album) "
                 "VALUES ('uuid:localfs-music','m1','http://m/1','Song','A','Al')")
-        self._p1 = patch.object(api_upnp, "DB", self.db)
+        self._p1 = patch.object(api_upnp_ids, "DB", self.db)
         self._p1.start()
         self._p2 = patch.object(dlna_localfs_wiring, "AUDIOBOOKS_UDN", AB_UDN)
         self._p2.start()
