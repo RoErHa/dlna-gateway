@@ -44,8 +44,9 @@ to a broken image is not.
 import http.client
 import io
 import logging
-import ssl
 import urllib.parse
+
+import dlna_ssrf
 
 import dlna_art_cache
 import api_playback_state as _st  # noqa: F401
@@ -107,14 +108,19 @@ def art_fetch(upstream: str):
             return 400, "Bad url", b""
         if parsed.scheme not in ("http", "https"):
             return 400, "Bad scheme", b""
+        # SSRF guard — re-checked on EVERY hop, so a public URL cannot
+        # redirect the fetch onto an internal address. 403 is deliberately
+        # indistinguishable from the other refusals at the route boundary
+        # (see the note in dlna_asgi_media.art) so this can't be used as an
+        # open/closed/filtered oracle.
+        if not dlna_ssrf.guard(url, "art"):
+            return 403, "Blocked", b""
         host = parsed.netloc
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         conn = None
         try:
             if parsed.scheme == "https":
-                conn = http.client.HTTPSConnection(
-                    host, timeout=_ART_TIMEOUT,
-                    context=ssl._create_unverified_context())
+                conn = http.client.HTTPSConnection(host, timeout=_ART_TIMEOUT)
             else:
                 conn = http.client.HTTPConnection(host, timeout=_ART_TIMEOUT)
             conn.request("GET", path, headers={"User-Agent": "DLNAGateway/1.0"})

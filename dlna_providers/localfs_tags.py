@@ -210,7 +210,24 @@ def _mime_for(suffix: str) -> str:
 def _sniff_image_mime(data: bytes) -> str:
     """Best-effort image MIME from magic bytes. Embedded-art metadata
     sometimes lies about (or omits) its MIME, so sniff the bytes rather
-    than trust the container. Falls back to image/jpeg."""
+    than trust the container. Falls back to image/jpeg.
+
+    SECURITY — this is load-bearing, do not "improve" it into trusting the
+    declared MIME, and do not add image/svg+xml. A media file is untrusted
+    input, and its embedded cover is the one part of it we hand to a browser:
+
+      * ID3 `APIC` has a documented phone-home form — MIME `-->` means the
+        picture payload is a URL, not image bytes. Because we sniff instead
+        of trusting, that payload is served as opaque bytes and NEVER
+        dereferenced, so a crafted file cannot make the gateway (or a
+        viewer) fetch an attacker's URL.
+      * An SVG "cover" would be script-capable markup. Falling back to
+        image/jpeg means the browser refuses to parse it as SVG, so a cover
+        cannot become an XSS or a tracking beacon.
+
+    The allowlist below is deliberately raster-only for that reason: anything
+    unrecognised is labelled image/jpeg and renders as a broken image, which
+    is the correct failure. Guarded by tests/test_art_safety.py."""
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
     if data[:8] == b"\x89PNG\r\n\x1a\n":

@@ -1,5 +1,11 @@
 const $=id=>document.getElementById(id);
-const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+// Escapes QUOTES as well as angle brackets. It used to do only & < >, which
+// is fine for text nodes but unsafe the moment the result lands inside a
+// quoted attribute — and it does (e.g. <option value="${esc(s.udn)}">, where
+// the UDN comes straight from a discovered device's XML). Escaping both
+// quote characters makes esc() correct in BOTH positions, so the next person
+// to interpolate it into an attribute cannot get it wrong.
+const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 const enc=s=>encodeURIComponent(s||"");
 // Every track/album art URL is routed through the gateway's /art proxy so
 // it's always same-origin as the PWA. Without this, an HTTPS-served PWA

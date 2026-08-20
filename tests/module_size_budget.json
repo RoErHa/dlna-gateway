@@ -93,6 +93,7 @@
     "dlna_registry.py": 400,
     "dlna_rendering_control.py": 400,
     "dlna_routes.py": 400,
+    "dlna_ssrf.py": 400,
     "dlna_stream_proxy.py": 400,
     "dlna_video_index.py": 400
   }

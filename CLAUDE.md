@@ -322,6 +322,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_player_transport.py` | `TransportMixin` — SetURI/Play/Seek and the consecutive-send-failure abort. |
 | `dlna_player_volume.py` | `VolumeMixin` — startup volume + user trim, via RenderingControl SOAP. |
 | `dlna_player_registry.py` | `QueueRegistry` + the process-wide `QUEUES` singleton (one `RendererQueue` per renderer UDN). |
+| `dlna_ssrf.py` | The outbound-fetch guard fronting every caller-supplied `?url=` (`/art`, `/stream`, `/radio_stream`) and every redirect hop. Refuses private/loopback/link-local destinations unless the host is a device already in `SERVERS`/`RENDERERS`; refuses non-http(s) schemes. See "Security posture". |
 | `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout — the **byte-perfect** Range pass-through. |
 | `dlna_radio_proxy.py` | The internet-radio relay (`/radio_stream`): opens an ICY upstream and **de-interleaves** the metadata out of the audio (a browser `<audio>` cannot handle it), parking `StreamTitle` for `/api/radio/nowplaying`. Split from the byte-perfect path on purpose — this one must rewrite the stream. |
 | `dlna_proxy_common.py` | The constants both relays need (`PROXY_IDLE_SEC`, `_MIME_MAP`, `normalize_audio_ctype`). Exists to keep that split acyclic; dependency-free. |
@@ -1560,6 +1561,87 @@ rather than 500.
 | `tests/test_album_favourites.py` | DB round-trip + idempotent add, dedupe, ordering newest-first, orphan-album survival, `clear(udn)` invariant, handler 400/200 paths. 14 tests. |
 | `tests/test_upnp_album_favourites.py` | Album-id codec round-trip (incl. unicode/specials), root browse lists fav-albums first, "favalbums" lists each favourite, "favalbum:{...}" lists tracks, unknown album → empty container. 9 tests. |
 | `tests/frontend/test_album_favourites.py` | Album-header star only (the right-column browse view was removed 2026-06-01): star gated by `track_count>1`, initial state from `/check`, click → /add or /remove with optimistic flip, album_key-aware check/add. 8 Playwright tests. |
+
+## Security posture (audit 2026-08-20)
+
+The gateway is unauthenticated except for `/rest/*` (Subsonic) — CLAUDE.md's
+long-standing position is that **Tailscale is the primary access control**.
+That is still true, but it means every control here is what stands between a
+LAN peer and the gateway. Four things were fixed after an audit; the notes
+below exist so none is quietly undone.
+
+**1. SSRF on the three `?url=` endpoints (`dlna_ssrf.py`).** `/art`,
+`/stream` and `/radio_stream` take a caller-supplied URL. They used to fetch
+ANY http/https address, which made the gateway an unauthenticated SSRF proxy:
+`/art`'s error text was a clean open/closed/filtered **port oracle**, and
+`/stream` — which relays bytes with no content-type gating — returned the
+body of **any internal HTTP service** verbatim
+(`?url=http://127.0.0.1:8765/api/servers` dumped the JSON).
+`dlna_ssrf.guard(url)` now fronts all four fetch entry points **and every
+redirect hop**: a destination resolving to a private/loopback/link-local/
+reserved address is refused unless its host is a **device already in
+`SERVERS`/`RENDERERS`** (which is how the LocalFs file server on `:8200`
+stays reachable — it registers itself at boot). Public destinations stay
+allowed because cover art, station logos and radio streams are public by
+nature. Non-http(s) schemes (`file:`, `gopher:`, …) are refused outright.
+Read `dlna_ssrf.py`'s docstring for the two limits it does NOT claim to fix
+(host- not port-granularity; a DNS-rebinding window).
+
+**2. The error text WAS the oracle.** `/art` forwarded the upstream status
+and raw exception string. Every failure now returns an identical
+`502 {"error":"art unavailable"}` (`"stream unavailable"` for the relays) and
+the detail goes to the log only. `dlna_ssrf.guard` returns a bare bool for
+the same reason. **Do not "improve" these by forwarding the upstream status** —
+that is precisely the bug. Guarded by
+`tests/test_asgi.py::TestArtProxy::test_every_failure_looks_identical_to_the_caller`.
+
+**3. TLS verification is ON.** Five runtime call sites used
+`ssl._create_unverified_context()`, so cover art and HTTPS radio were
+MITM-able. Removed. Verified the real path still works end-to-end
+(coverartarchive → 307 → archive.org, verified cert). If a radio station ever
+fails to play with a certificate error, that is a real signal, not something
+to switch back off.
+
+**4. Untrusted device text is escaped and sanitised.** `esc()` in `app.js`
+escaped only `& < >` — fine for a text node, unsafe in the quoted attribute
+it actually lands in (`<option value="${esc(s.udn)}">`), and a UDN comes
+straight from a discovered device's XML. `esc()` now escapes both quote
+characters, and `dlna_discovery._clean_udn` / `_clean_name` strip
+markup-significant and control characters server-side as a second layer.
+Guarded by `tests/frontend/test_xss.py` (the UDN case genuinely fails on the
+old `esc()`).
+
+### Can a media file phone home? No — and here is what keeps it that way
+
+The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with
+mutagen `easy=True` and reads a **fixed allowlist of scalar fields**. It
+never touches the ID3 URL frames (`WOAR`/`WXXX`/`WCOM`), so nothing from a
+tag can become a URL the gateway fetches. Album art is a `localfs-art:<hash>`
+sentinel derived from the **hash of the embedded bytes**, never a tag string.
+
+The subtle part is `_sniff_image_mime`, which **ignores the declared MIME and
+sniffs magic bytes**. That is load-bearing, not cosmetic:
+
+  * ID3 `APIC` with MIME `-->` means the payload is a **URL**, not image
+    bytes — a documented phone-home form. Because we sniff, that payload is
+    served as opaque bytes and **never dereferenced**.
+  * An SVG "cover" is script-capable markup. Falling back to `image/jpeg`
+    means the browser refuses to parse it as SVG, so a cover cannot become an
+    XSS or a beacon.
+
+The allowlist is raster-only for exactly that reason. **Do not add
+`image/svg+xml` and do not trust the container's declared MIME** — either
+change reopens both vectors in one commit. Guarded by
+`tests/test_art_safety.py`.
+
+**What legitimately leaves the machine because of your files** (all
+documented in the External services table below): artist+album tags →
+MusicBrainz/Cover Art Archive during indexing; title/artist/album/duration →
+lrclib on the 📜 button; and — the privacy-relevant one — **video GPS
+coordinates → Nominatim automatically on every video scan**, at ~1 m
+precision with the contact email in the User-Agent. That is inherent to
+reverse-geocoding (cached per coordinate, ~1 req/s); the opt-out is leaving
+`LOCALFS_VIDEO_ROOT` unset.
 
 ## External services (outbound HTTP)
 

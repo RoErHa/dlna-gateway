@@ -322,8 +322,17 @@ class TestArtHandler(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._saved_cache_dir = dlna_art_cache.CACHE_DIR
         dlna_art_cache.CACHE_DIR = self._tmp.name
+        # These cases exercise art_fetch's REDIRECT / SIZE / CONTENT-TYPE
+        # logic against mocked sockets, using unresolvable placeholder hosts
+        # (fake.local, up/…). The SSRF guard added 2026-08-20 refuses those
+        # before a connection is attempted, which would make every case here
+        # test the guard instead of the thing it names. The guard has its own
+        # coverage in tests/test_ssrf.py, so neutralise it here.
+        self._guard = patch("dlna_ssrf.guard", return_value=True)
+        self._guard.start()
 
     def tearDown(self):
+        self._guard.stop()
         dlna_art_cache.CACHE_DIR = self._saved_cache_dir
         self._tmp.cleanup()
 

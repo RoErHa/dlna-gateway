@@ -347,12 +347,34 @@ class TestArtProxy(unittest.TestCase):
         self.assertEqual(api_playback.art_fetch("ftp://x/y")[0], 400)  # scheme
         self.assertEqual(api_playback.art_fetch("no-scheme")[0], 400)
 
-    def test_art_route_maps_fetch_result(self):
+    def test_every_failure_looks_identical_to_the_caller(self):
+        """SSRF hardening (2026-08-20): the route used to forward the
+        upstream status and the raw error text, which made /art a clean
+        open/closed/filtered oracle for any address — "Upstream 404" vs
+        "Connection refused" vs "timed out" were all distinguishable.
+        Every failure mode must now be indistinguishable: same 502, same
+        body. The detail goes to the log instead."""
         from unittest import mock
-        with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
-                               return_value=(400, "Missing url", b"")):
-            r = asyncio.run(dlna_asgi.art(url=""))
-            self.assertEqual(r.status_code, 400)
+        seen = set()
+        for code, detail in ((400, "Missing url"),
+                             (403, "Blocked"),
+                             (404, "Upstream 404"),
+                             (502, "Not an image: text/html"),
+                             (503, "[Errno 61] Connection refused"),
+                             (503, "timed out")):
+            with mock.patch.object(dlna_asgi.api_playback, "art_fetch_scaled",
+                                   return_value=(code, detail, b"")):
+                r = asyncio.run(dlna_asgi.art(url="http://x/c.jpg"))
+            seen.add((r.status_code, bytes(r.body)))
+            # The upstream detail must not reach the caller.
+            self.assertNotIn(b"refused", bytes(r.body).lower())
+            self.assertNotIn(b"timed out", bytes(r.body).lower())
+        self.assertEqual(len(seen), 1,
+                         f"failures are distinguishable — oracle reopened: {seen}")
+        self.assertEqual(next(iter(seen))[0], 502)
+
+    def test_art_route_maps_success(self):
+        from unittest import mock
         with mock.patch.object(dlna_asgi.api_playback, "art_fetch",
                                return_value=(200, "image/png", b"PNGDATA")):
             r = asyncio.run(dlna_asgi.art(url="x"))

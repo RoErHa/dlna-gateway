@@ -10,6 +10,7 @@ Standalone test (runs SSDP for 20 s and prints found devices):
     python dlna_discovery.py
 """
 import logging
+import re
 import socket
 import threading
 import time
@@ -49,6 +50,30 @@ log = logging.getLogger("dlna.discovery")
 ALLOWED_SERVER_NAME_PREFIX = "Asset UPnP"
 
 
+
+# Device-supplied text is UNTRUSTED: anything on the LAN can answer an
+# M-SEARCH and serve a description XML with arbitrary field contents. Both
+# the UDN and the friendly name are echoed to the PWA (the UDN into an
+# `<option value="…">` attribute), so a field carrying a quote could inject
+# markup. The frontend escapes too — this is the second layer, and it also
+# keeps junk out of the DB and the logs.
+_UDN_SAFE = re.compile(r"[^A-Za-z0-9:_.\-]")
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean_udn(raw: str) -> str:
+    """Strip anything a legitimate UDN cannot contain (RFC: `uuid:` + a UUID).
+    Sanitises rather than rejects — real devices deviate from the spec often
+    enough that dropping them outright would lose working hardware."""
+    return _UDN_SAFE.sub("", (raw or "").strip())[:128]
+
+
+def _clean_name(raw: str) -> str:
+    """Friendly names are free-form unicode, so only control characters and
+    the two markup-significant characters are removed."""
+    return _CTRL.sub("", (raw or "").strip()).replace("<", "").replace(">", "")[:200]
+
+
 # ── Device description fetcher ────────────────────────────────────
 
 def _fetch_device(location: str,
@@ -79,8 +104,9 @@ def _fetch_device(location: str,
         if device is None:
             return
 
-        udn  = device.findtext("u:UDN", "", ns) or f"uuid:{uuid.uuid4()}"
-        name = device.findtext("u:friendlyName", "Unknown Device", ns)
+        udn  = _clean_udn(device.findtext("u:UDN", "", ns)) or f"uuid:{uuid.uuid4()}"
+        name = _clean_name(
+            device.findtext("u:friendlyName", "", ns)) or "Unknown Device"
         dev_type = device.findtext("u:deviceType", "", ns)
 
         if gw_udn and udn == gw_udn:

@@ -25,11 +25,11 @@ import http.client
 import logging
 import re
 import selectors
-import ssl
 import threading
 import time
 import urllib.parse
 
+import dlna_ssrf
 from dlna_config import close_quietly
 from dlna_proxy_common import PROXY_IDLE_SEC, _MIME_MAP
 
@@ -45,6 +45,11 @@ def open_radio_upstream(upstream_url: str):
     Used by the 2.0 ASGI route (dlna_asgi.radio_stream) as a StreamingResponse
     source; the legacy `proxy_radio_stream` keeps its own inline open (it
     drives the stdlib handler's wfile via selectors — left untouched)."""
+    # SSRF guard — this relay returns the upstream body VERBATIM with no
+    # content-type gating, so without it any internal HTTP service the
+    # gateway can reach is readable by an unauthenticated caller.
+    if not dlna_ssrf.guard(upstream_url, "radio"):
+        return None, None, 0, ""
     parsed  = urllib.parse.urlparse(upstream_url)
     host    = parsed.netloc
     path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
@@ -52,8 +57,7 @@ def open_radio_upstream(upstream_url: str):
     conn = None
     try:
         if use_ssl:
-            conn = http.client.HTTPSConnection(
-                host, timeout=20, context=ssl._create_unverified_context())
+            conn = http.client.HTTPSConnection(host, timeout=20)
         else:
             conn = http.client.HTTPConnection(host, timeout=20)
         conn.request("GET", path, headers={
@@ -202,6 +206,11 @@ def proxy_radio_stream(upstream_url: str, handler):
     and StreamTitle is parked via _icy_set(). A server that ignores the
     header is relayed verbatim (no metadata, still plays).
     """
+    # SSRF guard — this relay returns the upstream body VERBATIM with no
+    # content-type gating, so without it any internal HTTP service the
+    # gateway can reach is readable by an unauthenticated caller.
+    if not dlna_ssrf.guard(upstream_url, "radio"):
+        return
     parsed  = urllib.parse.urlparse(upstream_url)
     host    = parsed.netloc
     path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
@@ -215,9 +224,7 @@ def proxy_radio_stream(upstream_url: str, handler):
     conn = None
     try:
         if use_ssl:
-            conn = http.client.HTTPSConnection(
-                host, timeout=20,
-                context=ssl._create_unverified_context())
+            conn = http.client.HTTPSConnection(host, timeout=20)
         else:
             conn = http.client.HTTPConnection(host, timeout=20)
 

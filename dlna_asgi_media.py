@@ -78,7 +78,13 @@ async def art(url: str = "", size: int = 0):
     code, ctype, body = await run_in_threadpool(
         api_playback.art_fetch_scaled, url, size)
     if code != 200:
-        return JSONResponse({"error": ctype}, status_code=code)
+        # Deliberately opaque. This used to return the upstream status and the
+        # raw exception text, which made /art a clean open/closed/filtered
+        # oracle for any address ("Upstream 404" vs "Connection refused" vs
+        # "timed out"). The detail is logged, not served; every failure looks
+        # identical to the caller.
+        log.info(f"/art refused or failed ({code}) for {url[:120]!r}: {ctype}")
+        return JSONResponse({"error": "art unavailable"}, status_code=502)
     return Response(content=body, media_type=ctype,
                     headers={"Cache-Control": "public, max-age=86400",
                              "Access-Control-Allow-Origin": "*"})
@@ -95,7 +101,7 @@ async def _audio_relay_response(url: str, range_hdr: str, client: str = "?"):
     conn, resp = await run_in_threadpool(
         dlna_stream_proxy.open_stream_upstream, url, range_hdr)
     if resp is None:
-        return JSONResponse({"error": "upstream unreachable"}, status_code=502)
+        return JSONResponse({"error": "stream unavailable"}, status_code=502)
 
     out = {"Access-Control-Allow-Origin": "*"}
     for hname in ("Content-Range", "Accept-Ranges", "Content-Length",
@@ -169,7 +175,7 @@ async def radio_stream(request: Request, url: str = ""):
     conn, resp, metaint, ctype = await run_in_threadpool(
         dlna_stream_proxy.open_radio_upstream, url)
     if resp is None:
-        return JSONResponse({"error": "radio upstream unreachable"},
+        return JSONResponse({"error": "stream unavailable"},
                             status_code=502)
     media_type = dlna_stream_proxy.normalize_audio_ctype(ctype) or "audio/mpeg"
 

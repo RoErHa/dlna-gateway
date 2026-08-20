@@ -19,10 +19,10 @@ monkey-patch a shorter window for chaos runs without waiting 5 min.
 import http.client
 import logging
 import selectors
-import ssl
 import time
 import urllib.parse
 
+import dlna_ssrf
 from dlna_config import close_quietly
 # Shared with the radio relay; re-exported so `dlna_stream_proxy.
 # normalize_audio_ctype` and `from dlna_stream_proxy import
@@ -56,6 +56,11 @@ def open_stream_upstream(upstream_url: str, range_hdr: str = ""):
     Used by the 2.0 ASGI route (dlna_asgi.stream) as a StreamingResponse
     source; the legacy `proxy_stream` keeps its own inline open (it's the
     chaos-tested selectors relay — left untouched)."""
+    # SSRF guard — this relay returns the upstream body VERBATIM with no
+    # content-type gating, so without it any internal HTTP service the
+    # gateway can reach is readable by an unauthenticated caller.
+    if not dlna_ssrf.guard(upstream_url, "stream"):
+        return None, None
     parsed  = urllib.parse.urlparse(upstream_url)
     host    = parsed.netloc
     path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
@@ -63,8 +68,7 @@ def open_stream_upstream(upstream_url: str, range_hdr: str = ""):
     conn = None
     try:
         if use_ssl:
-            conn = http.client.HTTPSConnection(
-                host, timeout=20, context=ssl._create_unverified_context())
+            conn = http.client.HTTPSConnection(host, timeout=20)
         else:
             conn = http.client.HTTPConnection(host, timeout=20)
         req_headers = {"User-Agent": "DLNAGateway/1.0", "Connection": "close"}
@@ -86,6 +90,11 @@ def proxy_stream(upstream_url: str, handler):
     Forwards the browser's Range header so <audio> seeks don't hit the
     media server directly (same-origin only — no mixed-content issues).
     """
+    # SSRF guard — this relay returns the upstream body VERBATIM with no
+    # content-type gating, so without it any internal HTTP service the
+    # gateway can reach is readable by an unauthenticated caller.
+    if not dlna_ssrf.guard(upstream_url, "stream"):
+        return
     parsed  = urllib.parse.urlparse(upstream_url)
     host    = parsed.netloc
     path    = parsed.path + (f"?{parsed.query}" if parsed.query else "")
@@ -102,9 +111,7 @@ def proxy_stream(upstream_url: str, handler):
     conn = None
     try:
         if use_ssl:
-            conn = http.client.HTTPSConnection(
-                host, timeout=20,
-                context=ssl._create_unverified_context())
+            conn = http.client.HTTPSConnection(host, timeout=20)
         else:
             conn = http.client.HTTPConnection(host, timeout=20)
 
