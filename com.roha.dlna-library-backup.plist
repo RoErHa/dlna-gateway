@@ -1,0 +1,84 @@
+<!--
+  com.roha.dlna-library-backup.plist  —  TEMPLATE (macOS LaunchAgent)
+  ───────────────────────────────────────────────────────────────────
+  Weekly snapshot of library.db. **macOS only.** On Linux use a systemd
+  timer; on Windows use Task Scheduler. The script itself is portable.
+
+  WHY THIS EXISTS: library.db holds the index AND everything a person
+  created that deliberately survives a rebuild — playlists, album
+  favourites, audiobook resume positions, play counts, lyrics, radio
+  stations, metadata overrides. Re-indexing rebuilds `tracks`; it cannot
+  rebuild those. The file is gitignored and (since 2026-08-20) purged
+  from git history, so git is NOT a safety net for it.
+
+  Runs backup-library.sh every Sunday at 03:30 local — deliberately a
+  different day/hour from com.roha.dlna-cert-renew (Mon 04:30) so the two
+  jobs never contend. The snapshot uses SQLite's online-backup API, so it
+  is safe while the gateway is running and needs no downtime.
+
+  Output goes to library-backup.log (script-managed). The plist's
+  StandardOut/Error catch only launchd-level errors before the script
+  starts.
+
+  BEFORE YOU INSTALL:
+    1. Replace `/path/to/dlna-gateway` with your clone's absolute path.
+    2. Optionally set BACKUP_DIR / KEEP below (defaults:
+       ~/dlna-gateway-backups, 8 snapshots ≈ two months).
+    3. Optionally rename the file + the <Label> to your namespace.
+
+  INSTALL:
+    cp com.roha.dlna-library-backup.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.roha.dlna-library-backup.plist
+
+  MANAGE:
+    launchctl list | grep library-backup                            # confirm
+    launchctl kickstart gui/$(id -u)/com.roha.dlna-library-backup   # run now
+    ./backup-library.sh --list                                      # snapshots
+    tail -f /path/to/dlna-gateway/library-backup.log                # results
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roha.dlna-library-backup</string>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/dlna-gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/dlna-gateway/backup-library.sh</string>
+    </array>
+
+    <!-- Weekly: Sunday 03:30 (Weekday 0 = Sun on macOS launchd) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- If the Mac was asleep at the scheduled time, launchd runs it on wake -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dlna-library-backup.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dlna-library-backup.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- Uncomment to override the script defaults:
+        <key>BACKUP_DIR</key>
+        <string>/Volumes/SomeDrive/dlna-backups</string>
+        <key>KEEP</key>
+        <string>8</string>
+        -->
+    </dict>
+</dict>
+</plist>

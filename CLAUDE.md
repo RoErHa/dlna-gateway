@@ -1252,6 +1252,56 @@ DELETE FROM album_art WHERE source='notfound';
 
 Those albums become bare again and get looked up on the next `ART_FETCHER.trigger()` — which means either a rebuild-index of any server, or a gateway restart (the 120s startup scan).
 
+## Backing up library.db (weekly)
+
+`library.db` holds the index **and everything a person created that
+deliberately survives a rebuild** — playlists, album favourites, audiobook
+resume positions, play counts, lyrics, radio stations, `metadata_overrides`,
+`book_meta`. Re-indexing rebuilds `tracks`; it cannot rebuild those. The file
+is gitignored and, since the 2026-08-20 history rewrite, purged from git
+history entirely — so **git is not a safety net for it**. This job is.
+
+**`backup-library.sh` + `com.roha.dlna-library-backup` LaunchAgent (Sundays
+03:30)** — deliberately a different day/hour from the cert renewal (Mon
+04:30) so the two never contend. Output appends to `library-backup.log`.
+
+The one thing that makes it correct: **`sqlite3 .backup`, not `cp`.** The
+gateway runs WAL mode and is writing while the job fires; a plain copy can
+capture a torn page set or miss a checkpointed WAL and produce a file that
+opens cleanly and is subtly wrong. `.backup` uses SQLite's online-backup
+API — consistent, concurrent-safe, no downtime.
+
+Every snapshot is verified before it counts: `PRAGMA integrity_check` **and**
+a non-zero `tracks` count, because an empty-but-valid database passes
+integrity_check happily and would be a silent disaster to keep while pruning
+a good one. Snapshots are written to `.part` first, so an interrupted run
+can't leave a half-file looking valid. Pruning runs only AFTER a good
+snapshot exists, so a failing run never reduces how many backups you have.
+
+Retention: newest 8 (≈2 months, ~64 MB each). `BACKUP_DIR` / `KEEP` override
+via env or the plist.
+
+```bash
+./backup-library.sh              # snapshot now
+./backup-library.sh --list       # what exists
+./backup-library.sh --keep 12    # override retention for this run
+launchctl kickstart gui/$(id -u)/com.roha.dlna-library-backup   # run the job
+```
+
+**Restore is deliberately manual** — clobbering a live index should be a
+choice, not a script:
+
+```bash
+launchctl bootout gui/$(id -u)/com.roha.dlna-gateway
+cp ~/dlna-gateway-backups/library-YYYYMMDD-HHMMSS.db library.db
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.roha.dlna-gateway.plist
+```
+
+⚠️ **The script must stay bash 3.2-compatible.** macOS ships bash 3.2 and
+that is what launchd runs it under. `mapfile` was used in the first draft and
+failed at exactly that point — retention silently never pruned while the
+snapshot itself succeeded, which is the worst shape of bug for a backup job.
+
 ## Restarting the gateway
 
 The gateway runs under launchd (LaunchAgent `com.roha.dlna-gateway`). To restart:
