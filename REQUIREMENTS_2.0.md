@@ -7,7 +7,8 @@
 > (`dlna_asgi.py`)**, NOT `tailscale serve` (tried and dropped — broken on this
 > mini's Tailscale `:443`). For the as-built picture see **`CLAUDE.md`** (living
 > reference), **`docs/BUILDING_2.0.md`** (build log + checklist), and
-> **`docs/CUTOVER_RUNBOOK.md`**. Everything below is the original proposal.
+> the cutover runbook (kept locally, untracked). Everything below is the
+> original proposal.
 
 Status: **proposal / backlog (HISTORICAL).** Nothing here was committed to a
 release date. This was the running list of "big improvements to come" for a 2.0

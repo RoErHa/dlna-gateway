@@ -685,8 +685,7 @@ def list_pages():
                    "RoHaLocalFS file server (audio + /localfs/video) · 26125 "
                    "(legacy AssetUPnP, decommissioned). The HTTP/2 + "
                    "app-owned-TLS roadmap is now DONE — Hypercorn terminates "
-                   "TLS/h2 natively. Cutover: docs/CUTOVER_RUNBOOK.md + "
-                   "CUTOVER_LAUNCHD.md.", note))
+                   "TLS/h2 natively.", note))
 
     # ---- Tool options reference (per tool, every flag explained) ----
     story.append(PageBreak())

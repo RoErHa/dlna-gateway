@@ -878,7 +878,7 @@ launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 > HTTP/3 (QUIC) is a later `--quic-bind` add. **`tailscale serve` was tried and
 > dropped** (broken on this mini's Tailscale `:443`) — the app owning TLS is the
 > chosen end-state. Verified trusted h2 over the tailnet hostname. Full detail:
-> `docs/BUILDING_2.0.md`, `docs/CUTOVER_RUNBOOK.md`, `docs/ARCHITECTURE.PDF`.
+> `docs/BUILDING_2.0.md`, `docs/ARCHITECTURE.PDF`.
 > **Everything below this line is the pre-2.0 (1.x stdlib) state, kept for
 > historical context — it no longer describes what runs.**
 
@@ -1106,7 +1106,7 @@ The remaining **78** unindexed files are SAME-folder same-tag collisions
 tag ambiguities; fix by real retagging (interactive `beets --timid`
 session) if ever worth it. The full audit report — and the proposed
 **audiobooks plan** (second LocalFs root + `playback_positions`
-cross-session resume; P1–P5) — is `docs/REPORTS.html` (self-contained
+cross-session resume; P1–P5) — is `docs/REPORTS.html` (LOCAL ONLY, untracked — self-contained
 HTML, open in any browser). The bigger find: **10,859 of 10,890 manual
 `metadata_overrides` are ORPHANED** — 10,810 still key on dead AssetUPnP
 `:26125` URLs (the ~10k `improve_song_years` year corrections + user
@@ -3106,7 +3106,7 @@ safe — the old "refuse while the worker is live" guard was removed too.)
 
 ## Audiobooks (P1+P2 shipped 2026-07-13; P3–P5 planned)
 
-Full plan/design: `docs/REPORTS.html` Part II. What's live:
+Full plan/design: `docs/REPORTS.html` Part II (local only, untracked). What's live:
 
 - **Second LocalFs library** — `AUDIOBOOKS_ROOT` in `.env`
   (`/Volumes/SAMDATA-1TB/Audio_Books`; or `localfs.audiobooks_root` in

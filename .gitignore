@@ -79,3 +79,17 @@ art_cache/
 # (docs/FIELD_MANUAL.html was un-ignored on 2026-08-21 — it is architecture
 # documentation with nothing sensitive in it, and it is worth reading.)
 docs/SECURITY_AUDIT.html
+
+# Untracked 2026-08-21, before the repo went public: personal working
+# documents, not project documentation. They are completed one-time
+# procedures for ONE machine (the 1.x->2.0 cutover, its LaunchAgent draft,
+# the Cleanup C refactor, a superseded refactor plan) plus a report on the
+# maintainer's OWN library — 236 missing files, 10,859 dead overrides. All
+# still on disk locally; none of it tells a downloader anything about
+# running the gateway, and the two cutover files were the only tracked
+# things in the repo containing a /Users/<name> path.
+docs/CUTOVER_LAUNCHD.md
+docs/CUTOVER_RUNBOOK.md
+docs/CLEANUP_C_RUNBOOK.md
+docs/dlna_gateway_refactoring_plan.pdf
+docs/REPORTS.html

@@ -73,9 +73,6 @@ auto-discovering a `tailscale cert`). The Naim-facing `/gw/*` UPnP surface is
 served by the app on the plain `:8765` bind; RoHaLocalFS (`:8200`) runs
 in-process — both stay plain HTTP for the Naim. `python dlna_gateway.py` is no
 longer a server (Cleanup C); it keeps only `--list-devices` / `--reset-devices`.
-A production LaunchAgent that adopts this on `:8443`/`:8765` is documented in
-[docs/CUTOVER_LAUNCHD.md](docs/CUTOVER_LAUNCHD.md).
-
 For auto-start at login: see the comments at the top of
 `com.roha.dlna-gateway.plist` (it's a LaunchAgent template — edit the
 path placeholders, copy to `~/Library/LaunchAgents/`, `launchctl load`).

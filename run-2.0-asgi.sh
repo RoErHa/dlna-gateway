@@ -10,7 +10,7 @@
 # therefore REFUSES to start while the launchd gateway is loaded; stop that
 # first if you really want a foreground run (instructions printed below).
 #
-# Live config (matches CUTOVER_LAUNCHD.md):
+# Live config (matches the installed LaunchAgent):
 #   • Hypercorn main app   :8443 TLS+HTTP/2 (ALPN)  +  :8765 plain
 #     Listen addresses come from .env via hypercorn_conf.py (NOT 0.0.0.0).
 #   • /gw/* (UPnP, Naim)   served by the app on the :8765 plain bind (no HTTPS)
@@ -50,7 +50,7 @@ fi
 # (dlna_config.raise_fd_limit() also raises it in-process as a backstop.)
 ulimit -n 8192 2>/dev/null || true
 
-# ── Live identity + ports (match the launchd plist / CUTOVER_LAUNCHD.md) ──────
+# ── Live identity + ports (match the installed launchd plist) ────────────────
 export APP_VERSION="${APP_VERSION:-2.0.0}"
 export GW_UDN="${GW_UDN:-uuid:dlna-gateway-iina-8765}"
 export GW_NAME="${GW_NAME:-DLNA Gateway (IINA)}"
