@@ -136,6 +136,7 @@ loop (it's native now, not bridged).
    launch the ASGI stack (`exec ./run-2.0-asgi.sh "$@"`, or hypercorn directly)
    instead of `dlna_gateway.py`.
 3. **Remove `GATEWAY_PORT` plumbing:** `com.roha.dlna-gateway.cutover.plist`
+   *(that file was deleted on 2026-08-21 — see `docs/CUTOVER_RUNBOOK.md`)*
    (the key @82 + comment @21) and the **installed** plist; `run-2.0-asgi.sh`
    (@15/59/71/110); `dlna_asgi.py` (@79/82/89/111/131 — use `PLAIN_PORT`);
    `tests/test_asgi.py` (@639/674/684).

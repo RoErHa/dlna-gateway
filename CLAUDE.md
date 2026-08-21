@@ -329,7 +329,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
 | `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (pure per-file helpers — the album-key folder identity and the namespace-salted track id), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
-| `dlna_localfs_http.py` | The two PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, and parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200). |
+| `dlna_localfs_http.py` | The PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200), and `resolve_within` — the containment test every byte route asks before opening a file (path COMPONENTS, not string prefixes; returns the RESOLVED path so the caller cannot re-open the original through a TOCTOU gap). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
 | `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`; gated on `$LOCALFS_MUSIC_ROOT` / `localfs.root` in `config.json`. Starts the file server, creates a `LocalFsProvider` with the LAN-IP `base_url`, binds it via `dlna_providers.bind_provider`, adds a synthetic `MediaServer` entry to `SERVERS`, kicks off the initial scan in the background. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
@@ -341,7 +341,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_player_transport.py` | `TransportMixin` — SetURI/Play/Seek and the consecutive-send-failure abort. |
 | `dlna_player_volume.py` | `VolumeMixin` — startup volume + user trim, via RenderingControl SOAP. |
 | `dlna_player_registry.py` | `QueueRegistry` + the process-wide `QUEUES` singleton (one `RendererQueue` per renderer UDN). |
-| `dlna_xml.py` | The ONE place untrusted XML is parsed. Refuses DTDs outright (entity-expansion amplification was measured at 10× per nesting level on the unauthenticated `/gw/*` SOAP endpoints) and caps input size; raises `ParseError` so existing handlers need no new branch. |
+| `dlna_xml.py` | The ONE place untrusted XML is parsed. Refuses DTDs outright (entity-expansion amplification was measured at 10× per nesting level on the unauthenticated `/gw/*` SOAP endpoints) and caps input size; raises `ParseError` so existing handlers need no new branch. Also `read_capped` — the bounded READ that must happen first, because the size cap above can only judge bytes already in memory. |
 | `hypercorn_conf.py` | The server's listen addresses, read from `.env`. Must stay PICKLABLE — hypercorn pickles the config namespace for workers, so no `def`/class/module may survive at module scope. |
 | `dlna_ssrf.py` | The outbound-fetch guard fronting every caller-supplied `?url=` (`/art`, `/stream`, `/radio_stream`) and every redirect hop. Refuses private/loopback/link-local destinations unless the host is a device already in `SERVERS`/`RENDERERS`; refuses non-http(s) schemes. See "Security posture". |
 | `dlna_stream_proxy.py` | Browser-audio HTTP proxy (`/stream`) with 5-min idle timeout — the **byte-perfect** Range pass-through. |
@@ -1174,15 +1174,24 @@ completeness, not capability:
 
 ## Dependencies
 
-Python packages — all optional, the gateway degrades gracefully if missing (see `requirements.txt` for the canonical list):
+**NOT all optional** — that changed at the 2.0 cutover and this section said
+otherwise until 2026-08-21. `requirements.txt` is the canonical list and
+explains each entry; the short version:
 
-```
-rich>=13.7.0              # colored terminal logging
-python-json-logger>=2.0.7 # structured JSON logging
-python-dotenv>=1.0.0      # .env file loader (see caveat below)
-```
+| Package | Needed for |
+|---|---|
+| `fastapi` · `starlette` · `hypercorn` | **REQUIRED.** The gateway IS `dlna_asgi:app`; without these there is no server at all (the stdlib HTTP edge they once supplemented was deleted in Cleanup C). |
+| `mutagen` | **Required by the LocalFs backend** — i.e. in practice. Absent, the gateway still boots and serves, and the scan fails loudly with the install command. Only a UPnP-provider setup runs without it. |
+| `watchdog` | Incremental rescans (`LocalFsProvider.watch_changes`). |
+| `Pillow` | Cover-art downscaling. Absent → full-resolution originals, i.e. slower, never broken. |
+| `rich` · `python-json-logger` | Log formatting. Genuinely cosmetic. |
+| `python-dotenv` | Convenience only: `dlna_config` has a built-in fallback parser, so `.env` loads either way (`tests/test_env_loader.py`). |
 
-Standard library only for core UPnP functionality. Chromecast support was removed in commit `2a8d81e`; `PyChromecast` was dropped from `requirements.txt` accordingly.
+Verified on 2026-08-21 by stripping rich, python-dotenv, mutagen, watchdog and
+Pillow from a fresh clone's venv and removing ffmpeg from PATH: it boots,
+serves the PWA and the API, and `.env` still loads.
+
+The UPnP/DLNA protocol work itself — SSDP, SOAP, DIDL — is standard library only; the dependencies above are the server, the tag reader and the niceties. Chromecast support was removed in commit `2a8d81e`; `PyChromecast` was dropped from `requirements.txt` accordingly.
 
 External CLI binaries — optional per feature:
 
