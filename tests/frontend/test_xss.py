@@ -102,3 +102,24 @@ def test_quote_in_track_title_stays_inert(page, stub, gateway):
     assert page.locator("[onmouseover]").count() == 0, "payload became markup"
     # The quotes must survive as literal text inside the title element.
     assert title in page.evaluate("document.body.innerText")
+
+
+def test_album_header_shows_an_ampersand_literally(page, stub, gateway):
+    """textContent does not parse HTML, so escaping BEFORE assigning it
+    renders the entity itself: "Alder & Ash" appeared as "Alder &amp; Ash"
+    in the album header while the track rows below were correct.
+
+    The safety direction was never wrong — over-escaping, not under — but
+    `&` is common enough in band names (Simon & Garfunkel, Earth, Wind &
+    Fire) that it was visible on a real library. Found while generating the
+    README screenshots, 2026-08-21.
+    """
+    gateway.add_album("Alder & Ash", "Aurora Falls", 2)
+    gateway.add_track("Alder & Ash", "Aurora Falls", "Clearwater")
+    _boot(page, stub)
+    page.evaluate("setBrowseMode('albums')")
+    page.wait_for_function(
+        "document.querySelectorAll('#item-list .row').length > 0", timeout=5000)
+    page.locator("#item-list .row").first.click()
+    page.wait_for_selector("#browse-play-all", timeout=5000)
+    assert page.text_content("#browse-section-title") == "Alder & Ash"

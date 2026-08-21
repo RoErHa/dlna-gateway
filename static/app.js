@@ -1097,7 +1097,12 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   // Back label = artist name (the level we're returning to)
   $("browse-back-title").textContent = backLabel;
   $("browse-section-hdr").style.display = "";
-  $("browse-section-title").textContent = esc(artist||"Various Artists");
+  // NOT esc(): textContent does not parse HTML, so escaping first renders the
+  // entity literally — "Alder & Ash" showed as "Alder &amp; Ash" in the album
+  // header while the track rows below it were correct. Assigning to
+  // textContent is already injection-safe; esc() is for values interpolated
+  // into innerHTML or an attribute. (Found in the README screenshots, 2026-08-21.)
+  $("browse-section-title").textContent = artist || "Various Artists";
   $("browse-play-all").onclick = ()=>playAlbumFromDB(artist, album, albumKey);
   // Hide the star until the track count is known so single-track
   // "albums" (orphan metadata-less tracks) never expose it.
