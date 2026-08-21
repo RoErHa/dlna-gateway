@@ -36,11 +36,18 @@
     <key>WorkingDirectory</key>
     <string>/path/to/dlna-gateway</string>
 
+    <!-- The gateway is an ASGI app: Hypercorn serves dlna_asgi:app, and its
+         lifespan starts every background service. Do NOT run dlna_gateway.py
+         here — since 2.0 that entrypoint only keeps the device-DB utilities;
+         launched as a job it prints a hint and exits, so the job dies at
+         login and nothing ever listens. Listen addresses + TLS come from
+         .env via hypercorn_conf.py. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/path/to/dlna-gateway/.venv/bin/python</string>
-        <string>/path/to/dlna-gateway/dlna_gateway.py</string>
-        <string>--no-browser</string>
+        <string>/path/to/dlna-gateway/.venv/bin/hypercorn</string>
+        <string>-c</string>
+        <string>file:/path/to/dlna-gateway/hypercorn_conf.py</string>
+        <string>dlna_asgi:app</string>
     </array>
 
     <!-- Start at login -->
@@ -58,7 +65,7 @@
     <!-- File descriptor and process limits — MUST be inside SoftResourceLimits.
          Without this wrapper, launchd silently ignores them and the gateway
          hits the default 256 FD limit, causing "Too many open files" and
-         "unable to open database" errors under Chromecast mDNS discovery. -->
+         "unable to open database" errors under a full library scan. -->
     <key>SoftResourceLimits</key>
     <dict>
         <key>NumberOfFiles</key>

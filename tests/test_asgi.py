@@ -27,6 +27,7 @@ import dlna_gateway
 import api_subsonic
 import api_subsonic_proto
 import api_upnp
+import api_upnp_ids
 from dlna_asgi_bridge import run_legacy_sync
 from dlna_config import VERSION
 
@@ -1132,7 +1133,10 @@ class TestGwDeviceAsgi(unittest.TestCase):
         # URLBase MUST be the plain ASGI port (the Naim can't do TLS), never :8443
         self.assertIn(f"http://10.0.0.5:{dlna_asgi.PLAIN_PORT}", body)
         self.assertNotIn(":8443", body)
-        self.assertIn("uuid:dlna-gateway-iina-8765", body)   # adopted identity
+        # The CONFIGURED identity, not a literal: GW_UDN comes from .env, so
+        # hardcoding this machine's UDN failed the offline suite on every
+        # other clone (found by the fresh-clone test, 2026-08-21).
+        self.assertIn(api_upnp_ids.GW_UDN, body)
         self.assertIn("ContentDirectory", body)
 
     def test_cd_desc_xml_is_scpd(self):

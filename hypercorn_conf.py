@@ -74,9 +74,28 @@ if not certfile:
     del _host
 
 # Without a certificate there is nothing to terminate TLS with, so drop the
-# TLS listener rather than let hypercorn fail on a half-configured bind.
+# TLS listener rather than let hypercorn fail on a half-configured bind — and
+# MOVE the plain addresses into `bind`.
+#
+# That move is not cosmetic. Hypercorn only reads `insecure_bind` when TLS is
+# enabled; with no certificate it serves `bind` alone and ignores
+# `insecure_bind` entirely (hypercorn/config.py, `create_sockets`). So a
+# certless run — a fresh clone, or `GATEWAY_TLS=0 ./run-2.0-asgi.sh` — used to
+# end up with `bind = []` and `insecure_bind` populated, i.e. ZERO listening
+# sockets, while still logging a clean startup and announcing itself on SSDP.
+# Found 2026-08-21 on the first fresh-clone boot test.
 if not (certfile and keyfile):
-    bind = []
+    bind = insecure_bind
+    insecure_bind = []
+
+# Zero listeners is never what anyone meant, and it fails silently — the app
+# starts, the log looks healthy, nothing answers. Fail loudly instead, the same
+# reasoning as the missing-address case in the docstring.
+if not bind:
+    raise RuntimeError(
+        "hypercorn_conf: no listen address configured. Set GATEWAY_BIND_PLAIN "
+        "(and GATEWAY_BIND_TLS plus a certificate for TLS) in .env."
+    )
 
 accesslog = None      # access logging off; the app logs what matters
 errorlog = "-"        # stderr, which launchd captures
