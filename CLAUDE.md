@@ -1777,6 +1777,49 @@ reason.
 > (SSDP lines end `\r\n`). If a device ever vanishes, run with
 > `GATEWAY_DEBUG=1` and `grep "announced a URL for" gateway.log`.
 
+**10. Nothing a peer can hold is unbounded (2026-08-21).** Three resources
+had no ceiling, all measured on the running gateway before being fixed.
+*(a)* **Reads from devices** — anything that answers an SSDP packet becomes a
+renderer/server the gateway talks SOAP to, and every response was a bare
+`resp.read()`. `dlna_xml.read_capped` bounds the read itself; it lives beside
+`safe_fromstring` because that cap could only ever judge bytes **already in
+memory**. Every device-facing site now uses it, plus the four outbound
+service calls, and `tests/test_resource_limits.py` asserts no bare read is
+left — so the next one added is caught rather than discovered. *(b)*
+**Audio relays** — 40 stalled `/stream` requests cost **120 file
+descriptors** (client socket + upstream socket + the LocalFs server's own
+accepted socket), and 80 survived the client disconnecting, draining over
+about a minute. `/stream`, `/radio_stream` and Subsonic `/rest/stream` share
+a **64-slot cap** (`dlna_asgi_state.AUDIO_RELAYS`) and answer 503 +
+`Retry-After` beyond it. *(c)* **SSE subscribers** — same shape, capped at 64
+(`SSE_STREAMS`). Verified live: 80 simultaneous requests to each → exactly 64
+× 200 and 16 × 503, with full recovery and no slot leak afterwards.
+> **What is NOT a problem — do not "fix" these again.** Half-open requests
+> (classic slowloris) are reaped by hypercorn's `keep_alive_timeout` in ~5 s
+> (60 of them never moved the FD count). The shared 256-token threadpool
+> absorbed **150 concurrent full `/stream` pulls with zero failures**. And
+> `/art` already capped its read at 12 MB *during* the read — that is the
+> pattern everything else now copies.
+
+**11. A switched-off renderer used to cost six seconds per poll
+(2026-08-21).** `tests/chaos.py` failed on `snapshot (no udn) > 5s`, and the
+cause was real: `/api/renderer_state` with no udn took **6.011 s** while the
+same call for the reachable Naim took **2 ms**. Two compounding bugs.
+`QueueRegistry.snapshot_all` walked every queue **sequentially** — and queues
+are *never evicted*, so it visited the LG TV, switched off, and paid its full
+SOAP timeout; `RendererQueue.snapshot` already fires its own two SOAP calls
+in parallel precisely so a dead renderer costs ~6 s not 12 s, and doing the
+queues sequentially threw that away one level up, making the total the **SUM**
+over dead renderers. It now fans out in parallel (4 unresponsive renderers:
+1.62 s → 0.41 s in a direct A/B), and a queue that misses the deadline is
+served from its own cached snapshot. On top of that, `snapshot()` now leaves
+a renderer that answered `UNREACHABLE` alone for `_UNREACHABLE_BACKOFF_SEC`
+(30 s) instead of re-dialling it every time the 500 ms cache expires —
+**the PWA polls this endpoint every second while audio plays**. Recovery is
+unaffected: the monitor thread probes independently while a queue is actually
+playing. After both fixes chaos passes and runs 400 actions in 9.5 s instead
+of 25.1 s.
+
 ### Can a media file phone home? No — and here is what keeps it that way
 
 The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with
