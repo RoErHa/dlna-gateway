@@ -1,168 +1,59 @@
 # DLNA Gateway
 
-A self-hosted UPnP/DLNA music library gateway. Discovers UPnP MediaServers
-(AssetUPnP, MinimServer, Jellyfin, Plex DLNA) on your local network,
-indexes their music into a local SQLite database, and serves a fast PWA
-web UI for browsing and playback. Plays to UPnP MediaRenderers (Naim,
-Sonos in UPnP mode, etc.) or directly in any modern browser.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-191%20checks%20%C2%B7%201%2C089%20unit%20%C2%B7%20231%20browser-brightgreen.svg)](#testing)
+[![Security policy](https://img.shields.io/badge/security-policy-informational.svg)](SECURITY.md)
 
-Built because the manufacturer apps (Focal & Naim, etc.) are slow,
-flaky, or platform-locked. This one runs anywhere Python runs and is
-usable from any device with a browser.
+**Your music, on your hi-fi, from your own files — with a web app that is
+actually fast.**
 
-**2.1** — the gateway is a **FastAPI ASGI app served by Hypercorn**, which
-terminates **TLS + HTTP/2** natively (HTTP/3 ready) using a `tailscale cert`.
-A LAN-only plain-HTTP device tier (`/gw/*`) and the RoHaLocalFS file server
-stay un-encrypted for UPnP renderers that can't do HTTPS. See
-[docs/ARCHITECTURE.PDF](docs/ARCHITECTURE.PDF) for the full picture.
+A self-hosted UPnP/DLNA music gateway. Point it at a folder of music (or at
+any UPnP media server you already run), and it gives you a browsable library
+in the browser, on your phone, on your streamer, and in the car. Built
+because the manufacturer apps — Focal & Naim and friends — are slow, flaky,
+or locked to one platform.
+
+![The album grid](docs/img/album-grid.png)
+
+## Why you might want it
+
+- **Bit-perfect to your hi-fi.** For a UPnP renderer the gateway is *not in
+  the audio path*: it sends `SetURI` + `Play` and the streamer pulls the
+  original bytes straight off disk. No transcoding, no resampling, no mixer.
+  The volume slider drives the renderer's own hardware volume.
+- **It indexes your files, not someone else's catalogue.** The built-in
+  RoHaLocalFS backend reads the tags in your folder and serves the files
+  itself — no second media server to install, run and keep in sync.
+- **It works in the car.** A Subsonic-compatible API means a native client
+  like [Amperfy](https://github.com/BLeeEZ/amperfy) gives you proper
+  **CarPlay**, which a web app fundamentally cannot.
+- **Audiobooks that resume anywhere.** The bookmark lives on the server, per
+  book — so a chapter you stopped on the streamer picks up in the car, and
+  then on your phone in the kitchen.
+- **Your streamer can browse it directly.** The gateway announces *itself*
+  as a DLNA Media Server, so the Naim's own front panel sees your whole
+  library — artists, albums, genres, playlists, favourites — with no phone
+  involved.
+- **One person's real library.** ~26,000 tracks, ~11,600 audiobook chapters
+  and a few thousand videos, in daily use. The awkward parts — duplicate
+  editions, compilations scattered across folders, FTS corruption, renderers
+  that stop answering — are handled because they had to be.
+
+| Now playing | Internet radio |
+|---|---|
+| ![Now playing](docs/img/now-playing.png) | ![Radio stations](docs/img/radio.png) |
+
+| Audiobooks — continue listening | On a phone |
+|---|---|
+| ![Audiobook shelf](docs/img/audiobooks.png) | <img src="docs/img/mobile-browse.png" width="300" alt="Phone layout"> |
+
+> Screenshots are generated from a synthetic library by
+> `tools/screenshots.py`, which drives the same stub the browser test suite
+> uses — so they are reproducible, and they are not anyone's listening
+> history.
 
 ---
-
-## Features
-
-- **One library, many sources.** Indexes anything that speaks UPnP
-  ContentDirectory — *and* your own filesystem via the built-in
-  **RoHaLocalFS** backend (point it at a music folder; no separate
-  media server needed). Multiple sources coexist and the PWA has a
-  source picker to switch between them.
-- **Two playback paths.**
-  - **UPnP renderers** — sends `SetURI` + `Play` SOAP to the device;
-    the renderer streams audio directly from the source server
-    (gateway is **not** in the audio path; bit-perfect).
-  - **Browser audio** — `<audio>` element + a per-tab `/stream`
-    Range-proxy. Works on any device with a browser.
-- **PWA web UI.** Letter-indexed browse (artists / albums / tracks /
-  genres / decades), FTS5 search (type-ahead: the last word matches as
-  a prefix), playlists, album-level favourites, lyrics (via lrclib),
-  album art (sibling → MusicBrainz / Cover Art Archive fallback). For
-  RoHaLocalFS, albums group by folder (one folder = one album);
-  compilations whose tracks are scattered across per-artist folders can
-  be surfaced as playlists with `tools/compilation_playlists.py`.
-- **Metadata enrichment — beets, tag-in-place.** `tools/beets_enrich.py`
-  wraps a [beets](https://beets.io/) import that writes clean tags + MBIDs
-  **into your files** (MusicBrainz + AcoustID), in place — never moving or
-  copying them. The gateway's indexer reads those enriched tags on the next
-  rebuild, so beets is the **single** upstream source of truth.
-  `tools/post_beets_reindex.py` does the follow-up in one shot (clear stale
-  overrides, then reindex). *(The old in-process AcoustID worker was an
-  alternative path; it was removed in 2.0 — it did the same fingerprint →
-  MusicBrainz job and collided with beets, which is the better tagger.)*
-- **Browsable by your renderer (DLNA Media Server).** The gateway also
-  announces *itself* as a full DLNA Media Server, so a UPnP renderer like the
-  Naim can browse your whole library — Artists / Albums (#-A-Z) / Genres /
-  Playlists / Favourite Albums — and play directly, no PWA needed.
-- **Internet radio ("📡 Stations").** Search the radio-browser.info
-  catalogue, favourite up to 25 stations, play with ICY now-playing
-  metadata in a dedicated radio screen.
-- **Audiobooks.** Point `AUDIOBOOKS_ROOT` at a second folder and it is
-  indexed as its own source — kept out of music browse, search and radio
-  by construction (it is a separate UDN). Books remember **where you
-  stopped, server-side per book**, so every entry point resumes on every
-  device: the PWA, the Naim, and CarPlay (Subsonic bookmarks) all read
-  and write the same position. Plus per-book playback speed, a sleep
-  timer, m4b chapter marks, a "continue listening" shelf, and optional
-  series/author metadata from OpenLibrary.
-- **Home videos (optional).** Point `LOCALFS_VIDEO_ROOT` at a folder and
-  the gateway indexes it, generating titles from **metadata rather than
-  filenames** (GPS reverse-geocoded location + timestamp), and exposes a
-  browse tree by date / location / person — in the PWA and over DLNA to a
-  TV. See [docs/VIDEO_SUPPORT.md](docs/VIDEO_SUPPORT.md).
-- **Subsonic-compatible API** (`/rest/*`). Read-only-ish surface that
-  lets Subsonic clients (Amperfy, substreamer, …) browse and stream.
-  Designed for **CarPlay**, which the PWA can't do.
-- **Concurrent playback.** Per-renderer queue model; multiple users on
-  multiple renderers can play simultaneously without stepping on each
-  other (`409 Conflict` if you try to take over a busy renderer).
-- **Self-healing.** Detects and auto-repairs FTS5 index corruption
-  during rebuild-index instead of dying.
-- **Observability.** Greppable per-track playback logs; client-side
-  errors POST to `/api/client_log` and land in the same log.
-
-## Security
-
-**The gateway is designed for a LAN / tailnet, not the public internet.**
-It binds `0.0.0.0` on 8765/8443 (plus 8200 for the file server) and, apart
-from the Subsonic `/rest/*` surface, the API is **unauthenticated** — access
-control is the network (Tailscale), not a login. Do not port-forward it.
-
-A security audit on 2026-08-20 fixed four issues; see CLAUDE.md →
-"Security posture" for the detail and for the things that must not be undone:
-
-- **SSRF.** `/art`, `/stream` and `/radio_stream` take a caller-supplied
-  `?url=`. They now go through `dlna_ssrf.py`, which refuses private,
-  loopback and link-local destinations unless the host is a device already
-  discovered (so the LocalFs file server still works), refuses non-http(s)
-  schemes, and re-checks **every redirect hop**. Before this, `/stream`
-  would relay the body of any internal HTTP service verbatim.
-- **Error responses are uniform.** They used to forward the upstream status
-  and error text, which made `/art` a working open/closed/filtered port
-  oracle. Every failure now looks identical; detail goes to the log.
-- **TLS certificates are verified** on all outbound fetches (they weren't).
-- **Untrusted device text is escaped**, in the PWA and again server-side —
-  a UDN comes straight from a discovered device's description XML.
-
-**Can a media file make the gateway phone home? No.** The tag reader takes a
-fixed allowlist of scalar fields and never reads ID3 URL frames, and embedded
-cover art is typed by **sniffing magic bytes rather than trusting the
-declared MIME**. That is what makes an ID3 `APIC` with MIME `-->` (whose
-payload is a URL) inert opaque bytes, and stops an SVG "cover" being parsed
-as SVG. It is deliberate and test-pinned — see `tests/test_art_safety.py`.
-
-**What does leave your machine**, all over TLS: artist/album tags go to
-MusicBrainz + Cover Art Archive while indexing; lyrics lookups send
-title/artist/album/duration to lrclib on demand; and if you enable video,
-**GPS coordinates from your clips are sent to Nominatim automatically** to
-turn them into place names. That last one is the privacy-relevant one — it
-is inherent to reverse-geocoding, cached per coordinate, and opt-out by
-leaving `LOCALFS_VIDEO_ROOT` unset.
-
-## Cross-platform notes
-
-**Server (runs anywhere Python runs).** Tested on macOS; the Python
-code is platform-neutral except for two macOS-specific helpers
-(`launchctl` for autostart, `osascript` for `tools/prune_empty_music_dirs.py`).
-On Linux use a systemd unit instead of the LaunchAgent; on Windows
-use WSL2 (easy) or run native with a service wrapper like NSSM.
-Hard requirements:
-
-- Python 3.14+ (what the project is developed and run on; `setup.sh`
-  creates the venv, so the system Python is untouched)
-- (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
-  on macOS) — used by the beets enrichment tool (`tools/beets_enrich.py`,
-  via pyacoustid) for fingerprint matching.
-- (Optional) [beets](https://beets.io/) for the enrichment tool — install
-  via `brew install beets`, **not** pip (Homebrew Python upgrades wipe a
-  pip install). The formula omits two plugin packages the workflow needs
-  (`musicbrainzngs`, `pyacoustid`); see the "beets enrichment toolchain"
-  block in `requirements.txt` for the keg-venv install command.
-- A music source: either network access to a UPnP MediaServer on your
-  LAN, **or** a readable music folder via RoHaLocalFS (set
-  `LOCALFS_MUSIC_ROOT` — see "Serving your own files" below).
-- Inbound TCP 8765 (HTTP) and 8443 (HTTPS) to the gateway from your
-  clients; UDP 1900 multicast for SSDP discovery.
-
-**Clients (any browser on any platform).** The PWA uses standard
-HTML5 `<audio>` + MediaSession APIs. Anything that runs a modern
-browser — iOS Safari, Android Chrome, Firefox/Chrome/Edge on
-Linux/Windows/macOS, Chrome OS — can browse the library and play
-in-browser. iOS gives the best PWA polish (Add to Home Screen,
-lock-screen artwork) but is **not** required.
-
-**Tailscale (optional but recommended).** The gateway is LAN-only by
-default. Run [Tailscale](https://tailscale.com/) on the server and
-on each client device and you get end-to-end encrypted access from
-anywhere with no port-forwarding. A Tailscale-issued Let's Encrypt
-cert (`tailscale cert`) gives you a trusted HTTPS URL on the
-`*.ts.net` MagicDNS hostname — no certificate warnings on mobile.
-Auto-renewal: `renew-cert.sh` + the cert-renew LaunchAgent (macOS).
-
-**Caveats.**
-- **CarPlay** is iOS-only — that's the only reason the Subsonic API
-  exists (via [Amperfy](https://github.com/BLeeEZ/amperfy)). For
-  everything else CarPlay-compatible doesn't matter.
-- **UPnP renderers** must be reachable from the gateway on the LAN
-  (UPnP uses LAN multicast/HTTP). Tailscale doesn't help here —
-  the renderer needs to be on the same LAN as the gateway.
 
 ## Quick start (macOS)
 
@@ -293,6 +184,108 @@ ignored" failure mode is gone (guarded by `tests/test_env_loader.py`).
 > plist env *overrides* `.env`, so a stale value there silently wins.
 > The plist carries only `PATH` + the launch command.
 
+## Everything it does
+
+The headline list above is the short version.
+
+- **One library, many sources.** Indexes anything that speaks UPnP
+  ContentDirectory — *and* your own filesystem via the built-in
+  **RoHaLocalFS** backend (point it at a music folder; no separate
+  media server needed). Multiple sources coexist and the PWA has a
+  source picker to switch between them.
+- **Two playback paths.**
+  - **UPnP renderers** — sends `SetURI` + `Play` SOAP to the device;
+    the renderer streams audio directly from the source server
+    (gateway is **not** in the audio path; bit-perfect).
+  - **Browser audio** — `<audio>` element + a per-tab `/stream`
+    Range-proxy. Works on any device with a browser.
+- **PWA web UI.** Letter-indexed browse (artists / albums / tracks /
+  genres / decades), FTS5 search (type-ahead: the last word matches as
+  a prefix), playlists, album-level favourites, lyrics (via lrclib),
+  album art (sibling → MusicBrainz / Cover Art Archive fallback). For
+  RoHaLocalFS, albums group by folder (one folder = one album);
+  compilations whose tracks are scattered across per-artist folders can
+  be surfaced as playlists with `tools/compilation_playlists.py`.
+- **Metadata enrichment — beets, tag-in-place.** `tools/beets_enrich.py`
+  wraps a [beets](https://beets.io/) import that writes clean tags + MBIDs
+  **into your files** (MusicBrainz + AcoustID), in place — never moving or
+  copying them. The gateway's indexer reads those enriched tags on the next
+  rebuild, so beets is the **single** upstream source of truth.
+  `tools/post_beets_reindex.py` does the follow-up in one shot (clear stale
+  overrides, then reindex). *(The old in-process AcoustID worker was an
+  alternative path; it was removed in 2.0 — it did the same fingerprint →
+  MusicBrainz job and collided with beets, which is the better tagger.)*
+- **Browsable by your renderer (DLNA Media Server).** The gateway also
+  announces *itself* as a full DLNA Media Server, so a UPnP renderer like the
+  Naim can browse your whole library — Artists / Albums (#-A-Z) / Genres /
+  Playlists / Favourite Albums — and play directly, no PWA needed.
+- **Internet radio ("📡 Stations").** Search the radio-browser.info
+  catalogue, favourite up to 25 stations, play with ICY now-playing
+  metadata in a dedicated radio screen.
+- **Audiobooks.** Point `AUDIOBOOKS_ROOT` at a second folder and it is
+  indexed as its own source — kept out of music browse, search and radio
+  by construction (it is a separate UDN). Books remember **where you
+  stopped, server-side per book**, so every entry point resumes on every
+  device: the PWA, the Naim, and CarPlay (Subsonic bookmarks) all read
+  and write the same position. Plus per-book playback speed, a sleep
+  timer, m4b chapter marks, a "continue listening" shelf, and optional
+  series/author metadata from OpenLibrary.
+- **Home videos (optional).** Point `LOCALFS_VIDEO_ROOT` at a folder and
+  the gateway indexes it, generating titles from **metadata rather than
+  filenames** (GPS reverse-geocoded location + timestamp), and exposes a
+  browse tree by date / location / person — in the PWA and over DLNA to a
+  TV. See [docs/VIDEO_SUPPORT.md](docs/VIDEO_SUPPORT.md).
+- **Subsonic-compatible API** (`/rest/*`). Read-only-ish surface that
+  lets Subsonic clients (Amperfy, substreamer, …) browse and stream.
+  Designed for **CarPlay**, which the PWA can't do.
+- **Concurrent playback.** Per-renderer queue model; multiple users on
+  multiple renderers can play simultaneously without stepping on each
+  other (`409 Conflict` if you try to take over a busy renderer).
+- **Self-healing.** Detects and auto-repairs FTS5 index corruption
+  during rebuild-index instead of dying.
+- **Observability.** Greppable per-track playback logs; client-side
+  errors POST to `/api/client_log` and land in the same log.
+
+## Security
+
+**Built for a LAN or a private tailnet, not the public internet. Do not
+port-forward it.**
+
+Apart from the Subsonic `/rest/*` surface, the API is **unauthenticated by
+design** — the access control is the network, in the same way anyone standing
+in your living room can press play on your hi-fi. `.env.example` ships
+`0.0.0.0` binds, which is right for a single-homed box and wrong for a machine
+with a LAN address, a VPN and a tailnet; name the addresses you actually mean.
+
+Full threat model, what counts as a finding, and how to report one:
+**[SECURITY.md](SECURITY.md)**.
+
+An audit in August 2026 and two follow-up passes found and fixed **eleven**
+issues — SSRF on the caller-supplied `?url=` endpoints, an `/art` error path
+that worked as a port oracle, XML entity expansion on an unauthenticated
+endpoint, a file-server containment check that compared string prefixes (so a
+sibling directory whose name merely *started* with a root's name was inside
+it), unauthenticated SSDP that could point the gateway at a third party or
+cost it unbounded threads, unbounded reads and connection counts, unverified
+outbound TLS, and escaping that missed quoted attributes. Each fix ships with
+a regression test verified to fail on the unfixed code; the reasoning is in
+`CLAUDE.md` → "Security posture" so it does not get quietly undone.
+
+**Can a media file make the gateway phone home? No.** The tag reader takes a
+fixed allowlist of scalar fields and never reads ID3 URL frames, and embedded
+cover art is typed by **sniffing magic bytes rather than trusting the declared
+MIME**. That is what makes an ID3 `APIC` with MIME `-->` (whose payload is a
+URL) inert opaque bytes, and stops an SVG "cover" being parsed as SVG. It is
+deliberate and test-pinned — see `tests/test_art_safety.py`.
+
+**What does leave your machine**, all over verified TLS: artist/album tags go
+to MusicBrainz + Cover Art Archive while indexing; lyrics lookups send
+title/artist/album/duration to lrclib on demand; and if you enable video,
+**GPS coordinates from your clips are sent to Nominatim automatically** to
+turn them into place names. That last one is the privacy-relevant one — it is
+inherent to reverse-geocoding, cached per coordinate, and opt-out by leaving
+`LOCALFS_VIDEO_ROOT` unset.
+
 ## Serving your own files — RoHaLocalFS
 
 Instead of (or alongside) a UPnP MediaServer, the gateway can index a
@@ -355,6 +348,54 @@ performer — rather than fragmenting into one album per artist.
   case). Supported: FLAC, MP3, AAC/M4A/ALAC, OGG/Opus, WAV, AIFF,
   DSF/DFF, APE, WMA.
 
+## Cross-platform notes
+
+**Server (runs anywhere Python runs).** Tested on macOS; the Python
+code is platform-neutral except for two macOS-specific helpers
+(`launchctl` for autostart, `osascript` for `tools/prune_empty_music_dirs.py`).
+On Linux use a systemd unit instead of the LaunchAgent; on Windows
+use WSL2 (easy) or run native with a service wrapper like NSSM.
+Hard requirements:
+
+- Python 3.14+ (what the project is developed and run on; `setup.sh`
+  creates the venv, so the system Python is untouched)
+- (Optional) `fpcalc` from Chromaprint on `PATH` (`brew install chromaprint`
+  on macOS) — used by the beets enrichment tool (`tools/beets_enrich.py`,
+  via pyacoustid) for fingerprint matching.
+- (Optional) [beets](https://beets.io/) for the enrichment tool — install
+  via `brew install beets`, **not** pip (Homebrew Python upgrades wipe a
+  pip install). The formula omits two plugin packages the workflow needs
+  (`musicbrainzngs`, `pyacoustid`); see the "beets enrichment toolchain"
+  block in `requirements.txt` for the keg-venv install command.
+- A music source: either network access to a UPnP MediaServer on your
+  LAN, **or** a readable music folder via RoHaLocalFS (set
+  `LOCALFS_MUSIC_ROOT` — see "Serving your own files" below).
+- Inbound TCP 8765 (HTTP) and 8443 (HTTPS) to the gateway from your
+  clients; UDP 1900 multicast for SSDP discovery.
+
+**Clients (any browser on any platform).** The PWA uses standard
+HTML5 `<audio>` + MediaSession APIs. Anything that runs a modern
+browser — iOS Safari, Android Chrome, Firefox/Chrome/Edge on
+Linux/Windows/macOS, Chrome OS — can browse the library and play
+in-browser. iOS gives the best PWA polish (Add to Home Screen,
+lock-screen artwork) but is **not** required.
+
+**Tailscale (optional but recommended).** The gateway is LAN-only by
+default. Run [Tailscale](https://tailscale.com/) on the server and
+on each client device and you get end-to-end encrypted access from
+anywhere with no port-forwarding. A Tailscale-issued Let's Encrypt
+cert (`tailscale cert`) gives you a trusted HTTPS URL on the
+`*.ts.net` MagicDNS hostname — no certificate warnings on mobile.
+Auto-renewal: `renew-cert.sh` + the cert-renew LaunchAgent (macOS).
+
+**Caveats.**
+- **CarPlay** is iOS-only — that's the only reason the Subsonic API
+  exists (via [Amperfy](https://github.com/BLeeEZ/amperfy)). For
+  everything else CarPlay-compatible doesn't matter.
+- **UPnP renderers** must be reachable from the gateway on the LAN
+  (UPnP uses LAN multicast/HTTP). Tailscale doesn't help here —
+  the renderer needs to be on the same LAN as the gateway.
+
 ## Database
 
 The library index is a local SQLite file (`library.db`, gitignored).
@@ -394,6 +435,16 @@ audio) isn't automatable and is covered by the manual checklist in
 smoke layers.
 
 ## Architecture
+
+The gateway is a **FastAPI ASGI app served by Hypercorn**, which terminates
+**TLS + HTTP/2** natively (HTTP/3 ready) using a `tailscale cert`. A LAN-only
+plain-HTTP device tier (`/gw/*`) and the RoHaLocalFS file server stay
+unencrypted, because UPnP renderers cannot do HTTPS.
+
+**[docs/FIELD_MANUAL.html](docs/FIELD_MANUAL.html)** is the short version:
+a standalone page (open it in a browser) with two diagrams — the
+control-plane / data-plane split that keeps the gateway out of the audio
+path, and the `LibraryProvider` seam that lets a different backend drop in.
 
 A one-page coloured diagram of the whole 2.0 system (every program,
 tool, device, external service, and scheduled job, with the request

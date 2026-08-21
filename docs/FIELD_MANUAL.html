@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gateway Field Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@600;700;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground:      #F4F7FC;
+    --surface:     #FFFFFF;
+    --surface-alt: #E9F0F9;
+    --hairline:    #CDD9E9;
+    --hairline-2:  #A9BDD6;
+    --ink:         #0E1724;
+    --ink-dim:     #46586F;
+    --ink-faint:   #6E8098;
+    --accent:      #8A5A0B;
+    --accent-line: #C2851C;
+    --accent-soft: #FAEFD8;
+    --live:        #1F6B4A;
+    --live-soft:   #DFEFE6;
+    --planned:     #6E8098;
+    --shadow:      0 1px 2px rgba(14,23,36,.05), 0 10px 30px -18px rgba(14,23,36,.35);
+    --measure: 72ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0D1420;
+      --surface:     #151E2C;
+      --surface-alt: #1A2536;
+      --hairline:    #27374C;
+      --hairline-2:  #3B5170;
+      --ink:         #F2F7FF;
+      --ink-dim:     #B0C6E4;
+      --ink-faint:   #7E93B2;
+      --accent:      #FFC24A;
+      --accent-line: #FFC24A;
+      --accent-soft: #2C2517;
+      --live:        #4FD98C;
+      --live-soft:   #11291E;
+      --planned:     #7E93B2;
+      --shadow:      0 1px 2px rgba(0,0,0,.45), 0 10px 30px -18px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #0D1420;
+    --surface:     #151E2C;
+    --surface-alt: #1A2536;
+    --hairline:    #27374C;
+    --hairline-2:  #3B5170;
+    --ink:         #F2F7FF;
+    --ink-dim:     #B0C6E4;
+    --ink-faint:   #7E93B2;
+    --accent:      #FFC24A;
+    --accent-line: #FFC24A;
+    --accent-soft: #2C2517;
+    --live:        #4FD98C;
+    --live-soft:   #11291E;
+    --planned:     #7E93B2;
+    --shadow:      0 1px 2px rgba(0,0,0,.45), 0 10px 30px -18px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 1rem; line-height: 1.62; margin: 0;
+    padding: 0 1.5rem 6rem; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--measure); margin-inline: auto; }
+  .bleed { max-width: 1040px; margin-inline: auto; }
+
+  h1, h2, h3, .eyebrow, .key, th { font-family: Chivo, "Helvetica Neue", Arial, sans-serif; }
+  h1, h2, h3 { text-wrap: balance; line-height: 1.14; margin: 0; }
+  .eyebrow {
+    font-size: .7rem; font-weight: 700; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent);
+  }
+
+  header { padding: 5rem 0 0; }
+  header .bar { display: flex; gap: .5rem; margin-bottom: 1.5rem; }
+  header .bar i { display: block; height: 6px; flex: 1; background: var(--hairline-2); }
+  header .bar i:first-child { background: var(--accent-line); flex: 0 0 88px; }
+  h1 {
+    font-size: clamp(2.2rem, 6vw, 3.6rem); font-weight: 900;
+    letter-spacing: -.035em; margin: .6rem 0 1rem;
+  }
+  .standfirst { font-size: 1.15rem; color: var(--ink-dim); margin: 0 0 2.5rem; text-wrap: pretty; }
+
+  /* Spec strip */
+  .spec {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(132px,1fr));
+    gap: 1px; background: var(--hairline);
+    border: 1px solid var(--hairline); margin: 0 0 1rem;
+  }
+  .spec div { background: var(--surface); padding: .9rem 1rem; }
+  .spec .k {
+    font-family: Chivo, sans-serif; font-size: .66rem; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint);
+    display: block; margin-bottom: .3rem;
+  }
+  .spec .v {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .95rem; font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+
+  section { margin: 4.5rem auto 0; }
+  h2 {
+    font-size: 1.75rem; font-weight: 700; letter-spacing: -.022em;
+    margin-bottom: .4rem;
+  }
+  h2 .n {
+    font-family: "IBM Plex Mono", monospace; font-size: .8rem;
+    color: var(--accent); display: block; margin-bottom: .35rem;
+    letter-spacing: .1em; font-weight: 500;
+  }
+  h3 { font-size: 1.1rem; font-weight: 700; margin: 2rem 0 .5rem; letter-spacing: -.01em; }
+  .lede { color: var(--ink-dim); margin: 0 0 1.75rem; }
+  p { margin: 0 0 1.1rem; }
+  strong { font-weight: 600; }
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .86em; background: var(--surface-alt);
+    padding: .1em .36em; border: 1px solid var(--hairline); border-radius: 2px;
+  }
+
+  /* Figures */
+  figure { margin: 2rem 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  .figframe {
+    background: var(--surface); border: 1px solid var(--hairline);
+    padding: 1.5rem 1.25rem; box-shadow: var(--shadow); overflow-x: auto;
+  }
+  figcaption {
+    font-size: .875rem; color: var(--ink-faint); margin-top: .75rem;
+    max-width: 68ch;
+  }
+  figcaption b { color: var(--ink-dim); font-weight: 600; }
+
+  /* Callout */
+  .note {
+    border-left: 3px solid var(--accent-line); background: var(--accent-soft);
+    padding: 1.1rem 1.35rem; margin: 1.75rem 0;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note .eyebrow { display: block; margin-bottom: .4rem; }
+
+  /* Tables */
+  .t-scroll { overflow-x: auto; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th {
+    text-align: left; font-size: .68rem; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-faint); white-space: nowrap;
+    padding: 0 1.1rem .55rem 0; border-bottom: 2px solid var(--hairline-2);
+  }
+  td { padding: .65rem 1.1rem .65rem 0; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  td.mono, .num {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-variant-numeric: tabular-nums; font-size: .84rem;
+  }
+  .pill {
+    font-family: Chivo, sans-serif; font-size: .64rem; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase; padding: .22rem .5rem;
+    border-radius: 100px; white-space: nowrap;
+  }
+  .pill-live { color: var(--live); background: var(--live-soft); }
+  .pill-plan { color: var(--planned); background: var(--surface-alt); }
+
+  ul { padding-left: 1.15rem; margin: 0 0 1.1rem; }
+  li { margin-bottom: .5rem; }
+
+  footer {
+    margin: 5rem auto 0; padding-top: 1.5rem; border-top: 1px solid var(--hairline);
+    font-size: .875rem; color: var(--ink-faint);
+  }
+  :focus-visible { outline: 2px solid var(--accent-line); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="bar"><i></i><i></i><i></i><i></i></div>
+  <span class="eyebrow">DLNA Gateway · v2.1.0</span>
+  <h1>Field manual</h1>
+  <p class="standfirst">
+    A self-hosted music gateway: it indexes a filesystem, serves the bytes itself,
+    and speaks four client protocols over one library. Two mechanisms explain most
+    of the design — start with those.
+  </p>
+
+  <div class="spec">
+    <div><span class="k">Music</span><span class="v">26,341</span></div>
+    <div><span class="k">Audiobooks</span><span class="v">11,629</span></div>
+    <div><span class="k">Videos</span><span class="v">3,977</span></div>
+    <div><span class="k">Modules</span><span class="v">87</span></div>
+    <div><span class="k">Routes</span><span class="v">75</span></div>
+  </div>
+  <p style="font-size:.82rem;color:var(--ink-faint);margin:0">
+    Listeners — <code>8443</code> TLS + HTTP/2 <em>(tailnet + LAN + loopback)</em> ·
+    <code>8765</code> plain <em>(LAN + tailnet + loopback — the UPnP device tier)</em> ·
+    <code>8200</code> file server <em>(LAN only)</em>. Named explicitly in
+    <code>.env</code> rather than <code>0.0.0.0</code>: the control API is
+    unauthenticated, so it should not appear on interfaces nobody intended.
+  </p>
+</header>
+
+<section class="bleed">
+  <div class="wrap">
+    <h2><span class="n">Mechanism 01</span>The gateway is not in the audio path</h2>
+    <p class="lede">
+      For a UPnP renderer, the gateway sends control messages and then gets out of
+      the way. The renderer fetches the bytes itself, directly from the file server.
+    </p>
+    <p>
+      This single fact explains a surprising amount: why playback is bit-perfect
+      (nothing can resample what it never touches), why the file server must bind a
+      LAN address the renderer can reach, and why volume is set via the renderer's
+      own hardware rather than by scaling samples.
+    </p>
+    <p>
+      Browser playback is the opposite shape. iOS refuses cross-origin audio in a
+      PWA, so those bytes <em>must</em> be relayed same-origin through the gateway.
+      One library, two topologies:
+    </p>
+  </div>
+
+  <figure>
+    <div class="figframe">
+      <svg viewBox="0 0 900 380" role="img"
+           aria-label="Two playback paths. A Naim renderer receives AVTransport SOAP control from the gateway, then fetches audio bytes directly from the RoHaLocalFS file server, bypassing the gateway entirely. A browser instead requests slash-stream from the gateway, which relays the bytes from the same file server.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+          <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent-line)"/>
+          </marker>
+        </defs>
+
+        <!-- audio bypass arc: the claim of the figure -->
+        <path d="M 175 78 C 330 14, 640 14, 800 138"
+              fill="none" stroke="var(--accent-line)" stroke-width="2.5"
+              marker-end="url(#ar-a)"/>
+        <text x="487" y="26" text-anchor="middle" font-size="13"
+              font-family="Chivo, sans-serif" font-weight="700"
+              fill="var(--accent-line)">audio bytes · HTTP Range</text>
+        <text x="487" y="44" text-anchor="middle" font-size="11.5"
+              fill="var(--accent-line)">renderer pulls direct — gateway never sees them</text>
+
+        <!-- Naim -->
+        <rect x="35" y="78" width="140" height="66" rx="2"
+              fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="105" y="106" text-anchor="middle" font-size="13"
+              font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">Naim renderer</text>
+        <text x="105" y="124" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">UPnP · on the LAN</text>
+
+        <!-- Browser -->
+        <rect x="35" y="252" width="140" height="66" rx="2"
+              fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="105" y="280" text-anchor="middle" font-size="13"
+              font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">Browser / PWA</text>
+        <text x="105" y="298" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">iOS: same-origin only</text>
+
+        <!-- Gateway -->
+        <rect x="370" y="152" width="170" height="92" rx="2"
+              fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="455" y="185" text-anchor="middle" font-size="13.5"
+              font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">Gateway</text>
+        <text x="455" y="204" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">ASGI · Hypercorn</text>
+        <text x="455" y="222" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">:8443 / :8765</text>
+
+        <!-- File server -->
+        <rect x="720" y="152" width="150" height="92" rx="2"
+              fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="795" y="185" text-anchor="middle" font-size="13.5"
+              font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">RoHaLocalFS</text>
+        <text x="795" y="204" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">file server :8200</text>
+        <text x="795" y="222" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">Range · bit-perfect</text>
+
+        <!-- control arrow: gateway -> naim -->
+        <line x1="368" y1="176" x2="180" y2="120"
+              stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="272" y="134" text-anchor="middle" font-size="11.5" fill="currentColor">AVTransport SOAP</text>
+        <text x="272" y="150" text-anchor="middle" font-size="11" fill="currentColor" opacity=".6">SetURI + Play</text>
+
+        <!-- browser -> gateway -->
+        <line x1="178" y1="276" x2="366" y2="232"
+              stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="272" y="290" text-anchor="middle" font-size="11.5" fill="currentColor">GET /stream</text>
+
+        <!-- gateway -> fileserver relay -->
+        <line x1="542" y1="210" x2="716" y2="210"
+              stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="629" y="202" text-anchor="middle" font-size="11.5" fill="currentColor">relays bytes</text>
+
+        <!-- baseline note -->
+        <line x1="35" y1="348" x2="865" y2="348" stroke="currentColor" stroke-width="1" opacity=".22"/>
+        <text x="35" y="368" font-size="11" fill="currentColor" opacity=".6">
+          Amber = the audio hop. It bypasses the gateway for renderers and passes through it for browsers.
+        </text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>The divergence is the point.</b> Remove the gateway mid-playback and the
+      Naim keeps playing; the browser stops. That asymmetry drives the bit-perfect
+      guarantee, the separate <code>:8200</code> bind, and why the SSRF guard added
+      in v2.1.0 had to keep the file server reachable while refusing every other
+      private address.
+    </figcaption>
+  </figure>
+</section>
+
+<section class="bleed">
+  <div class="wrap">
+    <h2><span class="n">Mechanism 02</span>Four surfaces, one library</h2>
+    <p class="lede">
+      Every client protocol is a <em>view</em> over the same index. Nothing owns its
+      own copy of the library.
+    </p>
+    <p>
+      This is why the module count looks large for the amount of behaviour: the
+      families are surfaces, not duplicated logic. Below the index sits a provider
+      seam so the backend itself is swappable.
+    </p>
+  </div>
+
+  <figure>
+    <div class="figframe">
+      <svg viewBox="0 0 900 430" role="img"
+           aria-label="Four client surfaces — the PWA over JSON, the Naim over UPnP, CarPlay over Subsonic, and a TV over UPnP video — all reach the same ASGI edge, which reads one LibraryDB index. Below the index a LibraryProvider seam has one live implementation, LocalFs, one kept implementation for generic UPnP servers, and two unbuilt ones for Plex and Jellyfin.">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- surfaces row -->
+        <text x="35" y="26" font-size="11" font-family="Chivo, sans-serif" font-weight="700"
+              letter-spacing="1.6" fill="currentColor" opacity=".55">CLIENT SURFACES</text>
+
+        <rect x="35" y="40" width="192" height="62" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="131" y="66" text-anchor="middle" font-size="12.5" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">PWA</text>
+        <text x="131" y="84" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">/api/* JSON + SSE</text>
+
+        <rect x="245" y="40" width="192" height="62" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="341" y="66" text-anchor="middle" font-size="12.5" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">Naim</text>
+        <text x="341" y="84" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">/gw/* UPnP DMS</text>
+
+        <rect x="455" y="40" width="192" height="62" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="551" y="66" text-anchor="middle" font-size="12.5" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">CarPlay</text>
+        <text x="551" y="84" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">/rest/* Subsonic</text>
+
+        <rect x="665" y="40" width="200" height="62" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="765" y="66" text-anchor="middle" font-size="12.5" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">TV</text>
+        <text x="765" y="84" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">UPnP video tree</text>
+
+        <!-- funnel arrows -->
+        <line x1="131" y1="104" x2="380" y2="146" stroke="currentColor" stroke-width="1.3" opacity=".8" marker-end="url(#ar2)"/>
+        <line x1="341" y1="104" x2="430" y2="146" stroke="currentColor" stroke-width="1.3" opacity=".8" marker-end="url(#ar2)"/>
+        <line x1="551" y1="104" x2="470" y2="146" stroke="currentColor" stroke-width="1.3" opacity=".8" marker-end="url(#ar2)"/>
+        <line x1="765" y1="104" x2="520" y2="146" stroke="currentColor" stroke-width="1.3" opacity=".8" marker-end="url(#ar2)"/>
+
+        <!-- edge -->
+        <rect x="255" y="150" width="390" height="56" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="450" y="174" text-anchor="middle" font-size="13" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">ASGI edge — FastAPI on Hypercorn</text>
+        <text x="450" y="192" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">terminates TLS + HTTP/2 · 75 routes</text>
+
+        <line x1="450" y1="208" x2="450" y2="238" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+        <text x="462" y="228" font-size="11" fill="currentColor" opacity=".7">reads</text>
+
+        <!-- library -->
+        <rect x="255" y="242" width="390" height="58" rx="2"
+              fill="none" stroke="var(--accent-line)" stroke-width="2.5"/>
+        <text x="450" y="267" text-anchor="middle" font-size="13" font-family="Chivo, sans-serif" font-weight="700" fill="var(--accent-line)">LibraryDB — one SQLite index</text>
+        <text x="450" y="285" text-anchor="middle" font-size="11" fill="var(--accent-line)" opacity=".85">FTS5 search · WAL · six mixins</text>
+
+        <line x1="450" y1="302" x2="450" y2="332" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+        <!-- seam -->
+        <line x1="35" y1="336" x2="865" y2="336" stroke="currentColor" stroke-width="1" stroke-dasharray="5 4" opacity=".5"/>
+        <text x="865" y="330" text-anchor="end" font-size="10.5" font-family="Chivo, sans-serif"
+              font-weight="700" letter-spacing="1.4" fill="currentColor" opacity=".55">LibraryProvider seam</text>
+
+        <rect x="150" y="352" width="170" height="56" rx="2" fill="none" stroke="var(--live)" stroke-width="2"/>
+        <text x="235" y="376" text-anchor="middle" font-size="12.5" font-family="Chivo, sans-serif" font-weight="700" fill="var(--live)">LocalFs</text>
+        <text x="235" y="393" text-anchor="middle" font-size="10.5" fill="var(--live)" opacity=".85">live · mutagen + watchdog</text>
+
+        <rect x="340" y="352" width="170" height="56" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="425" y="376" text-anchor="middle" font-size="12.5" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">UpnpProvider</text>
+        <text x="425" y="393" text-anchor="middle" font-size="10.5" fill="currentColor" opacity=".65">kept · any UPnP server</text>
+
+        <rect x="530" y="352" width="105" height="56" rx="2" fill="none"
+              stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 4" opacity=".5"/>
+        <text x="582" y="384" text-anchor="middle" font-size="12" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor" opacity=".55">Plex</text>
+
+        <rect x="650" y="352" width="105" height="56" rx="2" fill="none"
+              stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 4" opacity=".5"/>
+        <text x="702" y="384" text-anchor="middle" font-size="12" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor" opacity=".55">Jellyfin</text>
+
+        <text x="35" y="384" font-size="10.5" fill="currentColor" opacity=".55">dashed =</text>
+        <text x="35" y="398" font-size="10.5" fill="currentColor" opacity=".55">not built</text>
+      </svg>
+    </div>
+    <figcaption>
+      <b>Adding a client protocol adds a surface, not a library.</b> The Subsonic
+      API exists purely because CarPlay is a closed iOS framework a PWA cannot enter
+      — it is a translation layer over the same index, not a second system.
+    </figcaption>
+  </figure>
+
+  <div class="wrap">
+    <h3>How the 85 modules group</h3>
+    <div class="t-scroll">
+      <table>
+        <thead><tr><th>Family</th><th class="num">Modules</th><th>Responsibility</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">dlna_library_*</td><td class="num">13</td><td>The index — schema, migrations, browse, facets, collections, videos</td></tr>
+          <tr><td class="mono">dlna_asgi_*</td><td class="num">9</td><td>The HTTP edge, split per surface</td></tr>
+          <tr><td class="mono">api_subsonic_*</td><td class="num">7</td><td>Subsonic protocol — auth, ids, browse, media, extras</td></tr>
+          <tr><td class="mono">api_upnp_*</td><td class="num">7</td><td>Gateway-as-MediaServer — DIDL, descriptors, browse, SSDP</td></tr>
+          <tr><td class="mono">dlna_player_*</td><td class="num">6</td><td>Per-renderer queue, monitor, transport, volume</td></tr>
+          <tr><td class="mono">dlna_providers/*</td><td class="num">6</td><td>The backend seam</td></tr>
+          <tr><td class="mono">api_playback_*</td><td class="num">4</td><td>Playback control, cover art, track metadata</td></tr>
+          <tr><td class="mono">…</td><td class="num">33</td><td>Discovery, proxies, indexer, config, events, SSRF guard</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <span class="eyebrow">Enforced, not aspirational</span>
+      <p>
+        Every module carries a line ceiling in a committed budget file: it may
+        shrink, never grow, and a new module is held to 400 lines from birth. As of
+        v2.1.0 all 85 are within that target and the over-budget list is empty — so
+        the ratchet now behaves as a flat limit without ever having needed a flag day.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2><span class="n">Invariant</span>What survives a rebuild</h2>
+  <p class="lede">
+    Re-indexing wipes and repopulates <code>tracks</code>. Everything a person
+    created must outlive that.
+  </p>
+  <p>
+    This is the rule most likely to be broken by accident, because the natural
+    instinct is to key user data to a track row. Instead each of these tables is
+    independent of <code>tracks</code> and untouched by <code>clear(udn)</code>:
+  </p>
+  <div class="t-scroll">
+    <table>
+      <thead><tr><th>Table</th><th>Holds</th><th>Keyed by</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">playlists</td><td>User playlists + ⭐ favourites</td><td class="mono">url</td></tr>
+        <tr><td class="mono">album_favourites</td><td>Bookmarked albums</td><td class="mono">artist, album, album_key</td></tr>
+        <tr><td class="mono">playback_positions</td><td>Audiobook resume — one row per book</td><td class="mono">album_key</td></tr>
+        <tr><td class="mono">play_counts</td><td>Radio-rotation bias</td><td class="mono">url</td></tr>
+        <tr><td class="mono">lyrics</td><td>Fetched lyrics, incl. sticky misses</td><td class="mono">url</td></tr>
+        <tr><td class="mono">album_art</td><td>Resolved cover URLs</td><td class="mono">artist, album</td></tr>
+        <tr><td class="mono">radio_favourites</td><td>Stations (capped at 25)</td><td class="mono">station_uuid</td></tr>
+        <tr><td class="mono">metadata_overrides</td><td>Corrections; <code>manual</code> always wins</td><td class="mono">url</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The audiobook position is deliberately <strong>server-side and keyed to the
+    book</strong>, not to a device or a session. That is what makes a book resume
+    on whichever thing you pick up next — phone, car, or the PWA.
+  </p>
+</section>
+
+<section class="wrap">
+  <h2><span class="n">Boundary</span>What the gateway is not</h2>
+  <p class="lede">Scope decisions that are settled, not pending.</p>
+  <ul>
+    <li>
+      <strong>Not a transcoder for audio.</strong> Original bytes, always. Video
+      transcodes on demand when a client cannot decode it — that rule is about
+      audio fidelity and does not extend to video.
+    </li>
+    <li>
+      <strong>Not a commercial-streaming client.</strong> DRM and closed protocols
+      put Spotify, Tidal and friends out of reach; the renderer already speaks them
+      natively, which is the right layer for it.
+    </li>
+    <li>
+      <strong>Not multi-user.</strong> Single user by design. The Subsonic surface
+      has credentials; the rest of the API does not, and the network is the access
+      control.
+    </li>
+    <li>
+      <strong>Not internet-facing.</strong> LAN and tailnet only, and since
+      the 2026-08-20 audit that is enforced by the listen addresses rather
+      than assumed — see the companion security audit.
+    </li>
+  </ul>
+</section>
+
+<footer class="wrap">
+  DLNA Gateway v2.1.0 · 26,341 music tracks + 11,629 audiobook chapters + 3,977 videos ·
+  The living reference is <code>CLAUDE.md</code>; this page is the orientation for a cold start.
+</footer>
+</body>
+</html>

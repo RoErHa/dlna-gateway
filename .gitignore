@@ -70,9 +70,12 @@ corrupt-audio.txt
 # server-side cover-art byte cache (dlna_art_cache)
 art_cache/
 
-# Published-artifact copies kept locally for offline reading (docs/REPORTS.html
-# is the tracked exception — these two are generated deliverables, not source).
-# SECURITY_AUDIT.html deliberately stays UNTRACKED: it names exact exploit
-# shapes for this gateway, and the repo has a public remote.
+# SECURITY_AUDIT.html stays UNTRACKED, deliberately: it names exact working
+# exploit shapes for this gateway, and the repo is public. The findings
+# themselves are not hidden — SECURITY.md summarises all eleven, and
+# CLAUDE.md -> "Security posture" carries the reasoning and the invariants.
+# Publishing the probe shapes adds nothing for a reader and hands a
+# ready-made checklist to anyone scanning someone else's instance.
+# (docs/FIELD_MANUAL.html was un-ignored on 2026-08-21 — it is architecture
+# documentation with nothing sensitive in it, and it is worth reading.)
 docs/SECURITY_AUDIT.html
-docs/FIELD_MANUAL.html
