@@ -1734,6 +1734,49 @@ alternative is silently falling back to `0.0.0.0`. Changing an address is an
 `.env` edit + `./setup.sh --restart` — no plist bootout, which is the whole
 reason the binds live in `.env` rather than the LaunchAgent's argv.
 
+**8. Containment is about path COMPONENTS, not string prefixes (2026-08-21).**
+The LocalFs file server checked `str(resolved).startswith(root)`, so any
+sibling directory whose name merely began with a root's name was inside it —
+`/Volumes/SAMDATA/Music` admitted `/Volumes/SAMDATA/Music Videos`, and
+`Audio_Books` admitted `Audio_Books_private`. Every byte of them, to any
+unauthenticated peer on the LAN, because renderers fetch from this server
+directly. All three byte routes were affected; the check had been
+copy-pasted. It is now **one** helper, `dlna_localfs_http.resolve_within`,
+and the caller opens the path it RETURNS — resolving follows symlinks, so
+re-opening the original path would hand back a time-of-check/time-of-use
+gap. `/localfs/poster/<id>` is the only route where a URL segment becomes a
+filesystem path; it keeps `basename()` **and** gets containment. Guarded by
+`tests/test_localfs_traversal.py`, which asks the adversarial questions the
+older `TestPathTraversalDefence` did not.
+
+**9. An SSDP packet may not cost unbounded work — or name someone else
+(2026-08-21).** SSDP is the one place a stranger hands the gateway bytes with
+no authentication and no proven return address. Three things followed from
+that and are now enforced in `dlna_discovery_ssdp.parse_location` (pure, so
+the hostile cases are directly testable) plus `_spawn_registration`:
+*(a)* every LOCATION-bearing packet used to spawn a thread that slept 1.5 s
+then made an HTTP request, so a flood exhausted threads and FDs — appearing
+as SQLite's `unable to open database file`, which looks nothing like an
+attack. Capped at **8 registrations in flight**, excess **dropped** (safe:
+devices re-announce on a timer). *(b)* the URL was fetched unvalidated and
+read **uncapped** — `file://` worked, and an endless stream was buffered
+until death, since `safe_fromstring`'s 4 MB cap only sees bytes already in
+memory. Now http/https only, body capped at `_MAX_DESC_BYTES` (512 KB;
+real descriptions are ~4 KB). *(c)* nothing required the URL to name the
+sender, so any peer could aim the gateway's HTTP client at a third party —
+now the URL's host must BE the datagram source, compared via
+`urlsplit().hostname` so `http://192.168.1.5@elsewhere/` reads as
+*elsewhere* and is refused. `_seen_locations` is bounded for the same
+reason.
+> ⚠️ **A too-strict SSDP rule shows up as "the Naim stopped browsing", not
+> as a red test.** Verified against 25 s of real LAN traffic before shipping
+> — router, gateway, a Google device and both Naim descriptors all accepted,
+> zero false drops — and again after restart. `tests/test_ssdp_parsing.py`
+> puts the *legitimate* packet shapes first for this reason; they caught a
+> first draft that anchored the regex on `$` and rejected every real device
+> (SSDP lines end `\r\n`). If a device ever vanishes, run with
+> `GATEWAY_DEBUG=1` and `grep "announced a URL for" gateway.log`.
+
 ### Can a media file phone home? No — and here is what keeps it that way
 
 The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with
