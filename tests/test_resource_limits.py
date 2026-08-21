@@ -40,7 +40,34 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 import dlna_asgi_state as _st          # noqa: E402
-from dlna_xml import MAX_XML_BYTES, read_capped  # noqa: E402
+import dlna_xml                        # noqa: E402
+
+# Fetched through the MODULE, not `from dlna_xml import read_capped`. The
+# difference matters for the standard this project holds itself to: a
+# regression test has to be verified failing on the UNFIXED code, and a
+# missing name in a module-level `from ... import` is an ImportError at
+# collection time — one error for the whole file, proving nothing about
+# behaviour. Resolved per-test instead, each assertion fails on its own and
+# says what is missing.
+MAX_XML_BYTES = dlna_xml.MAX_XML_BYTES
+
+
+def read_capped(*a, **kw):
+    fn = getattr(dlna_xml, "read_capped", None)
+    if fn is None:
+        raise AssertionError(
+            "dlna_xml.read_capped is missing — reads from network peers are "
+            "unbounded")
+    return fn(*a, **kw)
+
+
+def _cap(limit, what):
+    cls = getattr(_st, "ConcurrencyCap", None)
+    if cls is None:
+        raise AssertionError(
+            "dlna_asgi_state.ConcurrencyCap is missing — long-lived "
+            "connections are uncapped")
+    return cls(limit, what)
 
 
 class _Endless(io.RawIOBase):
@@ -119,7 +146,7 @@ class TestEverySoapPathIsCapped(unittest.TestCase):
 
 class TestConcurrencyCap(unittest.TestCase):
     def setUp(self):
-        self.cap = _st.ConcurrencyCap(3, "test")
+        self.cap = _cap(3, "test")
 
     def test_it_admits_up_to_the_limit(self):
         self.assertEqual([self.cap.acquire() for _ in range(3)],
@@ -148,7 +175,9 @@ class TestConcurrencyCap(unittest.TestCase):
                          [True, True, True, False])
 
     def test_the_shipped_caps_exist_and_are_sane(self):
-        for cap in (_st.AUDIO_RELAYS, _st.SSE_STREAMS):
+        caps = [getattr(_st, n, None) for n in ("AUDIO_RELAYS", "SSE_STREAMS")]
+        self.assertNotIn(None, caps, "a shipped concurrency cap is missing")
+        for cap in caps:
             with self.subTest(cap=cap.what):
                 self.assertGreaterEqual(cap.limit, 16,
                                         "would break real household use")
@@ -219,7 +248,6 @@ class TestSnapshotAllFansOutInParallel(unittest.TestCase):
     """
 
     def _registry(self, n: int, delay: float):
-        import dlna_player  # noqa: F401 — import cycle: must precede the registry
         import dlna_player_registry as reg
 
         class _SlowQueue:
@@ -254,7 +282,6 @@ class TestSnapshotAllFansOutInParallel(unittest.TestCase):
 
     def test_a_queue_that_never_answers_is_served_from_cache(self):
         """A wedged renderer must not remove its own key or hold up the rest."""
-        import dlna_player  # noqa: F401 — import cycle: must precede the registry
         import dlna_player_registry as reg
 
         class _Wedged:
@@ -286,7 +313,6 @@ class TestSnapshotAllFansOutInParallel(unittest.TestCase):
         self.assertEqual(len(r.snapshot_all()), 1)
 
     def test_no_queues_is_empty(self):
-        import dlna_player  # noqa: F401 — import cycle: must precede the registry
         import dlna_player_registry as reg
         self.assertEqual(reg.QueueRegistry().snapshot_all(), {})
 
@@ -371,6 +397,48 @@ class TestUnreachableRendererBackoff(unittest.TestCase):
     def test_the_backoff_is_bounded(self):
         import dlna_player
         self.assertLessEqual(dlna_player.RendererQueue._UNREACHABLE_BACKOFF_SEC, 120)
+
+
+class TestPlayerModulesImportInEitherOrder(unittest.TestCase):
+    """`dlna_player` and `dlna_player_registry` need each other: the registry
+    builds queues, and dlna_player re-exports QUEUES from the registry because
+    two production modules and a test spell it `from dlna_player import
+    QUEUES`.
+
+    While the registry's import sat at module level, that pair could only load
+    in ONE order — `import dlna_player_registry` FIRST raised `ImportError:
+    cannot import name 'QUEUES'`. Never a production fault (the app imports
+    dlna_player first), but a trap for tests, tools and REPL sessions, which
+    import whatever they actually care about. It cost real time during the
+    2026-08-21 audit session.
+
+    Subprocesses, because import order is process-global: once anything in
+    this suite has imported dlna_player, the bad order is unreachable in-process.
+    """
+
+    def _run(self, code: str):
+        import subprocess
+        return subprocess.run([sys.executable, "-c", code], cwd=PROJECT,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_registry_first(self):
+        r = self._run("import dlna_player_registry as m; "
+                      "assert m.QUEUES is not None; print('ok')")
+        self.assertEqual(r.returncode, 0,
+                         f"registry-first import failed:\n{r.stderr}")
+
+    def test_player_first(self):
+        r = self._run("from dlna_player import QUEUES, QueueRegistry; "
+                      "assert QUEUES is not None; print('ok')")
+        self.assertEqual(r.returncode, 0,
+                         f"player-first import failed:\n{r.stderr}")
+
+    def test_both_spellings_are_the_same_singleton(self):
+        r = self._run("import dlna_player_registry as reg; "
+                      "from dlna_player import QUEUES; "
+                      "assert QUEUES is reg.QUEUES; print('ok')")
+        self.assertEqual(r.returncode, 0,
+                         f"the two spellings diverged:\n{r.stderr}")
 
 
 if __name__ == "__main__":

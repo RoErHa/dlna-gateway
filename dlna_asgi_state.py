@@ -31,6 +31,8 @@ sees the SAME object. It is only WHOLESALE rebinding that needs the owner.
 """
 import logging
 import os
+import threading
+import time
 
 from fastapi import Request
 from starlette.responses import JSONResponse
@@ -94,35 +96,50 @@ def _peer(request: Request) -> str:
 # streams and a few browser tabs — so hitting one means something is wrong,
 # and 503 with Retry-After is the honest answer.
 class ConcurrencyCap:
-    """Counts in-flight holders of a long-lived resource. Not a semaphore:
-    nothing may ever block here, because these run on the event loop."""
+    """Counts in-flight holders of a long-lived resource.
+
+    Not a semaphore: acquire() must never block, because it is called from
+    request handlers running on the event loop. It takes a plain lock instead,
+    held only across a compare-and-increment.
+
+    Today's callers are all async, so the loop already serialises them and the
+    lock is redundant — but `acquire`/`release` are an obvious thing for a
+    later caller to reach for from inside `run_in_threadpool`, which this
+    codebase uses everywhere. Unlocked, a racing pair can both pass the limit
+    check, and worse, a lost decrement ratchets the ceiling down permanently:
+    the gateway would 503 every stream until it was restarted, with nothing in
+    the log to explain why. Three lines to make that impossible.
+    """
 
     def __init__(self, limit: int, what: str):
         self.limit = limit
         self.what = what
         self._n = 0
         self._warned = 0.0
+        self._lock = threading.Lock()
 
     @property
     def in_flight(self) -> int:
-        return self._n
+        with self._lock:
+            return self._n
 
     def acquire(self) -> bool:
-        if self._n >= self.limit:
-            import time as _t
-            now = _t.monotonic()
-            if now - self._warned >= 60.0:      # one line a minute, not a flood
-                self._warned = now
-                log.warning(f"{self.what}: at the concurrency cap "
-                            f"({self.limit}) — refusing new requests with 503")
-            return False
-        self._n += 1
-        return True
+        with self._lock:
+            if self._n < self.limit:
+                self._n += 1
+                return True
+        now = time.monotonic()
+        if now - self._warned >= 60.0:          # one line a minute, not a flood
+            self._warned = now
+            log.warning(f"{self.what}: at the concurrency cap "
+                        f"({self.limit}) — refusing new requests with 503")
+        return False
 
     def release(self) -> None:
-        # Never below zero: a double release must not create capacity that
-        # does not exist.
-        self._n = max(0, self._n - 1)
+        with self._lock:
+            # Never below zero: a double release must not create capacity that
+            # does not exist.
+            self._n = max(0, self._n - 1)
 
 
 # A household streams to a few devices at once; 64 is generous even counting

@@ -31,13 +31,41 @@ Queues are created lazily and never evicted — a renderer that goes away
 leaves a stopped queue behind, which is cheap and means its history survives
 the renderer coming back.
 """
+from __future__ import annotations
+
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
 
-from dlna_player import RendererQueue
+if TYPE_CHECKING:                     # annotations only — see _new_queue()
+    from dlna_player import RendererQueue
 
 log = logging.getLogger("dlna.player")
+
+
+def _new_queue() -> RendererQueue:
+    """Construct a RendererQueue, importing it at CALL time.
+
+    This module and `dlna_player` need each other: the registry builds queues,
+    and `dlna_player` re-exports `QUEUES` from here so
+    `from dlna_player import QUEUES` keeps working (two production modules and
+    a test rely on that spelling). While the import here sat at module level
+    the pair could only be loaded in ONE order — importing
+    `dlna_player_registry` FIRST raised `ImportError: cannot import name
+    'QUEUES'`, because `dlna_player` reached its re-export while this module
+    was still half-built.
+
+    That is a trap rather than a bug in normal running — the app imports
+    `dlna_player` first, so it never fired in production — but it bites tests,
+    tools and REPL sessions, which import whatever they are actually
+    interested in. Deferring to call time breaks the cycle at the end that
+    does not need to be eager, the same way `_register` in
+    `dlna_discovery_ssdp` and the avtransport imports inside `snapshot()`
+    already do.
+    """
+    from dlna_player import RendererQueue as _RendererQueue
+    return _RendererQueue()
 
 
 # ── QueueRegistry — per-renderer queue owner ──────────────────────
@@ -60,7 +88,7 @@ class QueueRegistry:
         with self._lock:
             q = self._queues.get(udn)
             if q is None:
-                q = RendererQueue()
+                q = _new_queue()
                 self._queues[udn] = q
             return q
 
