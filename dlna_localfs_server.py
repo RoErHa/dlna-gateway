@@ -51,6 +51,7 @@ from dlna_localfs_http import (
     _FALLBACK_MIME,
     _dlna_headers_for_mime,
     _parse_range_header,
+    resolve_within,
 )
 from dlna_providers.localfs import _extract_art_bytes
 
@@ -129,23 +130,19 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, f"Unknown track id: {track_id}")
             return
 
-        # Path-traversal defence: if the resolved path is outside any
-        # allowed root, refuse. (The DB column is normally trustworthy
-        # — only LocalFsProvider writes to it — but defending here keeps
-        # the server safe if something downstream gets compromised.)
-        if self.allowed_roots:
-            try:
-                resolved = Path(file_path).resolve()
-            except OSError as e:
-                log.warning(f"resolve failed for {file_path}: {e}")
-                self.send_error(404, "File not accessible")
-                return
-            if not any(str(resolved).startswith(r)
-                       for r in self.allowed_roots):
-                log.warning(f"path-traversal blocked: {file_path} "
-                            f"not under {self.allowed_roots}")
-                self.send_error(403, "Path not under any allowed root")
-                return
+        # Containment: the resolved path must lie inside an allowed root.
+        # (The DB column is normally trustworthy — only LocalFsProvider
+        # writes to it — but this server answers any unauthenticated peer on
+        # the LAN, so it does not take the database's word for what it may
+        # read.) Everything below uses the RESOLVED path, so a symlink can't
+        # be swapped between the check and the open.
+        safe = resolve_within(file_path, self.allowed_roots)
+        if safe is None:
+            log.warning(f"path-traversal blocked: {file_path} "
+                        f"not under {self.allowed_roots}")
+            self.send_error(403, "Path not under any allowed root")
+            return
+        file_path = str(safe)
 
         try:
             size = os.path.getsize(file_path)
@@ -216,21 +213,16 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, f"Unknown track id: {track_id}")
             return
 
-        # Same path-traversal defence as the audio route.
-        if self.allowed_roots:
-            try:
-                resolved = Path(file_path).resolve()
-            except OSError as e:
-                log.warning(f"art resolve failed for {file_path}: {e}")
-                self.send_error(404, "File not accessible")
-                return
-            if not any(str(resolved).startswith(r)
-                       for r in self.allowed_roots):
-                log.warning(f"art path-traversal blocked: {file_path}")
-                self.send_error(403, "Path not under any allowed root")
-                return
+        # Same containment rule as the audio route, through the same helper
+        # — this used to be a second copy, and a second copy is how one of
+        # them ends up different from the other.
+        safe = resolve_within(file_path, self.allowed_roots)
+        if safe is None:
+            log.warning(f"art path-traversal blocked: {file_path}")
+            self.send_error(403, "Path not under any allowed root")
+            return
 
-        got = _extract_art_bytes(Path(file_path))
+        got = _extract_art_bytes(safe)
         if not got:
             self.send_error(404, "No embedded art")
             return
@@ -278,8 +270,15 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
         dlna_ffmpeg.POSTER_DIR. 404 when there's no poster for that id."""
         import dlna_ffmpeg
         vid = unquote(self.path[len(_POSTER_PREFIX):]).split("?", 1)[0]
+        # This is the ONE route where a URL segment becomes a filesystem
+        # path, so it gets both belts: basename() drops any directory part,
+        # and the result is then required to be inside POSTER_DIR — which
+        # also catches `..`, a NUL byte, and anything basename() lets past.
         path = os.path.join(dlna_ffmpeg.POSTER_DIR, f"{os.path.basename(vid)}.jpg")
-        if not vid or not os.path.isfile(path):
+        if not vid or resolve_within(path, (dlna_ffmpeg.POSTER_DIR,)) is None:
+            self.send_error(404, "No poster")
+            return
+        if not os.path.isfile(path):
             self.send_error(404, "No poster")
             return
         try:

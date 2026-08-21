@@ -78,6 +78,11 @@ def _clean_name(raw: str) -> str:
 
 # ── Device description fetcher ────────────────────────────────────
 
+# Ceiling on a device-description body. The largest real one seen here is
+# ~4 KB (the LG TV's, with its icon list); 512 KB leaves room for anything
+# reasonable while making an endless stream cheap to refuse.
+_MAX_DESC_BYTES = 512 * 1024
+
 def _fetch_device(location: str,
                   servers: ServerRegistry,
                   renderers: RendererRegistry,
@@ -86,12 +91,23 @@ def _fetch_device(location: str,
     Fetch UPnP device description XML.
     Registers as MediaServer, MediaRenderer, or both.
     Skips the gateway's own UDN to prevent self-discovery.
+
+    The read is CAPPED. `location` arrives from an unauthenticated SSDP
+    datagram, so an unbounded `read()` let a URL that streams for ever be
+    buffered until the process died — and `safe_fromstring`'s own 4 MB cap
+    is no help, because it only sees the bytes after they are all in memory.
+    A real device description is a few kilobytes.
     """
     try:
         req = urllib.request.Request(
             location, headers={"User-Agent": "DLNAGateway/1.0"})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            xml_data = resp.read().decode("utf-8", errors="replace")
+            raw = resp.read(_MAX_DESC_BYTES + 1)
+            if len(raw) > _MAX_DESC_BYTES:
+                log.warning(f"_fetch_device({location}): description exceeds "
+                            f"{_MAX_DESC_BYTES} bytes — ignoring")
+                return
+            xml_data = raw.decode("utf-8", errors="replace")
     except Exception as e:
         log.debug(f"_fetch_device({location}): {e}")
         return
@@ -173,6 +189,12 @@ def _fetch_device(location: str,
 
 _seen_locations: set = set()
 _seen_lock = threading.Lock()
+# A home LAN has a handful of UPnP devices; this set only ever needs to hold
+# them. It is bounded because its keys come from unauthenticated packets:
+# unique LOCATIONs would otherwise grow it for as long as the gateway runs.
+# Clearing wholesale (rather than evicting one entry) keeps it O(1) and
+# costs only a re-probe of devices that are announcing anyway.
+_SEEN_MAX = 512
 
 # Injected by gateway at startup to avoid forward import
 _on_server_found = None   # callable(MediaServer) — starts indexer
@@ -182,6 +204,10 @@ def _register_location(location: str, gw_udn: str = ""):
     with _seen_lock:
         if location in _seen_locations:
             return
+        if len(_seen_locations) >= _SEEN_MAX:
+            log.warning(f"discovery: seen-locations hit {_SEEN_MAX} — "
+                        "clearing (a flood, or a device rotating its URL)")
+            _seen_locations.clear()
         _seen_locations.add(location)
     time.sleep(1.5)   # let AssetUPnP finish booting if just started
     before_servers = {s.udn for s in SERVERS.all()}

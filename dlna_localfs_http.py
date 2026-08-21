@@ -18,8 +18,15 @@ refuse the stream outright.
 Correct Range handling is equally non-optional: the Naim seeks with
 `bytes=N-M`, so a malformed or unsatisfiable range must produce
 `416`, never a silent full-body 200.
+
+`resolve_within` joined them on 2026-08-21 (audit Track B1). It is pure in
+the same sense — it touches the filesystem only to canonicalise — and it is
+here rather than in the handler because the handler had TWO copies of the
+containment test, which is how one of them drifted.
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 # Default Content-Type when we can't infer one. Keeps Range responses
 # working even for unknown extensions.
@@ -66,6 +73,44 @@ def _dlna_headers_for_mime(mime: str) -> dict:
         "contentFeatures.dlna.org": contentFeatures,
         "transferMode.dlna.org":    "Streaming",
     }
+
+
+def resolve_within(file_path: str,
+                   allowed_roots: tuple[str, ...]) -> Path | None:
+    """Canonicalise `file_path` and return it only if it lies inside one of
+    `allowed_roots`. `None` means refuse — the caller answers 403.
+
+    Two things here are load-bearing, and both were wrong before 2026-08-21:
+
+    * **Containment is asked about path COMPONENTS, not string prefixes.**
+      `str(p).startswith(root)` says `/Volumes/SAMDATA/Music Videos` is
+      inside `/Volumes/SAMDATA/Music`, because as text it is. With the
+      deployed roots that admitted any sibling directory whose name began
+      with a root's name — every byte of it, to any unauthenticated peer on
+      the LAN, since renderers fetch from this server directly.
+    * **The RESOLVED path is what the caller must then open.** Resolving
+      follows symlinks, which is what stops a link planted inside the root
+      from reading outside it; opening the original path afterwards would
+      hand that back through a time-of-check/time-of-use gap.
+
+    An empty `allowed_roots` disables the check — the CLI driver and some
+    tests construct a server with no roots on purpose.
+    """
+    try:
+        resolved = Path(file_path).resolve()
+    except (OSError, ValueError):
+        # ValueError covers a NUL byte in the path; both mean "not a file
+        # we can reason about", and both must refuse rather than raise.
+        return None
+    if not allowed_roots:
+        return resolved
+    for root in allowed_roots:
+        try:
+            if resolved.is_relative_to(Path(root)):
+                return resolved
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def _parse_range_header(value: str, file_size: int) -> tuple[int, int] | None:

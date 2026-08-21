@@ -10,6 +10,23 @@ re-exports them so `dlna_discovery.SSDP_ADDR` still resolves.
 Every device-description URL this finds is handed to `_register`
 below rather than parsed here — see that function for why the import
 is deliberately lazy.
+
+THIS IS THE UNAUTHENTICATED INPUT PATH. Anything on the LAN can send
+UDP to port 1900, unconnected and with a forgeable source, and have
+`parse_location` read it. Two rules follow, and both are enforced
+below rather than trusted to the sender (audit Track B3, 2026-08-21):
+
+  * **A packet may not name a URL that isn't the sender's own.** A
+    device announces where to fetch ITS description; a LOCATION
+    pointing anywhere else turns the gateway into an unauthenticated
+    HTTP reflector.
+  * **A packet may not cost an unbounded amount of work.** Each one
+    used to spawn a thread that slept 1.5 s and then made a request,
+    so a few thousand packets a second exhausted threads and file
+    descriptors — surfacing as SQLite's "unable to open database
+    file", which doesn't look like an attack at all. Registrations
+    are now capped and excess packets are DROPPED, which is safe
+    because devices re-announce on a timer.
 """
 from __future__ import annotations
 
@@ -19,6 +36,7 @@ import socket
 import struct
 import threading
 import time
+import urllib.parse
 
 from dlna_config import close_quietly
 
@@ -26,6 +44,21 @@ log = logging.getLogger("dlna.discovery")
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
+
+# Only the head of a datagram is scanned for headers. A real SSDP packet is
+# a few hundred bytes; this bounds the regex against a jumbo datagram.
+_MAX_SCAN_BYTES = 2048
+# Device-description URLs are short. 512 is generous for the longest real
+# one seen (a Windows Media Player UUID path).
+_MAX_LOCATION_LEN = 512
+# Concurrent registrations in flight. Discovery is a background convenience:
+# a handful at a time finds every device on a home LAN within one announce
+# cycle, and the cap is what makes a flood cost nothing.
+_MAX_INFLIGHT = 8
+_INFLIGHT = threading.Semaphore(_MAX_INFLIGHT)
+# One WARNING per source per minute — a flood must not become a log flood.
+_DROP_WARN_SEC = 60.0
+_last_drop_warn = 0.0
 
 
 def _register(location: str, gw_udn: str = "") -> None:
@@ -39,6 +72,76 @@ def _register(location: str, gw_udn: str = "") -> None:
     """
     import dlna_discovery
     dlna_discovery._register_location(location, gw_udn)
+
+
+def parse_location(data: bytes, src_ip: str = "") -> str | None:
+    """Extract a usable device-description URL from one SSDP datagram, or
+    `None` to drop the packet. Pure — no sockets, no threads — so the
+    hostile cases are directly testable (`tests/test_ssdp_parsing.py`).
+
+    `src_ip` is the datagram's source address. When given, the URL's host
+    must BE that address: a device announces its own description, and
+    allowing anything else lets any peer aim the gateway's HTTP client at a
+    third party. Passing `""` skips that check, for the callers that
+    genuinely have no peer (the subnet-scan path).
+
+    Note the host comparison uses `urlsplit().hostname`, which is the part
+    after any `user@` — so `http://192.168.1.5@elsewhere/` is correctly read
+    as a URL for `elsewhere`, and refused.
+    """
+    msg = data[:_MAX_SCAN_BYTES].decode("utf-8", errors="replace")
+    # Anchored at line start so a LOCATION cannot be smuggled inside another
+    # header's value. NOT anchored at line end: SSDP lines end `\r\n`, and a
+    # `$` would then have to account for the `\r` — getting that wrong
+    # rejects every real device, which is how this was first written.
+    # `\S+` already stops at the `\r`.
+    m = re.search(r"^LOCATION:[ \t]*(\S+)", msg,
+                  re.IGNORECASE | re.MULTILINE)
+    if not m:
+        return None
+    loc = m.group(1).strip()
+    if not loc or len(loc) > _MAX_LOCATION_LEN:
+        return None
+    try:
+        parts = urllib.parse.urlsplit(loc)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    if src_ip and parts.hostname != src_ip:
+        log.debug(f"SSDP: {src_ip} announced a URL for "
+                  f"{parts.hostname} — dropped")
+        return None
+    return loc
+
+
+def _spawn_registration(location: str, gw_udn: str) -> bool:
+    """Register `location` on a worker thread if a slot is free.
+
+    Returns False when the cap is reached, meaning the packet was dropped.
+    That is the correct outcome rather than queueing: SSDP devices announce
+    repeatedly, so a device dropped now is seen on its next NOTIFY, while an
+    unbounded queue is exactly the resource a flood is trying to consume.
+    """
+    global _last_drop_warn
+    if not _INFLIGHT.acquire(blocking=False):
+        now = time.time()
+        if now - _last_drop_warn >= _DROP_WARN_SEC:
+            _last_drop_warn = now
+            log.warning(f"SSDP: {_MAX_INFLIGHT} registrations already in "
+                        "flight — dropping announcements until one finishes "
+                        "(normal under a burst; sustained means a flood)")
+        return False
+
+    def _run():
+        try:
+            _register(location, gw_udn)
+        finally:
+            _INFLIGHT.release()
+
+    threading.Thread(target=_run, daemon=True,
+                     name="ssdp-register").start()
+    return True
 
 
 _SEARCH_TYPES = [
@@ -96,14 +199,10 @@ def ssdp_discovery_thread(lan_ip: str, gw_udn: str = ""):
             close_quietly(rx)
         rx = None
 
-    def handle(data: bytes):
-        msg = data.decode("utf-8", errors="replace")
-        m = re.search(r"LOCATION:\s*(\S+)", msg, re.IGNORECASE)
-        if not m:
-            return
-        loc = m.group(1).strip()
-        threading.Thread(target=_register, args=(loc, gw_udn),
-                         daemon=True).start()
+    def handle(data: bytes, src: tuple):
+        loc = parse_location(data, src[0] if src else "")
+        if loc:
+            _spawn_registration(loc, gw_udn)
 
     socks = [s for s in (tx, rx) if s]
     last_search = 0.0
@@ -121,8 +220,8 @@ def ssdp_discovery_thread(lan_ip: str, gw_udn: str = ""):
 
         for s in socks:
             try:
-                data, _ = s.recvfrom(4096)
-                handle(data)
+                data, src = s.recvfrom(4096)
+                handle(data, src)
             except TimeoutError:
                 pass
             except Exception as e:
