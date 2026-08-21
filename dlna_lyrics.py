@@ -23,6 +23,13 @@ import logging
 import os
 import urllib.parse
 import urllib.request
+from dlna_xml import read_capped
+
+# Ceiling on a JSON body from an external service. These are answers to
+# our own queries over verified TLS, so this is a backstop against an
+# upstream misbehaving rather than a hostile-peer defence — but there is
+# no reason for any read here to be unbounded either.
+_JSON_MAX = 8 * 1024 * 1024
 
 log = logging.getLogger("dlna.lyrics")
 
@@ -51,7 +58,7 @@ def fetch_lrclib(track: str, artist: str, album: str = "", duration: int = 0):
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-            body = r.read()
+            body = read_capped(r, what="lrclib", max_bytes=_JSON_MAX)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise LrclibNotFound() from e

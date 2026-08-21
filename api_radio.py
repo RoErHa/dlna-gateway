@@ -27,6 +27,13 @@ from dlna_library import DB
 from dlna_player import QUEUES
 
 from dlna_config import close_quietly
+from dlna_xml import read_capped
+
+# Ceiling on a JSON body from an external service. These are answers to
+# our own queries over verified TLS, so this is a backstop against an
+# upstream misbehaving rather than a hostile-peer defence — but there is
+# no reason for any read here to be unbounded either.
+_JSON_MAX = 8 * 1024 * 1024
 
 log = logging.getLogger("dlna.api.radio")
 
@@ -52,7 +59,8 @@ def _radiobrowser_get(path: str):
         try:
             conn.request("GET", path, headers={"User-Agent": _RB_USER_AGENT})
             resp = conn.getresponse()
-            body = resp.read()
+            body = read_capped(resp, what="radio-browser",
+                               max_bytes=_JSON_MAX)
             if resp.status != 200:
                 log.warning(f"radio-browser {host} → HTTP {resp.status}")
                 continue

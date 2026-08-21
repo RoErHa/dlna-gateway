@@ -22,7 +22,7 @@ import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-from dlna_xml import safe_fromstring
+from dlna_xml import read_capped, safe_fromstring
 
 from dlna_config import close_quietly
 
@@ -79,7 +79,9 @@ def _soap_post(host: str, path: str, body: bytes, action: str) -> tuple:
                 "Connection":      "close",
             })
             resp = conn.getresponse()
-            return resp.status, resp.read().decode("utf-8", errors="replace")
+            return resp.status, read_capped(
+                resp, what=f"ContentDirectory {action}").decode(
+                "utf-8", errors="replace")
         finally:
             close_quietly(conn)
 

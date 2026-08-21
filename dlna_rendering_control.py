@@ -26,7 +26,7 @@ import logging
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-from dlna_xml import safe_fromstring
+from dlna_xml import read_capped, safe_fromstring
 
 from dlna_config import close_quietly
 
@@ -58,7 +58,8 @@ def _rc_soap(rc_url: str, action: str, body_inner: str,
             "User-Agent":     "DLNAGateway/1.0",
         })
         resp = conn.getresponse()
-        text = resp.read().decode("utf-8", errors="replace")
+        text = read_capped(resp, what=f"RenderingControl {action}").decode(
+            "utf-8", errors="replace")
         if resp.status not in (200, 204):
             log.debug(f"_rc_soap {action} → HTTP {resp.status}: {text[:200]}")
             return None

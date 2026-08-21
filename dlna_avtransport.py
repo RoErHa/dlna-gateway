@@ -18,7 +18,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-from dlna_xml import safe_fromstring
+from dlna_xml import read_capped, safe_fromstring
 
 from dlna_config import close_quietly
 # RenderingControl (volume) moved to its own module 2026-08-20; re-exported
@@ -67,7 +67,7 @@ def avtransport_send(av_url: str, media_url: str, title: str,
                 "User-Agent":     "DLNAGateway/1.0",
             })
             resp = conn.getresponse()
-            body = resp.read()
+            body = read_capped(resp, what=f"AVTransport {action}")
             if resp.status not in (200, 204):
                 log.error(f"AVTransport {action} → HTTP {resp.status}: {body[:800]}")
                 return False
@@ -186,7 +186,7 @@ def avtransport_pause(av_url: str) -> bool:
             "SOAPAction":     f'"urn:schemas-upnp-org:service:AVTransport:1#{action}"',
             "Content-Length": str(len(envelope)),
         })
-        resp = conn.getresponse(); resp.read()
+        resp = conn.getresponse(); read_capped(resp, what="AVTransport")
         log.info(f"AVTransport {action} → {av_url}")
         return resp.status in (200, 204)
     except Exception as e:
@@ -224,7 +224,8 @@ def _av_soap(av_url: str, action: str,
             "Content-Length": str(len(envelope)),
         })
         resp = conn.getresponse()
-        text = resp.read().decode("utf-8", errors="replace")
+        text = read_capped(resp, what=f"AVTransport {action}").decode(
+            "utf-8", errors="replace")
         if resp.status in (200, 204):
             return text, None
         return None, f"HTTP {resp.status}"
@@ -389,7 +390,7 @@ def avtransport_stop(av_url: str) -> bool:
             "Content-Length": str(len(envelope)),
         })
         resp = conn.getresponse()
-        resp.read()
+        read_capped(resp, what="AVTransport Stop")
         log.info(f"AVTransport ■ Stop → {av_url}")
         return resp.status in (200, 204)
     except Exception as e:

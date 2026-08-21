@@ -15,6 +15,13 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from dlna_xml import read_capped
+
+# Ceiling on a JSON body from an external service. These are answers to
+# our own queries over verified TLS, so this is a backstop against an
+# upstream misbehaving rather than a hostile-peer defence — but there is
+# no reason for any read here to be unbounded either.
+_JSON_MAX = 8 * 1024 * 1024
 
 log = logging.getLogger("dlna.geocode")
 
@@ -65,7 +72,8 @@ def reverse_geocode(lat, lon, timeout: float = 8.0):
         req = urllib.request.Request(
             f"{_NOMINATIM}?{params}", headers={"User-Agent": _user_agent()})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8"))
+            data = json.loads(read_capped(
+                r, what="Nominatim", max_bytes=_JSON_MAX).decode("utf-8"))
     except Exception as e:                        # noqa: BLE001 (transient)
         log.debug("geocode failed (%s,%s): %s", lat, lon, e)
         return None

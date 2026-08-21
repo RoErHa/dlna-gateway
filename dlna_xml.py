@@ -27,6 +27,14 @@ parsing a 500 MB well-formed document is its own denial of service.
 Failures raise `ElementTree.ParseError`, which every existing call site
 already handles as "malformed XML from a device" — so a hostile body takes
 the same path as a broken one and nothing needs a new error branch.
+
+`read_capped` joined this module on 2026-08-21 (audit Track B2) because the
+size cap above turned out to be applied one step too late. It can only judge
+bytes that are already in memory, so a device answering a SOAP request with
+an endless body exhausted memory BEFORE the cap ever ran. Reading is
+therefore bounded here too, at the same trust boundary and for the same
+reason: everything on the other end of these sockets is a device that merely
+answered an SSDP packet.
 """
 from __future__ import annotations
 
@@ -68,3 +76,30 @@ def safe_fromstring(data: str | bytes, *, what: str = "xml",
         raise ET.ParseError("doctype declarations are not accepted")
 
     return ET.fromstring(raw)
+
+
+def read_capped(resp, *, what: str = "response",
+                max_bytes: int = MAX_XML_BYTES) -> bytes:
+    """Read at most `max_bytes` from an HTTP response, returning b"" if the
+    body is larger (or the read fails).
+
+    Use this instead of a bare `resp.read()` wherever the peer is a device
+    rather than a service we chose: any box on the LAN can answer an SSDP
+    M-SEARCH and become a "renderer" or "server" the gateway then talks SOAP
+    to. An unbounded read there is a memory-exhaustion primitive handed to
+    whatever is on the network, and `safe_fromstring`'s cap cannot help
+    because it only ever sees bytes that are already in memory.
+
+    Returning empty rather than raising is deliberate: every caller already
+    treats an empty or unparseable body as "device said nothing useful", so
+    a hostile response takes an existing path instead of a new one.
+    """
+    try:
+        raw = resp.read(max_bytes + 1)
+    except OSError as e:
+        log.debug(f"read_capped({what}): {e}")
+        return b""
+    if len(raw) > max_bytes:
+        log.warning(f"{what}: response exceeds {max_bytes} bytes — ignoring")
+        return b""
+    return raw

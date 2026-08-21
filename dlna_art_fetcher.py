@@ -20,6 +20,13 @@ import logging
 import os
 import threading
 import urllib.parse
+from dlna_xml import read_capped
+
+# Ceiling on a JSON body from an external service. These are answers to
+# our own queries over verified TLS, so this is a backstop against an
+# upstream misbehaving rather than a hostile-peer defence — but there is
+# no reason for any read here to be unbounded either.
+_JSON_MAX = 8 * 1024 * 1024
 
 log = logging.getLogger("dlna.library")
 
@@ -63,7 +70,7 @@ def _mb_lookup_cover(artist: str, album: str) -> str | None:
         try:
             conn.request("GET", path, headers={"User-Agent": _MB_USER_AGENT})
             resp = conn.getresponse()
-            body = resp.read()
+            body = read_capped(resp, what="MusicBrainz", max_bytes=_JSON_MAX)
             if resp.status != 200:
                 log.warning(f"MB ← HTTP {resp.status} for "
                             f"{artist!r} / {album!r}")
@@ -98,7 +105,7 @@ def _mb_lookup_cover(artist: str, album: str) -> str | None:
             conn.request("HEAD", f"/release-group/{mbid}/front-500",
                          headers={"User-Agent": _MB_USER_AGENT})
             resp = conn.getresponse()
-            resp.read()
+            read_capped(resp, what="CoverArtArchive", max_bytes=_JSON_MAX)
             if resp.status in (200, 301, 302, 307):
                 log.info(f"CAA ← HTTP {resp.status} — cover available "
                          f"for mbid={mbid}")

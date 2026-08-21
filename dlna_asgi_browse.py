@@ -356,6 +356,14 @@ _SSE_HEARTBEAT_SEC = 45.0
 
 @router.get("/api/events", include_in_schema=False)
 async def events(request: Request):
+    # Capped: an SSE connection is held for as long as the client wants it,
+    # so without a ceiling the subscriber set and its sockets grow without
+    # bound. Note the asymmetry that makes this the exposed one — hypercorn
+    # reaps a request that never COMPLETES in ~5 s, but this one completes
+    # and then stays. See ConcurrencyCap in dlna_asgi_state.
+    if not _st.SSE_STREAMS.acquire():
+        return JSONResponse({"error": "too many event streams"},
+                            status_code=503, headers={"Retry-After": "10"})
     q = EVENTS.subscribe()
 
     async def gen():
@@ -371,6 +379,7 @@ async def events(request: Request):
                     yield ": keepalive\n\n"      # SSE comment frame
         finally:
             EVENTS.unsubscribe(q)
+            _st.SSE_STREAMS.release()
 
     return StreamingResponse(
         gen(), media_type="text/event-stream",

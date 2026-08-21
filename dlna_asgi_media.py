@@ -44,6 +44,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 import api_playback
 import dlna_stream_proxy
+import dlna_asgi_state as _st
 from dlna_asgi_state import _peer
 from dlna_config import close_quietly
 
@@ -98,9 +99,20 @@ async def _audio_relay_response(url: str, range_hdr: str, client: str = "?"):
     upstream when the client disconnects (Hypercorn closes it). `client` is
     the requesting peer's IP — a 100.x address means tailnet (CarPlay/Amperfy
     or remote PWA), a 192.168.x one means LAN."""
-    conn, resp = await run_in_threadpool(
-        dlna_stream_proxy.open_stream_upstream, url, range_hdr)
+    # Capped: a relay holds a client socket AND an upstream socket for as long
+    # as the client keeps it, so an uncapped one is a file-descriptor
+    # exhaustion primitive. See ConcurrencyCap in dlna_asgi_state.
+    if not _st.AUDIO_RELAYS.acquire():
+        return JSONResponse({"error": "too many concurrent streams"},
+                            status_code=503, headers={"Retry-After": "5"})
+    try:
+        conn, resp = await run_in_threadpool(
+            dlna_stream_proxy.open_stream_upstream, url, range_hdr)
+    except BaseException:
+        _st.AUDIO_RELAYS.release()
+        raise
     if resp is None:
+        _st.AUDIO_RELAYS.release()
         return JSONResponse({"error": "stream unavailable"}, status_code=502)
 
     out = {"Access-Control-Allow-Origin": "*"}
@@ -149,6 +161,7 @@ async def _audio_relay_response(url: str, range_hdr: str, client: str = "?"):
                      f"in {time.monotonic()-_t0:.1f}s reason={reason} "
                      f"client={client}")
             close_quietly(conn)
+            _st.AUDIO_RELAYS.release()
 
     return StreamingResponse(_relay(), status_code=status,
                              media_type=ctype, headers=out)
@@ -172,9 +185,19 @@ async def radio_stream(request: Request, url: str = ""):
     client gone, and closes the upstream in its finally."""
     if not url:
         return JSONResponse({"error": "Missing url"}, status_code=400)
-    conn, resp, metaint, ctype = await run_in_threadpool(
-        dlna_stream_proxy.open_radio_upstream, url)
+    # An endless stream by definition, so it holds its two sockets until the
+    # client leaves — capped alongside the audio relays.
+    if not _st.AUDIO_RELAYS.acquire():
+        return JSONResponse({"error": "too many concurrent streams"},
+                            status_code=503, headers={"Retry-After": "5"})
+    try:
+        conn, resp, metaint, ctype = await run_in_threadpool(
+            dlna_stream_proxy.open_radio_upstream, url)
+    except BaseException:
+        _st.AUDIO_RELAYS.release()
+        raise
     if resp is None:
+        _st.AUDIO_RELAYS.release()
         return JSONResponse({"error": "stream unavailable"},
                             status_code=502)
     media_type = dlna_stream_proxy.normalize_audio_ctype(ctype) or "audio/mpeg"
@@ -189,6 +212,7 @@ async def radio_stream(request: Request, url: str = ""):
                 yield chunk
         finally:
             close_quietly(conn)
+            _st.AUDIO_RELAYS.release()
 
     return StreamingResponse(
         _relay(), media_type=media_type,
