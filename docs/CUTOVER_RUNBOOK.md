@@ -7,6 +7,13 @@
 > (2026-06-12) folded `/gw/*` into the ASGI app on the plain `:8765` bind** and
 > retired `dlna_server.py` + the `:8770`/`GATEWAY_PORT` plumbing. The current
 > architecture lives in `CLAUDE.md` + `docs/ARCHITECTURE.PDF`.
+>
+> **The two one-shot tools this runbook drives were deleted on 2026-08-21**
+> (`com.roha.dlna-gateway.cutover.plist`, `tools/cutover_copy_userdata.py`):
+> the cutover finished in June 2026 and both hardcoded one machine's paths,
+> which is not what a public repo should ship. They are still in git history
+> — `git log --diff-filter=D -- tools/cutover_copy_userdata.py` finds the
+> commit that removed them.
 
 The ordered, reversible procedure to make the **2.0 ASGI gateway** the live
 daily driver, taking over 1.x's identity so the Naim, CarPlay/Amperfy, Subsonic
