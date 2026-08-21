@@ -290,5 +290,88 @@ class TestSnapshotAllFansOutInParallel(unittest.TestCase):
         import dlna_player_registry as reg
         self.assertEqual(reg.QueueRegistry().snapshot_all(), {})
 
+class TestUnreachableRendererBackoff(unittest.TestCase):
+    """The rest of the B4 finding. Fanning out in parallel stopped the cost
+    being the SUM over dead renderers, but ONE dead renderer still cost a full
+    ~6 s TCP connect timeout — and with a 500 ms snapshot cache, the next poll
+    paid it again. Since queues are never evicted, that is the steady state
+    for any renderer used once and then switched off, and the PWA polls this
+    every second while audio plays.
+    """
+
+    def _queue(self, state):
+        import dlna_player
+        q = dlna_player.RendererQueue()
+        q._av_url = "http://192.168.1.99:1/AVTransport"
+        q._tracks = [{"title": "t", "url": "u"}]
+        q._rnd_name = "Off TV"
+        calls = []
+
+        def _state(url):
+            calls.append(url)
+            return state
+
+        return q, calls, _state
+
+    def test_a_dead_renderer_is_dialled_once_not_every_poll(self):
+        from unittest import mock
+
+        import dlna_avtransport
+        q, calls, _state = self._queue("UNREACHABLE")
+        with mock.patch.object(dlna_avtransport, "avtransport_get_state", _state),              mock.patch.object(dlna_avtransport, "avtransport_get_position",
+                               lambda u: None):
+            q.snapshot()
+            first = len(calls)
+            for _ in range(5):
+                q._snap_cache_at = 0.0        # expire the 500 ms cache
+                q.snapshot()
+        self.assertEqual(len(calls), first,
+                         "re-dialled an unreachable renderer inside the backoff")
+
+    def test_the_cached_state_is_still_served(self):
+        from unittest import mock
+
+        import dlna_avtransport
+        q, _, _state = self._queue("UNREACHABLE")
+        with mock.patch.object(dlna_avtransport, "avtransport_get_state", _state),              mock.patch.object(dlna_avtransport, "avtransport_get_position",
+                               lambda u: None):
+            q.snapshot()
+            q._snap_cache_at = 0.0
+            snap = q.snapshot()
+        self.assertFalse(snap["alive"])
+        self.assertEqual(snap["renderer"], "Off TV")
+
+    def test_a_reachable_renderer_is_never_backed_off(self):
+        from unittest import mock
+
+        import dlna_avtransport
+        q, calls, _state = self._queue("PLAYING")
+        with mock.patch.object(dlna_avtransport, "avtransport_get_state", _state),              mock.patch.object(dlna_avtransport, "avtransport_get_position",
+                               lambda u: {"position": "0:00:01",
+                                          "duration": "0:03:00", "title": "t"}):
+            for _ in range(4):
+                q._snap_cache_at = 0.0
+                q.snapshot()
+        self.assertEqual(len(calls), 4, "a healthy renderer must be polled")
+        self.assertEqual(q._unreachable_until, 0.0)
+
+    def test_the_backoff_expires_so_a_renderer_can_come_back(self):
+        from unittest import mock
+
+        import dlna_avtransport
+        q, calls, _state = self._queue("UNREACHABLE")
+        with mock.patch.object(dlna_avtransport, "avtransport_get_state", _state),              mock.patch.object(dlna_avtransport, "avtransport_get_position",
+                               lambda u: None):
+            q.snapshot()
+            q._snap_cache_at = 0.0
+            q._unreachable_until = 0.0        # as if the window had passed
+            q.snapshot()
+        self.assertEqual(len(calls), 2)
+
+    def test_the_backoff_is_bounded(self):
+        import dlna_player
+        self.assertLessEqual(dlna_player.RendererQueue._UNREACHABLE_BACKOFF_SEC, 120)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

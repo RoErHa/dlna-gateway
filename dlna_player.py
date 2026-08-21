@@ -101,6 +101,8 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
                                    "renderer": "", "queue_len": 0,
                                    "queue_pos": 0}
         self._snap_cache_at: float = 0.0
+        # >0 while a renderer is known unreachable; see snapshot().
+        self._unreachable_until: float = 0.0
         # Try-acquire lock: the first caller who finds cache stale
         # becomes the fetcher; everyone else gets the stale cache
         # immediately (no blocking). Without this, N concurrent callers
@@ -227,19 +229,40 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
     # nothing UI-relevant and caps real-world load.
     _SNAP_TTL_SEC = 0.5
 
+    # How long to stop SOAPing a renderer that just proved unreachable.
+    # Reaching a switched-off device costs a full TCP connect timeout (~6 s
+    # measured against the LG TV), and the 500 ms cache means the NEXT poll
+    # pays it again — so with one dead renderer the PWA's state poll cost 6 s
+    # over and over. Queues are never evicted, so this is the normal state of
+    # affairs for any device that has been used once and then switched off.
+    # 30 s bounds the staleness on recovery, and the monitor thread probes
+    # independently while a queue is actually playing, so a renderer coming
+    # back mid-session is still noticed at once.
+    _UNREACHABLE_BACKOFF_SEC = 30.0
+
     def snapshot(self) -> dict:
         """Return current queue state for the UI state poll. Cached for
         _SNAP_TTL_SEC; concurrent callers that miss the TTL return the
         stale cache rather than block — only the first caller to find
-        stale cache fires the SOAP round-trip."""
+        stale cache fires the SOAP round-trip.
+
+        A renderer that answered UNREACHABLE is not re-dialled for
+        _UNREACHABLE_BACKOFF_SEC; its cached (stopped) snapshot is served
+        instead."""
         from dlna_avtransport import avtransport_get_state, avtransport_get_position
 
         now = time.monotonic()
         with self._lock:
             cache     = dict(self._snap_cache)
             cached_at = self._snap_cache_at
+            quiet_til = self._unreachable_until
 
         if now - cached_at < self._SNAP_TTL_SEC:
+            return cache
+
+        # Known unreachable and still inside the backoff: answer from cache
+        # rather than spend another connect timeout finding out again.
+        if cache and now < quiet_til:
             return cache
 
         # Stale. Try to become the fetcher. If we can't, we're in the
@@ -272,6 +295,14 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
                 ts.start(); tp.start()
                 ts.join(timeout=7); tp.join(timeout=7)
                 state = result["state"] or "UNKNOWN"
+                # UNREACHABLE means the SOAP call itself failed — the device
+                # is off or gone, not merely quiet. Arm the backoff so the
+                # next poll is answered from cache instead of spending
+                # another connect timeout learning the same thing.
+                with self._lock:
+                    self._unreachable_until = (
+                        time.monotonic() + self._UNREACHABLE_BACKOFF_SEC
+                        if state == "UNREACHABLE" else 0.0)
                 pos   = result["pos"]   or {"position": None, "duration": None,
                                              "title": None}
                 cur = tracks[idx] if 0 <= idx < len(tracks) else {}
