@@ -71,13 +71,20 @@ mkdir -p "$DEST"
 STAMP="$(date '+%Y%m%d-%H%M%S')"
 OUT="$DEST/library-$STAMP.db"
 
+# The source runs in WAL mode, so the .backup DESTINATION opens in WAL too and
+# gets `-shm` / `-wal` sidecars beside it. Renaming the .part away orphans
+# them, and the retention glob (library-*.db) can never match them — so before
+# this they accumulated 2–3 files per run, for ever. Every path that disposes
+# of a database file goes through here.
+drop_db() { rm -f "$1" "$1-shm" "$1-wal"; }
+
 # ── snapshot ─────────────────────────────────────────────────────────────
 # .backup is safe while the gateway is writing; cp is not. Snapshot to a
 # .part file so an interrupted run can never leave a half-written file
 # looking like a valid backup.
 if ! sqlite3 "$DB" ".backup '$OUT.part'" 2>>"$LOG"; then
   log "✗ FAILED: sqlite3 .backup errored"
-  rm -f "$OUT.part"
+  drop_db "$OUT.part"
   exit 1
 fi
 
@@ -85,7 +92,7 @@ fi
 CHECK="$(sqlite3 "$OUT.part" 'PRAGMA integrity_check;' 2>&1 | head -1)"
 if [ "$CHECK" != "ok" ]; then
   log "✗ FAILED: integrity_check on the snapshot said: $CHECK"
-  rm -f "$OUT.part"
+  drop_db "$OUT.part"
   exit 1
 fi
 
@@ -95,11 +102,14 @@ fi
 TRACKS="$(sqlite3 "$OUT.part" 'SELECT count(*) FROM tracks;' 2>/dev/null || echo 0)"
 if [ "${TRACKS:-0}" -lt 1 ]; then
   log "✗ FAILED: snapshot holds $TRACKS tracks — refusing to keep it"
-  rm -f "$OUT.part"
+  drop_db "$OUT.part"
   exit 1
 fi
 
 mv "$OUT.part" "$OUT"
+# Whatever WAL sidecars the snapshot left under the .part name are now
+# orphaned by the rename; the snapshot itself is complete and verified.
+rm -f "$OUT.part-shm" "$OUT.part-wal"
 SIZE="$(du -h "$OUT" | awk '{print $1}')"
 log "✓ snapshot $(basename "$OUT")  ${SIZE}  ${TRACKS} tracks  (integrity ok)"
 
@@ -112,7 +122,7 @@ log "✓ snapshot $(basename "$OUT")  ${SIZE}  ${TRACKS} tracks  (integrity ok)"
 # under launchd on exactly that bash.
 ls -1t "$DEST"/library-*.db 2>/dev/null | tail -n +$((KEEP + 1)) | while IFS= read -r f; do
   [ -n "$f" ] || continue
-  rm -f "$f"
+  drop_db "$f"
   log "  pruned $(basename "$f")"
 done
 
