@@ -188,8 +188,13 @@ def scan_videos(root, udn: str, db, base_url: str, *, force: bool = False,
         db.upsert_videos(udn, batch); added += len(batch)
     pruned = db.prune_videos(udn, seen)
     applied = apply_location_overrides(db, udn)
-    log.info("video scan %s: %d files, +%d, skip %d, prune %d, overrides %d",
-             root, scanned, added, skipped, pruned, applied)
+    # A rescan that changed nothing is not news, and at one line every five
+    # minutes it was 33% of gateway.log — enough to hide the stream failures
+    # this file has nothing to do with. Report at INFO when the library
+    # actually moved, at DEBUG when it did not.
+    _lvl = (log.info if (added or pruned or applied) else log.debug)
+    _lvl("video scan %s: %d files, +%d, skip %d, prune %d, overrides %d",
+         root, scanned, added, skipped, pruned, applied)
     return {"scanned": scanned, "added": added, "skipped": skipped,
             "pruned": pruned, "overrides_applied": applied,
             "missing_root": False}

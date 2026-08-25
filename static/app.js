@@ -146,9 +146,94 @@ let shuffleEnabled=(()=>{const v=localStorage.getItem("dlna_shuffle");return v==
 
 browserAudio.addEventListener("ended",()=>{
   _abSavePosition("ended");   // audiobook: persist end-of-chapter (no-op for music)
+  _stallWatchdogStop();
   if(browserIdx<browserQueue.length-1){browserIdx++;_browserPlayIdx(browserIdx);}
   else{activeDevice="browser";} // playlist done
 });
+
+// ── Stall watchdog — the "it just stopped mid-playlist" fix ────────
+//
+// The queue only ever advanced on `ended` or `error`. An <audio> element has
+// a third resting state that fires NEITHER: buffer starved, no more bytes
+// coming, not an error from its point of view. It reached that state in the
+// wild on 2026-08-25 — the last byte of a track was delivered at 10:22:32,
+// then no further request, no error report, and the queue sat dead for six
+// minutes until the track was restarted by hand. The gateway log for that
+// track shows what starved it: eleven concurrent Range requests for one file
+// against a relay that had already dumped the whole remainder into memory
+// (see _MAX_SLICE in dlna_asgi_media.py). That relay bug is fixed, but the
+// player must not depend on the network being well-behaved: any stall that
+// nothing reports still has to un-wedge the queue.
+//
+// So: while we believe we are playing, watch currentTime. If it has not moved
+// for _STALL_GRACE_MS, nudge the element back to life once (re-seek to where
+// it stopped — this re-issues the Range request), and if that does not take
+// either, treat the track as unplayable and advance. Progress resets both
+// counters, so a slow network that eventually delivers is never penalised.
+const _STALL_POLL_MS  = 2000;
+const _STALL_GRACE_MS = 12000;   // > any normal rebuffer over the tailnet
+let _stallTimer=null, _stallPos=-1, _stallSince=0, _stallNudged=false;
+
+function _stallWatchdogStop(){
+  if(_stallTimer){clearInterval(_stallTimer);_stallTimer=null;}
+  _stallPos=-1;_stallSince=0;_stallNudged=false;
+}
+
+function _stallWatchdogStart(){
+  _stallWatchdogStop();
+  _stallTimer=setInterval(_stallCheck,_STALL_POLL_MS);
+}
+
+function _stallCheck(){
+  // Only meaningful while browser output is the active device and the element
+  // believes it is playing. A user pause is not a stall.
+  if(activeDevice!=="browser"||browserAudio.paused||browserAudio.ended){
+    _stallPos=-1;_stallSince=0;_stallNudged=false;return;
+  }
+  const pos=browserAudio.currentTime||0;
+  if(_stallPos<0||pos>_stallPos+0.05){        // real progress
+    _stallPos=pos;_stallSince=Date.now();_stallNudged=false;return;
+  }
+  if(!_stallSince){_stallSince=Date.now();return;}
+  if(Date.now()-_stallSince<_STALL_GRACE_MS) return;
+
+  const t=browserQueue[browserIdx];
+  if(!_stallNudged){
+    // One recovery attempt: re-seek to where it died. On a media element
+    // whose fetch was dropped this re-issues the range request and playback
+    // resumes without the user noticing.
+    _stallNudged=true;_stallSince=Date.now();
+    _reportClientError({kind:"audio_stall",phase:"nudge",
+      position:pos,title:t?.title||"",artist:t?.artist||"",
+      ready_state:browserAudio.readyState,
+      network_state:browserAudio.networkState,
+      buffered_end:(browserAudio.buffered.length
+        ?browserAudio.buffered.end(browserAudio.buffered.length-1):0),
+      ua:navigator.userAgent.slice(0,120)});
+    try{ browserAudio.currentTime=Math.max(0,pos-0.5); }catch(e){}
+    _playBrowserAudio("stall_nudge");
+    return;
+  }
+  // The nudge did not take. Do not leave the queue wedged.
+  _reportClientError({kind:"audio_stall",phase:"give_up",
+    position:pos,title:t?.title||"",artist:t?.artist||"",
+    queue_len:browserQueue.length,
+    ready_state:browserAudio.readyState,
+    network_state:browserAudio.networkState,
+    ua:navigator.userAgent.slice(0,120)});
+  _stallWatchdogStop();
+  if(browserIdx<browserQueue.length-1){
+    toast(`⚠ "${t?.title||'Track'}" stalled — skipping`);
+    browserIdx++;_browserPlayIdx(browserIdx);
+  }else{
+    toast(`⚠ "${t?.title||'Track'}" stalled`);
+    $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
+  }
+}
+
+browserAudio.addEventListener("playing",()=>_stallWatchdogStart());
+browserAudio.addEventListener("pause",  ()=>_stallWatchdogStop());
+browserAudio.addEventListener("emptied",()=>_stallWatchdogStop());
 
 // ── Audiobook resume positions (P2) ───────────────────────────────
 // Active only when the current browser queue came from the audiobooks
@@ -319,6 +404,7 @@ async function _reportClientError(payload){
 
 browserAudio.addEventListener("error", e=>{
   if(activeDevice!=="browser") return;
+  _stallWatchdogStop();   // the error path owns the advance from here
   const err = browserAudio.error;
   const code = err ? err.code : 0;
   const codeName = _MEDIA_ERR[code] || `unknown(${code})`;
@@ -462,6 +548,7 @@ browserAudio.addEventListener("timeupdate",()=>{
 
 function _browserPlayIdx(idx){
   const t=browserQueue[idx];if(!t)return;
+  _stallWatchdogStop();
   browserAudio.src=`/stream?url=${enc(t.url)}`;
   // Loading a new src resets playbackRate to defaultPlaybackRate in some
   // engines — re-assert the audiobook speed per chapter.

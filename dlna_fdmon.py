@@ -113,6 +113,7 @@ def start_fd_monitor(interval: float = 10.0,
         prev = fd_count()
         last_dump_t = 0.0
         tick = 0
+        last_beat = -1   # count at the last INFO heartbeat
         while True:
             n = fd_count()
             lim = soft_limit()
@@ -130,7 +131,16 @@ def start_fd_monitor(interval: float = 10.0,
             elif frac >= warn_frac:
                 log.warning(f"FD usage rising {n}/{lim} ({frac:.0%})")
             elif tick % heartbeat_every == 0:
-                log.info(f"FD usage {n}/{lim} ({frac:.0%})")
+                # Only say it when it has something to say. A flat count
+                # repeated every few minutes is 40% of gateway.log and it
+                # buries the playback lines you actually go looking for; the
+                # ALERT / rising / high-water branches above are what catch a
+                # leak. Under GATEWAY_DEBUG=1 the full heartbeat is still there.
+                if abs(n - last_beat) >= max(5, int(lim * 0.001)):
+                    log.info(f"FD usage {n}/{lim} ({frac:.0%})")
+                    last_beat = n
+                else:
+                    log.debug(f"FD usage {n}/{lim} ({frac:.0%})")
             prev = n
             tick += 1
             time.sleep(interval)

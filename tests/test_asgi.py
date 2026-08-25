@@ -520,6 +520,193 @@ class TestStreamProxy(unittest.TestCase):
         self.assertTrue(conn.closed)            # generator closed the upstream
 
 
+class _ByteResp:
+    """Upstream fake whose read(n) honours n — the slice tests are about byte
+    counts, so a fake that pops whole chunks regardless of n would pass
+    vacuously."""
+
+    def __init__(self, status, headers, body: bytes):
+        self.status = status
+        self._h = headers
+        self._body = body
+        self.pos = 0
+
+    def getheader(self, name):
+        for k, v in self._h.items():
+            if k.lower() == name.lower():
+                return v
+        return None
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = len(self._body) - self.pos
+        out = self._body[self.pos:self.pos + n]
+        self.pos += len(out)
+        return out
+
+
+def _drain(resp):
+    body = b""
+
+    async def _c():
+        nonlocal body
+        async for c in resp.body_iterator:
+            body += c
+    asyncio.run(_c())
+    return body
+
+
+class TestStreamUpstreamErrors(unittest.TestCase):
+    """An upstream error body is not media.
+
+    A playlist row pointing at a track the index no longer has resolves to a
+    404 on the LocalFs file server. Relaying that body as audio/flac makes
+    `<audio>` report MediaError 4 'unsupported format' and the PWA skips the
+    track — the 2026-08-25 "songs skip at random" report. Fail the request."""
+
+    def _run(self, status, headers=None, body=b"Not found"):
+        conn = _FakeConn()
+        resp = _ByteResp(status, headers or {"Content-Type": "text/plain"}, body)
+        req = types.SimpleNamespace(headers={"range": ""})
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+        return r, conn
+
+    def test_upstream_404_is_not_relayed_as_audio(self):
+        r, conn = self._run(404)
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn("audio", (r.media_type or ""))
+        self.assertTrue(conn.closed, "upstream connection must be closed")
+
+    def test_upstream_500_refused_too(self):
+        r, _ = self._run(500)
+        self.assertEqual(r.status_code, 502)
+
+    def test_error_is_opaque_to_the_caller(self):
+        """Same rule as /art: the upstream status must not become a probe
+        oracle. 404 and 500 must be indistinguishable from outside."""
+        a, _ = self._run(404)
+        b, _ = self._run(500)
+        self.assertEqual(a.status_code, b.status_code)
+        self.assertEqual(bytes(a.body), bytes(b.body))
+
+    def test_416_passes_through_bodyless(self):
+        conn = _FakeConn()
+        resp = _ByteResp(416, {"Content-Range": "bytes */100"}, b"")
+        req = types.SimpleNamespace(headers={"range": "bytes=999-"})
+        with mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+        self.assertEqual(r.status_code, 416)
+        self.assertEqual(r.headers.get("content-range"), "bytes */100")
+        self.assertTrue(conn.closed)
+
+    def test_relay_slot_released_on_refusal(self):
+        """The refusal path must give the AUDIO_RELAYS slot back. Leaking one
+        per dead playlist row would wedge /stream after 64 of them."""
+        cap = dlna_asgi_state.AUDIO_RELAYS
+        before = getattr(cap, "count", None)
+        for _ in range(5):
+            self._run(404)
+        self.assertEqual(getattr(cap, "count", None), before)
+
+
+class TestStreamSliceCap(unittest.TestCase):
+    """Hypercorn 0.18's h2 path does not backpressure a slow reader, so an
+    unbounded relay buffers the whole remainder of a file in the worker
+    (measured: 3 slow clients x 70 MB FLAC took RSS 195 MB -> 383 MB). A
+    ranged request is capped instead; the client asks for the next slice."""
+
+    def test_clamp_arithmetic_is_exact(self):
+        from dlna_asgi_media import _clamp_content_range as clamp
+        cr, cl, lim = clamp("bytes 0-73848355/73848356", 8 * 1024 * 1024)
+        span = cr.split()[1].split("/")[0]
+        start, end = (int(x) for x in span.split("-"))
+        self.assertEqual(end - start + 1, int(cl))
+        self.assertEqual(int(cl), lim)
+        self.assertEqual(cr, "bytes 0-8388607/73848356")
+
+    def test_clamp_preserves_a_non_zero_start(self):
+        from dlna_asgi_media import _clamp_content_range as clamp
+        cr, cl, _ = clamp("bytes 42336256-73848355/73848356", 1024)
+        self.assertEqual(cr, "bytes 42336256-42337279/73848356")
+        self.assertEqual(cl, "1024")
+
+    def test_clamp_leaves_small_and_junk_ranges_alone(self):
+        from dlna_asgi_media import _clamp_content_range as clamp
+        for cr in ("bytes 0-9/100", "bytes 0-0/100", "garbage", "",
+                   "items 0-9/100", "bytes 9-0/100"):
+            self.assertIsNone(clamp(cr, 8 * 1024 * 1024), cr)
+
+    def test_ranged_response_is_capped_and_headers_agree(self):
+        conn = _FakeConn()
+        resp = _ByteResp(206, {"Content-Type": "audio/flac",
+                               "Content-Range": "bytes 0-999/1000",
+                               "Content-Length": "1000"}, b"x" * 1000)
+        req = types.SimpleNamespace(headers={"range": "bytes=0-"})
+        with mock.patch("dlna_asgi_media._MAX_SLICE", 100), \
+             mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+            body = _drain(r)
+        self.assertEqual(r.status_code, 206)
+        self.assertEqual(r.headers.get("content-range"), "bytes 0-99/1000")
+        self.assertEqual(r.headers.get("content-length"), "100")
+        # The promise in the headers and the bytes delivered must match, or
+        # the browser reports a corrupt file rather than a short one.
+        self.assertEqual(len(body), 100)
+
+    def test_request_without_a_range_is_never_truncated(self):
+        """A client that did not send Range has not shown itself Range-aware —
+        truncating it would corrupt a plain download (curl, Amperfy sync)."""
+        conn = _FakeConn()
+        resp = _ByteResp(200, {"Content-Type": "audio/flac",
+                               "Content-Length": "1000"}, b"x" * 1000)
+        req = types.SimpleNamespace(headers={})
+        with mock.patch("dlna_asgi_media._MAX_SLICE", 100), \
+             mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+            body = _drain(r)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(body), 1000)
+
+    def test_cap_of_zero_disables_slicing(self):
+        conn = _FakeConn()
+        resp = _ByteResp(206, {"Content-Type": "audio/flac",
+                               "Content-Range": "bytes 0-999/1000",
+                               "Content-Length": "1000"}, b"x" * 1000)
+        req = types.SimpleNamespace(headers={"range": "bytes=0-"})
+        with mock.patch("dlna_asgi_media._MAX_SLICE", 0), \
+             mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+            body = _drain(r)
+        self.assertEqual(len(body), 1000)
+        self.assertEqual(r.headers.get("content-range"), "bytes 0-999/1000")
+
+    def test_short_range_under_the_cap_is_untouched(self):
+        conn = _FakeConn()
+        resp = _ByteResp(206, {"Content-Type": "audio/flac",
+                               "Content-Range": "bytes 0-49/1000",
+                               "Content-Length": "50"}, b"x" * 50)
+        req = types.SimpleNamespace(headers={"range": "bytes=0-49"})
+        with mock.patch("dlna_asgi_media._MAX_SLICE", 100), \
+             mock.patch.object(dlna_asgi.dlna_stream_proxy,
+                               "open_stream_upstream",
+                               return_value=(conn, resp)):
+            r = asyncio.run(dlna_asgi.stream(req, url="http://x/a.flac"))
+            body = _drain(r)
+        self.assertEqual(r.headers.get("content-range"), "bytes 0-49/1000")
+        self.assertEqual(len(body), 50)
+
+
 class TestRadioStreamProxy(unittest.TestCase):
     """The /radio_stream ICY relay ported native as a StreamingResponse."""
 

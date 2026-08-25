@@ -354,7 +354,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `api_playback_state.py` | Shared runtime handles + request helpers for the `api_playback` family. |
 | `api_radio.py` | Internet-radio API handlers (`/api/radio/*` — search, favourites, nowplaying). |
 | `dlna_lyrics.py` | On-demand lyrics fetch via lrclib.net (the network half; the cache lives in `LibraryDB`). |
-| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. |
+| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. Together those two were **295 of 400 lines**. |
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
@@ -582,6 +582,60 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 - Every session logs `proxy_stream ▶ START host/path` and `proxy_stream ■ END host/path sent=N bytes in Xs reason=<r>` with reason ∈ `{upstream_eof, client_idle_timeout, client_closed, error:<Type>}`.
 - The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from the file server — RoHaLocalFS on `:8200` since the 2026-05-31 migration); the proxy only matters for browser-audio playback.
 - No HTTP keep-alive — `Connection: close` on both ends. Each browser Range request opens a new upstream TCP connection. On LAN this is ~1ms; on Tailscale it's ~50-100ms per seek. Acceptable for current load; would need a connection pool if users start complaining about seek latency over the tailnet.
+
+#### Two things the relay must keep doing (2026-08-25)
+
+Both were diagnosed from `gateway.log` after a "songs skip at random, then it
+just stops mid-playlist" report. Native route: `dlna_asgi_media.
+_audio_relay_response` (shared by `/stream` and Subsonic `/rest/stream`).
+
+**1. An upstream error body is NOT media — never relay it.** The relay took
+`status = resp.status` and streamed whatever came back, typed as the
+upstream's content-type normalised into an audio MIME. A playlist row
+pointing at a track the index no longer has resolves to a **404 on the
+LocalFs server**, so `<audio>` was handed a 404 page labelled `audio/flac`,
+reported `MediaError.code 4` "unsupported format", and the PWA skipped the
+track — with nothing in the log saying why. Now only **200/206** stream;
+**416** passes through bodyless (a real Range answer); everything else logs
+`stream ✗ upstream <status> …` at WARNING and returns the opaque
+`502 {"error":"stream unavailable"}`. **Do not "improve" that by forwarding
+the upstream status** — same rule and same reason as `/art` (§Security
+posture 2): the status would be a probe oracle. The refusal path must also
+release the `AUDIO_RELAYS` slot; leaking one per dead row would wedge
+`/stream` after 64 of them. Guarded by
+`tests/test_asgi.py::TestStreamUpstreamErrors`.
+
+**2. `_MAX_SLICE` caps a ranged response — because HTTP/2 has no
+backpressure here.** Hypercorn 0.18's `StreamBuffer.pop()` unpauses the
+producer whenever the chunk it popped is under the low-water mark —
+**including the empty chunk it pops when the peer's flow-control window is
+shut**. A stalled reader therefore does not stop us: the relay generator runs
+to EOF and the whole remainder of the file lands in the worker's memory.
+Measured on this gateway: three 50 KB/s clients pulling one 70 MB FLAC took
+RSS **195 MB → 383 MB**, and every `stream ■ END` was logged **within 0.1 s
+while the clients still had minutes of reading left** — so the END line's
+`sent=` and `reason=` were describing a buffer fill, not a delivery. HTTP/1.1
+backpressures properly; **the PWA is on h2, so the PWA is the case that
+breaks**. In the wild Safari was seen opening **eleven concurrent Range
+requests for one track** (10:38:24, 2026-08-25) — ~770 MB of buffer for one
+70 MB file, with relays lingering 160–208 s after their track was over.
+
+We cannot see how much the client consumed, so we bound what we hand it: a
+request **that sent a Range** gets at most `_MAX_SLICE` (8 MB ≈ 70 s of
+16/44 FLAC; env `STREAM_SLICE_BYTES`, 0 disables) with a **truthful
+`Content-Range`/`Content-Length`**, and asks for the next slice when it wants
+more. Serving less of a range than was asked for is ordinary HTTP and is
+exactly how `<audio>` already drives this endpoint. After the fix the same
+three-slow-client test moved RSS 114 MB → 133 MB (**10× less**).
+
+> ⚠️ **A request with NO Range header is left alone**, deliberately: it has
+> not shown itself Range-aware, and truncating it would corrupt a plain file
+> download (curl, an Amperfy full-file sync). **Bit-perfect is unaffected** —
+> verified after the change: a no-Range pull and a 9-request walk of the
+> whole file both `sha256`-match the source file on disk.
+> `_clamp_content_range` is pure precisely because an off-by-one there is a
+> corrupt audio stream that the browser reports as an unplayable file rather
+> than as a bad byte count. Guarded by `TestStreamSliceCap`.
 
 ### `/art` — lock-screen artwork proxy
 
@@ -824,6 +878,42 @@ playing→paused→playing call-interruption round-trip).
 | 4    | SRC_NOT_SUPPORTED | skip immediately — the format genuinely isn't playable        |
 
 Prior to 2026-04-23 every `error` event was treated as code 4 and auto-skipped, producing false-positive "unsupported format" skips whenever the network hiccupped. Every event (including ignored-code-1) is now POSTed to `/api/client_log` so real-world incidents land in `gateway.log` for diagnosis.
+
+### The stall watchdog — "it just stopped mid-playlist" (2026-08-25)
+
+**The browser queue only ever advanced on `ended` or `error`.** An `<audio>`
+element has a third resting state that fires **neither**: buffer starved, no
+more bytes arriving, and — from the element's own point of view — no error.
+Nothing in `app.js` was listening for `stalled`/`waiting`/`suspend`, so when
+that happened the queue simply sat there showing "⏸ Pause" with silence, and
+the only way out was restarting a track by hand.
+
+It happened in the wild: the last byte of a track was delivered at 10:22:32,
+then **no further request, no `client_log` entry, and nothing at all until
+10:28:38** when the next track was started manually. What starved the buffer
+was the relay bug above (eleven concurrent Range requests against a relay
+that had already dumped the whole file into memory) — that is fixed, **but
+the player must not depend on the network being well-behaved.** Any stall
+that nothing reports still has to un-wedge the queue.
+
+`_stallCheck` polls `currentTime` every `_STALL_POLL_MS` (2 s) while the
+element believes it is playing. No progress for `_STALL_GRACE_MS` (12 s,
+comfortably longer than a tailnet rebuffer) → **one recovery nudge** (re-seek
+to where it died, which re-issues the Range request; a dropped fetch usually
+resumes and the listener never notices) → still nothing → report
+`kind:"audio_stall"` to `/api/client_log` and **advance the queue**.
+
+Non-obvious things it must keep getting right, each one a test:
+- **Progress resets everything.** A watchdog that fires on a slow-but-healthy
+  stream is worse than no watchdog.
+- **A user pause is not a stall** — `paused` stops `currentTime` too.
+- **It never runs for UPnP output.** With a renderer selected the gateway
+  owns advancing the queue and the browser element is idle.
+- **The `error` path and `_browserPlayIdx` both stop it**, so an error-driven
+  skip and a watchdog-driven skip can't both fire and jump two tracks.
+
+Guarded by `tests/frontend/test_stall_watchdog.py` (7 tests; the give-up case
+genuinely fails with the branch disabled — checked).
 
 ### `_playBrowserAudio()` — autoplay-rejection-aware play()
 
@@ -2498,6 +2588,50 @@ family, Essential Classical Chillout, Toen Was Het Stil Op Straat,
 Cohen Covered, …); the 3 Billboard candidates already existed. Side
 fix: `pl_get` now orders by `added_at, id` — `added_at` alone has
 second resolution, so bulk adds tied and returned in arbitrary order.
+
+### `tools/audit_playlist_orphans.py`
+
+Finds — and relinks — **playlist rows pointing at a track the index no longer
+has.** `playlist_tracks` is deliberately independent of `tracks` (that is what
+lets a playlist survive `clear(udn)` and a rebuild); the cost is that nothing
+notices when a row goes stale. A LocalFs track id is `sha1(rel_path)`, so
+**renaming a folder** — or splitting a whole-album file into per-track files,
+or changing the file-server port — silently orphans every playlist row that
+referenced it. The files are still on disk under new ids; the playlist still
+holds the old ones.
+
+From the sofa that is "the app skips songs at random": the dead id resolves
+to a 404 and the browser reports an unplayable file. (The relay no longer
+hands that 404 to `<audio>` as audio — see **Two things the relay must keep
+doing** — but the row stays dead until it is repaired, which is what this is
+for.)
+
+Matching ladder, same as the 2.0 migration tools, both sides normalised
+(diacritics, smart quotes, case, whitespace) so a retag doesn't break it:
+**(artist, album, title)** strong → **(artist, title)** song-level (the album
+name legitimately differs between a compilation and the original release).
+
+**A row that matches nothing is KEPT by default** (`--remove-unmatched` to
+delete). It is usually music still on disk under a name the tool cannot
+guess, and a playlist entry the owner can see and fix beats one that
+vanished. Relinking onto a track already in that playlist would violate
+`UNIQUE(pl_id, url)`, so the stale row is dropped as a duplicate instead. A
+blank artist/title is never a match *target* — it would collide every orphan
+onto one row. Existing `art` is never overwritten; a blank one is filled.
+Idempotent; DRY-RUN by default; `--apply` backs up `library.db` first.
+
+```bash
+python3 tools/audit_playlist_orphans.py                    # report
+python3 tools/audit_playlist_orphans.py --apply            # relink
+python3 tools/audit_playlist_orphans.py --apply --remove-unmatched
+python3 -m unittest tools.test_audit_playlist_orphans -v   # 15 tests
+```
+
+First real run (2026-08-25, 14 orphans of 1091): **12 relinked** — the whole
+"latin Jazz" playlist, still on the pre-cutover `:8201` port (the 2026-05-31
+port change healed `metadata_overrides` but nobody healed playlists) — and
+**2 kept**: two whole-album Harmonium files since split into per-track files,
+which have no single successor row and are the owner's call to re-add.
 
 ### `tools/relink_orphan_overrides.py`
 
