@@ -27,6 +27,8 @@ from dlna_library_sql import (
     _dedup_clause,
     _is_localfs,
     _localfs_album_artist,
+    VARIOUS_ARTISTS,
+    _localfs_album_group,
     _localfs_album_name,
 )
 
@@ -85,7 +87,7 @@ class BrowseMixin(FacetsMixin):
                        WHERE tracks_fts MATCH ? AND t.udn = ?
                          AND t.album_key != ''
                          AND {dedup}
-                       GROUP BY t.album_key
+                       GROUP BY {_localfs_album_group("t")}
                        ORDER BY album
                        LIMIT 100""",
                     (fts_q, udn)).fetchall()
@@ -159,10 +161,20 @@ class BrowseMixin(FacetsMixin):
 
         Two addressing modes:
           * `album_key` set → folder-based identity (LocalFs). Returns
-            every track in that folder regardless of per-track artist/album
-            tags, ordered by `file_path` so disc/track order is preserved.
-            This is what makes a Various-Artists compilation open as one
-            album.
+            every track in that folder, ordered by `file_path` so
+            disc/track order is preserved. This is what makes a
+            Various-Artists compilation open as one album.
+
+            A NAMED `artist` narrows it to that performer, mirroring
+            `_localfs_album_group`: a folder whose tracks declare no album
+            tag is grouped per artist, so it must RESOLVE per artist too or
+            the browse row and the queue it produces disagree — which is
+            exactly the bug, a Marsh & Quinn row that played 247 tracks by
+            43 artists. `Various Artists` is the sentinel for a genuinely
+            mixed folder and deliberately does NOT narrow. For every other
+            folder this is a no-op: `_localfs_album_artist` only yields a
+            real name when `COUNT(DISTINCT artist)=1`, i.e. when every row
+            already carries it.
           * otherwise → the legacy `(artist, album)` pair (UPnP and any
             caller that hasn't moved to album_key — favourites, UPnP,
             Subsonic). Unchanged behaviour."""
@@ -172,12 +184,36 @@ class BrowseMixin(FacetsMixin):
                 "'audio' as type")
         with self._pool.read() as conn:
             if album_key:
-                rows = conn.execute(
-                    f"""SELECT {cols} FROM tracks t
-                       WHERE t.udn=? AND t.album_key=?
-                         AND {dedup}
-                       ORDER BY t.file_path COLLATE NOCASE, t.title""",
-                    (udn, album_key)).fetchall()
+                base = f"""SELECT {cols} FROM tracks t
+                            WHERE t.udn=? AND t.album_key=? {{extra}}
+                              AND {dedup}
+                            ORDER BY t.file_path COLLATE NOCASE, t.title"""
+                rows = []
+                if artist not in ("", VARIOUS_ARTISTS):
+                    # Mirror `_localfs_album_group` exactly: rows carrying NO
+                    # album tag are grouped per performer, so they must
+                    # RESOLVE per performer too, or the browse row and the
+                    # queue it produces disagree — the 2026-08-25 bug, where
+                    # one Marsh & Quinn row played 247 tracks by 43 artists.
+                    #
+                    # Keyed on the ROW, not the folder: the real junk drawer
+                    # held four stray tagged files, and a folder-level test
+                    # ("does anything here name an album?") was defeated by
+                    # them. Tagged rows keep folder identity, which is what
+                    # leaves genuine compilations — and every normal album —
+                    # untouched.
+                    rows = conn.execute(
+                        base.format(extra="AND COALESCE(t.album,'')='' "
+                                          "AND t.artist=?"),
+                        (udn, album_key, artist)).fetchall()
+                if not rows:
+                    # Either the caller named a real album's performer, or the
+                    # artist is stale — a favourite saved before a retag, an id
+                    # a Subsonic client cached. Narrowing must never EMPTY an
+                    # album: that reads as data loss, which is worse than the
+                    # over-broad queue this exists to prevent.
+                    rows = conn.execute(
+                        base.format(extra=""), (udn, album_key)).fetchall()
             else:
                 rows = conn.execute(
                     f"""SELECT {cols} FROM tracks t
@@ -217,7 +253,7 @@ class BrowseMixin(FacetsMixin):
                        FROM tracks t
                        WHERE t.udn=? AND t.album_key != ''
                          AND {dedup}
-                       GROUP BY t.album_key
+                       GROUP BY {_localfs_album_group("t")}
                        ORDER BY {order_sql}{page_sql}""",
                     (udn,) + extra).fetchall()
             else:
@@ -256,7 +292,7 @@ class BrowseMixin(FacetsMixin):
                              SELECT album_key FROM tracks
                               WHERE udn=? AND artist=? AND album_key != '')
                          AND {dedup}
-                       GROUP BY t.album_key
+                       GROUP BY {_localfs_album_group("t")}
                        ORDER BY album COLLATE NOCASE""",
                     (udn, udn, artist)).fetchall()
             else:
@@ -320,7 +356,7 @@ class BrowseMixin(FacetsMixin):
                 having      = where_extra.format(col=name)
                 params      = [udn] + ([like] if like else [])
                 base = (f"FROM tracks t WHERE t.udn=? AND t.album_key!='' "
-                        f"AND {dedup} GROUP BY t.album_key HAVING 1=1 {having}")
+                        f"AND {dedup} GROUP BY {_localfs_album_group('t')} HAVING 1=1 {having}")
                 total = conn.execute(
                     f"SELECT COUNT(*) FROM (SELECT t.album_key {base})",
                     params).fetchone()[0]

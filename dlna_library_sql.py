@@ -127,23 +127,64 @@ def _is_localfs(udn: str) -> bool:
     return udn.startswith("uuid:localfs-")
 
 
+VARIOUS_ARTISTS = "Various Artists"
+
+
+def _localfs_album_leaf(a: str = "t") -> str:
+    """SQL: the folder's own leaf name — the segment of `album_key` after
+    the last '/'. `rtrim(path, replace(path,'/',''))` strips back to and
+    including the last slash, which `replace` then removes."""
+    return (f"replace({a}.album_key, "
+            f"rtrim({a}.album_key, replace({a}.album_key,'/','')), '')")
+
+
 def _localfs_album_name(a: str = "t") -> str:
     """SQL aggregate expression for a folder-grouped album's DISPLAY name:
     the album tag when the folder is tag-consistent (normal albums), else
     the folder's own leaf name (Various-Artists comps where every track
-    carries its original album tag). The leaf is the segment of `album_key`
-    after the last '/' — `rtrim(path, replace(path,'/',''))` strips back to
-    and including the last slash, which `replace` then removes."""
-    return (f"CASE WHEN COUNT(DISTINCT {a}.album)=1 THEN MAX({a}.album) "
-            f"ELSE replace({a}.album_key, "
-            f"rtrim({a}.album_key, replace({a}.album_key,'/','')), '') END")
+    carries its original album tag).
+
+    A BLANK album tag falls through to the leaf too. It used to satisfy
+    `COUNT(DISTINCT album)=1` and win, so a folder where nothing declares
+    an album name rendered as an album with no name at all."""
+    return (f"CASE WHEN COUNT(DISTINCT {a}.album)=1 "
+            f"          AND COALESCE(MAX({a}.album),'')<>'' "
+            f"     THEN MAX({a}.album) "
+            f"     ELSE {_localfs_album_leaf(a)} END")
 
 
 def _localfs_album_artist(a: str = "t") -> str:
     """SQL aggregate: 'Various Artists' when a folder spans >1 performer,
     else the single performer."""
-    return (f"CASE WHEN COUNT(DISTINCT {a}.artist)>1 THEN 'Various Artists' "
+    return (f"CASE WHEN COUNT(DISTINCT {a}.artist)>1 THEN '{VARIOUS_ARTISTS}' "
             f"ELSE MAX({a}.artist) END")
+
+
+def _localfs_album_group(a: str = "t") -> str:
+    """GROUP BY expression for folder-albums — the FOLDER, plus the artist
+    when the folder's tracks declare no album at all.
+
+    A folder is the album identity because that is what reunites a
+    Various-Artists compilation whose every track carries its own performer.
+    That inference only holds while the folder is *claimed* by something: a
+    real compilation still names itself in the album tag. A folder where
+    every album tag is blank has made no such claim, and treating it as one
+    album turns a junk drawer into a single enormous record — measured here
+    at 247 tracks by 43 unrelated artists, so playing one Marsh & Quinn song
+    queued Rio Verde Social Club behind it.
+
+    So blank-album folders group by performer instead. Everything else is
+    byte-identical to grouping by `album_key` alone: rows carrying a real
+    album tag all collapse to the same '' branch.
+
+    The artist branch is PREFIXED so the two branches can never collide:
+    without it a blank-album/blank-artist track keys on '' — the same key
+    the album branch uses — and the untagged strays merge into whatever
+    properly-tagged album shares their folder, which is how the junk
+    folder first rendered as one 190-track 'Various Artists' record."""
+    return (f"{a}.album_key, "
+            f"CASE WHEN COALESCE({a}.album,'')='' "
+            f"     THEN 'a:'||COALESCE({a}.artist,'') ELSE '' END")
 
 
 def _dur_to_secs(dur: str) -> int:

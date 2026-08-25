@@ -23,6 +23,7 @@ from dlna_library_sql import (
     _dedup_clause,
     _is_localfs,
     _localfs_album_artist,
+    _localfs_album_group,
     _localfs_album_name,
 )
 
@@ -89,7 +90,7 @@ class FacetsMixin:
                              SELECT album_key FROM tracks
                               WHERE udn=? AND genre=? AND album_key != '')
                          AND {dedup}
-                       GROUP BY t.album_key
+                       GROUP BY {_localfs_album_group("t")}
                        ORDER BY album COLLATE NOCASE""",
                     (udn, udn, genre)).fetchall()
             else:
@@ -155,7 +156,7 @@ class FacetsMixin:
                              WHERE t2.udn = ? AND t2.album_key != ''
                                AND ({eff2} / 10) * 10 = ?)
                          AND {dedup}
-                       GROUP BY t.album_key
+                       GROUP BY {_localfs_album_group("t")}
                        ORDER BY album COLLATE NOCASE""",
                     (udn, udn, decade)).fetchall()
             else:

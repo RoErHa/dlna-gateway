@@ -252,5 +252,139 @@ class TestGenreDecadeSearchUpnp(unittest.TestCase):
         self.assertEqual(rows[0]["album"], "Album")
 
 
+class TestUntaggedFolderIsNotOneAlbum(unittest.TestCase):
+    """A folder whose tracks declare NO album tag is a junk drawer, not a
+    record, and must not resolve as one.
+
+    The live symptom (2026-08-25): `<music-root>/Unknown Artist/Unknown Album/`
+    held 247 tracks by 43 unrelated artists, so playing a Marsh & Quinn
+    song queued Rio Verde Social Club behind it. Folder identity is
+    right for a compilation — but a compilation NAMES itself in the album
+    tag, and this folder claimed nothing."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        # The junk drawer: no album tag anywhere, many unrelated artists,
+        # plus untagged strays carrying no artist either.
+        self.db.upsert_tracks(LF, [
+            _row("j1", "Unknown/Unknown", "Marsh and Quinn", "", "Rich Girl",
+                 "/m/Unknown/Unknown/a.mp3"),
+            _row("j2", "Unknown/Unknown", "Marsh and Quinn", "", "Sara Smile",
+                 "/m/Unknown/Unknown/b.mp3"),
+            _row("j3", "Unknown/Unknown", "Rio Verde Social Club", "",
+                 "Pueblo Nuevo", "/m/Unknown/Unknown/c.mp3"),
+            _row("j4", "Unknown/Unknown", "Rory Fenwick", "", "Blues Solo",
+                 "/m/Unknown/Unknown/d.mp3"),
+            _row("j5", "Unknown/Unknown", "", "", "01 - Untitled",
+                 "/m/Unknown/Unknown/e.mp3"),
+        ])
+        # A stray that DOES carry an album tag, sharing the drawer. The
+        # real folder had four of these, and they defeated a first attempt
+        # that asked "does anything in this folder name an album?" — the
+        # answer was yes, so nothing narrowed and the bug survived.
+        self.db.upsert_tracks(LF, [
+            _row("j6", "Unknown/Unknown", "Someone", "A Real LP", "Tagged",
+                 "/m/Unknown/Unknown/f.mp3"),
+        ])
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def test_playing_one_artist_does_not_queue_the_whole_drawer(self):
+        t = self.db.album_tracks(LF, "Marsh and Quinn", "",
+                                 album_key="Unknown/Unknown")
+        self.assertEqual({x["title"] for x in t}, {"Rich Girl", "Sara Smile"})
+
+    def test_the_drawer_lists_as_one_album_per_artist(self):
+        albums = [a for a in self.db.all_albums(LF)
+                  if a["album_key"] == "Unknown/Unknown"]
+        self.assertEqual(len(albums), 5)      # 3 artists + strays + the tagged one
+        self.assertEqual(max(a["track_count"] for a in albums), 2)
+
+    def test_untagged_strays_do_not_join_a_named_artist(self):
+        """The stray keys on '' — the album branch's key before it was
+        prefixed. Unprefixed, the strays merged into whatever real album
+        shared the folder."""
+        t = self.db.album_tracks(LF, "Rory Fenwick", "",
+                                 album_key="Unknown/Unknown")
+        self.assertEqual([x["title"] for x in t], ["Blues Solo"])
+
+    def test_a_nameless_album_never_displays_a_blank_name(self):
+        albums = [a for a in self.db.all_albums(LF)
+                  if a["album_key"] == "Unknown/Unknown"]
+        self.assertTrue(all((a["album"] or "").strip() for a in albums))
+
+    def test_a_stray_tagged_file_does_not_defeat_the_narrowing(self):
+        """The drawer holds one file that names an album. Narrowing is
+        keyed on the ROW, so the untagged majority still resolves per
+        artist rather than as one 6-track lump."""
+        t = self.db.album_tracks(LF, "Marsh and Quinn", "",
+                                 album_key="Unknown/Unknown")
+        self.assertEqual({x["title"] for x in t}, {"Rich Girl", "Sara Smile"})
+
+    def test_the_tagged_stray_keeps_folder_identity(self):
+        """It named an album, so it is not junk: it stays reachable by the
+        folder, and does not get pulled into a per-artist group."""
+        albums = {(a["artist"], a["album"]) for a in self.db.all_albums(LF)
+                  if a["album_key"] == "Unknown/Unknown"}
+        self.assertIn(("Someone", "A Real LP"), albums)
+
+    def test_a_stale_artist_falls_back_instead_of_emptying_the_album(self):
+        """Narrowing must never make an album resolve to nothing — a
+        favourite saved before a retag, or a cached Subsonic id, would
+        read as data loss. Worse than the over-broad queue it prevents."""
+        t = self.db.album_tracks(LF, "Nobody At All", "",
+                                 album_key="Unknown/Unknown")
+        self.assertEqual(len(t), 6)      # the whole drawer, nothing lost
+
+
+class TestNarrowingLeavesRealAlbumsAlone(unittest.TestCase):
+    """The narrowing is a no-op wherever the album tag exists — which is
+    the whole library bar a rounding error. These are the cases that must
+    NOT move."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        self.db.upsert_tracks(LF, [
+            _row("v1", "VA/Hits", "Alice", "Hits 88", "A", "/m/VA/Hits/1.flac"),
+            _row("v2", "VA/Hits", "Bob", "Hits 88", "B", "/m/VA/Hits/2.flac"),
+            _row("v3", "VA/Hits", "Cara", "Hits 88", "C", "/m/VA/Hits/3.flac"),
+            _row("s1", "N/Nevermind", "Nirvana", "Nevermind", "Breed",
+                 "/m/N/Nevermind/1.flac"),
+            _row("s2", "N/Nevermind", "Nirvana", "Nevermind", "Lithium",
+                 "/m/N/Nevermind/2.flac"),
+        ])
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def test_various_artists_compilation_still_opens_whole(self):
+        t = self.db.album_tracks(LF, "Various Artists", "Hits 88",
+                                 album_key="VA/Hits")
+        self.assertEqual(len(t), 3)
+
+    def test_a_named_performer_on_a_real_comp_still_opens_it_whole(self):
+        """The comp declares an album, so the folder stays one album and
+        a performer drilling into it gets the WHOLE record, not their one
+        track. This is the behaviour the junk-drawer fix must not break."""
+        t = self.db.album_tracks(LF, "Bob", "Hits 88", album_key="VA/Hits")
+        self.assertEqual(len(t), 3)
+
+    def test_single_artist_album_unchanged(self):
+        t = self.db.album_tracks(LF, "Nirvana", "Nevermind",
+                                 album_key="N/Nevermind")
+        self.assertEqual(len(t), 2)
+
+    def test_both_folders_still_list_as_exactly_one_album_each(self):
+        albums = self.db.all_albums(LF)
+        keys = [a["album_key"] for a in albums]
+        self.assertEqual(keys.count("VA/Hits"), 1)
+        self.assertEqual(keys.count("N/Nevermind"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

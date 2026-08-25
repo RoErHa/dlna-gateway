@@ -490,6 +490,50 @@ video_people(video_id, person, person_id, updated_at)
   clear_videos. Feeds the "👤 By person" DLNA container + PWA grouping.
 ```
 
+### Folder-album identity — and the one folder it gets wrong (2026-08-25)
+
+A LocalFs album is its FOLDER (`album_key`), which is what reunites a
+Various-Artists compilation whose every track carries a different
+performer. That inference holds only while the folder is *claimed* by
+something: a real compilation names itself in the album tag.
+
+**A folder where every album tag is blank has claimed nothing**, and
+treating it as one album turns a junk drawer into a single enormous
+record. Measured live: `<music-root>/Unknown Artist/Unknown Album/` held **247
+tracks by 43 unrelated artists**, so playing one Marsh & Quinn song queued
+Rio Verde Social Club behind it, and none of those files has art. It
+read exactly like a corrupted database — it wasn't; playlists were 100%
+intact and every id resolved to the right file.
+
+`_localfs_album_group` (in `dlna_library_sql.py`, used by **all six**
+localfs GROUP BY sites) therefore groups blank-album rows **per artist**
+and tagged rows by folder as before. Three things there are load-bearing:
+
+- **The artist branch is PREFIXED (`'a:'||artist`).** Unprefixed it keys
+  on `''` — the same key the album branch uses — so untagged strays merge
+  into whatever real album shares their folder. That rendered as one
+  190-track "Various Artists" record.
+- **`album_tracks` narrows on the ROW, not the folder.** A first attempt
+  asked "does anything in this folder name an album?"; the real drawer
+  held four stray tagged files, so the answer was yes and the bug
+  survived. Tagged rows keep folder identity, which is what leaves
+  genuine compilations and every normal album untouched.
+- **Narrowing may never EMPTY an album.** A stale artist — a favourite
+  saved before a retag, an id a Subsonic client cached — falls back to
+  the whole folder. An album that resolves to nothing reads as data loss,
+  which is worse than the over-broad queue this prevents.
+
+`_localfs_album_name` also falls through to the folder leaf when the tag
+is blank; it used to satisfy `COUNT(DISTINCT album)=1` and win, so such a
+folder displayed as an album with no name at all.
+
+The remaining lump is honest: ~186 files with no artist tag either, so
+there is nothing to split them by. That is a **media** problem, and no
+rebuild fixes any of this — re-reading the same files with the same blank
+tags reproduces it exactly. Guarded by
+`tests/test_album_grouping.py::TestUntaggedFolderIsNotOneAlbum` and
+`::TestNarrowingLeavesRealAlbumsAlone`.
+
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 
 Diagnosed 2026-05-28: AssetUPnP exposes the SAME physical file under
