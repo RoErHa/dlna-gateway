@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from dlna_artist_infer import infer_artist
+from dlna_artist_infer import ANON_ARTIST, infer_artist
 from dlna_library_radio import RadioFavouritesMixin
 from dlna_library_sql import UNKNOWN_ARTISTS_PLAYLIST
 
@@ -56,17 +56,24 @@ class WorklistMixin(RadioFavouritesMixin):
         with self._pool.read() as conn:
             rows = conn.execute(
                 "SELECT url, album_key FROM tracks "
-                " WHERE udn=? AND COALESCE(artist,'')='' AND url<>'' "
-                " ORDER BY file_path COLLATE NOCASE", (udn,)).fetchall()
+                " WHERE udn=? AND url<>'' "
+                "   AND (COALESCE(artist,'')='' OR artist=?) "
+                " ORDER BY file_path COLLATE NOCASE",
+                (udn, ANON_ARTIST)).fetchall()
             # Which folders can name their own performer? Asked ONCE per
             # folder rather than per track — a folder is an album, so the
             # answer cannot differ between two tracks that share one.
             sibs: dict[str, list] = {}
             for k in {r["album_key"] for r in rows}:
+                # `Anon` is the ABSENCE of an answer, so it must never
+                # count as sibling evidence — a folder of Anon tracks
+                # would otherwise reach "unanimity" and name them all Anon
+                # forever, which is exactly the guess this avoids.
                 sibs[k] = [x["artist"] for x in conn.execute(
                     "SELECT DISTINCT artist FROM tracks "
-                    " WHERE udn=? AND album_key=? AND COALESCE(artist,'')<>''",
-                    (udn, k)).fetchall()]
+                    " WHERE udn=? AND album_key=? "
+                    "   AND COALESCE(artist,'')<>'' AND artist<>?",
+                    (udn, k, ANON_ARTIST)).fetchall()]
             pl = conn.execute(
                 "SELECT id FROM playlists WHERE name=?",
                 (UNKNOWN_ARTISTS_PLAYLIST,)).fetchone()

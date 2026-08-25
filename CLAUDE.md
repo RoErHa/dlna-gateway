@@ -574,6 +574,34 @@ never questioned again.** Hence the refusals, each a test:
   `[`, `{`. Stripping brackets in place instead yielded
   `Mira Calvo Caminhos ` — the album glued onto the artist.
 
+**Everything unattributable carries ONE name: `Anon`** (`ANON_ARTIST`).
+Never a per-track guess. A made-up name that LOOKS like a performer is
+worse than an obvious placeholder — it can collide with a real act, and
+it never invites correction. `is_unattributed()` treats blank and `Anon`
+as the same state, so **every caller must ask that rather than testing
+for an empty string**; `Anon` is how these tracks BROWSE, not a claim
+about who played them, and they stay in the worklist either way.
+
+`is_a_performer_name()` is the guard that keeps shelves out of the artist
+field. Filename parsing lifts whatever sits left of the dash, which is
+often a soundtrack, a genre shelf or a track number; the FOLDER rule had
+the identical hole (a folder named `Guitar Lounge` was being recovered as
+an artist), so both now face the same test. Three refusals inside it are
+load-bearing, each learned the hard way on the real library:
+
+- **The known-album check is filename-only.** "This name is also an album
+  title" sounds right (an album name lifted into the artist field) and is
+  catastrophic as a bulk audit: **self-titled albums are everywhere**, so
+  it reclassified thousands of real artists as non-performers.
+- **`allow_numeric` exists because 112, 911, 999 and 98° are bands.**
+  Rejecting letter-less names catches `07` (a track number) when judging
+  one parsed filename, and erases four real artists when auditing tags
+  that already exist.
+- **`Various Artists` is protected**, checked BEFORE the junk set that
+  contains it. It is not a performer, but it is the sentinel
+  `_localfs_album_artist` emits for a multi-performer folder — rewriting
+  it would break album grouping, not just a tag.
+
 **`- Unknown Artists -`** takes the remainder: swept automatically at the
 end of each LocalFs scan, to be tagged by hand.
 

@@ -43,7 +43,12 @@ if PROJECT not in sys.path:
 # Deliberately NOT `import dlna_library`: importing it constructs
 # `DB = LibraryDB()` at module scope, which runs every pending migration
 # against the live database as a side effect of a read-only preview.
-from dlna_artist_infer import infer_artist        # noqa: E402
+from dlna_artist_infer import (  # noqa: E402
+    ANON_ARTIST,
+    infer_artist,
+    is_a_performer_name,
+    is_unattributed,
+)
 
 DB_FILE = os.path.join(PROJECT, "library.db")
 
@@ -69,20 +74,41 @@ def pick_udn(conn, override: str = "") -> str:
 def plan(conn, udn: str) -> tuple[list, list]:
     """`(writes, unattributable)` — touches nothing."""
     rows = conn.execute(
-        "SELECT url, title, album_key, file_path FROM tracks "
-        " WHERE udn=? AND COALESCE(artist,'')='' AND COALESCE(file_path,'')<>'' "
+        "SELECT url, title, artist, album_key, file_path FROM tracks "
+        " WHERE udn=? AND COALESCE(file_path,'')<>'' "
         " ORDER BY file_path COLLATE NOCASE", (udn,)).fetchall()
+    # A track needs attention when it has no artist, carries the `Anon`
+    # placeholder, or names something that never performed — a
+    # soundtrack, a genre shelf, a track number.
+    #
+    # NOTE: `is_a_performer_name` is called WITHOUT the known-album set
+    # here. That check ("this name is also an album title") is safe when
+    # judging one freshly-parsed filename, and catastrophic as a bulk
+    # audit: self-titled albums are everywhere, so it reclassified Elvis
+    # Presley, another and 3,000 others as non-performers.
+    rows = [r for r in rows
+            if is_unattributed(r["artist"])
+            or not is_a_performer_name(r["artist"], allow_numeric=True)]
 
     sibs: dict[str, list] = {}
     for key in {r["album_key"] for r in rows}:
         sibs[key] = [x["artist"] for x in conn.execute(
             "SELECT DISTINCT artist FROM tracks "
-            " WHERE udn=? AND album_key=? AND COALESCE(artist,'')<>''",
-            (udn, key)).fetchall()]
+            " WHERE udn=? AND album_key=? "
+            "   AND COALESCE(artist,'')<>'' AND artist<>?",
+            (udn, key, ANON_ARTIST)).fetchall()
+        if is_a_performer_name(x["artist"])]
 
     writes, unattributable = [], []
     for r in rows:
         artist = infer_artist(r["album_key"], sibs.get(r["album_key"]))
+        # A folder can be named after a shelf just as a filename can
+        # ("Guitar Lounge"), so the inferred name faces the same test
+        # as a parsed one. Otherwise the folder rule quietly reintroduces
+        # exactly the labels the filename rule rejects.
+        if artist and (is_unattributed(artist)
+                       or not is_a_performer_name(artist)):
+            artist = ""
         (writes if artist else unattributable).append(
             {"path": r["file_path"], "artist": artist,
              "album_key": r["album_key"], "title": r["title"]})
@@ -114,7 +140,11 @@ def write_artist(path: str, artist: str) -> str:
         # Re-read rather than trusting the index: if the file gained an
         # artist since the last scan, that tag is newer than our inference
         # and must win.
-        if str((f.get("artist") or [""])[0]).strip():
+        cur = str((f.get("artist") or [""])[0]).strip()
+        if cur and not is_unattributed(cur) and is_a_performer_name(cur):
+            # A real performer name in the file is newer evidence than any
+            # inference of ours and always wins. A shelf label is not —
+            # that is the thing being corrected.
             return "has_artist"
         try:
             f["artist"] = artist
@@ -134,6 +164,9 @@ def main(argv=None) -> int:
     ap.add_argument("--db", default=DB_FILE)
     ap.add_argument("--udn", default="")
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--anon", action="store_true",
+                    help=f"also tag the unattributable ones '{ANON_ARTIST}' "
+                         "so they browse as one bucket instead of blank")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
 
@@ -168,6 +201,14 @@ def main(argv=None) -> int:
             seen[u["album_key"]] = seen.get(u["album_key"], 0) + 1
         for key, n in sorted(seen.items(), key=lambda x: -x[1]):
             print(f"  {n:>5}  {key[:60]}")
+
+    if args.anon:
+        # One shared name, never a per-track guess. These stay in the
+        # "- Unknown Artists -" worklist either way — `Anon` is how they
+        # BROWSE, not a claim about who played them.
+        writes += [{**u, "artist": ANON_ARTIST} for u in unattributable]
+        print(f"\n  + tagging {len(unattributable)} unattributable "
+              f"track(s) '{ANON_ARTIST}'")
 
     if not writes:
         print("\n✓ nothing to do")

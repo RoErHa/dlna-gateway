@@ -44,6 +44,15 @@ import os
 import re
 import sys
 
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT not in sys.path:
+    sys.path.insert(0, PROJECT)
+
+from dlna_artist_infer import (  # noqa: E402
+    ANON_ARTIST,
+    is_a_performer_name,
+)
+
 AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wma", ".aiff",
               ".aif", ".wav", ".alac", ".aac"}
 
@@ -139,7 +148,7 @@ def write_tags(path: str, artist: str, title: str) -> bool:
 
 def plan(folder: str, *, limit: int = 0, verbose: bool = False) -> dict:
     """Decide what to write, touching nothing. Returns a report dict."""
-    out = {"write": [], "has_artist": [], "unparseable": [], "unreadable": []}
+    out = {"write": [], "has_artist": [], "anon": [], "unreadable": []}
     names = sorted(os.listdir(folder))
     for name in names:
         path = os.path.join(folder, name)
@@ -159,9 +168,14 @@ def plan(folder: str, *, limit: int = 0, verbose: bool = False) -> dict:
                 print(f"  = keeps {cur_artist!r:28} {name}")
             continue
         artist, title = parse_name(stem)
+        if artist and not is_a_performer_name(artist):
+            # The name left of the dash is a shelf, not an act — a
+            # soundtrack, a genre, a track number. Writing it would file
+            # the track under something that never performed anything.
+            artist = ""
         if not artist:
-            out["unparseable"].append(name)
-            continue
+            artist = ANON_ARTIST
+            out["anon"].append(name)
         out["write"].append({
             "name": name, "path": path, "artist": artist,
             "title": title if not cur_title.strip() else "",
@@ -190,7 +204,7 @@ def main(argv=None) -> int:
     print(f"\n{args.folder}")
     print(f"  would tag        {len(w)}")
     print(f"  already tagged   {len(rep['has_artist'])}  (untouched)")
-    print(f"  no artist in name{len(rep['unparseable']):4}  (left alone)")
+    print(f"  no artist readable{len(rep['anon']):4}  (tagged '{ANON_ARTIST}')")
     if rep["unreadable"]:
         print(f"  unreadable       {len(rep['unreadable'])}")
 
@@ -201,9 +215,9 @@ def main(argv=None) -> int:
         if len(w) > 40:
             print(f"  … and {len(w) - 40} more")
 
-    if rep["unparseable"] and args.verbose:
-        print("\n  left alone (no artist readable):")
-        for n in rep["unparseable"][:40]:
+    if rep["anon"] and args.verbose:
+        print(f"\n  tagged '{ANON_ARTIST}' (no artist readable):")
+        for n in rep["anon"][:40]:
             print(f"    {n}")
 
     if not w:

@@ -35,6 +35,19 @@ from __future__ import annotations
 
 import re
 
+# The single name every unattributable track carries. One shared bucket,
+# never a per-track guess: a made-up name that LOOKS like a performer is
+# worse than an obvious placeholder, because it can silently collide with
+# a real act and it never invites correction. "Anon" browses as one
+# artist, and every track under it is in the "- Unknown Artists -"
+# worklist waiting for a person.
+ANON_ARTIST = "Anon"
+
+# The conventional compilation tag; also the sentinel
+# `_localfs_album_artist` emits for a multi-performer folder.
+VARIOUS_ARTISTS_TAG = "Various Artists"
+
+
 # Names that describe a COLLECTION rather than a performer. Matched on the
 # whole parsed name, case-folded — a substring test would eat real bands
 # ("Various Comforts", "The Unknown").
@@ -53,6 +66,12 @@ _NOT_A_PERFORMER = {
 # A BARE "-" is not a divider: it would halve "Jean-Marc Aubert" exactly
 # as it would in a filename.
 _CUTS = (" - ", "(", "[", "{")
+
+# Words that mark a SHELF rather than an act. Substring match on purpose:
+# these appear inside longer strings ("Some Film Soundtrack").
+_COLLECTION_WORD = re.compile(
+    r"soundtrack|meditation|relaxation|\brelax\b|lounge|chillout|"
+    r"\boldies\b|classics for|collecto|compilation|\bsampler\b", re.I)
 
 
 def parse_folder_artist(album_key: str) -> str:
@@ -113,3 +132,57 @@ def infer_artist(album_key: str, sibling_artists) -> str:
     if folder.casefold() in lowered:                      # 3. corroborated
         return folder
     return ""
+
+
+def is_unattributed(artist: str) -> bool:
+    """Is this track still waiting for a person? Blank and `Anon` mean
+    the same thing — one is a track nothing has looked at yet, the other
+    is one that was looked at and could not be named. Both belong in the
+    worklist, so every caller must ask THIS rather than testing for an
+    empty string."""
+    a = (artist or "").strip()
+    return not a or a.casefold() == ANON_ARTIST.casefold()
+
+
+def is_a_performer_name(name: str, known_albums=None, *,
+                        allow_numeric: bool = False) -> bool:
+    """Would writing `name` into an artist tag be a lie?
+
+    Filename parsing lifts whatever sits left of the dash, which is often
+    a compilation, a soundtrack, a genre shelf or a track number rather
+    than a performer — measured on a real drawer: `Some Film
+    Soundtrack`, `Beach Chillout Lounge`, `Classics for Meditation`,
+    `oldies`, `07`, `<Unknown>`. These get `Anon` instead.
+
+    Deliberately NOT a test of whether the performer is *known*: most
+    names here are real acts that simply have no other track in the
+    library (The Riverside Four, Lunacharsky, A Solo Singer). Rejecting those
+    would discard correct tags to catch a handful of bad ones."""
+    n = (name or "").strip()
+    if not n or n.casefold() == ANON_ARTIST.casefold():
+        return False
+    if n.casefold() == VARIOUS_ARTISTS_TAG.casefold():
+        # Checked BEFORE the junk set, which contains it. The conventional
+        # compilation tag is not a performer, but it MEANS something — and
+        # it is the sentinel `_localfs_album_artist` emits for a
+        # multi-performer folder, so rewriting it would break album
+        # grouping, not just a tag.
+        return True
+    if n.casefold() in _NOT_A_PERFORMER:
+        return False
+    if not allow_numeric and not re.search(r"[^\W\d_]", n):
+        # Digits/punctuation only. Strict when judging a freshly-parsed
+        # FILENAME, where "07" is a track number. Lenient when auditing
+        # tags that already exist, because 112, 911, 999 and 98° are real
+        # bands and rejecting them would erase four artists to catch one
+        # stray number.
+        return False
+    if n.startswith("<") and n.endswith(">"):   # "<Unknown>"
+        return False
+    if _COLLECTION_WORD.search(n):
+        return False
+    # A name that is also an ALBUM title in this library is far more
+    # likely the album than the act ("Slade Alive").
+    if known_albums and n.casefold() in known_albums:
+        return False
+    return True
