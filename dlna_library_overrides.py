@@ -25,6 +25,25 @@ import sqlite3
 log = logging.getLogger("dlna.library")
 
 
+
+def _blank_to_null(v):
+    """`''` → `None`, because in `metadata_overrides` those mean opposite
+    things and only one of them is ever intended.
+
+    The table's contract is **NULL = no override for this field**, read
+    back through `COALESCE(override.col, tracks.col)`. An empty string is
+    NOT NULL, so it wins that COALESCE and permanently blanks a field the
+    file tags fill correctly.
+
+    That is not hypothetical: this writer used to seed a new row from the
+    track's CURRENT values, so editing one field froze whatever the other
+    three happened to be at that moment — including blanks. 74 rows ended
+    up masking real tags, and 11 perfectly-tagged files showed no
+    artist at all. The fields a user did not touch must be absent, not
+    empty."""
+    return None if v is None or v == "" else v
+
+
 class OverridesMixin:
     """See module docstring. Mixed into `LibraryDB` via `TracksMixin`;
     never instantiated on its own — it relies on `self._pool` from the
@@ -77,22 +96,29 @@ class OverridesMixin:
                     "SET artist=?, album=?, title=?, genre=?, year=?, "
                     "    source='manual', updated_at=datetime('now') "
                     "WHERE url=?",
-                    (merged["artist"], merged["album"], merged["title"],
-                     merged["genre"], merged["year"], url))
+                    (_blank_to_null(merged["artist"]),
+                     _blank_to_null(merged["album"]),
+                     _blank_to_null(merged["title"]),
+                     _blank_to_null(merged["genre"]),
+                     merged["year"], url))
             else:
-                # Fill blanks from current track record
+                # Seed from the current track record so an edit to ONE
+                # field doesn't drop the others out of the override.
                 row = conn.execute(
                     "SELECT artist, album, title, genre FROM tracks WHERE url=?",
                     (url,)).fetchone()
-                base = dict(row) if row else {"artist":"","album":"","title":"","genre":""}
+                base = dict(row) if row else {"artist": None, "album": None,
+                                              "title": None, "genre": None}
                 base.update(str_fields)
                 yr = year if year_touched else None
                 conn.execute(
                     "INSERT INTO metadata_overrides "
                     "(url, artist, album, title, genre, year, source) "
                     "VALUES (?,?,?,?,?,?, 'manual')",
-                    (url, base["artist"], base["album"],
-                     base["title"], base["genre"], yr))
+                    (url, _blank_to_null(base["artist"]),
+                     _blank_to_null(base["album"]),
+                     _blank_to_null(base["title"]),
+                     _blank_to_null(base["genre"]), yr))
 
             changed = conn.execute("SELECT changes()").fetchone()[0]
         return changed > 0

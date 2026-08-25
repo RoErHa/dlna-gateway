@@ -643,6 +643,41 @@ a handful of self-named compilations). Guarded by
 `tests/test_artist_infer.py` (26) and
 `tests/test_unknown_artists_playlist.py` (20).
 
+### `metadata_overrides`: NULL and `''` are opposites (2026-08-25)
+
+The table's contract is **NULL = no override for this field**, read back
+as `COALESCE(override.col, tracks.col)`. An empty string is NOT NULL, so
+it WINS that COALESCE and permanently blanks a field the file tags fill
+correctly — on every re-index, forever.
+
+That happened. `update_track_meta` seeded a new override row from the
+track's CURRENT values ("fill blanks from current track record"), so
+editing ONE field froze whatever the other three happened to be at that
+moment, blanks included. **74 rows ended up masking real tags**, and 11
+perfectly-tagged FLACs (MusicBrainz IDs, the lot) browsed with no artist and no album.
+
+**Why it hid for so long:** those tracks were invisible to the
+`- Unknown Artists -` sweep too, because their FOLDER can name them, so
+they counted as tool-work rather than hand-work and appeared in neither
+place. The tell was capitalisation — the DB's title was Title-Cased, the file's was sentence-cased, so the value had
+never come from the file.
+
+Fixed in three places, deliberately overlapping:
+- **The writer** (`_blank_to_null` in `dlna_library_overrides.py`) stores
+  `None` for any field that is blank, so an untouched field is *absent*
+  rather than *empty*. Only `''` is treated as absent — a typed space is
+  a choice, and guessing otherwise would be a different bug.
+- **The reader** (`dlna_library_tracks.py`) wraps each subselect in
+  `NULLIF(..., '')` before the COALESCE, so a stray `''` from ANY source
+  — an old row, a tool, a hand-written UPDATE — can never mask a tag.
+- **The data**: all `''` → NULL across the 11,620 rows (backup taken
+  first; `integrity_check` ok).
+
+Guarded by `tests/test_override_blank_masking.py` (10 tests). Three of
+them genuinely fail against the old code — verified by reverting both
+fixes and re-running, because a regression test that passes either way
+is worse than none.
+
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 
 Diagnosed 2026-05-28: AssetUPnP exposes the SAME physical file under

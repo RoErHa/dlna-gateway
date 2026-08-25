@@ -229,12 +229,21 @@ class TracksMixin(OverridesMixin):
             # in the tracks row. That's identical to the live-update path in
             # LibraryDB.metadata_override_set (which catches IntegrityError
             # for the same reason).
+            # NULLIF(...,'') before COALESCE: the table's contract is
+            # "NULL means no override for this field", and an empty string
+            # is NOT NULL — it wins the COALESCE and permanently blanks a
+            # field the file tags fill correctly. 74 rows had stored ''
+            # for fields nobody edited, which is why 11 perfectly-tagged
+            # files browsed with no artist. The writer no longer
+            # produces those (`_blank_to_null`); this is the second layer,
+            # so a stray '' from any source — an old row, a tool, a manual
+            # SQL edit — can never mask a real tag again.
             conn.execute("""
                 UPDATE OR IGNORE tracks SET
-                    artist    = COALESCE((SELECT artist FROM metadata_overrides WHERE url=tracks.url), artist),
-                    album     = COALESCE((SELECT album  FROM metadata_overrides WHERE url=tracks.url), album),
-                    title     = COALESCE((SELECT title  FROM metadata_overrides WHERE url=tracks.url), title),
-                    genre     = COALESCE((SELECT genre  FROM metadata_overrides WHERE url=tracks.url), genre)
+                    artist    = COALESCE(NULLIF((SELECT artist FROM metadata_overrides WHERE url=tracks.url), ''), artist),
+                    album     = COALESCE(NULLIF((SELECT album  FROM metadata_overrides WHERE url=tracks.url), ''), album),
+                    title     = COALESCE(NULLIF((SELECT title  FROM metadata_overrides WHERE url=tracks.url), ''), title),
+                    genre     = COALESCE(NULLIF((SELECT genre  FROM metadata_overrides WHERE url=tracks.url), ''), genre)
                 WHERE udn=?
                   AND url IN (SELECT url FROM metadata_overrides)
             """, (udn,))
