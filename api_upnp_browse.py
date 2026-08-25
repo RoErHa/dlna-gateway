@@ -163,15 +163,48 @@ def _br_artists(ctx: _Browse) -> tuple:
     return ctx.listing(items, len(rows))
 
 
+def _artist_rows(artist: str):
+    """`(their own records, the compilations they appear on)`."""
+    udn = _ids.DB.primary_udn()
+    rows = [r for r in _ids.DB.artist_albums(udn, artist)
+            if not _is_junk_name(r.get("album"))] if udn else []
+    return ([r for r in rows if r.get("own", True)],
+            [r for r in rows if not r.get("own", True)])
+
+
 def _br_gartist(ctx: _Browse) -> tuple:
+    """Their own records, plus ONE container for everything they merely
+    appear on — UPnP has no dividers, so a sub-container is the honest
+    equivalent of the PWA's fold. See CLAUDE.md, "Appears on"."""
     artist = _b64d(ctx.obj_id[len("gartist:"):])
-    udn    = _ids.DB.primary_udn()
-    rows   = [r for r in _ids.DB.artist_albums(udn, artist)
-              if not _is_junk_name(r.get("album"))] if udn else []
+    own, appears = _artist_rows(artist)
+    if not own:
+        # Nothing to bury: an artist you own only via compilations would
+        # get a page holding one container, a tap from their only music.
+        own, appears = appears, []
+    items = list(own)
+    if appears:
+        items.append({"__appears__": True, "artist": artist,
+                      "count": len(appears)})
     if ctx.is_meta:
-        return ctx.meta("artists", artist or "(artist)", len(rows))
-    items = [_didl_album(r, ctx.obj_id) for r in ctx.page(rows)]
-    return ctx.listing(items, len(rows))
+        return ctx.meta("artists", artist or "(artist)", len(items))
+    didl = [_didl_container("gappears:" + _b64e(r["artist"]), ctx.obj_id,
+                            f"Appears on ({r['count']})", r["count"])
+            if r.get("__appears__") else _didl_album(r, ctx.obj_id)
+            for r in ctx.page(items)]
+    return ctx.listing(didl, len(items))
+
+
+def _br_gappears(ctx: _Browse) -> tuple:
+    """The compilations an artist appears on. Each still resolves to only
+    their tracks — the album id carries the performer."""
+    artist = _b64d(ctx.obj_id[len("gappears:"):])
+    _, appears = _artist_rows(artist)
+    if ctx.is_meta:
+        return ctx.meta("gartist:" + _b64e(artist),
+                        f"Appears on ({len(appears)})", len(appears))
+    items = [_didl_album(r, ctx.obj_id) for r in ctx.page(appears)]
+    return ctx.listing(items, len(appears))
 
 
 def _br_albums(ctx: _Browse) -> tuple:
@@ -316,6 +349,7 @@ _BROWSE_PREFIX = (
     ("abauthor:",   _br_abauthor),
     ("abbook:",     _br_abbook),
     ("gartist:",    _br_gartist),
+    ("gappears:",   _br_gappears),
     ("albumltr:",   _br_albumltr),
     ("galbum:",     _br_galbum),
     ("ggenre:",     _br_ggenre),

@@ -714,10 +714,26 @@ depends on a state set days ago. An appearance's subtitle reads
 A source that sends no `own` field (anything non-localfs) treats every
 row as theirs, so nothing can silently vanish into a fold.
 
-Scope is **PWA only** for now: UPnP has no dividers (the honest
-equivalent would be an "Appears on" sub-container) and Subsonic's
-`getArtist` has no grouping at all. Guarded by
-`tests/frontend/test_appears_on.py` (8) and the classification tests in
+**All three surfaces**, each given the honest equivalent of the same
+idea rather than a copy of the PWA's:
+- **The Naim** gets ONE `gappears:<b64(artist)>` container titled
+  `Appears on (N)` under the artist. UPnP has containers but no
+  dividers, so a sub-container is the fold. `gappears:` cannot be
+  swallowed by `gartist:` (they differ at the 8th character) — pinned by
+  a test, since the dispatch tables are disjoint by construction.
+- **CarPlay** gets order plus a name: Subsonic's `getArtist` has neither
+  dividers nor sub-containers, so their records come first and each
+  appearance reads `Big Comp · 1 of 67`. The marker goes in the DISPLAY
+  name only — changing the id would invalidate every album a client has
+  cached.
+
+**An artist with no records of their own shows their appearances
+directly** on all three. Folding is what stops compilations burying real
+albums; with none to bury it would leave a page holding a single
+collapsed row, one tap from that artist's only music.
+
+Guarded by `tests/frontend/test_appears_on.py` (9),
+`tests/test_appears_on_devices.py` (10) and the classification tests in
 `tests/test_album_grouping.py`.
 
 `album_tracks` then narrows whenever it is given a **named** performer.

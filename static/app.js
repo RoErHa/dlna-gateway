@@ -1159,8 +1159,12 @@ async function _showArtistAlbumsInner(artistItem){
   // Their own records, then the compilations they merely appear on. The
   // backend decides which is which (`own`); a source that doesn't say
   // treats everything as theirs, so nothing is ever hidden by accident.
-  const own  = albums.filter(a=>a.own !== false);
-  const app  = albums.filter(a=>a.own === false);
+  let own = albums.filter(a=>a.own !== false);
+  let app = albums.filter(a=>a.own === false);
+  // Nothing to bury: an artist you only own via compilations would
+  // otherwise get a page holding a single collapsed row, one extra tap
+  // from their only music.
+  if(!own.length){ own = app; app = []; }
   // Inside one artist the artist name is redundant on every card.
   const opts = {
     onPlay: a=>playAlbumFromDB(a.artist, a.album, a.album_key||""),

@@ -125,3 +125,25 @@ def test_a_source_that_omits_own_hides_nothing(app, gateway):
     app.wait_for_selector("#item-list .row", state="attached")
     assert app.locator(".appears-on").count() == 0
     assert app.locator("#item-list > .row").count() == 2
+
+
+def test_an_artist_with_only_appearances_gets_them_directly(app, gateway):
+    """Folding their only music behind a disclosure would give them a
+    page holding one collapsed row and nothing else. The fold stops
+    compilations burying real albums; here there are none to bury."""
+    gateway.artists = [{"artist": "Guest Only", "album_count": 2}]
+    gateway.artist_albums["Guest Only"] = [
+        {"artist": "Guest Only", "album": "Comp A", "album_key": "VA/A",
+         "track_count": 1, "folder_tracks": 50, "folder_artists": 40,
+         "own": False, "art": ""},
+        {"artist": "Guest Only", "album": "Comp B", "album_key": "VA/B",
+         "track_count": 1, "folder_tracks": 30, "folder_artists": 25,
+         "own": False, "art": ""}]
+    app.reload()
+    app.wait_for_selector("#item-list", state="attached")
+    app.evaluate("""() => showArtistAlbums({artist:"Guest Only", album_count:2})""")
+    app.wait_for_selector("#item-list .row", state="attached")
+    assert app.locator(".appears-on").count() == 0
+    titles = app.eval_on_selector_all(
+        "#item-list > .row .row-title", "els => els.map(e => e.textContent)")
+    assert titles == ["Comp A", "Comp B"]

@@ -163,12 +163,28 @@ def _get_artist(h, params):
         return
     udn = _default_udn()
     albums = _proto.DB.artist_albums(udn, artist) if udn else []
+    # Subsonic has no grouping in getArtist — no dividers, no
+    # sub-containers — so the only honest tools are ORDER and the name.
+    # Their own records come first; the compilations they merely appear
+    # on follow, each marked with how little of it is theirs, which is
+    # the same signal the PWA's "1 track of 67" subtitle carries.
+    own     = [a for a in albums if a.get("own", True)]
+    appears = [a for a in albums if not a.get("own", True)]
+
+    def _mark(a):
+        so = _so_album(a)
+        n, of = a.get("track_count") or 0, a.get("folder_tracks") or 0
+        if of:
+            so["name"] = so["title"] = (
+                f"{a['album']}  ·  {n} of {of}")
+        return so
+
     _ok(h, {"artist": {
         "id":         aid,
         "name":       artist,
         "coverArt":   _artist_id(artist),
         "albumCount": len(albums),
-        "album":      [_so_album(a) for a in albums],
+        "album":      [_so_album(a) for a in own] + [_mark(a) for a in appears],
     }})
 
 
