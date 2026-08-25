@@ -19,6 +19,7 @@ PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
+from tools import regen_badges  # noqa: E402
 from tools.regen_badges import (  # noqa: E402
     _thousands, apply_badges, lint_badge_value, tests_badge_value,
 )
@@ -131,6 +132,73 @@ class TestRealReadme(unittest.TestCase):
 
     def test_readme_actually_names_ruff(self):
         self.assertIn("ruff", self.text)
+
+
+class TestDocClaimPatterns(unittest.TestCase):
+    """The prose counts. These drifted twice in one day because nothing
+    recomputed them, so the patterns that find them are worth pinning: a
+    regex that silently matches NOTHING turns this gate green forever."""
+
+    def test_finds_a_unittest_command_claim(self):
+        m = regen_badges._CLAIM_CMD.search(
+            "python3 -m unittest tools.test_rotate_fixes -v   # 16 tests")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "tools.test_rotate_fixes")
+        self.assertEqual(m.group(2), "16")
+
+    def test_finds_a_backticked_file_claim(self):
+        m = regen_badges._CLAIM_FILE.search(
+            "Guarded by `tests/test_artist_infer.py` (26) and more.")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "tests/test_artist_infer.py")
+        self.assertEqual(m.group(2), "26")
+
+    def test_finds_the_module_ratchet_claim(self):
+        m = regen_badges._CLAIM_MODULES.search("grew — **89/89 today** and")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(2), "89")
+
+    def test_a_singular_test_is_still_a_claim(self):
+        self.assertIsNotNone(regen_badges._CLAIM_CMD.search(
+            "python3 -m unittest tools.test_x -v  # 1 test"))
+
+    def test_prose_without_a_count_is_not_a_claim(self):
+        """Most mentions carry no number and must not be flagged."""
+        self.assertIsNone(regen_badges._CLAIM_CMD.search(
+            "python3 -m unittest tools.test_rotate_fixes -v"))
+        self.assertIsNone(regen_badges._CLAIM_FILE.search(
+            "see `tests/test_artist_infer.py` for the rules"))
+
+
+class TestCountingTests(unittest.TestCase):
+
+    def test_counts_a_real_module(self):
+        n = regen_badges._count_tests("tools.test_regen_badges")
+        self.assertIsNotNone(n)
+        self.assertGreater(n, 10)
+
+    def test_a_missing_module_is_unavailable_not_one(self):
+        """unittest substitutes a single `_FailedTest` for a module it
+        cannot import. Counting that as 1 would let a deleted test file
+        pass the gate by claiming "1 test"."""
+        self.assertIsNone(regen_badges._count_tests("tools.no_such_module_xyz"))
+
+
+class TestTheGateActuallyBites(unittest.TestCase):
+    """A checker that reports nothing is indistinguishable from a clean
+    tree. These assert it finds the real claims, and that they hold."""
+
+    def test_the_repo_has_claims_to_check(self):
+        with open(os.path.join(regen_badges.PROJECT, "CLAUDE.md"),
+                  encoding="utf-8") as f:
+            text = f.read()
+        found = (len(regen_badges._CLAIM_CMD.findall(text))
+                 + len(regen_badges._CLAIM_FILE.findall(text))
+                 + len(regen_badges._CLAIM_MODULES.findall(text)))
+        self.assertGreater(found, 5, "patterns match nothing — vacuous gate")
+
+    def test_the_live_docs_are_currently_consistent(self):
+        self.assertEqual(regen_badges.check_doc_claims(), [])
 
 
 if __name__ == "__main__":

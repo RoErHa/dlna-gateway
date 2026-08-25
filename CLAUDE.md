@@ -113,8 +113,23 @@ staleness gate, unlike `test_schema_sync.py`: that gate would have to run
 the suite to learn the suite's own numbers, and a suite that fails because
 it cannot count itself is a worse failure mode than a stale badge. Run it
 when the counts move. `python3 -m unittest tools.test_regen_badges -v` —
-15 tests, mostly over the shields.io encoding (an unescaped `-` or `,`
-silently renders as a broken label).
+24 tests, over the shields.io encoding (an unescaped `-` or `,` silently
+renders as a broken label) and over the prose checker below.
+
+**`--check` also verifies the counts written in PROSE**, which is where
+the drift actually happens: the badges had this gate, while CLAUDE.md's
+"# N tests" and "N/N modules" lines had nothing and went stale twice in
+one day — both times minutes after the badge itself was refreshed. It
+matches three shapes (`unittest <mod> -v  # N tests`, `` `tests/x.py`
+(N) ``, `**N/N today**`), counts the real cases by LOADING the module
+rather than running it, and reports file:line for each disagreement.
+Two deliberate choices: a module that cannot be imported is reported
+**unavailable, never counted as 1** (unittest substitutes a single
+`_FailedTest`, so a deleted test file could otherwise pass by claiming
+"1 test"), and prose is **never rewritten automatically** — these counts
+live inside sentences, and a regex that edited them would eventually
+mangle the surrounding text. Fix those by hand; `--apply` only ever
+touches the badges.
 
 **Dependencies are pinned in two layers.** `requirements.txt` is the
 SPEC (loose `>=`, every dep optional, graceful degradation);

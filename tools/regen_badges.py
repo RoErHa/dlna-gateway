@@ -11,6 +11,12 @@ Same pattern the repo already uses for `schema.sql` (`tools/regen_schema.py`)
 and the size budget (`tools/regen_size_budget.py`): the artifact is
 GENERATED, and there is one command that regenerates it.
 
+It also checks the COUNTS WRITTEN IN PROSE, which is where the drift
+actually happens. The badges have this gate; `CLAUDE.md`'s "N tests" and
+"N/N modules" lines had nothing, and drifted twice in a single day — both
+times from edits made minutes after the badge was refreshed. A number a
+human retypes is a number that goes stale.
+
 Where the numbers come from:
 
     checks   `tests/run_all.py --offline`  → "ALL <n> TESTS PASSED"
@@ -51,6 +57,100 @@ _TESTS_RE = re.compile(
     r"(\[!\[Tests\]\(https://img\.shields\.io/badge/tests-)([^)]*?)(\))")
 _LINT_RE = re.compile(
     r"(\[!\[Lint: ruff\]\(https://img\.shields\.io/badge/lint-)([^)]*?)(\))")
+
+_DOCS = ("CLAUDE.md", "README.md")
+
+# "python3 -m unittest tools.test_x -v   # 16 tests"
+_CLAIM_CMD = re.compile(
+    r"unittest\s+([\w.]+)\s+-v[^\n#]*#\s*(\d+)\s+tests?\b")
+# "`tests/test_artist_infer.py` (26)"
+_CLAIM_FILE = re.compile(r"`((?:tests|tools)/[\w/]+\.py)`\s*\((\d+)\)")
+# "**89/89 today**" — the module ratchet
+_CLAIM_MODULES = re.compile(r"\*\*(\d+)/(\d+) today\*\*")
+
+
+def _count_tests(dotted: str) -> int | None:
+    """How many test cases `dotted` actually defines, without running
+    them. `None` when it cannot be loaded — a missing or broken module is
+    reported as unavailable rather than silently counted as the single
+    `_FailedTest` unittest substitutes."""
+    import unittest
+    try:
+        suite = unittest.TestLoader().loadTestsFromName(dotted)
+    except Exception:                                 # noqa: BLE001
+        return None
+    flat = list(_flatten(suite))
+    if any(type(t).__name__ == "_FailedTest" for t in flat):
+        return None
+    return len(flat)
+
+
+def _flatten(suite):
+    import unittest
+    for t in suite:
+        if isinstance(t, unittest.TestSuite):
+            yield from _flatten(t)
+        else:
+            yield t
+
+
+def _module_count() -> int | None:
+    import json
+    try:
+        with open(os.path.join(PROJECT, "tests",
+                               "module_size_budget.json")) as f:
+            d = json.load(f)
+    except Exception:                                 # noqa: BLE001
+        return None
+    return len(d.get("budgets", d))
+
+
+def check_doc_claims() -> list[str]:
+    """Every prose count that disagrees with reality, as readable lines.
+
+    Read-only by design: these live inside sentences, so a regex that
+    REWROTE them would eventually mangle the prose around them. Reporting
+    the file, line and both numbers is enough to fix by hand, and keeps
+    this tool unable to damage a document."""
+    problems: list[str] = []
+    if PROJECT not in sys.path:
+        sys.path.insert(0, PROJECT)
+
+    for doc in _DOCS:
+        path = os.path.join(PROJECT, doc)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+
+        for i, line in enumerate(lines, 1):
+            for m in _CLAIM_CMD.finditer(line):
+                dotted, claimed = m.group(1), int(m.group(2))
+                real = _count_tests(dotted)
+                if real is None:
+                    problems.append(f"{doc}:{i} cannot load {dotted}")
+                elif real != claimed:
+                    problems.append(
+                        f"{doc}:{i} {dotted} says {claimed} tests, has {real}")
+
+            for m in _CLAIM_FILE.finditer(line):
+                rel, claimed = m.group(1), int(m.group(2))
+                dotted = rel[:-3].replace("/", ".")
+                real = _count_tests(dotted)
+                if real is None:
+                    problems.append(f"{doc}:{i} cannot load {rel}")
+                elif real != claimed:
+                    problems.append(
+                        f"{doc}:{i} {rel} says {claimed} tests, has {real}")
+
+            for m in _CLAIM_MODULES.finditer(line):
+                claimed = int(m.group(2))
+                real = _module_count()
+                if real is not None and real != claimed:
+                    problems.append(
+                        f"{doc}:{i} says {m.group(1)}/{claimed} modules, "
+                        f"budget tracks {real}")
+    return problems
 
 
 def _run(cmd, **kw):
@@ -171,15 +271,27 @@ def main(argv=None) -> int:
         text = f.read()
     new_text, changes = apply_badges(text, counts)
 
-    if not changes:
-        print("\n✓ badges are current")
+    doc_problems = check_doc_claims()
+    if doc_problems:
+        print("\n  prose counts that disagree with reality:")
+        for d in doc_problems:
+            print(f"    {d}")
+
+    if not changes and not doc_problems:
+        print("\n✓ badges and prose counts are current")
         return 0
+    if not changes:
+        # Prose is never rewritten automatically — see check_doc_claims.
+        print("\n✗ fix the lines above by hand"
+              if args.check else
+              "\nbadges are current; the prose counts above need a hand edit.")
+        return 1 if args.check else 0
     print()
     for c in changes:
         print(f"  {c}")
 
     if args.check:
-        print("\n✗ badges are stale — run with --apply")
+        print("\n✗ stale — run with --apply (prose lines need a hand edit)")
         return 1
     if not args.apply:
         print("\nDRY RUN — nothing changed. Re-run with --apply.")
