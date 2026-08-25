@@ -625,11 +625,14 @@ end of each LocalFs scan, to be tagged by hand.
   Consequence: **removing a row by hand does not make it stay gone** —
   the next scan still sees a track with no artist. Give the file any
   artist tag to settle it.
-- **It prunes only rows mapping to a CURRENT track of that udn that now
-  has an artist.** A row pointing at nothing is left for
-  `tools/audit_playlist_orphans.py`; another source's rows are never
-  touched. This runs unattended, so what it must NOT delete matters more
-  than what it sweeps.
+- **It prunes a row when the work is done OR the file is gone.** In a
+  playlist a PERSON curated, a row pointing at nothing is a repair for
+  `tools/audit_playlist_orphans.py` and must never be deleted quietly —
+  but this list is GENERATED, so the opposite holds: a dead row is not
+  outstanding work, it is litter. Leaving them made the live worklist
+  read **44 items when 15 were real**, right while it was being worked
+  through. Another source's rows are still never touched, and a row
+  pointing at a real track always survives.
 - **Audiobooks opt out** (`collect_unknown_artists=False` in
   `dlna_localfs_wiring`) — a chapter with no artist tag is ordinary
   there, and ~550 would bury the music that needs the work.

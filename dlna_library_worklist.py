@@ -129,7 +129,18 @@ class WorklistMixin(RadioFavouritesMixin):
                 "SELECT url FROM playlist_tracks p WHERE p.pl_id=? AND EXISTS ("
                 "  SELECT 1 FROM tracks t WHERE t.udn=? AND t.url=p.url)",
                 (pl_id, udn)).fetchall()}
-        stale = sorted(mine - want)
+            # A row pointing at NO track at all. In a playlist a person
+            # curated that is a repair for `audit_playlist_orphans.py`,
+            # never something to delete quietly — but this list is
+            # generated, so a row whose file is gone is not outstanding
+            # work, it is litter. Leaving them made the worklist read 44
+            # items when 15 were real, right while somebody was working
+            # through it.
+            gone = {r["url"] for r in conn.execute(
+                "SELECT url FROM playlist_tracks p WHERE p.pl_id=? "
+                "  AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.url=p.url)",
+                (pl_id,)).fetchall()}
+        stale = sorted((mine - want) | gone)
 
         pruned = 0
         with self._pool.write() as conn:

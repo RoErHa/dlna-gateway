@@ -126,29 +126,41 @@ class TestRestraint(unittest.TestCase):
         self.assertEqual(res["pruned"], 0)
         self.assertEqual(res["total"], 1)
 
-    def test_a_hand_added_row_of_another_source_survives(self):
+    def test_another_sources_row_survives(self):
+        """A row belonging to a DIFFERENT source is never this source's
+        business — only rows of `udn`, plus rows pointing at nothing at
+        all, are ever removed."""
         self.db.upsert_tracks(LF, [_row("t1", "", "Untagged")])
+        self.db.upsert_tracks(OTHER, [_row("o1", "", "Other Untagged")])
+        self.db.sync_unknown_artist_playlist(OTHER)
         self.db.sync_unknown_artist_playlist(LF)
         pl = [p for p in self.db.pl_list() if p["name"] == PL_NAME][0]
-        self.db.pl_add_track(pl["id"], {
-            "url": "http://elsewhere/x", "title": "Mine", "artist": "",
-            "album": "", "duration": "", "art": ""})
-        self.db.sync_unknown_artist_playlist(LF)
         titles = {t["title"] for t in self.db.pl_get(pl["id"])["tracks"]}
-        self.assertIn("Mine", titles)
+        self.assertIn("Other Untagged", titles)
+        self.assertIn("Untagged", titles)
 
-    def test_an_orphan_row_is_left_for_the_orphan_tool(self):
-        """A row pointing at no track at all is a different repair, and
-        this must not quietly delete playlist history."""
+    def test_a_row_whose_file_is_gone_is_pruned(self):
+        """In a playlist a PERSON curated, a row pointing at nothing is a
+        repair for `audit_playlist_orphans.py` and must never be deleted
+        quietly. This list is GENERATED, so the opposite holds: a row
+        whose file no longer exists is not outstanding work, it is
+        litter. Leaving them made the live worklist read 44 items when 15
+        were real, while somebody was working through it.
+
+        The trade-off, stated on purpose: a row hand-added here that
+        points at no track WILL be removed. Rows pointing at a real track
+        — including another source's — are untouched."""
         self.db.upsert_tracks(LF, [_row("t1", "", "Untagged")])
         self.db.sync_unknown_artist_playlist(LF)
         pl = [p for p in self.db.pl_list() if p["name"] == PL_NAME][0]
         self.db.pl_add_track(pl["id"], {
-            "url": "http://h/gone", "title": "Dead Row", "artist": "",
-            "album": "", "duration": "", "art": ""})
-        self.db.sync_unknown_artist_playlist(LF)
+            "url": "http://h/deleted-file", "title": "Dead Row",
+            "artist": "", "album": "", "duration": "", "art": ""})
+        res = self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual(res["pruned"], 1)
         titles = {t["title"] for t in self.db.pl_get(pl["id"])["tracks"]}
-        self.assertIn("Dead Row", titles)
+        self.assertNotIn("Dead Row", titles)
+        self.assertIn("Untagged", titles)
 
     def test_survives_a_rebuild_like_every_other_playlist(self):
         """`clear(udn)` must not touch it — the whole point is that the
