@@ -698,6 +698,28 @@ real performer makes `album_tracks` narrow on all three surfaces without
 any of them knowing the rule exists. `HAVING track_count > 0` keeps a
 folder out of an artist's list when none of the tracks are theirs.
 
+**The artist page opens on THEIR records (2026-08-25).** `artist_albums`
+also returns `own` per row — `is_own_album(mine, folder_tracks,
+folder_artists)`: theirs when they hold at least half the folder, OR the
+folder has at most two performers, the clause that protects a duo record
+and a split album. Measured over all 6,390 artist/folder pairs in this
+library, **97.3% are not close** (2,074 at 50%+, 4,142 under 10%); the
+174 in between are mostly 3-to-9-performer folders.
+
+The PWA renders the `own` rows, then folds the rest behind an
+`Appears on N compilations` disclosure — **always folded, never
+remembered**, so every artist opens the same way and the page never
+depends on a state set days ago. An appearance's subtitle reads
+`1 track of 67`, which says "compilation" before the title is read.
+A source that sends no `own` field (anything non-localfs) treats every
+row as theirs, so nothing can silently vanish into a fold.
+
+Scope is **PWA only** for now: UPnP has no dividers (the honest
+equivalent would be an "Appears on" sub-container) and Subsonic's
+`getArtist` has no grouping at all. Guarded by
+`tests/frontend/test_appears_on.py` (8) and the classification tests in
+`tests/test_album_grouping.py`.
+
 `album_tracks` then narrows whenever it is given a **named** performer.
 Two things keep that safe:
 - **`Various Artists` is the sentinel for "the folder itself"** and never
@@ -709,7 +731,7 @@ Two things keep that safe:
   saved before a retag, an id a client cached — falls back to the whole
   folder, because an album resolving to nothing reads as data loss.
 
-Guarded by `tests/test_album_grouping.py` (35), including a
+Guarded by `tests/test_album_grouping.py` (44), including a
 cross-surface class that round-trips the real UPnP container id and the
 real Subsonic album id — the rule is easy to undo by "fixing"
 `artist_albums` to report the aggregate again.

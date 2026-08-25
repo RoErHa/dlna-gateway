@@ -19,6 +19,7 @@ if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
 from dlna_library import LibraryDB
+from dlna_library_sql import is_own_album
 
 LF = "uuid:localfs-test"          # _is_localfs() → True
 UPNP = "uuid:asset-1"             # legacy (artist, album) grouping
@@ -455,6 +456,73 @@ class TestEverySurfaceNarrowsTheSameWay(unittest.TestCase):
         an artist's list showing zero of their tracks."""
         self.assertTrue(all(a["track_count"] > 0
                             for a in self.db.artist_albums(LF, "Bob")))
+
+
+class TestOwnAlbumClassification(unittest.TestCase):
+    """Which of an artist's folders are THEIR records, and which are
+    compilations they appear on. The PWA folds the second group, so a
+    misclassification either buries a real album or pads the page with
+    somebody else's."""
+
+    def test_a_full_folder_is_theirs(self):
+        self.assertTrue(is_own_album(9, 9, 1))
+
+    def test_one_track_on_a_big_comp_is_an_appearance(self):
+        self.assertFalse(is_own_album(1, 67, 54))
+        self.assertFalse(is_own_album(10, 358, 246))
+
+    def test_half_the_folder_is_still_theirs(self):
+        self.assertTrue(is_own_album(5, 10, 8))
+
+    def test_a_duo_record_is_theirs_however_it_splits(self):
+        """The clause that stops a split album or a duo record being
+        filed as somebody else's compilation."""
+        self.assertTrue(is_own_album(3, 12, 2))
+        self.assertTrue(is_own_album(1, 20, 2))
+
+    def test_a_small_comp_is_not_theirs(self):
+        self.assertFalse(is_own_album(2, 12, 6))
+
+    def test_an_empty_folder_never_divides_by_zero(self):
+        self.assertTrue(is_own_album(0, 0, 0))
+
+
+class TestArtistAlbumsCarriesTheSplit(unittest.TestCase):
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        self.db.upsert_tracks(LF, [
+            _row("a1", "Band/Record", "The Band", "Their LP", "One",
+                 "/m/Band/Record/1.flac"),
+            _row("a2", "Band/Record", "The Band", "Their LP", "Two",
+                 "/m/Band/Record/2.flac"),
+        ])
+        self.db.upsert_tracks(LF, [
+            _row(f"c{i}", "VA/BigComp", f"Artist {i}", "Big Comp", f"T{i}",
+                 f"/m/VA/BigComp/{i}.flac") for i in range(1, 9)
+        ] + [_row("c9", "VA/BigComp", "The Band", "Big Comp", "Guest Spot",
+                  "/m/VA/BigComp/9.flac")])
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def _rows(self):
+        return {a["album_key"]: a for a in self.db.artist_albums(LF, "The Band")}
+
+    def test_their_record_is_marked_own(self):
+        self.assertTrue(self._rows()["Band/Record"]["own"])
+
+    def test_the_compilation_is_marked_not_own(self):
+        self.assertFalse(self._rows()["VA/BigComp"]["own"])
+
+    def test_the_row_carries_the_folder_total_for_the_subtitle(self):
+        """The PWA renders "1 track of 9" — the phrase that says
+        compilation before the title is read."""
+        r = self._rows()["VA/BigComp"]
+        self.assertEqual(r["track_count"], 1)
+        self.assertEqual(r["folder_tracks"], 9)
 
 
 if __name__ == "__main__":

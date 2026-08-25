@@ -29,6 +29,7 @@ from dlna_library_sql import (
     _localfs_album_artist,
     VARIOUS_ARTISTS,
     _localfs_album_group,
+    is_own_album,
     _localfs_album_name,
 )
 
@@ -276,6 +277,8 @@ class BrowseMixin(FacetsMixin):
                               ? as artist,
                               SUM(CASE WHEN t.artist=? THEN 1 ELSE 0 END)
                                   as track_count,
+                              COUNT(*) as folder_tracks,
+                              COUNT(DISTINCT t.artist) as folder_artists,
                               MAX(t.art) as art
                        FROM tracks t
                        WHERE t.udn=? AND t.album_key != ''
@@ -287,6 +290,12 @@ class BrowseMixin(FacetsMixin):
                        HAVING track_count > 0
                        ORDER BY album COLLATE NOCASE""",
                     (artist, artist, udn, udn, artist)).fetchall()
+                # `own` separates their records from the compilations
+                # they merely appear on — decided here so every surface
+                # reads the same rule.
+                return [{**dict(r), "own": is_own_album(
+                    r["track_count"], r["folder_tracks"],
+                    r["folder_artists"])} for r in rows]
             else:
                 rows = conn.execute(
                     f"""SELECT t.album, t.artist,

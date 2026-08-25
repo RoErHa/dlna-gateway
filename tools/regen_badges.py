@@ -82,7 +82,31 @@ def _count_tests(dotted: str) -> int | None:
     flat = list(_flatten(suite))
     if any(type(t).__name__ == "_FailedTest" for t in flat):
         return None
-    return len(flat)
+    if flat:
+        return len(flat)
+    # Zero from the unittest loader does not mean zero tests: the
+    # frontend suite is pytest-style, plain `def test_*` functions the
+    # loader cannot see. Counting those as 0 would have quietly marked a
+    # correct "8 tests" claim as wrong.
+    return _count_pytest_style(dotted)
+
+
+def _count_pytest_style(dotted: str) -> int | None:
+    """Module-level `def test_*` functions, read from the source."""
+    import ast
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec(dotted)
+        path = spec.origin if spec else None
+        if not path:
+            return None
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except Exception:                                 # noqa: BLE001
+        return None
+    return sum(1 for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name.startswith("test_")) or None
 
 
 def _flatten(suite):

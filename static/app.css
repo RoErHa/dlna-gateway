@@ -565,3 +565,30 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
   /* One column of covers is plenty in a half-width pane this short. */
   #item-list.grid{grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:11px;padding:11px}
 }
+
+/* ── "Appears on" — an artist's compilations, always folded ──────────
+   The artist page opens on THEIR records. Someone you own two albums by
+   should not have them outnumbered by six compilations they appear on
+   once. The fold is never remembered: every artist opens the same way,
+   so the page never depends on a state set days ago. */
+.appears-on{
+  grid-column: 1 / -1;          /* full width inside #item-list.grid */
+  margin-top: 4px;
+}
+.appears-on > summary{
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; cursor: pointer;
+  border: 1px dashed var(--border); border-radius: 10px;
+  font-size: var(--fs-micro); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-dim);
+  list-style: none;             /* Safari shows a marker without this */
+}
+.appears-on > summary::-webkit-details-marker{ display: none; }
+.appears-on > summary:hover{ color: var(--ink); border-color: var(--amber); }
+.appears-on > summary:focus-visible{ outline: 2px solid var(--amber); outline-offset: 2px; }
+.appears-on[open] > summary{ color: var(--amber); border-style: solid; }
+.ao-chev{ margin-left: auto; transition: transform .18s ease; }
+.appears-on[open] .ao-chev{ transform: rotate(180deg); }
+.ao-list{ margin-top: 6px; }
+.ao-of{ color: var(--ink-dim-soft); }
+@media (prefers-reduced-motion: reduce){ .ao-chev{ transition: none; } }

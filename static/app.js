@@ -935,8 +935,8 @@ function renderContinueListening(positions){
 // opts.onOpen(a)   → click on the card
 // opts.onPlay(a)   → click on the ▶ button
 function renderAlbumRows(albums, opts={}){
-  const list = $("item-list");
-  list.innerHTML = "";
+  const list = opts.into || $("item-list");
+  if(!opts.into){ list.innerHTML = ""; }
   list.classList.add("grid");
   const sub = opts.sub || (a=>`${a.artist?esc(a.artist)+" · ":""}${a.track_count||0} tracks`);
   albums.forEach(a=>{
@@ -1156,12 +1156,39 @@ async function _showArtistAlbumsInner(artistItem){
   const r = await api(`/api/artist_albums?udn=${enc(curServer.udn)}&artist=${enc(artistItem.artist)}`);
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load albums.</div>'; return; }
   const albums = await r.json();
+  // Their own records, then the compilations they merely appear on. The
+  // backend decides which is which (`own`); a source that doesn't say
+  // treats everything as theirs, so nothing is ever hidden by accident.
+  const own  = albums.filter(a=>a.own !== false);
+  const app  = albums.filter(a=>a.own === false);
   // Inside one artist the artist name is redundant on every card.
-  renderAlbumRows(albums, {
-    sub:    a=>`${a.track_count} tracks`,
+  const opts = {
     onPlay: a=>playAlbumFromDB(a.artist, a.album, a.album_key||""),
     onOpen: a=>showAlbumTracks(a.artist, a.album, artistItem, a.album_key||""),
-  });
+  };
+  const list = $("item-list");
+  list.innerHTML = "";
+  list.classList.add("grid");
+  renderAlbumRows(own, {...opts, into:list, sub:a=>`${a.track_count} tracks`});
+
+  if(app.length){
+    // ALWAYS folded. The point of the split is that an artist's own page
+    // opens on their records — an artist you own two albums by should not
+    // have them outnumbered by six compilations they appear on once.
+    const wrap = document.createElement("details");
+    wrap.className = "appears-on";
+    wrap.innerHTML = `<summary><span class="ao-label">Appears on `
+      + `${app.length} compilation${app.length!==1?"s":""}</span>`
+      + `<span class="ao-chev">⌄</span></summary>`
+      + `<div class="ao-list grid"></div>`;
+    list.appendChild(wrap);
+    renderAlbumRows(app, {...opts,
+      into: wrap.querySelector(".ao-list"),
+      // "1 track of 67" says compilation before the title is read.
+      sub: a=>`${a.track_count} track${a.track_count!==1?"s":""}`
+           + (a.folder_tracks ? ` <span class="ao-of">of ${a.folder_tracks}</span>` : ""),
+    });
+  }
 }
 
 // ── Drill-down: Album → Tracks ────────────────────────────────────
