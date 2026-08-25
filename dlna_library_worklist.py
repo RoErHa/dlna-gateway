@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+from dlna_artist_infer import infer_artist
 from dlna_library_radio import RadioFavouritesMixin
 from dlna_library_sql import UNKNOWN_ARTISTS_PLAYLIST
 
@@ -53,13 +54,30 @@ class WorklistMixin(RadioFavouritesMixin):
         playlist only when there is something to put in it, so a fully
         tagged library never grows an empty one."""
         with self._pool.read() as conn:
-            untagged = [r["url"] for r in conn.execute(
-                "SELECT url FROM tracks "
+            rows = conn.execute(
+                "SELECT url, album_key FROM tracks "
                 " WHERE udn=? AND COALESCE(artist,'')='' AND url<>'' "
-                " ORDER BY file_path COLLATE NOCASE", (udn,)).fetchall()]
+                " ORDER BY file_path COLLATE NOCASE", (udn,)).fetchall()
+            # Which folders can name their own performer? Asked ONCE per
+            # folder rather than per track — a folder is an album, so the
+            # answer cannot differ between two tracks that share one.
+            sibs: dict[str, list] = {}
+            for k in {r["album_key"] for r in rows}:
+                sibs[k] = [x["artist"] for x in conn.execute(
+                    "SELECT DISTINCT artist FROM tracks "
+                    " WHERE udn=? AND album_key=? AND COALESCE(artist,'')<>''",
+                    (udn, k)).fetchall()]
             pl = conn.execute(
                 "SELECT id FROM playlists WHERE name=?",
                 (UNKNOWN_ARTISTS_PLAYLIST,)).fetchone()
+
+        # Only what NOTHING can attribute reaches the worklist. A track
+        # whose folder names its performer is `tools/artist_from_folder.py`
+        # work, not hand work, and both sides ask `infer_artist` so they
+        # can never disagree about which is which.
+        untagged = [r["url"] for r in rows
+                    if not infer_artist(r["album_key"],
+                                        sibs.get(r["album_key"]))]
 
         pl_id = pl["id"] if pl else ""
         if not pl_id and not untagged:
@@ -91,13 +109,30 @@ class WorklistMixin(RadioFavouritesMixin):
             if self.pl_add_track(pl_id, row) == "added":
                 added += 1
 
+        # Prune what is no longer OUTSTANDING — which is not the same as
+        # "now has an artist". A track can leave the worklist two ways:
+        # somebody tagged it, or inference improved and
+        # `tools/artist_from_folder.py` can now do it. Pruning only the
+        # first left 25 RVM and Mira Calvo rows stranded here after the
+        # sweep was narrowed, so the rule is stated once, positively:
+        # a row survives only while its track is still in `untagged`.
+        want = set(untagged)
+        with self._pool.read() as conn:
+            mine = {r["url"] for r in conn.execute(
+                "SELECT url FROM playlist_tracks p WHERE p.pl_id=? AND EXISTS ("
+                "  SELECT 1 FROM tracks t WHERE t.udn=? AND t.url=p.url)",
+                (pl_id, udn)).fetchall()}
+        stale = sorted(mine - want)
+
+        pruned = 0
         with self._pool.write() as conn:
-            pruned = conn.execute(
-                "DELETE FROM playlist_tracks "
-                " WHERE pl_id=? AND url IN ("
-                "   SELECT url FROM tracks "
-                "    WHERE udn=? AND COALESCE(artist,'')<>'')",
-                (pl_id, udn)).rowcount or 0
+            for i in range(0, len(stale), 400):
+                batch = stale[i:i + 400]
+                ph = ",".join("?" * len(batch))
+                pruned += conn.execute(
+                    f"DELETE FROM playlist_tracks WHERE pl_id=? "
+                    f"AND url IN ({ph})", [pl_id, *batch]).rowcount or 0
+        with self._pool.read() as conn:
             total = conn.execute(
                 "SELECT COUNT(*) c FROM playlist_tracks WHERE pl_id=?",
                 (pl_id,)).fetchone()["c"]

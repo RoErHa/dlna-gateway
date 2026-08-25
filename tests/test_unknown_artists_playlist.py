@@ -26,10 +26,17 @@ LF = "uuid:localfs-test"
 OTHER = "uuid:localfs-other"
 
 
-def _row(tid, artist, title, album_key="Drawer", album=""):
+# The junk drawer: a folder that can never name its own performer, so
+# an untagged track in it is genuinely unknown. Using an ATTRIBUTABLE
+# folder name here would make every sweep test vacuous — the sweep would
+# correctly infer an artist and take nothing.
+DRAWER = "Unknown Artist/Unknown Album"
+
+
+def _row(tid, artist, title, album_key=DRAWER, album=""):
     return {"id": tid, "url": f"http://h/{tid}", "title": title,
             "artist": artist, "album": album, "album_key": album_key,
-            "file_path": f"/m/Drawer/{tid}.mp3", "mime": "audio/mpeg"}
+            "file_path": f"/m/{album_key}/{tid}.mp3", "mime": "audio/mpeg"}
 
 
 class TestSweep(unittest.TestCase):
@@ -177,6 +184,107 @@ class TestAudiobooksOptOut(unittest.TestCase):
         import dlna_localfs_wiring as w
         src = inspect.getsource(w)
         self.assertIn("collect_unknown_artists=False", src)
+
+
+class TestOnlyTheUnattributable(unittest.TestCase):
+    """The worklist is for what NOTHING can attribute. A folder that
+    names its own performer is `tools/artist_from_folder.py` work, and
+    sweeping it in would bury the real hand-work under it."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def _titles(self):
+        pl = [p for p in self.db.pl_list() if p["name"] == PL_NAME]
+        if not pl:
+            return set()
+        return {t["title"] for t in self.db.pl_get(pl[0]["id"])["tracks"]}
+
+    def test_a_named_folder_is_not_swept(self):
+        self.db.upsert_tracks(LF, [
+            _row("d1", "", "Chapter One", album_key="Mira Calvo (1996) Caminhos"),
+        ])
+        res = self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual(res["total"], 0)
+
+    def test_a_folder_its_siblings_agree_on_is_not_swept(self):
+        self.db.upsert_tracks(LF, [
+            _row("h1", "Stormwind", "Tagged", album_key="H-slug-2008-01-01"),
+            _row("h2", "", "Untagged", album_key="H-slug-2008-01-01"),
+        ])
+        self.assertEqual(self.db.sync_unknown_artist_playlist(LF)["total"], 0)
+
+    def test_the_drawer_is_still_swept(self):
+        self.db.upsert_tracks(LF, [
+            _row("j1", "", "Untitled"),
+            _row("j2", "Some Artist", "Tagged"),
+            _row("j3", "Other Artist", "Also Tagged"),
+        ])
+        self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual(self._titles(), {"Untitled"})
+
+    def test_a_compilation_named_after_itself_is_swept(self):
+        """Many performers, folder named after the COMPILATION — nothing
+        can attribute the untagged ones."""
+        self.db.upsert_tracks(LF, [
+            _row("c1", "Ember Hollow", "A", album_key="Nights On Neptune"),
+            _row("c2", "Bowie", "B", album_key="Nights On Neptune"),
+            _row("c3", "", "Mystery", album_key="Nights On Neptune"),
+        ])
+        self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual(self._titles(), {"Mystery"})
+
+
+class TestPrunesWhatIsNoLongerOutstanding(unittest.TestCase):
+    """A track leaves the worklist two ways: somebody tagged it, or
+    inference improved and a tool can now do it. Pruning only the first
+    stranded 25 real rows (RVM, Mira Calvo) when the sweep was
+    narrowed — they were still blank, so they were never pruned, but no
+    longer belonged."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def _pl(self):
+        pl = [p for p in self.db.pl_list() if p["name"] == PL_NAME][0]
+        return self.db.pl_get(pl["id"])["tracks"]
+
+    def test_a_track_that_became_inferable_is_pruned(self):
+        # A dated bootleg slug names nobody, and nothing else in the
+        # folder is tagged → genuinely unknown → swept.
+        self.db.upsert_tracks(LF, [
+            _row("r1", "", "Bootleg Cut", album_key="SVance2008-07-05-sbd"),
+            _row("d1", "", "Drawer Track"),
+        ])
+        self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual({t["title"] for t in self._pl()},
+                         {"Bootleg Cut", "Drawer Track"})
+
+        # A tagged sibling arrives. Unanimity can now name the performer,
+        # so this is tool work — even though the track is STILL blank.
+        self.db.upsert_tracks(LF, [
+            _row("r2", "Sam Vance", "Tagged", album_key="SVance2008-07-05-sbd"),
+        ])
+        res = self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual(res["pruned"], 1)
+        self.assertEqual({t["title"] for t in self._pl()}, {"Drawer Track"})
+
+    def test_a_still_unattributable_row_is_kept(self):
+        self.db.upsert_tracks(LF, [_row("d1", "", "Drawer Track")])
+        self.db.sync_unknown_artist_playlist(LF)
+        res = self.db.sync_unknown_artist_playlist(LF)
+        self.assertEqual(res["pruned"], 0)
+        self.assertEqual(len(self._pl()), 1)
 
 
 if __name__ == "__main__":

@@ -337,6 +337,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_browse.py` | `BrowseMixin` — artists/albums/letter-bar/FTS5 search. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
 | `dlna_library_facets.py` | `FacetsMixin` — the tag-sliced facets (genres, decades), their flat track listings, and the play-count-biased radio picker. Owns `_EFFECTIVE_YEAR`. |
 | `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
+| `dlna_artist_infer.py` | The pure decision "can we say who performed this, without guessing?" — SHARED by `tools/artist_from_folder.py` (writes the tag) and the worklist sweep (takes what is left), so the two can never disagree. |
 | `dlna_library_worklist.py` | `WorklistMixin` — the "- Unknown Artists -" hand-editing worklist: the one place the gateway admits it cannot do a job in code. Split from `collections` 2026-08-25 when the sweep pushed it past 400 lines. |
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
 | `dlna_library_radio.py` | `RadioFavouritesMixin` — the saved internet-radio stations. Enforces the 25-station cap SERVER-side (`DB.RADIO_FAV_MAX`); same `clear(udn)` survival contract. |
@@ -535,40 +536,69 @@ tags reproduces it exactly. Guarded by
 `tests/test_album_grouping.py::TestUntaggedFolderIsNotOneAlbum` and
 `::TestNarrowingLeavesRealAlbumsAlone`.
 
-### "- Unknown Artists -" — where the gateway stops guessing (2026-08-25)
+### Missing artist tags — infer, or hand it over (2026-08-25)
 
-Some tracks carry no artist tag at all. `tools/tag_from_filename.py`
-recovers what a filename will give up; past that point **only a person
-knows who the performer is**, and a wrong guess is worse than a blank —
-it files the track under a stranger. So the gateway sweeps every
-artist-less track into ONE playlist to be tagged by hand, automatically,
-at the end of each LocalFs scan (`LocalFsProvider.rescan` →
-`LibraryDB.sync_unknown_artist_playlist`, in `dlna_library_worklist.py`).
+Some tracks carry no artist tag. Two questions follow, and they must be
+answered by the SAME code or they contradict each other: *can this be
+worked out?*, and *if not, who does it?*
 
-- **It syncs both ways.** New untagged tracks are added; a row whose
+**`dlna_artist_infer.infer_artist(album_key, sibling_artists)`** owns the
+first. Pure, dependency-free, and shared by
+`tools/artist_from_folder.py` (which WRITES the inferred tag into the
+file) and `LibraryDB.sync_unknown_artist_playlist` (which sweeps up what
+is left). If the sweep were more generous than the tool, fixable tracks
+would sit in the worklist forever; stricter, and unfixable ones would
+vanish from it. Evidence order, strongest first:
+
+1. **Sibling unanimity** — every tagged track in the folder names the
+   same performer. A folder is an album.
+2. **An uncontradicted folder name** — nothing in the folder is tagged,
+   so there is nothing to weigh against the name on the tin
+   (`Mira Calvo (1996) Caminhos [FLAC]` → `Mira Calvo`).
+3. **A folder name a sibling confirms** — several spellings, one of which
+   IS the folder name (`Jean Vallier` beside `jean vallier`).
+
+Everything else returns `""`. The asymmetry driving all of it: **a blank
+artist asks a person; a wrong one files the track under a stranger and is
+never questioned again.** Hence the refusals, each a test:
+- a **compilation named after itself** — `Nights On Neptune` holds 20 artists
+  and is not a band; `Unknown Artist/Unknown Album` holds 126;
+- an **explicit `VA - …` folder outranks sibling unanimity**, because such
+  a folder can easily have exactly ONE tagged track (this really did
+  stamp a whole comp `Atlas & The Aviators`);
+- a **dated spaceless slug** is a bootleg directory, not a name
+  (`SVance2008-07-05-sbd`);
+- junk names match on the WHOLE string, never as a substring, or
+  "Various Comforts" and "The Unknown" get eaten.
+- The artist portion of a folder ends at the EARLIEST of `" - "`, `(`,
+  `[`, `{`. Stripping brackets in place instead yielded
+  `Mira Calvo Caminhos ` — the album glued onto the artist.
+
+**`- Unknown Artists -`** takes the remainder: swept automatically at the
+end of each LocalFs scan, to be tagged by hand.
+
+- **It syncs both ways.** Newly-untagged tracks are added; a row whose
   track has since gained an artist is pruned, because that work is done.
-  A list that only grows stops meaning anything. Consequence worth
-  knowing: **removing a row by hand does not make it stay gone** — the
-  next scan still sees a track with no artist. Give the file any artist
-  tag at all to settle it.
-- **It only ever prunes rows mapping to a CURRENT track of that udn that
-  now has an artist.** A row pointing at nothing is left for
-  `tools/audit_playlist_orphans.py`, and another source's rows are never
-  touched. This runs unattended on every scan, so what it must NOT delete
-  matters more than what it sweeps.
+  Consequence: **removing a row by hand does not make it stay gone** —
+  the next scan still sees a track with no artist. Give the file any
+  artist tag to settle it.
+- **It prunes only rows mapping to a CURRENT track of that udn that now
+  has an artist.** A row pointing at nothing is left for
+  `tools/audit_playlist_orphans.py`; another source's rows are never
+  touched. This runs unattended, so what it must NOT delete matters more
+  than what it sweeps.
 - **Audiobooks opt out** (`collect_unknown_artists=False` in
-  `dlna_localfs_wiring`). A chapter with no artist tag is ordinary there —
-  the author lives in `book_meta` — and ~550 of them would bury the music
-  that actually needs the work.
-- **The playlist is created only when there is something to put in it**,
-  so a fully tagged library never grows an empty one. The leading `- `
-  sorts it to the top of the playlist list, where the work is visible.
-- A sweep failure **never fails the scan**: the index is the product, the
-  worklist is a convenience on top of it.
+  `dlna_localfs_wiring`) — a chapter with no artist tag is ordinary
+  there, and ~550 would bury the music that needs the work.
+- Created only when there is something to put in it; the leading `- `
+  sorts it to the top. A sweep failure never fails a scan — the index is
+  the product.
 
-Guarded by `tests/test_unknown_artists_playlist.py` (14 tests, incl. the
-`clear(udn)` survival contract every collection here shares — a rebuild
-must not discard a list somebody is halfway through).
+Live: of 141 artist-less tracks, **65 were recoverable from their folder**
+and 76 are genuine hand-work (the junk drawer, a Sam Vance bootleg slug,
+a handful of self-named compilations). Guarded by
+`tests/test_artist_infer.py` (19) and
+`tests/test_unknown_artists_playlist.py` (18).
 
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 
@@ -2376,6 +2406,44 @@ case-insensitive extension match, `mp4` treated as non-music,
 ```bash
 python3 -m unittest tools.test_prune_empty_music_dirs -v
 ```
+
+### `tools/artist_from_folder.py`
+
+Restores a missing artist tag from what the FOLDER already knows —
+sibling tags, or the name on the tin. Stronger evidence than a filename,
+so run it BEFORE `tag_from_filename.py`. The decision is
+`dlna_artist_infer.infer_artist` (see "Missing artist tags" above);
+this module is just the walk plus the write.
+
+Same contract as its sibling tool: never moves/renames/deletes, never
+overwrites an existing artist, and **re-reads each file before writing**
+so a stale index cannot cause a bad write (that check earned its keep —
+11 files the DB called blank already had tags). DRY-RUN by default.
+
+> ⚠️ **There is deliberately NO fallback when a container refuses a tag,
+> and it must stay that way.** WAV rejects a bare string through mutagen's
+> easy interface ("not a Frame instance"). The first version caught that
+> and fell back to `ID3(path).save(path)` — which, for a RIFF container,
+> **PREPENDS a standalone ID3v2 tag**, so the file starts with `ID3`
+> instead of `RIFF` and stops being a WAV. It destroyed 15 files of a
+> Mira Calvo album; the next scan reported them as `malformed`, which is
+> the only reason it was caught. They were recoverable *only* because
+> prepending leaves the original bytes untouched further in: strip exactly
+> the ID3 length and `RIFF` is sitting there. Repaired and verified —
+> declared RIFF size == filesize-8 on all 15, zero decode errors.
+> **A tag is a convenience; the audio is the product.** A container that
+> will not take a tag gets reported as `unsupported` and left alone.
+> Guarded by `tools/test_artist_from_folder.py`, whose WAV test genuinely
+> fails against the old code (checked — `RIFF` becomes `ID3\x04`).
+
+```bash
+python3 tools/artist_from_folder.py            # preview
+python3 tools/artist_from_folder.py --apply    # then rescan
+python3 tools/artist_from_folder.py -v         # also list the hand-work
+```
+
+Live run: **39 files tagged** across 8 folders (Ray & Nadia Orbit, Mira Calvo,
+Jean Vallier, RVM, Stormwind, Vex …); the rest went to the worklist.
 
 ### `tools/tag_from_filename.py`
 

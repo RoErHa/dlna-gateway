@@ -36,6 +36,7 @@
     "db_pool.py": 400,
     "dlna_art_cache.py": 400,
     "dlna_art_fetcher.py": 400,
+    "dlna_artist_infer.py": 400,
     "dlna_asgi.py": 400,
     "dlna_asgi_bridge.py": 400,
     "dlna_asgi_browse.py": 400,
