@@ -1353,6 +1353,30 @@ DELETE FROM album_art WHERE source='notfound';
 
 Those albums become bare again and get looked up on the next `ART_FETCHER.trigger()` — which means either a rebuild-index of any server, or a gateway restart (the 120s startup scan).
 
+## FIXES.md — the rolling why-log
+
+`FIXES.md` holds write-ups for bugs where **the diagnosis took longer than
+the patch**, or where the symptom looked like something it wasn't. `git log`
+has the *what*; this has the *why*, the measurements that proved it, and the
+"don't re-introduce this" notes.
+
+**It keeps only the three most recent entries.** Add a new one at the top
+(`## <sha> — YYYYMMDD — <title>`, newest first), then:
+
+```bash
+python3 tools/rotate_fixes.py                 # what would be dropped
+python3 tools/rotate_fixes.py --apply         # rotate
+python3 tools/rotate_fixes.py --check         # exit 1 if over the limit
+python3 -m unittest tools.test_rotate_fixes -v   # 16 tests
+```
+
+Nothing is lost when an entry rotates out — **the sha in the heading is the
+point**, not decoration: the entry stays reachable in git history at exactly
+the commit it names. The tool's `split_entries`/`rotate` are pure and tested
+directly because the risk in a file-trimming script is deleting the wrong
+half; `###` subsections inside an entry don't split it, and a `##` heading
+without a date (ordinary prose in the preamble) is never treated as an entry.
+
 ## Backing up library.db (weekly)
 
 `library.db` holds the index **and everything a person created that

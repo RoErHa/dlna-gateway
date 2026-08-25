@@ -1,12 +1,19 @@
 # Fixes
 
-A running log of non-obvious bugs: what was actually wrong, how it was
+A rolling log of non-obvious bugs: what was actually wrong, how it was
 proven, and what would re-introduce it. Newest first, each entry headed by
-the commit that carries the fix and the date it landed.
+the commit that carries the fix and the date it landed (`<sha> — YYYYMMDD`).
 
 This is the "why", not the "what" — `git log` already has the what. An entry
 earns its place here when the diagnosis took longer than the patch, or when
 the symptom looked like something it wasn't.
+
+> **Only the three most recent entries are kept.** Add a new one at the top,
+> then run `python3 tools/rotate_fixes.py --apply` to drop whatever fell off
+> the end. Nothing is lost — every rotated entry stays reachable in git
+> history at the commit it names, which is why the sha is part of the
+> heading and not decoration. Rotating by hand is fine too; the tool exists
+> so the window is enforced rather than remembered.
 
 ---
 
