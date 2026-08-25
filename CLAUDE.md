@@ -2341,6 +2341,40 @@ case-insensitive extension match, `mp4` treated as non-music,
 python3 -m unittest tools.test_prune_empty_music_dirs -v
 ```
 
+### `tools/tag_from_filename.py`
+
+Gives untagged strays an **artist tag recovered from their own filename**
+— the companion to the folder-album fix above. The browse layer now groups
+blank-album rows per artist, which rescues every file that HAS an artist;
+this rescues the ones that have nothing. Written for
+`<music-root>/Unknown Artist/Unknown Album/` (251 loose 2009 MP3s), where it
+tagged **149**, left **64** already-tagged files untouched, and left **38**
+alone because their names carry no artist to read.
+
+`parse_name` is pure and is the whole risk in the tool — a bad split writes
+someone else's name into a real file — so the hostile shapes are tests, not
+discoveries made mid-batch: `NN - Title` yields NO artist (it is a track
+number and a title), `NN - Artist - Title` yields one, a bare `-` is never
+a separator (it would halve "Jean-Marc Aubert"), and a literal
+`Unknown`/`Various` in the artist slot is refused.
+
+Three things it will not do: never move, rename or delete; **never
+overwrite an artist that already exists** (a real tag is evidence, a
+filename is a guess, and a guess must not beat evidence); and never write
+what it had to invent — no separator means the file is reported and left
+exactly as it was. Because it only writes fields that are EMPTY, there is
+nothing to overwrite and nothing to lose, which is what makes it safe to
+run on the real library. Titles arrive clipped (these filenames are
+truncated at ~36 chars) and that is accepted: the artist decides which
+album a file lands in, and the artist is at the front, which is the half
+that survived. DRY-RUN by default.
+
+```bash
+python3 tools/tag_from_filename.py "<music-root>/Unknown Artist/Unknown Album"
+python3 tools/tag_from_filename.py "<folder>" --apply    # then rescan
+python3 -m unittest tools.test_tag_from_filename -v      # 19 tests
+```
+
 ### `tools/find_corrupt_audio.py`
 
 Walks the music root and flags audio files whose first 16 bytes are
