@@ -100,6 +100,22 @@ exists rather than just that it is small.
 `tests/` and `tools/` are excluded on purpose — gating test-file growth
 puts a thumb on the scale against writing tests.
 
+**The README's badge numbers are a GENERATED artifact too.** They are
+hand-written numbers in Markdown, so they drift the moment anyone adds a
+test — and they had (the badge still said `1,089 unit · 231 browser`
+several commits after both had moved). `python3 tools/regen_badges.py`
+reads the counts from the sources that own them (`run_all.py --offline`
+for checks + unit, `pytest --collect-only` for browser, `ruff check` for
+violations), shows the drift, and rewrites the badges on `--apply`;
+`--check` exits 1 if stale. Same pattern as `regen_schema.py` /
+`regen_size_budget.py`. Deliberately **NOT** wired into `run_all.py` as a
+staleness gate, unlike `test_schema_sync.py`: that gate would have to run
+the suite to learn the suite's own numbers, and a suite that fails because
+it cannot count itself is a worse failure mode than a stale badge. Run it
+when the counts move. `python3 -m unittest tools.test_regen_badges -v` —
+15 tests, mostly over the shields.io encoding (an unescaped `-` or `,`
+silently renders as a broken label).
+
 **Dependencies are pinned in two layers.** `requirements.txt` is the
 SPEC (loose `>=`, every dep optional, graceful degradation);
 `requirements.lock` is the INSTALL (exact transitive closure, 26
@@ -2681,7 +2697,7 @@ albums (compilations), same album's adjacent tracks (e.g. 3 Doors
 Down's Kryptonite + Down Poison sharing `d-4591903772373150829`),
 and same file indexed via two browse-tree paths with different
 tags. AssetUPnP's d-id is closer to "(album-bucket, track-position)
-hash" than to "physical-file hash". 
+hash" than to "physical-file hash".
 
 Therefore relinking by d-id alone WOULD silently re-attach overrides
 to wrong tracks. The tool now requires BOTH d-id match AND a fuzzy
@@ -3484,7 +3500,7 @@ Single-user, single shared-secret. Read at startup from environment:
 ```
 SUBSONIC_USER=user        # default "user" if unset
 SUBSONIC_PASSWORD=<set>   # REQUIRED; no default
-can be set using 
+can be set using
 launchctl unsetenv SUBSONIC_PASSWORD (delete old password)
 launchctl setenv SUBSONIC_PASSWORD=password (set new password)
 launchctl getenv SUBSONIC_PASSWORD (show new password)
