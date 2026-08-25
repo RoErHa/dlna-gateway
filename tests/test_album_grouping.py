@@ -111,15 +111,18 @@ class TestFolderGrouping(unittest.TestCase):
                                       album_key="VA/Comp")
         self.assertEqual(len(tracks), 3)
 
-    def test_artist_albums_returns_folder_for_compilation_performer(self):
-        # Drilling a performer who only appears on the comp lands on the
-        # whole comp folder.
+    def test_artist_albums_answers_from_the_artists_point_of_view(self):
+        """Drilling a performer who appears on a comp still FINDS the
+        comp — but the row is about them: their name, and the count of
+        THEIR tracks in it. The three surfaces all build their album link
+        from this field, so this is what makes the Naim and CarPlay
+        narrow too."""
         albums = self.db.artist_albums(LF, "Bob")
         keys = {a["album_key"] for a in albums}
         self.assertIn("VA/Comp", keys)
         comp = next(a for a in albums if a["album_key"] == "VA/Comp")
-        self.assertEqual(comp["track_count"], 3)
-        self.assertEqual(comp["artist"], "Various Artists")
+        self.assertEqual(comp["artist"], "Bob")
+        self.assertEqual(comp["track_count"], 1)
 
     def test_browse_letter_albums_groups_by_folder(self):
         res = self.db.browse_letter(LF, "albums", "C", 0, 50)
@@ -367,11 +370,19 @@ class TestNarrowingLeavesRealAlbumsAlone(unittest.TestCase):
                                  album_key="VA/Hits")
         self.assertEqual(len(t), 3)
 
-    def test_a_named_performer_on_a_real_comp_still_opens_it_whole(self):
-        """The comp declares an album, so the folder stays one album and
-        a performer drilling into it gets the WHOLE record, not their one
-        track. This is the behaviour the junk-drawer fix must not break."""
+    def test_a_named_performer_gets_only_their_track_on_a_comp(self):
+        """Arriving from an ARTIST, a compilation must show that artist's
+        track and nothing else. Folder identity answers "what is this
+        record" — the wrong question here, and it meant wading through
+        356 tracks by other people to reach the one you asked for."""
         t = self.db.album_tracks(LF, "Bob", "Hits 88", album_key="VA/Hits")
+        self.assertEqual([x["title"] for x in t], ["B"])
+
+    def test_the_albums_view_still_opens_the_whole_comp(self):
+        """`Various Artists` is the sentinel for "the folder itself", so
+        arriving from Albums is unchanged."""
+        t = self.db.album_tracks(LF, "Various Artists", "Hits 88",
+                                 album_key="VA/Hits")
         self.assertEqual(len(t), 3)
 
     def test_single_artist_album_unchanged(self):
@@ -384,6 +395,66 @@ class TestNarrowingLeavesRealAlbumsAlone(unittest.TestCase):
         keys = [a["album_key"] for a in albums]
         self.assertEqual(keys.count("VA/Hits"), 1)
         self.assertEqual(keys.count("N/Nevermind"), 1)
+
+
+class TestEverySurfaceNarrowsTheSameWay(unittest.TestCase):
+    """"Show me this artist" must mean the same thing in the PWA, on the
+    Naim and in CarPlay.
+
+    None of the three knows about this rule. All of them build their album
+    link from `artist_albums()[i]["artist"]`, so returning the queried
+    performer there — instead of the folder's `Various Artists` — is what
+    makes all three narrow at once. These tests exist because that is easy
+    to undo by "fixing" `artist_albums` to report the aggregate again."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        self.db.upsert_tracks(LF, [
+            _row("v1", "VA/Hits", "Alice", "Hits 88", "A", "/m/VA/Hits/1.flac"),
+            _row("v2", "VA/Hits", "Bob", "Hits 88", "B", "/m/VA/Hits/2.flac"),
+            _row("v3", "VA/Hits", "Cara", "Hits 88", "C", "/m/VA/Hits/3.flac"),
+        ])
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def _comp_row(self):
+        return next(a for a in self.db.artist_albums(LF, "Bob")
+                    if a["album_key"] == "VA/Hits")
+
+    def test_the_row_carries_the_queried_performer(self):
+        r = self._comp_row()
+        self.assertEqual(r["artist"], "Bob")
+        self.assertEqual(r["track_count"], 1)
+
+    def test_the_upnp_container_id_round_trips_that_performer(self):
+        from api_upnp_browse import _decode_lib_album_id
+        from api_upnp_didl import _didl_album
+        import re
+        xml = _didl_album(self._comp_row(), "gartist:x")
+        cid = re.search(r'id="([^"]+)"', xml).group(1)
+        artist, album, key = _decode_lib_album_id(cid)
+        self.assertEqual(artist, "Bob")
+        self.assertEqual(
+            [t["title"] for t in
+             self.db.album_tracks(LF, artist, album, album_key=key)], ["B"])
+
+    def test_the_subsonic_album_id_round_trips_that_performer(self):
+        from api_subsonic_ids import _album_id_decode, _so_album
+        so = _so_album(self._comp_row())
+        artist, album, key = _album_id_decode(so["id"])
+        self.assertEqual(artist, "Bob")
+        self.assertEqual(
+            [t["title"] for t in
+             self.db.album_tracks(LF, artist, album, album_key=key)], ["B"])
+
+    def test_an_artist_with_no_track_in_a_folder_never_lists_it(self):
+        """`HAVING track_count > 0` — otherwise a folder could appear in
+        an artist's list showing zero of their tracks."""
+        self.assertTrue(all(a["track_count"] > 0
+                            for a in self.db.artist_albums(LF, "Bob")))
 
 
 if __name__ == "__main__":

@@ -165,16 +165,10 @@ class BrowseMixin(FacetsMixin):
             disc/track order is preserved. This is what makes a
             Various-Artists compilation open as one album.
 
-            A NAMED `artist` narrows it to that performer, mirroring
-            `_localfs_album_group`: a folder whose tracks declare no album
-            tag is grouped per artist, so it must RESOLVE per artist too or
-            the browse row and the queue it produces disagree — which is
-            exactly the bug, a Marsh & Quinn row that played 247 tracks by
-            43 artists. `Various Artists` is the sentinel for a genuinely
-            mixed folder and deliberately does NOT narrow. For every other
-            folder this is a no-op: `_localfs_album_artist` only yields a
-            real name when `COUNT(DISTINCT artist)=1`, i.e. when every row
-            already carries it.
+            A NAMED `artist` narrows to that performer — so a
+            compilation opened from an artist shows their track, not all
+            356. `Various Artists` means "the folder itself" and does not
+            narrow.
           * otherwise → the legacy `(artist, album)` pair (UPnP and any
             caller that hasn't moved to album_key — favourites, UPnP,
             Subsonic). Unchanged behaviour."""
@@ -190,28 +184,17 @@ class BrowseMixin(FacetsMixin):
                             ORDER BY t.file_path COLLATE NOCASE, t.title"""
                 rows = []
                 if artist not in ("", VARIOUS_ARTISTS):
-                    # Mirror `_localfs_album_group` exactly: rows carrying NO
-                    # album tag are grouped per performer, so they must
-                    # RESOLVE per performer too, or the browse row and the
-                    # queue it produces disagree — the 2026-08-25 bug, where
-                    # one Marsh & Quinn row played 247 tracks by 43 artists.
-                    #
-                    # Keyed on the ROW, not the folder: the real junk drawer
-                    # held four stray tagged files, and a folder-level test
-                    # ("does anything here name an album?") was defeated by
-                    # them. Tagged rows keep folder identity, which is what
-                    # leaves genuine compilations — and every normal album —
-                    # untouched.
+                    # A NAMED performer narrows the folder to their tracks.
+                    # `Various Artists` is the sentinel for "the folder
+                    # itself" and never narrows, so the Albums view is
+                    # unchanged; for a single-artist album it is a no-op.
                     rows = conn.execute(
-                        base.format(extra="AND COALESCE(t.album,'')='' "
-                                          "AND t.artist=?"),
+                        base.format(extra="AND t.artist=?"),
                         (udn, album_key, artist)).fetchall()
                 if not rows:
-                    # Either the caller named a real album's performer, or the
-                    # artist is stale — a favourite saved before a retag, an id
-                    # a Subsonic client cached. Narrowing must never EMPTY an
-                    # album: that reads as data loss, which is worse than the
-                    # over-broad queue this exists to prevent.
+                    # Stale rather than selective — a favourite saved
+                    # before a retag, an id a client cached. Narrowing may
+                    # never EMPTY an album: that reads as data loss.
                     rows = conn.execute(
                         base.format(extra=""), (udn, album_key)).fetchall()
             else:
@@ -272,19 +255,27 @@ class BrowseMixin(FacetsMixin):
                     (udn,) + extra).fetchall()
         return [dict(r) for r in rows]
     def artist_albums(self, udn: str, artist: str) -> list:
-        """All albums for a given artist, A-Z. Track count is the
-        browse-visible (deduped) count. LocalFs groups by FOLDER: the
-        albums are the folders that contain a track by this artist
-        (so opening a performer on a compilation lands on the whole
-        comp folder); other sources keep (artist, album) grouping."""
+        """All albums for a given artist, A-Z, from THAT ARTIST'S point of
+        view: each row reports the QUERIED artist and the count of THEIR
+        tracks in the folder, not the folder's `Various Artists`
+        aggregate.
+
+        The PWA, the Naim's UPnP tree and CarPlay all build their album
+        link from this row's `artist`, so this one choice is what makes
+        `album_tracks` narrow on all three without any of them knowing
+        the rule exists. `HAVING track_count > 0` keeps out folders where
+        none of the tracks are theirs. Non-localfs sources keep the
+        legacy (artist, album) grouping. See CLAUDE.md, "Show me this
+        artist"."""
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             if _is_localfs(udn):
                 rows = conn.execute(
                     f"""SELECT t.album_key,
                               {_localfs_album_name("t")} as album,
-                              {_localfs_album_artist("t")} as artist,
-                              COUNT(*) as track_count,
+                              ? as artist,
+                              SUM(CASE WHEN t.artist=? THEN 1 ELSE 0 END)
+                                  as track_count,
                               MAX(t.art) as art
                        FROM tracks t
                        WHERE t.udn=? AND t.album_key != ''
@@ -293,8 +284,9 @@ class BrowseMixin(FacetsMixin):
                               WHERE udn=? AND artist=? AND album_key != '')
                          AND {dedup}
                        GROUP BY {_localfs_album_group("t")}
+                       HAVING track_count > 0
                        ORDER BY album COLLATE NOCASE""",
-                    (udn, udn, artist)).fetchall()
+                    (artist, artist, udn, udn, artist)).fetchall()
             else:
                 rows = conn.execute(
                     f"""SELECT t.album, t.artist,

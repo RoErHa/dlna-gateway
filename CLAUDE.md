@@ -681,6 +681,39 @@ them genuinely fail against the old code — verified by reverting both
 fixes and re-running, because a regression test that passes either way
 is worse than none.
 
+### "Show me this artist" means the same thing on every surface (2026-08-25)
+
+A LocalFs album is its FOLDER, so an artist's album list is every folder
+holding a track by them — compilations included. Opening one used to give
+the WHOLE folder: browsing to a performer and tapping a comp returned
+**356 tracks by other people** to reach the one you asked for. Search
+never had the problem, because it matches tracks and filters by artist.
+
+The fix is one line of intent in **`artist_albums`**: each row reports
+**the queried artist and the count of THEIR tracks**, not the folder's
+`Various Artists` aggregate. That is load-bearing far beyond the PWA —
+the PWA's `onOpen`, the Naim's `galbum:` container id and CarPlay's `al:`
+album id are ALL built from that row's `artist` field, so returning the
+real performer makes `album_tracks` narrow on all three surfaces without
+any of them knowing the rule exists. `HAVING track_count > 0` keeps a
+folder out of an artist's list when none of the tracks are theirs.
+
+`album_tracks` then narrows whenever it is given a **named** performer.
+Two things keep that safe:
+- **`Various Artists` is the sentinel for "the folder itself"** and never
+  narrows, so the Albums view, favourites, genre and decade drill-downs
+  are byte-identical to before. For an ordinary single-artist album the
+  narrowing is a no-op, because `_localfs_album_artist` only yields a
+  real name when `COUNT(DISTINCT artist)=1`.
+- **Narrowing may never EMPTY an album.** A stale artist — a favourite
+  saved before a retag, an id a client cached — falls back to the whole
+  folder, because an album resolving to nothing reads as data loss.
+
+Guarded by `tests/test_album_grouping.py` (35), including a
+cross-surface class that round-trips the real UPnP container id and the
+real Subsonic album id — the rule is easy to undo by "fixing"
+`artist_albums` to report the aggregate again.
+
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 
 Diagnosed 2026-05-28: AssetUPnP exposes the SAME physical file under
