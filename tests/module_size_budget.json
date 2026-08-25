@@ -72,6 +72,7 @@
     "dlna_library_tracks.py": 400,
     "dlna_library_unique.py": 400,
     "dlna_library_videos.py": 400,
+    "dlna_library_worklist.py": 400,
     "dlna_localfs_http.py": 400,
     "dlna_localfs_server.py": 400,
     "dlna_localfs_wiring.py": 400,

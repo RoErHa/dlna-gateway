@@ -129,6 +129,11 @@ def _is_localfs(udn: str) -> bool:
 
 VARIOUS_ARTISTS = "Various Artists"
 
+# The hand-editing worklist for tracks the indexer could not
+# attribute. Named with leading punctuation so it sorts to the top
+# of the playlist list, where the work is visible.
+UNKNOWN_ARTISTS_PLAYLIST = "- Unknown Artists -"
+
 
 def _localfs_album_leaf(a: str = "t") -> str:
     """SQL: the folder's own leaf name — the segment of `album_key` after

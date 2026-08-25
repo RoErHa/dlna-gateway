@@ -337,6 +337,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_browse.py` | `BrowseMixin` — artists/albums/letter-bar/FTS5 search. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
 | `dlna_library_facets.py` | `FacetsMixin` — the tag-sliced facets (genres, decades), their flat track listings, and the play-count-biased radio picker. Owns `_EFFECTIVE_YEAR`. |
 | `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
+| `dlna_library_worklist.py` | `WorklistMixin` — the "- Unknown Artists -" hand-editing worklist: the one place the gateway admits it cannot do a job in code. Split from `collections` 2026-08-25 when the sweep pushed it past 400 lines. |
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
 | `dlna_library_radio.py` | `RadioFavouritesMixin` — the saved internet-radio stations. Enforces the 25-station cap SERVER-side (`DB.RADIO_FAV_MAX`); same `clear(udn)` survival contract. |
 | `dlna_indexer.py` | `Indexer` — background crawler that walks a MediaServer and populates LibraryDB |
@@ -533,6 +534,41 @@ rebuild fixes any of this — re-reading the same files with the same blank
 tags reproduces it exactly. Guarded by
 `tests/test_album_grouping.py::TestUntaggedFolderIsNotOneAlbum` and
 `::TestNarrowingLeavesRealAlbumsAlone`.
+
+### "- Unknown Artists -" — where the gateway stops guessing (2026-08-25)
+
+Some tracks carry no artist tag at all. `tools/tag_from_filename.py`
+recovers what a filename will give up; past that point **only a person
+knows who the performer is**, and a wrong guess is worse than a blank —
+it files the track under a stranger. So the gateway sweeps every
+artist-less track into ONE playlist to be tagged by hand, automatically,
+at the end of each LocalFs scan (`LocalFsProvider.rescan` →
+`LibraryDB.sync_unknown_artist_playlist`, in `dlna_library_worklist.py`).
+
+- **It syncs both ways.** New untagged tracks are added; a row whose
+  track has since gained an artist is pruned, because that work is done.
+  A list that only grows stops meaning anything. Consequence worth
+  knowing: **removing a row by hand does not make it stay gone** — the
+  next scan still sees a track with no artist. Give the file any artist
+  tag at all to settle it.
+- **It only ever prunes rows mapping to a CURRENT track of that udn that
+  now has an artist.** A row pointing at nothing is left for
+  `tools/audit_playlist_orphans.py`, and another source's rows are never
+  touched. This runs unattended on every scan, so what it must NOT delete
+  matters more than what it sweeps.
+- **Audiobooks opt out** (`collect_unknown_artists=False` in
+  `dlna_localfs_wiring`). A chapter with no artist tag is ordinary there —
+  the author lives in `book_meta` — and ~550 of them would bury the music
+  that actually needs the work.
+- **The playlist is created only when there is something to put in it**,
+  so a fully tagged library never grows an empty one. The leading `- `
+  sorts it to the top of the playlist list, where the work is visible.
+- A sweep failure **never fails the scan**: the index is the product, the
+  worklist is a convenience on top of it.
+
+Guarded by `tests/test_unknown_artists_playlist.py` (14 tests, incl. the
+`clear(udn)` survival contract every collection here shares — a rebuild
+must not discard a list somebody is halfway through).
 
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 

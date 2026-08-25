@@ -182,7 +182,8 @@ def maybe_start_localfs(get_lan_ip):
     ab_provider = None
     if abpath:
         ab_provider = LocalFsProvider(DB, abpath, base_url=base_url,
-                                      id_namespace="audiobooks")
+                                      id_namespace="audiobooks",
+                                      collect_unknown_artists=False)
         bind_provider(ab_provider.udn, ab_provider)
         global AUDIOBOOKS_UDN
         AUDIOBOOKS_UDN = ab_provider.udn

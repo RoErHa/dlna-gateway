@@ -23,7 +23,7 @@ import sqlite3
 import time
 import uuid
 
-from dlna_library_radio import RadioFavouritesMixin
+from dlna_library_worklist import WorklistMixin
 from dlna_library_sql import (
     FAVOURITES_ID,
 )
@@ -31,7 +31,7 @@ from dlna_library_sql import (
 log = logging.getLogger("dlna.library")
 
 
-class CollectionsMixin(RadioFavouritesMixin):
+class CollectionsMixin(WorklistMixin):
     """See module docstring. Mixed into `LibraryDB`; never instantiated
     on its own — it relies on `self._pool` from the host class."""
 

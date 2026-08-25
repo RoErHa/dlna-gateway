@@ -85,7 +85,8 @@ class LocalFsProvider(ReadMixin):
     name = "localfs"
 
     def __init__(self, library_db: Any, music_root: Path | str,
-                 *, base_url: str = "", id_namespace: str = ""):
+                 *, base_url: str = "", id_namespace: str = "",
+                 collect_unknown_artists: bool = True):
         self._library = library_db
         self._root = Path(music_root).expanduser().resolve()
         self.udn: str = _udn_for_root(self._root)
@@ -99,6 +100,11 @@ class LocalFsProvider(ReadMixin):
         # (the file server resolves ids across ALL localfs UDNs). The
         # music root passes '' → ids unchanged.
         self._id_namespace: str = id_namespace
+        # After each scan, sweep tracks we could not attribute into the
+        # hand-editing worklist. OFF for audiobooks: a chapter with no
+        # artist tag is ordinary there (the author lives in `book_meta`),
+        # so sweeping them in would bury the music that needs the work.
+        self._collect_unknown_artists = bool(collect_unknown_artists)
 
     # ── Public surface ──────────────────────────────────────────
 
@@ -225,6 +231,14 @@ class LocalFsProvider(ReadMixin):
         # LibraryDB.run_with_fts_heal). Retry-safe: REPLACE/DELETE/UPDATE.
         self._library.run_with_fts_heal(
             self._rescan_finalize, cache_writes, removed_paths)
+        if self._collect_unknown_artists:
+            # Never let this fail a scan: the index is the product, the
+            # worklist is a convenience laid on top of it.
+            try:
+                sync = self._library.sync_unknown_artist_playlist(self.udn)
+                stats["unknown_artists"] = sync["total"]
+            except Exception as e:                    # noqa: BLE001
+                log.warning(f"unknown-artist sweep skipped: {e!r}")
         stats["elapsed_sec"] = round(time.time() - t0, 2)
         log.info(f"LocalFs rescan complete: {stats}")
         return stats
