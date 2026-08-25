@@ -90,8 +90,8 @@ so, so the gain is locked in instead of silently spent again. The count
 of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
-within a week. As of 2026-08-20 the debt is **paid off: 84/84 modules
-within target** and `over_target` is empty — so the ratchet now behaves
+within a week. The debt was **paid off on 2026-08-20 (84/84 modules
+within target)** and has stayed paid as the tree grew — **89/89 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -625,8 +625,8 @@ end of each LocalFs scan, to be tagged by hand.
 Live: of 141 artist-less tracks, **65 were recoverable from their folder**
 and 76 are genuine hand-work (the junk drawer, a Sam Vance bootleg slug,
 a handful of self-named compilations). Guarded by
-`tests/test_artist_infer.py` (19) and
-`tests/test_unknown_artists_playlist.py` (18).
+`tests/test_artist_infer.py` (26) and
+`tests/test_unknown_artists_playlist.py` (20).
 
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 
