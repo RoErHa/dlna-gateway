@@ -311,7 +311,35 @@ xcrun simctl shutdown all
 open -a Simulator                                 # optional: show the sim window
 ```
 
-`chaos.py` hard-fails if it sees any 5xx, `/tmp/dlna-gateway.err` grows (= silent thread death), or a snapshot takes >5s. Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string `ValueError` that was killing the renderer-queue daemon thread invisibly.
+`chaos.py` hard-fails if it sees any 5xx, a **crash signature** is appended
+to `/tmp/dlna-gateway.err` (= silent thread death), or a snapshot takes >5s.
+Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string
+`ValueError` that was killing the renderer-queue daemon thread invisibly.
+
+**The stderr criterion reads CONTENT, not byte count (2026-08-26).** It used
+to fail on any growth at all, which asks the wrong question: that path is the
+launchd **stderr sink**, so hypercorn's `[INFO] Running on …` banner lands
+there on every boot — and `launchctl kickstart -k` SIGKILLs the old process,
+which flushes `resource_tracker: leaked semaphore objects` on the way out
+*every single time* (18 of them had accumulated in the live file, one per
+restart). A restart overlapping a run therefore failed it while nothing had
+crashed. `classify_stderr` (pure, tested) now looks for `Traceback`,
+`Exception in thread`, `Fatal Python error` and `Segmentation fault`; benign
+growth is reported with a line count and passes. The marker list is
+deliberately short — this canary only earns its keep if a hit is worth waking
+up for, so an `[ERROR]` line or a 500 the run provoked on purpose must not
+trip it. A file truncated mid-run is detected (size < offset) and re-read
+from the start rather than compared against a stale position.
+`tests/test_chaos_stderr.py` (10) covers both directions, including a real
+crash buried inside restart noise.
+
+> ⚠️ **Cold-start caveat, unrelated and NOT a wedge:** the first
+> `snapshot (no udn)` after a restart pays one full SOAP timeout for any
+> switched-off renderer (measured 6.1 s with the LG TV off), because the
+> `_UNREACHABLE_BACKOFF_SEC` backoff and the per-queue snapshot cache are
+> both empty. It trips the >5 s hard-fail on a first run and passes on the
+> next (6.2 s total, PASS). Give a freshly-restarted gateway one warm-up run
+> before believing a slow-snapshot failure.
 
 Each core module also has a standalone self-test:
 

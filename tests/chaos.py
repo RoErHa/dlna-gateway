@@ -17,10 +17,19 @@ Usage:
 Pass criteria:
   - No 5xx responses at all.
   - Snapshot endpoint responds in < 1s throughout the run.
-  - /tmp/dlna-gateway.err must NOT grow during the run. Any growth means
-    a daemon thread crashed silently — the exact class of bug that the
-    per-renderer refactor and log.exception wrapping are meant to
-    prevent regressing.
+  - No CRASH SIGNATURE appended to /tmp/dlna-gateway.err during the run.
+    A silently-dead daemon thread is the exact class of bug the
+    per-renderer refactor and the log.exception wrapping exist to stop
+    regressing, and that file is where its traceback lands.
+
+    The criterion used to be "the file must not grow by a single byte",
+    which is not the same thing: that path is the launchd STDERR SINK,
+    and hypercorn logs its `[INFO] Running on …` banner there on every
+    boot, as does any Python warning. A restart overlapping a run — or
+    the SIGKILLed old process flushing `resource_tracker: leaked
+    semaphore objects` on its way out, which `kickstart -k` produces
+    every single time — therefore failed the run while nothing had
+    crashed. We now read WHAT was appended and judge that.
 """
 import argparse
 import json
@@ -447,6 +456,52 @@ def _stderr_size():
         return 0
 
 
+# Lines that mean a thread died. Deliberately a short, specific list:
+# this canary only earns its keep if a hit is worth waking up for, and
+# the 2026-08-21 incident in this very file opened with "Exception in
+# thread renderer-queue:".
+_CRASH_MARKERS = (
+    "Traceback (most recent call last):",
+    "Exception in thread",
+    "Fatal Python error",
+    "Segmentation fault",
+)
+
+
+def classify_stderr(text: str):
+    """Split appended stderr into (crash lines, benign line count).
+
+    Pure, so the hostile shapes are tests rather than things discovered
+    during a 500-iteration run against the live gateway."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    crash = [ln for ln in lines
+             if any(marker in ln for marker in _CRASH_MARKERS)]
+    return crash, len(lines) - len(crash)
+
+
+def _stderr_since(offset: int):
+    """The text appended to STDERR_PATH since `offset` bytes.
+
+    Returns (text, size_now, rotated). `rotated` is True when the file is
+    SHORTER than the offset — launchd recreated or truncated it mid-run,
+    which makes the offset meaningless; we then read the whole file and
+    say so rather than compare against a stale position and report
+    nonsense."""
+    try:
+        size = os.path.getsize(STDERR_PATH)
+    except OSError:
+        return "", 0, False
+    rotated = size < offset
+    try:
+        with open(STDERR_PATH, "rb") as fh:
+            fh.seek(0 if rotated else offset)
+            raw = fh.read()
+    except OSError as e:
+        print(f"chaos: could not read {STDERR_PATH}: {e}")
+        return "", size, rotated
+    return raw.decode("utf-8", "replace"), size, rotated
+
+
 # ── Main loop ─────────────────────────────────────────────────────
 
 def run(base, iterations, workers, seed, quiet):
@@ -503,8 +558,9 @@ def run(base, iterations, workers, seed, quiet):
         list(ex.map(iteration, range(iterations)))
     total_sec = time.monotonic() - t0
 
-    stderr_after  = _stderr_size()
-    stderr_growth = stderr_after - stderr_before
+    stderr_text, stderr_after, stderr_rotated = _stderr_since(stderr_before)
+    stderr_growth = len(stderr_text)
+    crash_lines, benign_lines = classify_stderr(stderr_text)
 
     # Summary
     print()
@@ -512,7 +568,19 @@ def run(base, iterations, workers, seed, quiet):
     print(f"chaos: {iterations} actions in {total_sec:.1f}s "
           f"({iterations/total_sec:.0f}/s, {workers} workers)")
     print(f"chaos: status histogram: {dict(status_hist)}")
-    print(f"chaos: /tmp/dlna-gateway.err grew by {stderr_growth} bytes")
+    if stderr_rotated:
+        print(f"chaos: {STDERR_PATH} was truncated/recreated during the run "
+              f"— read from the start ({stderr_after} bytes)")
+    if not stderr_growth:
+        print(f"chaos: {STDERR_PATH} did not grow")
+    elif crash_lines:
+        print(f"chaos: {STDERR_PATH} grew by {stderr_growth} bytes — "
+              f"{len(crash_lines)} CRASH line(s):")
+        for ln in crash_lines[:5]:
+            print(f"    {ln.strip()[:120]}")
+    else:
+        print(f"chaos: {STDERR_PATH} grew by {stderr_growth} bytes "
+              f"({benign_lines} line(s)) — no crash signature, benign")
     if slow_calls:
         print(f"chaos: {len(slow_calls)} slow snapshot(s) > 5s:")
         for d, e in slow_calls[:10]:
@@ -520,10 +588,11 @@ def run(base, iterations, workers, seed, quiet):
 
     # Pass/fail
     hard_fails = []
-    if stderr_growth > 0:
+    if crash_lines:
         hard_fails.append(
-            f"stderr grew by {stderr_growth} bytes — "
-            f"a worker thread crashed silently. "
+            f"{len(crash_lines)} crash line(s) appended to {STDERR_PATH} — "
+            f"a worker thread died silently: "
+            f"{crash_lines[0].strip()[:100]}. "
             f"tail {STDERR_PATH} to see the traceback.")
     bad_5xx = {500, 503}
     if any(s in bad_5xx for s in status_hist):
