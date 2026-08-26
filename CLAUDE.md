@@ -55,7 +55,7 @@ both are passed.
 ## Code quality gates (added 2026-08-20)
 
 Before this date the repo had **no lint, format, or type configuration
-and no CI** — nothing enforced any standard. Four gates now run inside
+and no CI** — nothing enforced any standard. Five gates now run inside
 `python tests/run_all.py --offline`, each sized to sit at **zero
 violations** so any hit is a real regression rather than backlog:
 
@@ -65,6 +65,23 @@ violations** so any hit is a real regression rather than backlog:
 | **T0.SIZE** — per-module line ratchet | `tests/module_size_budget.json` | split the code, or `python3 tools/regen_size_budget.py` to lock in a shrink |
 | `tests/test_lock_sync.py` — dependency pins | `requirements.lock` | `python3 tools/regen_lock.py` |
 | `tests/test_no_silent_swallows.py` — observability | — | log the exception, or narrow the `except` |
+| **T0.BADGES** — the README's numbers (added 2026-08-26) | `tools/badges.py` | `python3 tools/badges.py --write` |
+
+**T0.BADGES** exists because the badge strip was typed by hand, and a
+number nobody verifies is worse than no number: a reader believes it.
+`tools/badges.py` renders the strip from the suites. The **unit** and
+**browser** counts are collected without running anything, so
+`tests/test_badges.py` checks them for the price of a discovery pass.
+The **checks** count cannot be done that way — the only way to know how
+many checks `run_all.py` performs is to perform them, and a unit test
+that ran the runner would recurse into itself — so it is verified by
+`run_all.py` at the end of an `--offline` run, against the total it has
+just counted. **The gate is last on purpose: it counts itself**, as
+`passed + failed + 1`. Only an offline run can speak for that number,
+because live mode performs extra checks that `--offline` skips.
+
+Both halves were verified by breaking them: a wrong checks number reddens
+the gate, a wrong unit count fails the unit test.
 
 **ruff** (`pyproject.toml`): rules chosen because each catches a defect
 class, not a style preference — `F, E9, W, B, RET, UP, C4, PIE, ASYNC`.

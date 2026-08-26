@@ -794,6 +794,35 @@ if FRONTEND:
 
 
 # ══════════════════════════════════════════════════════════════════
+# T0.BADGES — the README's numbers are this suite's numbers
+# ══════════════════════════════════════════════════════════════════
+# The unit and browser counts are checked by tests/test_badges.py, which
+# can collect them without running anything. The CHECK count can only be
+# known by doing the checks, so it is verified here, from the total this
+# run has just finished counting.
+#
+# Live mode performs extra checks that --offline skips, so only an
+# offline run can speak for the number in the badge.
+
+if OFFLINE:
+    section("T0.BADGES — README badge numbers")
+    try:
+        # PROJECT is already on sys.path (set at the top of this file).
+        from tools import badges as _badges
+
+        # +1 for this check itself, which has not been counted yet. This
+        # gate must therefore stay last.
+        _expected = passed + failed + 1
+        _strip = _badges.render(_expected, _badges.count_unit(),
+                                _badges.count_browser())
+        check(f"README badges are current ({_expected} checks)",
+              _badges.current_strip() == _strip,
+              "run `python3 tools/badges.py --write`")
+    except Exception as _exc:      # a broken tool is a failed gate, not a crash
+        check("README badges are current", False, f"{type(_exc).__name__}: {_exc}")
+
+
+# ══════════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════════
 
