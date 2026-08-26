@@ -25,7 +25,7 @@ import dlna_discovery as _disc
 from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
 from dlna_fdmon import start_fd_monitor
-from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER
+from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER, get_db
 from api_upnp import (GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye,  # noqa: F401
                       gw_ssdp_responder)
 
@@ -89,6 +89,13 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
     # rising trajectory (and an lsof breakdown in the danger zone) BEFORE it
     # exhausts the limit and crashes the gateway. See dlna_fdmon.
     start_fd_monitor()
+
+    # Open the library DB here, explicitly. The handle is lazy (see
+    # dlna_library.get_db) so that importing the module can't migrate a live
+    # library.db as a side effect — but boot is exactly where the schema
+    # creation and pending migrations SHOULD happen, not inside whichever
+    # request happens to touch the DB first.
+    get_db()
 
     # Wire the indexer callback into discovery
     _disc._on_server_found = _on_server_found

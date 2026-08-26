@@ -429,12 +429,48 @@ These are shared state across all request handler threads:
 
 - `dlna_discovery.SERVERS` / `RENDERERS` — device registries
 - `dlna_library.DB` / `INDEXER` / `DEVICE_ROLES` — library DB, crawler, device role cache
-  ⚠ `DB = LibraryDB()` is constructed at MODULE IMPORT — merely importing
-  `dlna_library` (tests, tools, a REPL in the repo dir) runs `_init_schema`
-  and ALL pending migrations against the real `library.db`, even while the
-  gateway is live. Safe by design (idempotent migrations, WAL, per-call
-  pool connections) but surprising: a new migration "lands" on the live DB
-  the first time any test imports the module, not at the next restart.
+
+#### `DB` is LAZY — importing the module opens nothing (2026-08-26)
+
+Until this date `dlna_library` ended with `DB = LibraryDB()`, so merely
+IMPORTING it — a test, a tool, a REPL in the repo dir, or anything that
+reaches it transitively, which is most of the app — ran `_init_schema` and
+every pending migration against the real, live `library.db`. It was safe by
+design (idempotent migrations, WAL, per-call pool connections) and still
+wrong in a way that mattered: a new migration "landed" on the live DB the
+first time any test imported the module, not at the next restart.
+
+`dlna_library.get_db()` now opens the handle on FIRST CALL, double-checked
+under a lock because `LibraryDB()` runs the migrations and two threads
+racing that would run them twice against one file. `DB` is a `_LazyDB`
+proxy in front of it.
+
+Three things there are load-bearing:
+
+- **A proxy, not a module-level `__getattr__` (PEP 562).** Nearly every
+  consumer spells it `from dlna_library import DB`, which a module
+  `__getattr__` resolves — and therefore constructs — the moment that
+  consumer is imported. Binding a proxy is what keeps `import dlna_asgi`,
+  the widest import in the tree, cold.
+- **The proxy forwards WRITES too** (`__setattr__` / `__delattr__`). The
+  suite patches methods straight onto it
+  (`mock.patch.object(dlna_asgi.DB, "all_artists", ...)`) and mock setattrs
+  on entry, delattrs on exit. A first cut refused both — it read as a
+  sensible guard and broke 12 existing tests.
+- **Boot opens it explicitly.** `start_background_services` calls `get_db()`
+  before anything else, so schema creation and migrations still happen at
+  startup rather than inside whichever request touches the DB first. That
+  ordering is deliberate, not incidental — don't remove the call because
+  "the proxy handles it".
+
+Nothing else changed: `DB.<method>` at ~240 call sites, `db._pool`
+reach-ins, and the one-module-binds-`DB` family contracts
+(`api_upnp_ids`, `api_subsonic_proto`, `api_playback_state`) are all
+untouched. `_reset_db_singleton()` exists for tests only and is never
+called by the app. Guarded by `tests/test_library_singleton.py` (10) —
+the import half runs in a SUBPROCESS on purpose, since this process has
+already imported half the app and would be answering for the test runner
+rather than for a clean import.
 - `dlna_player.QUEUES` — `QueueRegistry` holding one `RendererQueue` per renderer UDN (lazily created). Replaces the prior single-queue singleton so multiple users/renderers can play concurrently.
 
 ### Database Schema

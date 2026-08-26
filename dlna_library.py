@@ -28,11 +28,21 @@ MRO note: the mixins are siblings, none of them inherits another, and
 no method name is defined twice — so resolution order is irrelevant to
 behaviour and cross-mixin calls (`BrowseMixin` → `run_with_fts_heal` on
 `MigrationsMixin`, say) simply resolve on the composed class.
-`tests/test_library_composition.py` asserts both properties.
+`tests/run_all.py` (section T3.2b) asserts both properties, plus that the
+public surface and the helper re-exports survived the split.
 
-⚠ `DB = LibraryDB()` is constructed at MODULE IMPORT, so importing this
-module runs `_init_schema` and every pending migration against the real
-`library.db` — even while the gateway is live.
+`DB` IS LAZY. Importing this module — or anything that reaches it, which
+is most of the app — opens NOTHING. The handle is constructed on the first
+attribute access (`get_db()` under the hood), so `_init_schema` and every
+pending migration run when someone actually asks for data, not as a side
+effect of an import. Until 2026-08-26 `DB = LibraryDB()` ran at import, so
+a test, a tool or a REPL in the repo dir silently migrated the LIVE
+`library.db` just by importing the module.
+
+The gateway opens it deliberately at boot (`start_background_services`)
+rather than letting the first request pay for the migrations mid-flight.
+New code should call `get_db()`; `DB` stays because ~240 call sites spell
+it that way and the proxy makes them all correct for free.
 
 Class Indexer crawls a MediaServer and populates the DB.
 
@@ -41,6 +51,7 @@ Standalone test:
 """
 import logging
 import os
+import threading
 
 from dlna_config import DB_FILE
 from db_pool import Pool
@@ -95,7 +106,68 @@ class LibraryDB(SchemaMixin, MigrationsMixin, TracksMixin,
 # wired to DB here so their modules don't need to know about
 # singleton patterns (and they stay unit-testable in isolation).
 
-DB = LibraryDB()
+_db_instance: LibraryDB | None = None
+_db_lock = threading.Lock()
+
+
+def get_db() -> LibraryDB:
+    """The process-wide `LibraryDB`, opened on FIRST CALL, never at import.
+
+    Double-checked under a lock: `LibraryDB()` runs `_init_schema` and every
+    pending migration, and two threads racing that would run the migrations
+    twice against one file."""
+    global _db_instance
+    if _db_instance is None:
+        with _db_lock:
+            if _db_instance is None:          # another thread may have won
+                _db_instance = LibraryDB()
+    return _db_instance
+
+
+def _reset_db_singleton() -> None:
+    """TEST ONLY — forget the handle so the next access builds a new one.
+
+    Never called by the application. The gateway holds one DB for the life
+    of the process; swapping it under live threads would hand a closed pool
+    to whoever is mid-query."""
+    global _db_instance
+    with _db_lock:
+        _db_instance = None
+
+
+class _LazyDB:
+    """`DB` — the name every call site uses, resolved on first attribute
+    access instead of at import.
+
+    Deliberately a PROXY rather than a module-level `__getattr__` (PEP 562):
+    nearly every consumer spells it `from dlna_library import DB`, which a
+    module `__getattr__` would resolve — and therefore construct — the moment
+    that consumer is imported. Binding a proxy keeps the whole import graph
+    cold until someone asks the DB a question.
+
+    It forwards writes as well as reads, and that is load-bearing rather
+    than tidiness: the suite patches methods straight onto this object
+    (`mock.patch.object(dlna_asgi.DB, "all_artists", ...)`), and mock does
+    `setattr` then `delattr` on exit. A proxy that refused either would
+    break ~12 existing tests. `_pool` reach-ins forward the same way."""
+
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        return getattr(get_db(), name)
+
+    def __setattr__(self, name, value):
+        setattr(get_db(), name, value)
+
+    def __delattr__(self, name):
+        delattr(get_db(), name)
+
+    def __repr__(self):
+        state = "open" if _db_instance is not None else "not yet opened"
+        return f"<LibraryDB proxy ({state})>"
+
+
+DB = _LazyDB()
 
 from dlna_devices      import DeviceRoleCache
 from dlna_indexer      import Indexer, IndexState  # noqa: F401 re-exported
