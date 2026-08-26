@@ -416,19 +416,19 @@
   </figure>
 
   <div class="wrap">
-    <h3>How the 85 modules group</h3>
+    <h3>How the 89 modules group</h3>
     <div class="t-scroll">
       <table>
         <thead><tr><th>Family</th><th class="num">Modules</th><th>Responsibility</th></tr></thead>
         <tbody>
-          <tr><td class="mono">dlna_library_*</td><td class="num">13</td><td>The index — schema, migrations, browse, facets, collections, videos</td></tr>
+          <tr><td class="mono">dlna_library_*</td><td class="num">14</td><td>The index — schema, migrations, browse, facets, collections, videos</td></tr>
           <tr><td class="mono">dlna_asgi_*</td><td class="num">9</td><td>The HTTP edge, split per surface</td></tr>
           <tr><td class="mono">api_subsonic_*</td><td class="num">7</td><td>Subsonic protocol — auth, ids, browse, media, extras</td></tr>
           <tr><td class="mono">api_upnp_*</td><td class="num">7</td><td>Gateway-as-MediaServer — DIDL, descriptors, browse, SSDP</td></tr>
           <tr><td class="mono">dlna_player_*</td><td class="num">6</td><td>Per-renderer queue, monitor, transport, volume</td></tr>
           <tr><td class="mono">dlna_providers/*</td><td class="num">6</td><td>The backend seam</td></tr>
           <tr><td class="mono">api_playback_*</td><td class="num">4</td><td>Playback control, cover art, track metadata</td></tr>
-          <tr><td class="mono">…</td><td class="num">33</td><td>Discovery, proxies, indexer, config, events, SSRF guard</td></tr>
+          <tr><td class="mono">…</td><td class="num">36</td><td>Discovery, proxies, indexer, config, events, SSRF guard</td></tr>
         </tbody>
       </table>
     </div>
@@ -437,7 +437,7 @@
       <p>
         Every module carries a line ceiling in a committed budget file: it may
         shrink, never grow, and a new module is held to 400 lines from birth. As of
-        v2.1.0 all 85 are within that target and the over-budget list is empty — so
+        v2.1.0 all 89 are within that target and the over-budget list is empty — so
         the ratchet now behaves as a flat limit without ever having needed a flag day.
       </p>
     </div>

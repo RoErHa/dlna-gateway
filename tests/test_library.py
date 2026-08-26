@@ -458,5 +458,47 @@ class TestAllAlbumsPagination(unittest.TestCase):
         self.assertEqual(len(self.db.all_albums(self.udn)), 4)
 
 
+class TestDeviceRoles(unittest.TestCase):
+    """The `device_roles` table had NO test coverage until 2026-08-26, which
+    is why `--reset-devices` could call the long-retired `DB._connect()` and
+    raise AttributeError unnoticed for months."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._path)
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def _seed(self):
+        self.db.role_set("uuid:naim", "Naim Uniti", host="192.168.1.9",
+                         is_renderer=True)
+        self.db.role_set("uuid:localfs", "RoHaLocalFS", host="192.168.1.125",
+                         is_server=True)
+
+    def test_role_set_then_roles_all(self):
+        self._seed()
+        rows = self.db.roles_all()
+        self.assertEqual({r["udn"] for r in rows},
+                         {"uuid:naim", "uuid:localfs"})
+
+    def test_roles_clear_reports_what_it_removed(self):
+        self._seed()
+        self.assertEqual(self.db.roles_clear(), 2)
+        self.assertEqual(self.db.roles_all(), [])
+        self.assertEqual(self.db.roles_load(), {})
+
+    def test_roles_clear_on_an_empty_table_is_zero_not_an_error(self):
+        self.assertEqual(self.db.roles_clear(), 0)
+
+    def test_device_roles_survive_clear_udn(self):
+        """Same invariant as play_counts / album_art / lyrics: re-indexing
+        must not forget which devices the gateway has met."""
+        self._seed()
+        self.db.clear("uuid:localfs")
+        self.assertEqual(len(self.db.roles_all()), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

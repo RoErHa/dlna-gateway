@@ -83,6 +83,22 @@ class CollectionsMixin(WorklistMixin):
                 "FROM device_roles ORDER BY last_seen DESC"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def roles_clear(self) -> int:
+        """Wipe the device_roles table (for `--reset-devices`). Returns the
+        row count removed.
+
+        Lives here, beside the other `roles_*` SQL, rather than in the CLI:
+        until 2026-08-26 `dlna_gateway.main()` opened its own connection via
+        `DB._connect()` — a method `db_pool.Pool` retired when it took over
+        connection management — so the documented `--reset-devices` command
+        had been raising AttributeError ever since, unnoticed because
+        nothing exercised it."""
+        with self._pool.write() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM device_roles").fetchone()[0]
+            conn.execute("DELETE FROM device_roles")
+        return int(n)
+
     def get_lyrics(self, url: str):
         with self._pool.read() as conn:
             row = conn.execute(

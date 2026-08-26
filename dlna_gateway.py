@@ -233,12 +233,8 @@ Examples:
 
     # ── --reset-devices: wipe and exit (don't start the gateway) ──
     if args.reset_devices:
-        rows_before = DB.roles_all()
-        conn = DB._connect()
-        conn.execute("DELETE FROM device_roles")
-        conn.commit()
-        conn.close()
-        print(f"\n✓  Cleared {len(rows_before)} device(s) from device_roles table.")
+        cleared = DB.roles_clear()
+        print(f"\n✓  Cleared {cleared} device(s) from device_roles table.")
         print("   Start the gateway normally to rediscover all devices:")
         print("   ./setup.sh --run")
         print("   Add --probe <url> if a server doesn't respond to SSDP.\n")
