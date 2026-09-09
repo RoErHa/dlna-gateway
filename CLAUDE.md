@@ -3044,6 +3044,97 @@ Cohen Covered, …); the 3 Billboard candidates already existed. Side
 fix: `pl_get` now orders by `added_at, id` — `added_at` alone has
 second resolution, so bulk adds tied and returned in arbitrary order.
 
+### `tools/folder_compilation_playlists.py`
+
+The other half of the compilation problem. `compilation_playlists.py`
+(above) reunites an album TAG *scattered* across many folders; this one
+takes the opposite shape — **one folder that IS a compilation**, holding
+a track each by dozens of performers:
+
+    Various Artists - 70s HITS 100 Greatest Songs of the 1970s (2023) …
+    VA - 100 Greatest Jazz Icons (2020) …
+    Blue Note Trip - Somethin' Old
+
+These already browse correctly — folder-album grouping renders them as
+one Various-Artists album, and they resolve fine through `album_tracks`
+(checked: the `0` letter bucket is the digits catch-all and holds all
+204 of them). What they lack is a NAME anywhere the eye lands: they sort
+under a leading digit among 200-odd other digit-albums, and they appear
+on **no** performer's artist page, because every track carries its own
+artist and nothing files the folder under "Various Artists" (that artist
+page holds 7 albums, not 137). A playlist puts each one in the list
+that every surface shows first — the PWA panel, the Naim's `Playlists`
+container, Amperfy/CarPlay.
+
+**The risk runs one way**, which is what shapes the rule: a missed
+compilation stays exactly as browsable as it is today, while a false
+positive drops litter into a list the owner curates by hand. So "lots of
+artists" is never sufficient on its own — measured live, `Unknown
+Artist/Unknown Album` holds **126 performers** and is a junk drawer,
+while `Santana - Supernatural` holds 9 because the record is full of
+guests. A folder qualifies when it makes an album claim and then either
+
+* **says so** — a `Various Artists` / `VA` / `V.A.` head or a collection
+  phrase ("greatest", "the best", "hits", "top 40", "collection",
+  "anthology", "essentials", Dutch "beste"/"voltreffers"), with
+  ≥`--min-artists` (4) performers at ≥45% performers-per-track; or
+* **is shaped like one** — no such phrase anywhere, but ≥8 performers at
+  ≥65%, or a near-perfect ≥95% spread across ≥5. This narrower tier is
+  what catches `Blue Note Trip - Sunset`, `Life On Mars` and
+  `De Pre Historie 1964`, which announce nothing.
+
+Four things are load-bearing, each learned from the data rather than
+guessed:
+
+- **The album TAG is searched, not just the folder name.** Three folders
+  here are called `Wembley`, `Grrl` and `Speed Ticket` and carry the tag
+  `Best Of JMFH's Choice 2004-2007 - <name>`. The tin is blank; the
+  tracks are not. (The reverse also bites: the folder named `Captain
+  Beefheart … Trout Mask Replica` actually contains `28 Vlaamse
+  voltreffers` — misfiled, and only the tag says so.)
+- **A folder whose tracks declare NO album never qualifies**, whatever
+  its performer count. Same junk-drawer rule `_localfs_album_group`
+  already enforces for browsing, and the one check that keeps the
+  126-artist drawer out. A real compilation names itself.
+- **Only the ABBREVIATED VA markers are read as a bare leading token**
+  (`VA The Very Best Of Smooth Jazz`, no separator). "Various" is an
+  ordinary English word and would claim a band called `Various
+  Comforts` — the whole-head match that `dlna_artist_infer` uses is
+  what normally prevents that.
+- **Names are tidied and de-collided.** A 40-CD box here nests every
+  disc in a directory literally called `CD` and tags all forty with the
+  same string, so tag-first naming would yield forty identical
+  playlists and leaf-first naming forty called "CD"; the distinguishing
+  segment wins instead (`Greatest Hits Collection - 50's Cd1…Cd40`).
+  `tidy_name` then strips release-group cruft so a name fits a Naim
+  remote — `VA - Hi-Res Masters 50 Britpop Tracks … [24Bit-FLAC]
+  [PMEDIA] ⭐️` → `Hi-Res Masters 50 Britpop Tracks To Test Your
+  Speakers` — while **keeping the year and the disc number**: `(2023)`
+  says which edition, and `(Disc 1)` is the only thing separating two
+  discs.
+
+Tracks are added in **`file_path` order** — the running order the
+compiler chose, which also keeps `CD 1/` ahead of `CD 2/`. Artist→title
+would destroy the sequencing that is the whole point of a compilation.
+
+Nothing here writes to `tracks`, touches a file, or edits an existing
+playlist; a candidate whose name already matches one is skipped, so
+re-running after new rips only adds what is new. DRY-RUN by default.
+
+```bash
+python3 tools/folder_compilation_playlists.py            # preview
+python3 tools/folder_compilation_playlists.py -v         # + why rejects were rejected
+python3 tools/folder_compilation_playlists.py --named-only
+python3 tools/folder_compilation_playlists.py --apply
+python3 -m unittest tools.test_folder_compilation_playlists -v   # 36 tests
+```
+
+First real run (2026-09-09): **137 playlists created** from 2,223
+folders — 113 named, 24 structural, 5,528 track rows; playlists went
+39 → 176. Rejected as intended: the 126-artist junk drawer, the
+guest-heavy Eminem/Santana/Rod Stewart records, and a 53-track
+Tchaikovsky box at 11% performers-per-track.
+
 ### `tools/audit_playlist_orphans.py`
 
 Finds — and relinks — **playlist rows pointing at a track the index no longer
