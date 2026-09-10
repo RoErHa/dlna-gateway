@@ -127,17 +127,20 @@ class BrowseMixin(FacetsMixin):
             "albums":  [dict(r) for r in albums],
             "artists": [dict(r) for r in artists],
         }
-    def primary_udn(self) -> str:
+    def primary_udn(self, among=None) -> str:
         """The udn of the library to expose as 'the' gateway MediaServer —
         the server owning the most tracks (in this single-library deployment,
         the LocalFs backend). Used by the gateway-as-MediaServer UPnP browse
         (api_upnp._gw_browse) to back the Artists/Albums/Genres tree. Returns
-        '' when no library is indexed yet."""
-        with self._pool.read() as conn:
-            row = conn.execute(
-                "SELECT udn FROM tracks GROUP BY udn "
-                "ORDER BY COUNT(*) DESC LIMIT 1").fetchone()
-        return row["udn"] if row else ""
+        '' when no library is indexed yet.
+
+        `among` restricts the answer to the udns actually SERVING: `tracks`
+        outlives its files, so an unmounted volume still owns the most rows.
+        Empty `among` = nothing is serving → ''. See api_upnp_ids.music_udn."""
+        with self._pool.read() as conn:      # a handful of udns: rank them all
+            rows = conn.execute("SELECT udn FROM tracks GROUP BY udn "
+                                "ORDER BY COUNT(*) DESC").fetchall()
+        return next((r["udn"] for r in rows if among is None or r["udn"] in among), "")
     def all_artists(self, udn: str) -> list:
         """Return all artists with album/track counts. Track count is
         the browse-visible (deduped) count."""

@@ -136,6 +136,44 @@ def _ab_udn() -> str:
         return ""
 
 
+def music_udn() -> str:
+    """The udn backing the Artists / Albums / Genres tree.
+
+    It must be a library that is actually SERVING, not merely the one
+    holding the most rows. `tracks` outlives its files: when the music
+    volume is unmounted the rows stay indexed, so `DB.primary_udn()` on
+    its own hands the Naim a full 26k-track tree in which nothing can
+    play — browsing works, pressing play 404s. That is the sibling half
+    of the 2026-09-10 LocalFs wiring fix; see CLAUDE.md,
+    "One unmounted volume must not take the others down".
+
+    A registered `MediaServer` is the evidence that something is
+    serving: `dlna_localfs_wiring` adds one per root it actually brought
+    up, and a discovered UPnP server is registered once it answers.
+    Books and videos are excluded — they own their own containers.
+
+    An EMPTY registry is deliberately NOT read as "nothing is live". The
+    SSDP announcer starts BEFORE `maybe_start_localfs` (see
+    `dlna_gateway.start_background_services`), so a control point that
+    browses inside that window would otherwise be told the library is
+    empty — and a client that caches an empty tree is a worse failure
+    than the stale one this fixes. Registered-but-no-music is
+    unambiguous, and only that returns ''.
+    """
+    try:
+        from dlna_discovery import SERVERS
+        servers = SERVERS.all()
+    except Exception as e:                                    # noqa: BLE001
+        log.debug(f"music_udn: server registry unavailable ({e}) — "
+                  "falling back to the index")
+        return DB.primary_udn()
+    if not servers:
+        return DB.primary_udn()          # mid-boot — don't blank the tree
+    skip = (_ab_udn(), _VIDEO_UDN)
+    live = [s.udn for s in servers if s.udn and s.udn not in skip]
+    return DB.primary_udn(among=live)    # [] → '' : music is not serving
+
+
 def _encode_ab_book_id(artist: str, album: str, album_key: str = "") -> str:
     """abbook:* ObjectID — same 3-field payload as galbum:*, but resolves
     against the AUDIOBOOKS udn, not the music library."""

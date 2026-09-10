@@ -73,17 +73,19 @@ def _br_root(ctx: _Browse) -> tuple:
     n_videos = len(_ids.DB.all_videos(_VIDEO_UDN))
     ab_udn   = _ab_udn()
     n_books  = len(_lib_artists(ab_udn)) if ab_udn else 0
+    # Music only while it is actually SERVING (api_upnp_ids.music_udn): an
+    # unmounted volume leaves its rows indexed, and music that 404s on play
+    # is worse than no music folder at all.
+    udn = _ids.music_udn()
     if ctx.is_meta:
-        return ctx.meta("-1", GW_NAME,
-                        5 + (1 if n_videos else 0) + (1 if n_books else 0))
-    udn       = _ids.DB.primary_udn()
-    n_artists = len(_lib_artists(udn))   if udn else 0
-    n_albums  = len(_album_letters(udn)) if udn else 0   # # of letter buckets
-    n_genres  = len(_lib_genres(udn))    if udn else 0
-    items = [
-        _didl_container("artists",   "0", "Artists",            n_artists),
-        _didl_container("albums",    "0", "Albums",             n_albums),
-        _didl_container("genres",    "0", "Genres",             n_genres),
+        return ctx.meta("-1", GW_NAME, 2 + (3 if udn else 0)
+                        + (1 if n_videos else 0) + (1 if n_books else 0))
+    music = [                           # albums = one entry per letter bucket
+        _didl_container("artists", "0", "Artists", len(_lib_artists(udn))),
+        _didl_container("albums",  "0", "Albums",  len(_album_letters(udn))),
+        _didl_container("genres",  "0", "Genres",  len(_lib_genres(udn))),
+    ] if udn else []
+    items = music + [
         _didl_container("favalbums", "0", "⭐ Favourite Albums", len(_ids.DB.album_fav_list())),
         _didl_container("playlists", "0", "Playlists",          len(_ids.DB.pl_list())),
     ]
@@ -153,7 +155,7 @@ def _br_abbook(ctx: _Browse) -> tuple:
 # resolves correctly through album_tracks.
 
 def _br_artists(ctx: _Browse) -> tuple:
-    udn  = _ids.DB.primary_udn()
+    udn  = _ids.music_udn()
     rows = _lib_artists(udn) if udn else []
     if ctx.is_meta:
         return ctx.meta("0", "Artists", len(rows))
@@ -165,7 +167,7 @@ def _br_artists(ctx: _Browse) -> tuple:
 
 def _artist_rows(artist: str):
     """`(their own records, the compilations they appear on)`."""
-    udn = _ids.DB.primary_udn()
+    udn = _ids.music_udn()
     rows = [r for r in _ids.DB.artist_albums(udn, artist)
             if not _is_junk_name(r.get("album"))] if udn else []
     return ([r for r in rows if r.get("own", True)],
@@ -209,7 +211,7 @@ def _br_gappears(ctx: _Browse) -> tuple:
 
 def _br_albums(ctx: _Browse) -> tuple:
     """"Albums" is a #-0-A..Z letter index (not one flat 2,000-entry list)."""
-    udn     = _ids.DB.primary_udn()
+    udn     = _ids.music_udn()
     letters = _album_letters(udn) if udn else []
     if ctx.is_meta:
         return ctx.meta("0", "Albums", len(letters))
@@ -220,7 +222,7 @@ def _br_albums(ctx: _Browse) -> tuple:
 
 def _br_albumltr(ctx: _Browse) -> tuple:
     letter = ctx.obj_id[len("albumltr:"):]
-    udn    = _ids.DB.primary_udn()
+    udn    = _ids.music_udn()
     rows   = [r for r in _lib_albums(udn)
               if _letter_of(r.get("album")) == letter] if udn else []
     if ctx.is_meta:
@@ -231,7 +233,7 @@ def _br_albumltr(ctx: _Browse) -> tuple:
 
 def _br_galbum(ctx: _Browse) -> tuple:
     artist, album, album_key = _decode_lib_album_id(ctx.obj_id)
-    udn    = _ids.DB.primary_udn()
+    udn    = _ids.music_udn()
     tracks = _ids.DB.album_tracks(udn, artist, album, album_key=album_key) if udn else []
     if ctx.is_meta:
         return ctx.meta("albums", album or "(album)", len(tracks))
@@ -240,7 +242,7 @@ def _br_galbum(ctx: _Browse) -> tuple:
 
 
 def _br_genres(ctx: _Browse) -> tuple:
-    udn  = _ids.DB.primary_udn()
+    udn  = _ids.music_udn()
     rows = _lib_genres(udn) if udn else []
     if ctx.is_meta:
         return ctx.meta("0", "Genres", len(rows))
@@ -252,7 +254,7 @@ def _br_genres(ctx: _Browse) -> tuple:
 
 def _br_ggenre(ctx: _Browse) -> tuple:
     genre = _b64d(ctx.obj_id[len("ggenre:"):])
-    udn   = _ids.DB.primary_udn()
+    udn   = _ids.music_udn()
     rows  = [r for r in _ids.DB.genre_albums(udn, genre)
              if not _is_junk_name(r.get("album"))] if udn else []
     if ctx.is_meta:

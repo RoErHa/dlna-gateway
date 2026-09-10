@@ -409,7 +409,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (pure per-file helpers — the album-key folder identity and the namespace-salted track id), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
 | `dlna_localfs_http.py` | The PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200), and `resolve_within` — the containment test every byte route asks before opening a file (path COMPONENTS, not string prefixes; returns the RESOLVED path so the caller cannot re-open the original through a TOCTOU gap). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
-| `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`; gated on `$LOCALFS_MUSIC_ROOT` / `localfs.root` in `config.json`. Starts the file server, creates a `LocalFsProvider` with the LAN-IP `base_url`, binds it via `dlna_providers.bind_provider`, adds a synthetic `MediaServer` entry to `SERVERS`, kicks off the initial scan in the background. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
+| `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. Wires up to THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — starting the one file server as soon as ANY of them resolves, then per live root a `LocalFsProvider` with the LAN-IP `base_url`, bound via `dlna_providers.bind_provider`, plus a synthetic `MediaServer` entry in `SERVERS` and a background initial scan. See **[One unmounted volume must not take the others down](#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position/seek) |
 | `dlna_rendering_control.py` | UPnP **RenderingControl** SOAP client (`SetVolume`/`GetVolume`) — a genuinely separate service with its own control URL, so the split follows the protocol boundary. Re-exported from `dlna_avtransport`. |
@@ -437,7 +437,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
 | `api_upnp.py` | The gateway-as-MediaServer (Browse is a **dispatch table** since 2026-08-20 — `_BROWSE_EXACT` + `_BROWSE_PREFIX` → one `_br_*` handler per container, sharing a `_Browse` context that owns the DIDL envelope and the "`count == 0` means unlimited" pagination rule; `_gw_browse` itself went 491 lines/~99 branches → 10 lines. Adding a container = one handler + one table entry.): a **complete DLNA Media Server** the Naim/LG browse. Device descriptor (`MediaServer:1` + `X_DLNADOC` + icons + ContentDirectory **and** ConnectionManager), both service SCPDs, SOAP `ContentDirectory#Browse` over the full library (`_gw_browse`) + the pre-browse handshake actions, `ConnectionManager#GetProtocolInfo` etc., GENA SUBSCRIBE + initial NOTIFY, and SSDP announce + **M-SEARCH responder**. See "UPnP exposure (Naim)". |
-| `api_upnp_ids.py` | Gateway UPnP identity, the ObjectID codecs, the junk-name display filter, and the LibraryDB reads the browse tree needs. |
+| `api_upnp_ids.py` | Gateway UPnP identity, the ObjectID codecs, the junk-name display filter, and the LibraryDB reads the browse tree needs. Owns `music_udn()` — the music tree follows what is SERVING, not what is merely indexed. |
 | `api_upnp_didl.py` | DIDL-Lite renderers + the `_Browse` request context shared by every ContentDirectory handler. |
 | `api_upnp_descriptors.py` | The device descriptor and the two service SCPDs that make strict DLNA clients willing to browse us at all. |
 | `api_upnp_browse.py` | ContentDirectory Browse — the music, audiobook, playlist and favourite-album handlers, the dispatch tables, and `_gw_browse`. |
@@ -587,6 +587,75 @@ video_people(video_id, person, person_id, updated_at)
   tools/immich_people_sync.py (per-person REPLACE semantics). Survives
   clear_videos. Feeds the "👤 By person" DLNA container + PWA grouping.
 ```
+
+### One unmounted volume must not take the others down (2026-09-10)
+
+The three LocalFs roots — music, video, audiobooks — live on different
+disks and are configured independently, but `maybe_start_localfs` used
+to `return` when the **music** root was absent, before the file server
+was started. So an unmounted music drive also took down the audiobooks
+sitting on a healthy one.
+
+**It did not present as "music is missing."** With no file server there
+was no `MediaServer` in `SERVERS`, and `dlna_ssrf.guard` only lets a
+private destination through when its host is a known device — so every
+`/stream` and `/art` against `:8200` was refused, the relay correctly
+declined to hand a non-200 to `<audio>` (§Two things the relay must
+keep doing), and the PWA skipped **every track in the queue at about
+one per second**. From the sofa that is "nothing plays, every song
+skips"; in `gateway.log` it is one WARNING at boot and then thousands
+of `SSRF guard: refused stream of …` lines. The trigger here was a
+locked APFS volume, which macOS declines to mount at all.
+
+`_resolve_root` now answers "configured, and actually there?" for each
+root on its own, and the server starts on whatever resolved:
+
+- **A missing root disables only itself**, whichever one it is. The
+  music root has no special status any more.
+- **The server starts if at least ONE root resolves** — video has no
+  `LibraryProvider` but its bytes come from the same `:8200`, so a
+  video-only setup still needs it.
+- **No root resolving starts NOTHING.** An empty `allowed_roots` is a
+  server that refuses every path while looking alive; the log says to
+  mount the volume and restart instead.
+- **Each initial scan is guarded on its own**, so one unreadable tree
+  never costs the other library its index.
+
+Guarded by `tests/test_localfs_wiring.py` (19). Four of them genuinely
+fail against the old code — verified by reverting it and re-running,
+including the audiobooks-survive-a-missing-music-root case.
+
+**The Naim's music tree had the same bug from the other side.** The PWA
+and Subsonic both degraded cleanly — they read the server registry, so
+music simply stopped being offered — but `api_upnp` backed its
+Artists/Albums/Genres tree with `DB.primary_udn()`, which is pure SQL
+over `tracks`: *the udn with the most rows*. **`tracks` outlives its
+files.** With the volume unmounted the music rows are still the majority
+of the index, so the Naim was handed a full 26k-track tree in which
+nothing could play — browsing worked, pressing play 404'd.
+
+`api_upnp_ids.music_udn()` now answers *which music library is actually
+serving*, and the root offers Artists/Albums/Genres only while one is:
+
+- **A registered `MediaServer` is the evidence.** The wiring above adds
+  one per root it actually brought up; books and videos are excluded
+  because they own their own containers.
+- **`primary_udn(among=…)`** narrows the same ranking to those udns, so
+  "the biggest library" still decides — among the ones that can serve.
+  An empty `among` means nothing is serving and returns `''`; that is
+  the OPPOSITE of `None`, which means don't restrict.
+- **An EMPTY registry is deliberately not read as "nothing is live".**
+  The SSDP announcer starts BEFORE `maybe_start_localfs`, so a control
+  point browsing in that window would be told the library is empty — and
+  a client that caches an empty tree is a worse failure than the stale
+  one this fixes. Only registered-but-no-music returns `''`.
+- **A stale bookmark still opens an empty container, never a fault.**
+
+Guarded by `tests/test_upnp_music_liveness.py` (16); three genuinely
+fail against the old code. ⭐ Favourite Albums and Playlists are NOT
+gated — they are user-curated and can hold books or radio, so a row
+that no longer resolves stays visible for `tools/audit_playlist_orphans.py`
+rather than vanishing.
 
 ### Folder-album identity — and the one folder it gets wrong (2026-08-25)
 

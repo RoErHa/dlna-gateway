@@ -4,12 +4,16 @@ dlna_localfs_wiring.py — boot-time wiring of the LocalFs provider.
 Phase 4 of the AssetUPnP migration. Kept in its own module to keep
 `dlna_gateway.py` slim (the run_all.py lint enforces < 350 lines).
 
-`maybe_start_localfs()` is gated on the `LOCALFS_MUSIC_ROOT` env var
-(or `localfs.root` in config.json). When that's set, the function:
+`maybe_start_localfs()` wires up to THREE independent libraries — music
+(`LOCALFS_MUSIC_ROOT` / `localfs.root`), video (`LOCALFS_VIDEO_ROOT` /
+`localfs.video_root`) and audiobooks (`AUDIOBOOKS_ROOT` /
+`localfs.audiobooks_root`) — and for whichever of them are configured
+AND present:
 
   1. Starts the LocalFs HTTP file server on its own port (default
      8200 / honors `$LOCALFS_PORT`). Binds `0.0.0.0` so the Naim
-     can reach it on the LAN.
+     can reach it on the LAN. ONE server serves all three roots, so
+     every present root joins its `allowed_roots`.
   2. Computes the file server's base_url (`$LOCALFS_BASE_URL`
      overrides; otherwise auto-detects the LAN IP via the same
      `get_lan_ip` helper the gateway uses for SSDP).
@@ -25,7 +29,7 @@ Phase 4 of the AssetUPnP migration. Kept in its own module to keep
      incremental thanks to the `localfs_files` (mtime, size) cache
      introduced in P2.
 
-The fallback when the env var is unset is the existing UPnP-only
+The fallback when no root is configured is the existing UPnP-only
 behaviour — no functional change for users who haven't opted in.
 """
 from __future__ import annotations
@@ -47,6 +51,19 @@ VIDEO_UDN = "uuid:localfs-movies"
 # reads this to tag the /api/servers entry `kind: "audiobooks"` so the
 # PWA knows which source gets resume-position behaviour.
 AUDIOBOOKS_UDN = ""
+
+
+def music_root() -> str:
+    """Configured MUSIC root: env `LOCALFS_MUSIC_ROOT`, else
+    `localfs.root` in config.json. Returns '' when unset = music
+    disabled. Independent of the video and audiobook roots — see
+    `_resolve_root` for why that independence is load-bearing."""
+    root = os.environ.get("LOCALFS_MUSIC_ROOT", "").strip()
+    if not root:
+        from dlna_config import load_config
+        root = ((load_config().get("localfs") or {})
+                .get("root", "") or "").strip()
+    return root
 
 
 def audiobooks_root() -> str:
@@ -75,27 +92,63 @@ def video_root() -> str:
     return root
 
 
+def _resolve_root(label: str, root: str) -> Path | None:
+    """A configured root that is actually THERE, or None.
+
+    Each root is optional and independent: a volume that is unmounted —
+    or a locked APFS volume, which macOS declines to mount at all —
+    disables ONLY its own library.
+
+    That independence is the whole point. Until 2026-09-10 a missing
+    MUSIC root returned out of `maybe_start_localfs` before the file
+    server was started, so an unmounted music drive also took down the
+    audiobooks sitting on a different, perfectly healthy disk. Worse,
+    the failure did not read as "music is missing": with no file server
+    there was no `MediaServer` in `SERVERS`, so `dlna_ssrf.guard`
+    refused every `/stream` and `/art` against :8200 as an unknown
+    device, the relay declined to hand a non-200 to `<audio>`, and the
+    PWA skipped every track in the queue at about one per second.
+    """
+    if not root:
+        return None
+    path = Path(root).expanduser()
+    if not path.exists():
+        log.warning(f"{label} root not found: {root} — disabled "
+                    "(is the volume mounted / unlocked?)")
+        return None
+    return path
+
+
 def maybe_start_localfs(get_lan_ip):
     """Caller passes the gateway's own `get_lan_ip` function so this
-    module doesn't need to re-implement LAN-IP detection."""
+    module doesn't need to re-implement LAN-IP detection.
+
+    The three libraries are wired INDEPENDENTLY: whichever roots are
+    both configured and present get served, and a missing one disables
+    only itself. The file server starts as soon as at least ONE root
+    resolves, because everything downstream hangs off it — the
+    `/localfs/*` byte routes the renderers fetch from, and the entry in
+    `SERVERS` that earns those URLs the SSRF guard's known-device
+    allowance."""
     # Imports kept INSIDE the function so the gateway core doesn't
     # pay the cost (or the mutagen/watchdog requirement) when LocalFs
     # isn't enabled.
-    from dlna_config import load_config
-
-    root_env = os.environ.get("LOCALFS_MUSIC_ROOT", "").strip()
-    if not root_env:
-        cfg = load_config()
-        root_env = (cfg.get("localfs") or {}).get("root", "").strip()
-    if not root_env:
-        log.debug("LocalFs disabled (LOCALFS_MUSIC_ROOT not set, "
-                  "no localfs.root in config.json)")
+    mroot, vroot, abroot = music_root(), video_root(), audiobooks_root()
+    if not (mroot or vroot or abroot):
+        log.debug("LocalFs disabled (no music / video / audiobooks root set "
+                  "in the environment or config.json)")
         return
 
-    root_path = Path(root_env).expanduser()
-    if not root_path.exists():
-        log.warning(f"LocalFs root not found: {root_env} — skipping "
-                    "(is the volume mounted / unlocked?)")
+    mpath = _resolve_root("Music", mroot)
+    vpath = _resolve_root("Video", vroot)
+    abpath = _resolve_root("Audiobooks", abroot)
+
+    # Every root the ONE file server is allowed to serve bytes from.
+    roots = [str(p.resolve()) for p in (mpath, vpath, abpath) if p]
+    if not roots:
+        log.warning("LocalFs: every configured root is missing — no file "
+                    "server started, so nothing can be browsed or played. "
+                    "Mount/unlock the volume(s), then restart the gateway.")
         return
 
     port = int(os.environ.get("LOCALFS_PORT", "8200"))
@@ -116,34 +169,7 @@ def maybe_start_localfs(get_lan_ip):
         log.warning(f"LocalFs imports failed: {e} — skipping")
         return
 
-    log.info(f"LocalFs enabled: root={root_env} port={port} "
-             f"base_url={base_url}")
-
-    # Video root (separate from music). Its files are served by THIS same
-    # LocalFs server (/localfs/video/<id>), so it must be in allowed_roots.
-    vroot = video_root()
-    vpath = Path(vroot).expanduser() if vroot else None
-    roots = [str(root_path.resolve())]
-    if vpath and vpath.exists():
-        roots.append(str(vpath.resolve()))
-        log.info(f"Video enabled: root={vroot} udn={VIDEO_UDN}")
-    elif vroot:
-        log.warning(f"Video root not found: {vroot} — video disabled "
-                    "(is the volume mounted?)")
-        vpath = None
-
-    # Audiobooks root (separate from music — own provider, own UDN, so
-    # books never surface in the music browse / radio / search). Served
-    # by this same file server, so it joins allowed_roots.
-    abroot = audiobooks_root()
-    abpath = Path(abroot).expanduser() if abroot else None
-    if abpath and abpath.exists():
-        roots.append(str(abpath.resolve()))
-        log.info(f"Audiobooks enabled: root={abroot}")
-    elif abroot:
-        log.warning(f"Audiobooks root not found: {abroot} — audiobooks "
-                    "disabled (is the volume mounted?)")
-        abpath = None
+    log.info(f"LocalFs file server: port={port} base_url={base_url}")
 
     try:
         # $LOCALFS_BIND narrows the listener to one address (audit
@@ -162,18 +188,20 @@ def maybe_start_localfs(get_lan_ip):
                   "changed? Set $LOCALFS_BIND / $LOCALFS_PORT.")
         return
 
-    provider = LocalFsProvider(DB, root_path, base_url=base_url)
-    bind_provider(provider.udn, provider)
-
-    # Synthetic MediaServer entry so SERVERS.all() lists the LocalFs
-    # library next to any AssetUPnP / MinimServer entries. The PWA's
-    # server picker reads from here.
-    _disc.SERVERS.add(MediaServer(
-        udn=provider.udn,
-        name="RoHaLocalFS",
-        location=base_url,
-        control_url=base_url,
-        base_url=base_url))
+    # Music provider. Synthetic MediaServer entry so SERVERS.all() lists
+    # the LocalFs library next to any AssetUPnP / MinimServer entries;
+    # the PWA's server picker reads from here.
+    provider = None
+    if mpath:
+        log.info(f"Music enabled: root={mroot}")
+        provider = LocalFsProvider(DB, mpath, base_url=base_url)
+        bind_provider(provider.udn, provider)
+        _disc.SERVERS.add(MediaServer(
+            udn=provider.udn,
+            name="RoHaLocalFS",
+            location=base_url,
+            control_url=base_url,
+            base_url=base_url))
 
     # Audiobooks provider — same machinery, own UDN. id_namespace salts
     # the track ids so a rel_path shared with the music root can't
@@ -181,6 +209,7 @@ def maybe_start_localfs(get_lan_ip):
     # UDNs).
     ab_provider = None
     if abpath:
+        log.info(f"Audiobooks enabled: root={abroot}")
         ab_provider = LocalFsProvider(DB, abpath, base_url=base_url,
                                       id_namespace="audiobooks",
                                       collect_unknown_artists=False)
@@ -199,21 +228,19 @@ def maybe_start_localfs(get_lan_ip):
     # existing AcoustID / Loudness mop-ups so the gateway doesn't
     # block on a big tree at boot. Sequential: the audiobooks scan
     # follows the music scan on the same thread (LibraryDB writes are
-    # serialized anyway).
-    def _initial_scan():
-        try:
-            stats = provider.rescan()
-            log.info(f"LocalFs initial scan complete: {stats}")
-        except Exception as e:                                # noqa: BLE001
-            log.exception(f"LocalFs initial scan failed: {e}")
-        if ab_provider is not None:
-            try:
-                stats = ab_provider.rescan()
-                log.info(f"Audiobooks initial scan complete: {stats}")
-            except Exception as e:                            # noqa: BLE001
-                log.exception(f"Audiobooks initial scan failed: {e}")
-    threading.Thread(target=_initial_scan, daemon=True,
-                     name="localfs-initial-scan").start()
+    # serialized anyway). Each library's scan is guarded on its own, so
+    # one failing tree never costs the other its index.
+    scans = [(label, p) for label, p in (("LocalFs", provider),
+                                         ("Audiobooks", ab_provider)) if p]
+    if scans:
+        def _initial_scan():
+            for label, prov in scans:
+                try:
+                    log.info(f"{label} initial scan complete: {prov.rescan()}")
+                except Exception as e:                        # noqa: BLE001
+                    log.exception(f"{label} initial scan failed: {e}")
+        threading.Thread(target=_initial_scan, daemon=True,
+                         name="localfs-initial-scan").start()
 
     # Video scan over GWMovies (separate udn, served from the same :8200).
     # PERIODIC + incremental so new clips appear without a restart: an initial
@@ -223,6 +250,7 @@ def maybe_start_localfs(get_lan_ip):
     # logs at INFO when something changed (or the first pass) to keep gateway.log
     # quiet.
     if vpath:
+        log.info(f"Video enabled: root={vroot} udn={VIDEO_UDN}")
         interval = max(30, int(os.environ.get("VIDEO_SCAN_INTERVAL_SEC", "300")))
 
         def _video_scan():
@@ -243,5 +271,5 @@ def maybe_start_localfs(get_lan_ip):
                          name="video-scan").start()
 
 
-__all__ = ["maybe_start_localfs", "video_root", "VIDEO_UDN",
+__all__ = ["maybe_start_localfs", "music_root", "video_root", "VIDEO_UDN",
            "audiobooks_root", "AUDIOBOOKS_UDN"]
