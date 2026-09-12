@@ -17,6 +17,122 @@ the symptom looked like something it wasn't.
 
 ---
 
+## 80fe588 — 20260912 — the same drive, seventeen hours, and nobody was told
+
+The fix below made the three LocalFs roots independent, so an unmounted
+music volume stops taking the audiobooks down with it. It resolves each
+root **at boot**. That turns out to be the wrong *number of times* to
+ask, and the very next reboot proved it.
+
+### What happened
+
+```
+ps:  gateway started            11 Sep 20:06:36
+log: 20:06:50 WARNING  Music root not found: /Volumes/SAMDATA/Music — disabled
+     20:06:50 WARNING  Video root not found: /Volumes/SAMDATA/GWMovies — disabled
+     20:06:50 INFO     Audiobooks enabled: root=/Volumes/SAMDATA-1TB/Audio_Books
+```
+
+launchd beat macOS to the punch: fourteen seconds after the machine came
+up, the external drive was not mounted yet. The new wiring did exactly
+what it promises — two libraries disabled themselves, the third came up
+— and then the drive mounted a few seconds later and **nothing
+re-asked**.
+
+The gateway then ran for **seventeen hours** with a file server whose
+`allowed_roots` held only the books. `tracks` outlives its files, so the
+music rows were all still there: every album browsed perfectly, and
+every play 403'd.
+
+```
+WARNING dlna.localfs.server: path-traversal blocked:
+        /Volumes/SAMDATA/Music/…/Burning Down The House (Live).flac
+        not under ('/Volumes/SAMDATA-1TB/Audio_Books',)
+WARNING dlna.asgi: stream ✗ upstream 403 … — refusing to relay a non-media body
+INFO    dlna.client: client_log[audio_error] code=4 codeName=unsupported
+```
+
+**The tell is different from the outage below, which is worth knowing
+before diagnosing the next one.** There the file server never started,
+so `dlna_ssrf.guard` refused `:8200` as an unknown device and the log
+read `SSRF guard: refused stream of …`. Here the server was up and
+registered, so the request got all the way in and the **containment
+check** (security posture §8) turned it away instead — a
+`path-traversal blocked` line naming a music path and the audiobooks
+root. Same sofa symptom, two different log lines, and the second one
+looks alarming in a way it does not deserve: nothing was attacking
+anything, a root was simply missing from the list.
+
+### The fix
+
+A missing root is now a **waiting** root. `dlna_localfs_watch.py` holds
+each configured root's state, and `maybe_start_localfs` REGISTERS all
+three with it rather than resolving them itself. Present ones activate
+at once; the rest are re-checked every 30 s
+(`$LOCALFS_ROOT_RECHECK_SEC`) by one daemon thread that **retires when
+nothing is waiting**, so a fully-mounted machine carries no idle thread.
+
+Four things there are load-bearing:
+
+* **The file server starts on the FIRST root to arrive**, whenever that
+  is, and every later one widens it via
+  `dlna_localfs_server.add_allowed_root`. That **rebinds** the tuple
+  rather than mutating it: the serving threads read `allowed_roots` off
+  the handler class, and a single attribute store is atomic under the
+  GIL, so a request sees the old tuple or the new one and never a
+  half-built one. Canonicalisation lives in that function beside
+  `make_handler_class`, because `resolve_within` compares RESOLVED
+  paths — a root added raw would silently never match, which is the
+  same bug wearing a different hat.
+* **Activation happens exactly once.** The state flips to ACTIVE
+  *before* the callback runs, since that callback starts a server, binds
+  a provider and registers a device.
+* **A failed activation is NOT retried.** The root is there; what failed
+  is our handling of it. Retrying every 30 s would repeat the failure
+  forever and re-run whichever half had succeeded.
+* **An unconfigured root is not tracked at all.** Off is not waiting —
+  warning someone about a Video library they never configured is exactly
+  the noise that buried this.
+
+### The half that is not code
+
+Seventeen hours is not a re-check problem, it is a *telling* problem.
+The only evidence was one WARNING at boot, in a file nobody reads from
+the sofa. So `WATCH.snapshot()` backs **`GET /api/libraries`** (a
+waiting row carries a message naming the volume to mount), every state
+change publishes a `libraries` SSE event, and the PWA renders
+`#library-bar` from it — built to the same shape as the index bar above
+it, so it reads as part of the app rather than an error page.
+
+It refreshes at **boot** (before the first poll tick — a missing drive
+is the first thing to say, not the last), on the event, and on the
+`servers` poll as the dropped-event fallback. A **failed fetch leaves
+the bar exactly as it was**: a dropped tailnet must never read as "the
+drive came back".
+
+Activation also publishes `devices`, because the source picker has just
+gained an entry — `SERVERS.add` does not fire `_on_server_found`, that
+being the discovery hook, so nothing else would say so.
+
+### Proof
+
+`tests/test_localfs_watch.py` (25), `tests/test_localfs_wiring.py` (18)
+and `tests/frontend/test_library_bar.py` (8). Both halves were verified
+by breaking them: neutering the re-check reddens 7 of the 8 late-mount
+tests, and neutering `add_allowed_root` reddens the three that assert
+what the one file server ends up allowed to serve. The widening path is
+additionally exercised on every real boot — music starts the server,
+books and video widen it — and the wait-then-activate path was run with
+real threads against a directory created mid-flight: registered,
+waited, picked up 3 s after it appeared, thread retired.
+
+### What would re-introduce it
+
+Resolving a root anywhere other than through `WATCH` — a `Path.exists()`
+at boot whose False means "off". And "simplifying" `add_allowed_root`
+into an in-place append, or dropping its `Path.resolve()`, both of which
+leave the code looking right and the volume unserved.
+
 ## 254a54b — 20260910 — "nothing plays, every song skips" was an unmounted drive
 
 **Reported as:** "check the log — nothing is playing, every song is skipping."
