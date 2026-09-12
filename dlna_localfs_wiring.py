@@ -7,13 +7,17 @@ Phase 4 of the AssetUPnP migration. Kept in its own module to keep
 `maybe_start_localfs()` wires up to THREE independent libraries — music
 (`LOCALFS_MUSIC_ROOT` / `localfs.root`), video (`LOCALFS_VIDEO_ROOT` /
 `localfs.video_root`) and audiobooks (`AUDIOBOOKS_ROOT` /
-`localfs.audiobooks_root`) — and for whichever of them are configured
-AND present:
+`localfs.audiobooks_root`). Each is REGISTERED with
+`dlna_localfs_watch.WATCH`, which brings it up the moment its volume is
+present — at boot if it already is, otherwise on a later re-check, so a
+drive that mounts after launchd starts the gateway costs no restart.
+Whenever a root activates, it:
 
-  1. Starts the LocalFs HTTP file server on its own port (default
-     8200 / honors `$LOCALFS_PORT`). Binds `0.0.0.0` so the Naim
-     can reach it on the LAN. ONE server serves all three roots, so
-     every present root joins its `allowed_roots`.
+  1. Ensures the LocalFs HTTP file server is running on its own port
+     (default 8200 / honors `$LOCALFS_PORT`). Binds `0.0.0.0` so the
+     Naim can reach it on the LAN. ONE server serves all three roots:
+     the first root to activate starts it, and every later one widens
+     its `allowed_roots` via `add_allowed_root`.
   2. Computes the file server's base_url (`$LOCALFS_BASE_URL`
      overrides; otherwise auto-detects the LAN IP via the same
      `get_lan_ip` helper the gateway uses for SSDP).
@@ -38,7 +42,6 @@ import logging
 import os
 import threading
 import time
-from pathlib import Path
 
 log = logging.getLogger("dlna.localfs.wiring")
 
@@ -57,7 +60,7 @@ def music_root() -> str:
     """Configured MUSIC root: env `LOCALFS_MUSIC_ROOT`, else
     `localfs.root` in config.json. Returns '' when unset = music
     disabled. Independent of the video and audiobook roots — see
-    `_resolve_root` for why that independence is load-bearing."""
+    `dlna_localfs_watch` for why that independence is load-bearing."""
     root = os.environ.get("LOCALFS_MUSIC_ROOT", "").strip()
     if not root:
         from dlna_config import load_config
@@ -92,174 +95,132 @@ def video_root() -> str:
     return root
 
 
-def _resolve_root(label: str, root: str) -> Path | None:
-    """A configured root that is actually THERE, or None.
+class _LocalFsWiring:
+    """Brings ONE library up, whenever its volume turns out to be there.
 
-    Each root is optional and independent: a volume that is unmounted —
-    or a locked APFS volume, which macOS declines to mount at all —
-    disables ONLY its own library.
-
-    That independence is the whole point. Until 2026-09-10 a missing
-    MUSIC root returned out of `maybe_start_localfs` before the file
-    server was started, so an unmounted music drive also took down the
-    audiobooks sitting on a different, perfectly healthy disk. Worse,
-    the failure did not read as "music is missing": with no file server
-    there was no `MediaServer` in `SERVERS`, so `dlna_ssrf.guard`
-    refused every `/stream` and `/art` against :8200 as an unknown
-    device, the relay declined to hand a non-200 to `<audio>`, and the
-    PWA skipped every track in the queue at about one per second.
+    A class rather than three closures because all three activations
+    share mutable state — the single file server — and "has it been
+    started yet?" is the question that has to be answered identically
+    from a boot thread and from the watch thread half an hour later.
     """
-    if not root:
-        return None
-    path = Path(root).expanduser()
-    if not path.exists():
-        log.warning(f"{label} root not found: {root} — disabled "
-                    "(is the volume mounted / unlocked?)")
-        return None
-    return path
 
+    def __init__(self, get_lan_ip):
+        self.port = int(os.environ.get("LOCALFS_PORT", "8200"))
+        self.base_url = os.environ.get(
+            "LOCALFS_BASE_URL",
+            f"http://{get_lan_ip()}:{self.port}").rstrip("/")
+        self.server = None
+        self._lock = threading.Lock()
 
-def maybe_start_localfs(get_lan_ip):
-    """Caller passes the gateway's own `get_lan_ip` function so this
-    module doesn't need to re-implement LAN-IP detection.
+    def _ensure_server(self, path):
+        """Start the file server on the first root to arrive; widen it
+        for every root after that. Returns False if it cannot serve —
+        the caller must then not register a provider, because a
+        `MediaServer` with no bytes behind it is what earns dead URLs
+        the SSRF guard's known-device allowance."""
+        from dlna_localfs_server import add_allowed_root, start_server
+        root = str(path.resolve())
+        with self._lock:
+            if self.server is not None:
+                add_allowed_root(self.server, root)
+                return True
+            # $LOCALFS_BIND narrows the listener to one address (audit
+            # 2026-08-20). ONE only — this is a single
+            # ThreadingHTTPServer socket, unlike hypercorn's multi-bind.
+            # The LAN address is the right choice: the Naim and the TV
+            # fetch bytes from here directly, and tailnet clients reach
+            # audio through the gateway's own relay rather than this
+            # port. Default stays 0.0.0.0 so a fresh clone works
+            # unconfigured.
+            bind = (os.environ.get("LOCALFS_BIND", "") or "0.0.0.0").strip()
+            try:
+                from dlna_config import DB_FILE
+                self.server = start_server(DB_FILE, port=self.port,
+                                           host=bind,
+                                           allowed_roots=(root,))
+            except OSError as e:
+                log.error(f"LocalFs file server failed to bind "
+                          f"{bind}:{self.port}: {e} — is the port in use, or "
+                          "has the machine's address changed? Set "
+                          "$LOCALFS_BIND / $LOCALFS_PORT.")
+                return False
+        log.info(f"LocalFs file server: port={self.port} "
+                 f"base_url={self.base_url}")
+        return True
 
-    The three libraries are wired INDEPENDENTLY: whichever roots are
-    both configured and present get served, and a missing one disables
-    only itself. The file server starts as soon as at least ONE root
-    resolves, because everything downstream hangs off it — the
-    `/localfs/*` byte routes the renderers fetch from, and the entry in
-    `SERVERS` that earns those URLs the SSRF guard's known-device
-    allowance."""
-    # Imports kept INSIDE the function so the gateway core doesn't
-    # pay the cost (or the mutagen/watchdog requirement) when LocalFs
-    # isn't enabled.
-    mroot, vroot, abroot = music_root(), video_root(), audiobooks_root()
-    if not (mroot or vroot or abroot):
-        log.debug("LocalFs disabled (no music / video / audiobooks root set "
-                  "in the environment or config.json)")
-        return
-
-    mpath = _resolve_root("Music", mroot)
-    vpath = _resolve_root("Video", vroot)
-    abpath = _resolve_root("Audiobooks", abroot)
-
-    # Every root the ONE file server is allowed to serve bytes from.
-    roots = [str(p.resolve()) for p in (mpath, vpath, abpath) if p]
-    if not roots:
-        log.warning("LocalFs: every configured root is missing — no file "
-                    "server started, so nothing can be browsed or played. "
-                    "Mount/unlock the volume(s), then restart the gateway.")
-        return
-
-    port = int(os.environ.get("LOCALFS_PORT", "8200"))
-    lan_ip = get_lan_ip()
-    base_url = os.environ.get(
-        "LOCALFS_BASE_URL",
-        f"http://{lan_ip}:{port}").rstrip("/")
-
-    try:
-        from dlna_config import DB_FILE
+    def _add_provider(self, path, *, name, namespace="",
+                      collect_unknown_artists=True):
+        """Construct + bind a LocalFsProvider, publish it as a
+        `MediaServer`, and scan it in the background."""
         from dlna_library import DB
-        from dlna_localfs_server import start_server
         from dlna_providers import bind_provider
         from dlna_providers.localfs import LocalFsProvider
         from dlna_registry import MediaServer
         import dlna_discovery as _disc
-    except ImportError as e:
-        log.warning(f"LocalFs imports failed: {e} — skipping")
-        return
 
-    log.info(f"LocalFs file server: port={port} base_url={base_url}")
-
-    try:
-        # $LOCALFS_BIND narrows the listener to one address (audit
-        # 2026-08-20). ONE only — this is a single ThreadingHTTPServer
-        # socket, unlike hypercorn's multi-bind. The LAN address is the
-        # right choice: the Naim and the TV fetch bytes from here directly,
-        # and tailnet clients reach audio through the gateway's own relay
-        # rather than this port. Default stays 0.0.0.0 so a fresh clone
-        # works unconfigured.
-        bind_host = (os.environ.get("LOCALFS_BIND", "") or "0.0.0.0").strip()
-        start_server(DB_FILE, port=port, host=bind_host,
-                     allowed_roots=tuple(roots))
-    except OSError as e:
-        log.error(f"LocalFs file server failed to bind {bind_host}:{port}: "
-                  f"{e} — is the port in use, or has the machine's address "
-                  "changed? Set $LOCALFS_BIND / $LOCALFS_PORT.")
-        return
-
-    # Music provider. Synthetic MediaServer entry so SERVERS.all() lists
-    # the LocalFs library next to any AssetUPnP / MinimServer entries;
-    # the PWA's server picker reads from here.
-    provider = None
-    if mpath:
-        log.info(f"Music enabled: root={mroot}")
-        provider = LocalFsProvider(DB, mpath, base_url=base_url)
-        bind_provider(provider.udn, provider)
+        prov = LocalFsProvider(DB, path, base_url=self.base_url,
+                               id_namespace=namespace,
+                               collect_unknown_artists=collect_unknown_artists)
+        bind_provider(prov.udn, prov)
         _disc.SERVERS.add(MediaServer(
-            udn=provider.udn,
-            name="RoHaLocalFS",
-            location=base_url,
-            control_url=base_url,
-            base_url=base_url))
+            udn=prov.udn, name=name, location=self.base_url,
+            control_url=self.base_url, base_url=self.base_url))
 
-    # Audiobooks provider — same machinery, own UDN. id_namespace salts
-    # the track ids so a rel_path shared with the music root can't
-    # collide on obj_id (the file server resolves across all localfs
-    # UDNs).
-    ab_provider = None
-    if abpath:
-        log.info(f"Audiobooks enabled: root={abroot}")
-        ab_provider = LocalFsProvider(DB, abpath, base_url=base_url,
-                                      id_namespace="audiobooks",
-                                      collect_unknown_artists=False)
-        bind_provider(ab_provider.udn, ab_provider)
-        global AUDIOBOOKS_UDN
-        AUDIOBOOKS_UDN = ab_provider.udn
-        _disc.SERVERS.add(MediaServer(
-            udn=ab_provider.udn,
-            name="RoHaAudioBooks",
-            location=base_url,
-            control_url=base_url,
-            base_url=base_url))
-        log.info(f"Audiobooks provider bound: udn={ab_provider.udn}")
-
-    # Initial scan in the background — same lazy posture as the
-    # existing AcoustID / Loudness mop-ups so the gateway doesn't
-    # block on a big tree at boot. Sequential: the audiobooks scan
-    # follows the music scan on the same thread (LibraryDB writes are
-    # serialized anyway). Each library's scan is guarded on its own, so
-    # one failing tree never costs the other its index.
-    scans = [(label, p) for label, p in (("LocalFs", provider),
-                                         ("Audiobooks", ab_provider)) if p]
-    if scans:
-        def _initial_scan():
-            for label, prov in scans:
-                try:
-                    log.info(f"{label} initial scan complete: {prov.rescan()}")
-                except Exception as e:                        # noqa: BLE001
-                    log.exception(f"{label} initial scan failed: {e}")
-        threading.Thread(target=_initial_scan, daemon=True,
+        # Background initial scan — same lazy posture as the other
+        # boot-time mop-ups, so the gateway never blocks on a big tree.
+        # Guarded on its own: one unreadable library must not cost the
+        # other its index.
+        def _scan():
+            try:
+                log.info(f"{name} initial scan complete: {prov.rescan()}")
+            except Exception as e:                            # noqa: BLE001
+                log.exception(f"{name} initial scan failed: {e}")
+        threading.Thread(target=_scan, daemon=True,
                          name="localfs-initial-scan").start()
+        return prov
 
-    # Video scan over GWMovies (separate udn, served from the same :8200).
-    # PERIODIC + incremental so new clips appear without a restart: an initial
-    # scan at boot, then every VIDEO_SCAN_INTERVAL_SEC (default 300s = 5 min).
-    # Each pass skips unchanged files (mtime,size) and prunes removed ones, so a
-    # steady library is near-free and new clips are geocoded once (cached). Only
-    # logs at INFO when something changed (or the first pass) to keep gateway.log
-    # quiet.
-    if vpath:
-        log.info(f"Video enabled: root={vroot} udn={VIDEO_UDN}")
-        interval = max(30, int(os.environ.get("VIDEO_SCAN_INTERVAL_SEC", "300")))
+    # ── one activation per library ──────────────────────────────────
+    def activate_music(self, path):
+        if not self._ensure_server(path):
+            return
+        log.info(f"Music enabled: root={path}")
+        self._add_provider(path, name="RoHaLocalFS")
+
+    def activate_audiobooks(self, path):
+        if not self._ensure_server(path):
+            return
+        log.info(f"Audiobooks enabled: root={path}")
+        # id_namespace salts the track ids so a rel_path shared with the
+        # music root can't collide on obj_id (the file server resolves
+        # across all localfs UDNs).
+        prov = self._add_provider(path, name="RoHaAudioBooks",
+                                  namespace="audiobooks",
+                                  collect_unknown_artists=False)
+        global AUDIOBOOKS_UDN
+        AUDIOBOOKS_UDN = prov.udn
+        log.info(f"Audiobooks provider bound: udn={prov.udn}")
+
+    def activate_video(self, path):
+        """Video has no provider — its bytes come off the same :8200 and
+        its index is the periodic GWMovies scan. PERIODIC + incremental
+        so new clips appear without a restart: each pass skips unchanged
+        files (mtime,size) and prunes removed ones, so a steady library
+        is near-free and new clips are geocoded once (cached). Only logs
+        at INFO when something changed."""
+        if not self._ensure_server(path):
+            return
+        log.info(f"Video enabled: root={path} udn={VIDEO_UDN}")
+        interval = max(30, int(os.environ.get("VIDEO_SCAN_INTERVAL_SEC",
+                                              "300")))
 
         def _video_scan():
             import dlna_video_index
+            from dlna_library import DB
             first = True
             while True:
                 try:
                     stats = dlna_video_index.scan_videos(
-                        str(vpath), VIDEO_UDN, DB, base_url)
+                        str(path), VIDEO_UDN, DB, self.base_url)
                     if first or stats.get("added") or stats.get("pruned"):
                         log.info(f"Video scan: {stats}")
                     first = False
@@ -269,6 +230,31 @@ def maybe_start_localfs(get_lan_ip):
 
         threading.Thread(target=_video_scan, daemon=True,
                          name="video-scan").start()
+
+
+def maybe_start_localfs(get_lan_ip):
+    """Caller passes the gateway's own `get_lan_ip` function so this
+    module doesn't need to re-implement LAN-IP detection.
+
+    The three libraries are wired INDEPENDENTLY, and a root that is not
+    present yet is WAITED FOR rather than written off: each one is
+    registered with `dlna_localfs_watch.WATCH`, which activates it now
+    if its volume is there and otherwise re-checks until it is. Nothing
+    here is conditional on the music root any more — it has no special
+    status, and a boot that races an unmounted drive costs a delay, not
+    a restart."""
+    mroot, vroot, abroot = music_root(), video_root(), audiobooks_root()
+    if not (mroot or vroot or abroot):
+        log.debug("LocalFs disabled (no music / video / audiobooks root set "
+                  "in the environment or config.json)")
+        return
+
+    from dlna_localfs_watch import WATCH
+    w = _LocalFsWiring(get_lan_ip)
+    WATCH.register("Music", mroot, w.activate_music)
+    WATCH.register("Audiobooks", abroot, w.activate_audiobooks)
+    WATCH.register("Video", vroot, w.activate_video)
+    WATCH.start()
 
 
 __all__ = ["maybe_start_localfs", "music_root", "video_root", "VIDEO_UDN",

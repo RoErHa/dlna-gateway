@@ -54,6 +54,15 @@
 <div class="workspace">
   <!-- LEFT: browser / search / playlist view -->
   <div id="browser">
+    <!-- Library-unavailable bar: a configured root whose volume isn't
+         mounted. Same shape as the index bar below it so it reads as
+         part of the app, not an error page. -->
+    <div id="library-bar" style="display:none;padding:7px 14px;border-bottom:1px solid var(--border);background:var(--raised);flex-shrink:0">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="flex-shrink:0">⚠️</span>
+        <span style="font-size:12px;color:var(--ink-dim);line-height:1.35" id="library-bar-msg"></span>
+      </div>
+    </div>
     <!-- Index progress bar -->
     <div id="index-bar" style="display:none;padding:7px 14px;border-bottom:1px solid var(--border);background:var(--raised);flex-shrink:0">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">

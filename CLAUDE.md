@@ -108,7 +108,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **89/89 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **90/90 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -409,7 +409,8 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (pure per-file helpers — the album-key folder identity and the namespace-salted track id), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
 | `dlna_localfs_http.py` | The PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200), and `resolve_within` — the containment test every byte route asks before opening a file (path COMPONENTS, not string prefixes; returns the RESOLVED path so the caller cannot re-open the original through a TOCTOU gap). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
-| `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. Wires up to THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — starting the one file server as soon as ANY of them resolves, then per live root a `LocalFsProvider` with the LAN-IP `base_url`, bound via `dlna_providers.bind_provider`, plus a synthetic `MediaServer` entry in `SERVERS` and a background initial scan. See **[One unmounted volume must not take the others down](#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
+| `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. REGISTERS THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — with `dlna_localfs_watch.WATCH`, and owns what BRINGING ONE UP means: ensure the one file server (started by the first root to arrive, widened by each later one), construct a `LocalFsProvider` with the LAN-IP `base_url`, bind it via `dlna_providers.bind_provider`, add a synthetic `MediaServer` to `SERVERS`, and scan it in the background. See **[One unmounted volume must not take the others down](#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
+| `dlna_localfs_watch.py` | WHEN each root gets wired — the half `maybe_start_localfs` used to answer once, at boot, and get wrong on a reboot that outran the drive. Holds each configured root's state (`waiting` / `active`), activates it exactly once when its volume is present, re-checks the rest every `$LOCALFS_ROOT_RECHECK_SEC` (30 s) on a thread that retires when nothing is waiting, and — the part the log alone never achieved — backs `GET /api/libraries` + a `libraries` SSE event so the PWA can name the drive to mount. Deliberately generic: it knows "a labelled path that may appear", never music/video/books. See **[A root is asked for ONCE](#a-root-is-asked-for-once-and-boot-is-the-wrong-moment-2026-09-12)**. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position/seek) |
 | `dlna_rendering_control.py` | UPnP **RenderingControl** SOAP client (`SetVolume`/`GetVolume`) — a genuinely separate service with its own control URL, so the split follows the protocol boundary. Re-exported from `dlna_avtransport`. |
@@ -616,12 +617,13 @@ root on its own, and the server starts on whatever resolved:
   `LibraryProvider` but its bytes come from the same `:8200`, so a
   video-only setup still needs it.
 - **No root resolving starts NOTHING.** An empty `allowed_roots` is a
-  server that refuses every path while looking alive; the log says to
-  mount the volume and restart instead.
+  server that refuses every path while looking alive. The server is
+  started by the FIRST root to arrive instead — which, since the
+  boot-race fix below, may be minutes after boot.
 - **Each initial scan is guarded on its own**, so one unreadable tree
   never costs the other library its index.
 
-Guarded by `tests/test_localfs_wiring.py` (19). Four of them genuinely
+Guarded by `tests/test_localfs_wiring.py` (18). Four of them genuinely
 fail against the old code — verified by reverting it and re-running,
 including the audiobooks-survive-a-missing-music-root case.
 
@@ -656,6 +658,83 @@ fail against the old code. ⭐ Favourite Albums and Playlists are NOT
 gated — they are user-curated and can hold books or radio, so a row
 that no longer resolves stays visible for `tools/audit_playlist_orphans.py`
 rather than vanishing.
+
+### A root is asked for ONCE, and boot is the wrong moment (2026-09-12)
+
+The fix above resolves each root at boot. That is the wrong **number
+of times** to ask, and the next reboot proved it: launchd started the
+gateway at **20:06:36**, and at **20:06:50** macOS had not finished
+mounting the external music drive.
+
+Everything then worked as designed — music and video disabled
+themselves, audiobooks came up — and the drive mounted a few seconds
+later with **nothing re-asking**. The gateway ran **seventeen hours**
+with a file server whose `allowed_roots` held only the books, while
+`tracks` still listed all 26k music rows. So every album browsed
+perfectly and every play 403'd:
+
+```
+path-traversal blocked: /Volumes/SAMDATA/Music/…/Burning Down The House (Live).flac
+                        not under ('/Volumes/SAMDATA-1TB/Audio_Books',)
+stream ✗ upstream 403 … — refusing to relay a non-media body
+client_log[audio_error] code=4 codeName=unsupported
+```
+
+Note the tell is DIFFERENT from the outage above: the containment
+check (§Security posture 8) catches it before the SSRF guard does, so
+it is a `path-traversal blocked` line naming a music path and the
+audiobooks root, not a `refused stream of …`.
+
+**A missing root is now a WAITING root** (`dlna_localfs_watch.py`).
+`maybe_start_localfs` REGISTERS all three with `WATCH` instead of
+resolving them itself; whichever are present activate at once, and the
+rest are re-checked every `LOCALFS_ROOT_RECHECK_SEC` (default 30 s) by
+one daemon thread that **retires when nothing is left waiting**, so a
+fully-mounted machine carries no idle thread. Four things there are
+load-bearing:
+
+- **The file server starts on the FIRST root to arrive**, whenever
+  that is, and every later one WIDENS it via
+  `dlna_localfs_server.add_allowed_root` — which rebinds the tuple
+  rather than mutating it, because the serving threads read
+  `allowed_roots` off the handler class and must see the old tuple or
+  the new one, never a half-built one. Canonicalisation lives there
+  beside `make_handler_class`: `resolve_within` compares RESOLVED
+  paths, so a raw root would silently never match.
+- **Activation happens exactly once.** The state flips to ACTIVE
+  BEFORE the callback runs — it starts a server, binds a provider and
+  registers a device, and a re-check firing meanwhile would publish
+  the library twice.
+- **A failed activation is NOT retried.** The root IS there; what
+  failed is our handling of it (a port in use, say). Retrying every
+  30 s would repeat the failure forever and re-run whichever half
+  succeeded — so it is logged once and recorded on the row.
+- **An unconfigured root is not tracked at all.** Off is not waiting.
+  Telling someone their Video library is unavailable when they never
+  configured one is exactly the noise that buried the last outage.
+
+**And the person is told.** The whole outage hid behind ONE boot-time
+WARNING in `gateway.log`, which is not a place anyone looks from the
+sofa. `WATCH.snapshot()` backs **`GET /api/libraries`** (one row per
+configured root, and a waiting one carries a `message` naming the
+volume to mount), and every state change publishes a `libraries` SSE
+event. The PWA renders `#library-bar` — the same shape as the index
+bar above it — from `refreshLibraries()`, called at **boot** (before
+the first poll tick: a missing drive is the first thing to say, not
+the last), on the `libraries` event, and on the `servers` poll as the
+dropped-event fallback. A failed fetch leaves the bar **as it was** —
+a dropped tailnet must not read as "the drive came back".
+
+Activation also publishes `devices`, because the source picker has
+just gained an entry — `SERVERS.add` does not fire `_on_server_found`,
+which is the discovery hook, so nothing else would say so.
+
+Guarded by `tests/test_localfs_watch.py` (25),
+`tests/test_localfs_wiring.py` (18) and
+`tests/frontend/test_library_bar.py` (8). Verified by breaking BOTH
+halves: neutering the re-check reddens 7 of 8 late-mount tests, and
+neutering `add_allowed_root` reddens the three that assert what the
+one file server ends up allowed to serve.
 
 ### Folder-album identity — and the one folder it gets wrong (2026-08-25)
 

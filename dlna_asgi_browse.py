@@ -73,6 +73,15 @@ async def servers() -> list:
     return await run_in_threadpool(api_browse.servers_payload)
 
 
+@router.get("/api/libraries")
+async def libraries() -> list:
+    """Which configured LocalFs roots are present and which are still
+    waiting for their volume. Read on load: an SSE event only reaches a
+    client already connected when the drive was (un)mounted."""
+    from dlna_localfs_watch import WATCH
+    return WATCH.snapshot()
+
+
 @router.get("/api/renderers")
 async def renderers() -> list:
     return await run_in_threadpool(api_browse.renderers_payload)

@@ -342,6 +342,29 @@ def make_handler_class(library_db_path: str,
          "allowed_roots":   canonical})
 
 
+def add_allowed_root(srv, root: str) -> bool:
+    """Let a RUNNING file server serve bytes from one more root — how a
+    volume mounted after boot becomes playable without a restart
+    (`dlna_localfs_watch`), since the byte routes read `allowed_roots`
+    off the handler CLASS.
+
+    REBINDS the tuple rather than mutating it: a request reads the
+    attribute once and a single store is atomic under the GIL, so a
+    serving thread sees the old tuple or the new one, never a
+    half-built one. Canonicalising here (beside `make_handler_class`)
+    is load-bearing — `resolve_within` compares RESOLVED paths, so a
+    raw root would silently never match. Idempotent: already-allowed
+    returns False, so a re-check loop may call it freely.
+    """
+    handler = srv.RequestHandlerClass
+    canonical = str(Path(root).resolve())
+    if canonical in handler.allowed_roots:
+        return False
+    handler.allowed_roots = handler.allowed_roots + (canonical,)
+    log.info(f"LocalFs server: now also serving {canonical}")
+    return True
+
+
 def start_server(library_db_path: str,
                  port: int = 8200,
                  *,
@@ -369,6 +392,7 @@ def start_server(library_db_path: str,
 __all__ = [
     "LocalFsHTTPHandler",
     "make_handler_class",
+    "add_allowed_root",
     "start_server",
     "_parse_range_header",          # for tests
     "_dlna_headers_for_mime",        # for tests

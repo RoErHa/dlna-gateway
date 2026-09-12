@@ -9,6 +9,12 @@ different, healthy disk — and, with no `MediaServer` in `SERVERS`, the
 SSRF guard then refused every /stream and /art against :8200 as an
 unknown device, which the PWA saw as "every song skips".
 
+A root that is configured but NOT present is no longer written off —
+it is registered with `dlna_localfs_watch.WATCH` and brought up when
+its volume appears (see tests/test_localfs_watch.py). These tests
+still ask the boot-time question: given which volumes are there right
+now, which libraries came up?
+
 No network, no live gateway: the file server, the provider and the
 device registry are all stubbed, so these tests assert WIRING
 DECISIONS — which libraries came up, and what the one file server was
@@ -29,6 +35,7 @@ if PROJECT not in sys.path:
 # time, which would re-populate the very LOCALFS_* vars these tests
 # pop in setUp if the first import happened mid-test.
 import dlna_config          # noqa: F401
+import dlna_localfs_watch as watch
 import dlna_localfs_wiring as wiring
 
 ROOT_ENVS = ("LOCALFS_MUSIC_ROOT", "LOCALFS_VIDEO_ROOT", "AUDIOBOOKS_ROOT",
@@ -61,6 +68,7 @@ class _WiringCase(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self._saved_udn = wiring.AUDIOBOOKS_UDN
         wiring.AUDIOBOOKS_UDN = ""
+        watch.WATCH.reset()     # module singleton — never leak a root
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -70,21 +78,35 @@ class _WiringCase(unittest.TestCase):
                 os.environ[k] = v
         self._tmp.cleanup()
         wiring.AUDIOBOOKS_UDN = self._saved_udn
+        watch.WATCH.reset()
 
     def mkroot(self, name):
         p = self.tmp / name
         p.mkdir()
         return str(p)
 
-    def run_wiring(self):
-        """Returns (started_servers, bound_providers, added_servers)."""
+    def run_wiring(self, then=None):
+        """Returns (started_servers, bound_providers, added_servers).
+
+        `then` runs INSIDE the patch context, after boot — that is how
+        a volume appearing later is exercised, since the activation it
+        triggers reaches the same stubbed server/provider/registry."""
         started, bound, added = [], [], []
+        self.server = None
 
         def fake_start_server(db, port=8200, *, host="0.0.0.0",
                               allowed_roots=()):
+            # Modelled, not mocked, so the REAL `add_allowed_root` runs
+            # against it: only the first root to arrive starts the
+            # server and every later one widens it, which is the step a
+            # MagicMock would silently swallow.
+            handler = type("H", (), {"allowed_roots": tuple(allowed_roots)})
+            srv = mock.MagicMock()
+            srv.RequestHandlerClass = handler
             started.append({"port": port, "host": host,
                             "allowed_roots": tuple(allowed_roots)})
-            return mock.MagicMock()
+            self.server = srv
+            return srv
 
         threads = []
 
@@ -103,12 +125,23 @@ class _WiringCase(unittest.TestCase):
                         lambda udn, p: bound.append((udn, p))), \
              mock.patch("dlna_discovery.SERVERS") as servers, \
              mock.patch("dlna_config.load_config", return_value={}), \
-             mock.patch.object(wiring.threading, "Thread", _FakeThread):
+             mock.patch.object(wiring.threading, "Thread", _FakeThread), \
+             mock.patch.object(watch.threading, "Thread", _FakeThread):
             servers.add.side_effect = lambda s: added.append(s)
             wiring.maybe_start_localfs(lambda: "192.168.1.125")
+            if then is not None:
+                then()
 
         self.threads = threads
         return started, bound, added
+
+    def served_roots(self):
+        """What the ONE file server may serve once every present root
+        has been wired — the tuple after any `add_allowed_root` calls,
+        not just the one it was started with."""
+        if self.server is None:
+            return ()
+        return tuple(sorted(self.server.RequestHandlerClass.allowed_roots))
 
 
 class TestRootsAreIndependent(_WiringCase):
@@ -123,8 +156,7 @@ class TestRootsAreIndependent(_WiringCase):
         started, bound, added = self.run_wiring()
 
         self.assertEqual(len(started), 1, "file server must still start")
-        self.assertEqual(started[0]["allowed_roots"],
-                         (str(Path(books).resolve()),))
+        self.assertEqual(self.served_roots(), (str(Path(books).resolve()),))
         names = sorted(s.name for s in added)
         self.assertEqual(names, ["RoHaAudioBooks"])
         self.assertTrue(wiring.AUDIOBOOKS_UDN,
@@ -138,7 +170,7 @@ class TestRootsAreIndependent(_WiringCase):
 
         started, bound, added = self.run_wiring()
 
-        self.assertEqual(started[0]["allowed_roots"],
+        self.assertEqual(self.served_roots(),
                          (str(Path(music).resolve()),))
         self.assertEqual([s.name for s in added], ["RoHaLocalFS"])
         self.assertEqual(wiring.AUDIOBOOKS_UDN, "")
@@ -151,7 +183,7 @@ class TestRootsAreIndependent(_WiringCase):
 
         started, _bound, added = self.run_wiring()
 
-        self.assertEqual(sorted(started[0]["allowed_roots"]),
+        self.assertEqual(list(self.served_roots()),
                          sorted([str(Path(music).resolve()),
                                  str(Path(books).resolve())]))
         self.assertEqual(sorted(s.name for s in added),
@@ -165,7 +197,7 @@ class TestRootsAreIndependent(_WiringCase):
 
         started, bound, added = self.run_wiring()
 
-        self.assertEqual(started[0]["allowed_roots"],
+        self.assertEqual(self.served_roots(),
                          (str(Path(video).resolve()),))
         self.assertEqual(bound, [])
         self.assertEqual(added, [])
@@ -180,7 +212,7 @@ class TestRootsAreIndependent(_WiringCase):
 
         started, bound, added = self.run_wiring()
 
-        self.assertEqual(sorted(started[0]["allowed_roots"]),
+        self.assertEqual(list(self.served_roots()),
                          sorted(str(Path(p).resolve())
                                 for p in (music, video, books)))
         self.assertEqual(len(bound), 2)          # music + audiobooks
@@ -200,12 +232,81 @@ class TestNothingToServe(_WiringCase):
         os.environ["LOCALFS_MUSIC_ROOT"] = str(self.tmp / "gone-music")
         os.environ["AUDIOBOOKS_ROOT"] = str(self.tmp / "gone-books")
 
-        with self.assertLogs("dlna.localfs.wiring", "WARNING") as cm:
+        with self.assertLogs("dlna.localfs.watch", "WARNING") as cm:
             started, bound, added = self.run_wiring()
 
+        # An empty allowed_roots would be a server that refuses every
+        # path while looking alive, so nothing is started at all...
         self.assertEqual((started, bound, added), ([], [], []))
-        self.assertTrue(any("every configured root is missing" in m
-                            for m in cm.output), cm.output)
+        # ...but both volumes are WAITED for, and the log names each one.
+        self.assertEqual(sorted(watch.WATCH.waiting()),
+                         ["Audiobooks", "Music"])
+        joined = "\n".join(cm.output)
+        self.assertIn("gone-music", joined)
+        self.assertIn("gone-books", joined)
+
+
+class TestARootThatArrivesLate(_WiringCase):
+    """The 2026-09-11 boot race: launchd beat the volume to the punch.
+
+    Before this, a root absent at boot was absent forever — the gateway
+    ran seventeen hours with a file server that could not reach the
+    music it was still advertising."""
+
+    def test_a_volume_mounted_after_boot_brings_its_library_up(self):
+        root = self.tmp / "Music"
+        os.environ["LOCALFS_MUSIC_ROOT"] = str(root)
+
+        def mount_it_late():
+            root.mkdir()                      # the drive appears
+            watch.WATCH._activate("Music")    # ...and the re-check fires
+
+        started, bound, added = self.run_wiring(then=mount_it_late)
+
+        self.assertEqual(len(started), 1, "the file server must come up")
+        self.assertEqual(self.served_roots(), (str(root.resolve()),))
+        self.assertEqual([s.name for s in added], ["RoHaLocalFS"])
+        self.assertEqual(watch.WATCH.waiting(), [])
+
+    def test_it_joins_a_server_that_is_already_running(self):
+        """Books were up all along; music arrives an hour later. ONE
+        server serves both, so the late root WIDENS it rather than
+        binding a second socket."""
+        books = self.mkroot("Audio_Books")
+        music = self.tmp / "Music"
+        os.environ["AUDIOBOOKS_ROOT"] = books
+        os.environ["LOCALFS_MUSIC_ROOT"] = str(music)
+
+        def mount_it_late():
+            music.mkdir()
+            watch.WATCH._activate("Music")
+
+        started, bound, added = self.run_wiring(then=mount_it_late)
+
+        self.assertEqual(len(started), 1, "must not start a second server")
+        self.assertEqual(list(self.served_roots()),
+                         sorted([str(Path(books).resolve()),
+                                 str(music.resolve())]))
+        self.assertEqual(sorted(s.name for s in added),
+                         ["RoHaAudioBooks", "RoHaLocalFS"])
+
+    def test_the_late_library_is_indexed_too(self):
+        """Coming up without a scan would leave the source in the picker
+        and empty behind it."""
+        root = self.tmp / "Music"
+        os.environ["LOCALFS_MUSIC_ROOT"] = str(root)
+
+        def mount_it_late():
+            root.mkdir()
+            watch.WATCH._activate("Music")
+
+        _started, bound, _added = self.run_wiring(then=mount_it_late)
+        for t in self.threads:
+            if t.name == "localfs-initial-scan":
+                t.target()
+
+        self.assertEqual(len(bound), 1)
+        self.assertTrue(bound[0][1].rescanned)
 
 
 class TestScanThreads(_WiringCase):
@@ -225,9 +326,9 @@ class TestScanThreads(_WiringCase):
         os.environ["AUDIOBOOKS_ROOT"] = self.mkroot("Audio_Books")
 
         _started, bound, _added = self.run_wiring()
-        scan = next(t for t in self.threads
-                    if t.name == "localfs-initial-scan")
-        scan.target()
+        for t in self.threads:
+            if t.name == "localfs-initial-scan":
+                t.target()
 
         self.assertTrue(all(p.rescanned for _, p in bound))
 
@@ -238,10 +339,10 @@ class TestScanThreads(_WiringCase):
         _started, bound, _added = self.run_wiring()
         music = bound[0][1]
         music.rescan = mock.Mock(side_effect=RuntimeError("bad tree"))
-        scan = next(t for t in self.threads
-                    if t.name == "localfs-initial-scan")
+        scans = [t for t in self.threads if t.name == "localfs-initial-scan"]
         with self.assertLogs("dlna.localfs.wiring", "ERROR"):
-            scan.target()
+            for t in scans:
+                t.target()
 
         self.assertTrue(bound[1][1].rescanned,
                         "audiobooks must still scan after music fails")
@@ -252,28 +353,6 @@ class TestScanThreads(_WiringCase):
         names = [t.name for t in self.threads]
         self.assertNotIn("localfs-initial-scan", names)
         self.assertIn("video-scan", names)
-
-
-class TestResolveRoot(unittest.TestCase):
-    """The pure half — a root is present, absent, or not configured."""
-
-    def test_unconfigured_is_none_and_silent(self):
-        self.assertIsNone(wiring._resolve_root("Music", ""))
-
-    def test_present_root_resolves(self):
-        with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(wiring._resolve_root("Music", d), Path(d))
-
-    def test_missing_root_warns_and_names_the_volume(self):
-        with self.assertLogs("dlna.localfs.wiring", "WARNING") as cm:
-            got = wiring._resolve_root("Audiobooks", "/nope/not/mounted")
-        self.assertIsNone(got)
-        joined = "\n".join(cm.output)
-        self.assertIn("Audiobooks", joined)
-        self.assertIn("/nope/not/mounted", joined)
-
-    def test_user_home_is_expanded(self):
-        self.assertIsNone(wiring._resolve_root("Music", "~/definitely-absent"))
 
 
 class TestMusicRootConfig(unittest.TestCase):

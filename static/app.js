@@ -664,6 +664,26 @@ function showTab(tab){
 // carries a SRC dropdown (#source-sel) to switch the active source; the
 // disc-dot still shows the active source's online status.
 let renderers = {};   // udn → MediaRenderer
+// ── Libraries that are configured but whose volume isn't mounted ──
+// The gateway waits for such a root and wires it in the moment it
+// appears (dlna_localfs_watch), so the only thing missing is telling
+// the person which drive to plug in — the 2026-09-11 outage ran for
+// seventeen hours behind one WARNING nobody was looking at.
+// Rendered from /api/libraries (authoritative on load) and refreshed
+// by the `libraries` SSE event (instant when a drive comes or goes).
+async function refreshLibraries(){
+  const r=await api("/api/libraries");if(!r)return;
+  let rows;
+  try{ rows=await r.json(); }catch(e){ return; }
+  const bar=$("library-bar"), msg=$("library-bar-msg");
+  if(!bar||!msg) return;
+  const waiting=(rows||[]).filter(x=>x && x.state==="waiting");
+  if(!waiting.length){ bar.style.display="none"; return; }
+  msg.innerHTML=waiting.map(x=>esc(x.message||
+      (x.label+" library unavailable — mount "+x.root+"."))).join("<br>");
+  bar.style.display="block";
+}
+
 async function refreshServers(){
   const r=await api("/api/servers");if(!r)return;
   const data=await r.json();
@@ -2813,6 +2833,7 @@ function initEventSource(){
     _es.addEventListener("state",   ()=>kickPoll("state"));
     _es.addEventListener("index",   ()=>kickPoll("index"));
     _es.addEventListener("devices", ()=>{refreshServers();refreshRenderers();});
+    _es.addEventListener("libraries", ()=>{refreshLibraries();refreshServers();});
     // Transient drop — EventSource retries on its own. Until it's back the
     // polls must carry the load again, so drop out of the SSE-backed tier.
     _es.onerror=()=>{ _sseUp=false; _rearmPolls(); };
@@ -2869,7 +2890,7 @@ const _LOOPS = {
   // before refreshServers has adopted a source and returns early, so without
   // it the index bar would wait a full slow tick to appear.
   index:     {fn:()=>pollIndex(),        fast: 2000, slow:60000, hot:()=>_idxRunning||!curServer},
-  servers:   {fn:()=>refreshServers(),   fast: 8000, slow:60000, hot:()=>!_sseUp},
+  servers:   {fn:()=>{refreshServers();refreshLibraries();}, fast: 8000, slow:60000, hot:()=>!_sseUp},
   renderers: {fn:()=>refreshRenderers(), fast:10000, slow:60000, hot:()=>!_sseUp},
 };
 const _timers={};
@@ -2985,6 +3006,9 @@ browserAudio.addEventListener("play", ()=>{
 // Defensive: any failure (older 1.x with no /api/version) just leaves it blank.
 api("/api/version").then(async r=>{try{if(r&&r.ok){const j=await r.json();const el=$("app-version");if(el&&j&&j.version)el.textContent="v"+j.version;}}catch{}});
 refreshServers();
+// Before the first poll tick, not 8 s into it: if a drive is missing,
+// that is the first thing a person needs to be told, not the last.
+refreshLibraries();
 refreshRenderers();
 loadPlaylists().then(showPlaylists);
 startPolling();

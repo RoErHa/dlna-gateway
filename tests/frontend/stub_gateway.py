@@ -33,6 +33,9 @@ class StubGateway:
             {"udn": "uuid:asset-1", "name": "AssetUPnP", "online": True, "tracks": 1234}
         ]
         self.renderers: list[dict] = []  # tests can populate
+        # /api/libraries — configured LocalFs roots and whether each one's
+        # volume is actually mounted. Empty = nothing to warn about.
+        self.libraries: list[dict] = []
         # browse_letter responses keyed by (mode, letter) -> {items, total, offset, limit}
         self.browse_pages: dict[tuple, dict] = {}
         self.artists_default: list[dict] = []
@@ -289,6 +292,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/renderers":
             self._send_json(gw.renderers)
+            return
+        if path == "/api/libraries":
+            self._send_json(gw.libraries)
             return
         if path == "/api/browse_letter":
             mode = q.get("mode", "artists")
