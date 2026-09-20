@@ -70,8 +70,20 @@
     <dict>
         <key>NumberOfFiles</key>
         <integer>8192</integer>
+        <!-- RLIMIT_NPROC counts EVERY process this UID owns, not just
+             the gateway's. At 512 a busy desktop (72 Safari WebContent
+             helpers alone) puts the user over the cap, and hypercorn then
+             cannot fork its resource_tracker at startup:
+               BlockingIOError: [Errno 35] Resource temporarily unavailable
+             from hypercorn/run.py's ctx.Event(), BEFORE any app code
+             loads — so it looks nothing like an app fault. KeepAlive then
+             respawn-loops on it (53 runs on 2026-09-20, 547 procs vs the
+             512 cap). It only bites at START, which is why a running
+             gateway survives the desktop getting busy and only the next
+             restart fails. 2048 sits well under the system soft limit
+             (launchctl limit maxproc = 2666). -->
         <key>NumberOfProcesses</key>
-        <integer>512</integer>
+        <integer>2048</integer>
     </dict>
 
     <key>StandardOutPath</key>
