@@ -109,6 +109,25 @@ def query_names(name: str) -> list[str]:
         _add(raw.split(";", 1)[0])
     if "&" in raw:
         _add(raw.split("&", 1)[0])
+    # MusicBrainz's QUOTED search returns nothing at all for
+    # artist:"The New York Dolls" (measured live), so a leading article
+    # gets a bare attempt too. Free: accept_match still has to approve
+    # whatever comes back.
+    unarticled = _LEADING_ARTICLE.sub("", raw).strip()
+    if unarticled and unarticled != raw:
+        _add(unarticled)
+    return out
+
+
+def _alias_keys(cand: dict) -> set[str]:
+    """Every spelling MusicBrainz records for this artist. MB omits the
+    key entirely when there are none."""
+    out = set()
+    for a in (cand.get("aliases") or []):
+        for field in ("name", "sort-name"):
+            v = a.get(field)
+            if v:
+                out.add(norm_artist(v))
     return out
 
 
@@ -124,13 +143,22 @@ def accept_match(query: str, candidates: list[dict]) -> str | None:
     key = norm_artist(query)
     if not key or not candidates:
         return None
-    top = candidates[0]
-    if int(top.get("score") or 0) < MIN_SCORE:
+
+    scored = [c for c in candidates
+              if int(c.get("score") or 0) >= MIN_SCORE]
+    by_name = [c for c in scored if norm_artist(c.get("name")) == key]
+    # An ALIAS is how MB records the shorter or punctuated spelling a
+    # tag usually carries: 'Gonzales' for 'Chilly Gonzales', 'AC-DC'
+    # for 'AC/DC'. They arrive on the same search response, so widening
+    # to them costs no extra request. Measured: recovers ~15% of
+    # refusals. A canonical NAME is stronger evidence, so aliases are
+    # only consulted when nothing matched by name.
+    hits = by_name or [c for c in scored if key in _alias_keys(c)]
+
+    # The ambiguity guard must span both, or widening the match quietly
+    # reintroduces the namesake problem it exists to prevent — several
+    # real acts are called Nirvana, and picking the popular one is a
+    # guess that is silently wrong forever.
+    if len(hits) != 1:
         return None
-    if norm_artist(top.get("name")) != key:
-        return None
-    for other in candidates[1:]:
-        if (int(other.get("score") or 0) >= MIN_SCORE
-                and norm_artist(other.get("name")) == key):
-            return None                      # a genuine namesake — refuse
-    return top.get("id") or None
+    return hits[0].get("id") or None

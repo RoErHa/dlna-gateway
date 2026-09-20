@@ -20,8 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dlna_mbid import accept_match, norm_artist, query_names      # noqa: E402
 
 
-def _c(name, score, mbid="mb-1", dis=""):
-    return {"id": mbid, "name": name, "score": score, "disambiguation": dis}
+def _c(name, score, mbid="mb-1", dis="", aliases=()):
+    return {"id": mbid, "name": name, "score": score, "disambiguation": dis,
+            "aliases": [{"name": a, "sort-name": a} for a in aliases]}
 
 
 class TestNormArtist(unittest.TestCase):
@@ -133,6 +134,18 @@ class TestQueryNames(unittest.TestCase):
     def test_a_plain_name_yields_exactly_one_query(self):
         self.assertEqual(query_names("Elbow"), ["Elbow"])
 
+    def test_a_leading_article_gets_an_unarticled_fallback(self):
+        """MusicBrainz's quoted search returns ZERO results for
+        artist:"The New York Dolls" — measured live. Stripping the
+        article is a free extra attempt that accept_match still has to
+        approve."""
+        names = query_names("The New York Dolls")
+        self.assertEqual(names[0], "The New York Dolls")
+        self.assertIn("New York Dolls", names)
+
+    def test_a_band_actually_called_the_is_not_emptied(self):
+        self.assertEqual(query_names("The"), ["The"])
+
 
 class TestAcceptMatch(unittest.TestCase):
     def test_a_clean_exact_match_is_accepted(self):
@@ -166,6 +179,46 @@ class TestAcceptMatch(unittest.TestCase):
         self.assertEqual(accept_match("Rush", [
             _c("Rush", 100, "good", "Canadian rock trio"),
             _c("Rush", 60, "other")]), "good")
+
+    def test_an_alias_match_is_accepted_when_the_name_differs(self):
+        """MB's canonical name is often longer than the tag:
+        'Gonzales' -> 'Chilly Gonzales', 'Healy & Amos' -> 'Jeremy
+        Healy & Amos', 'AC-DC' -> 'AC/DC'. The aliases ride on the SAME
+        search response, so this costs no extra request."""
+        self.assertEqual(
+            accept_match("Gonzales",
+                         [_c("Chilly Gonzales", 100, "cg",
+                             aliases=("Gonzales", "Gonzo"))]),
+            "cg")
+
+    def test_a_name_match_outranks_an_alias_match(self):
+        """A canonical name is stronger evidence than an alias, so a
+        later candidate matching by name must win over an earlier one
+        matching only by alias."""
+        got = accept_match("Gonzales", [
+            _c("Chilly Gonzales", 100, "alias-hit", aliases=("Gonzales",)),
+            _c("Gonzales", 100, "name-hit")])
+        self.assertEqual(got, "name-hit")
+
+    def test_two_alias_matches_are_refused(self):
+        """The ambiguity guard has to cover aliases too, or widening the
+        match silently reintroduces the namesake problem it was written
+        to prevent."""
+        self.assertIsNone(accept_match("Gonzales", [
+            _c("Chilly Gonzales", 100, "a", aliases=("Gonzales",)),
+            _c("Speedy Gonzales", 99, "b", aliases=("Gonzales",))]))
+
+    def test_an_alias_below_the_score_floor_is_ignored(self):
+        self.assertIsNone(
+            accept_match("Gonzales",
+                         [_c("Chilly Gonzales", 40, "cg",
+                             aliases=("Gonzales",))]))
+
+    def test_candidates_without_an_aliases_key_do_not_crash(self):
+        """MB omits the key entirely when an artist has no aliases."""
+        self.assertEqual(
+            accept_match("Elbow", [{"id": "e", "name": "Elbow",
+                                    "score": 100}]), "e")
 
     def test_no_candidates_is_refused(self):
         self.assertIsNone(accept_match("Nobody", []))
