@@ -161,6 +161,45 @@ class TestProxySurface(unittest.TestCase):
             self.assertEqual(dlna_library.DB.pl_list(), ["from the fake"])
             self.assertEqual(_FakeDB.built, 1)
 
+    def test_a_stray_open_cannot_reach_the_live_library(self):
+        """The proxy closed the IMPORT door; `patch.object` is a second
+        one. `mock.patch.object(DB, "all_artists", ...)` must getattr the
+        original to save it, which resolves the proxy and opens the real
+        `library.db` — running every pending migration against the
+        user's live index from a test run. Proven directly on
+        2026-09-20: a suite run applied a pending ADD COLUMN to it.
+
+        The proxy cannot refuse that getattr (CLAUDE.md: a first cut
+        that did broke 12 tests), so the defence is at the other end —
+        `tests/__init__.py` points DB_FILE at a throwaway before
+        dlna_library binds it as an __init__ default. An ADD COLUMN was
+        survivable; the UNIQUE migrations REBUILD `tracks`."""
+        import dlna_config
+        live = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "library.db")
+        default_db = dlna_library.LibraryDB.__init__.__defaults__[0]
+        self.assertNotEqual(os.path.abspath(default_db),
+                            os.path.abspath(live),
+                            "a default-constructed LibraryDB would open "
+                            "the LIVE library.db")
+        self.assertNotEqual(os.path.abspath(dlna_config.DB_FILE),
+                            os.path.abspath(live))
+
+    def test_patch_object_does_not_touch_the_live_file(self):
+        """The behavioural half: do what the suite actually does and
+        assert the live file is not created or modified by it."""
+        live = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "library.db")
+        before = os.stat(live).st_mtime_ns if os.path.exists(live) else None
+        with patch.object(dlna_library.DB, "pl_list", return_value=[]):
+            pass
+        after = os.stat(live).st_mtime_ns if os.path.exists(live) else None
+        self.assertEqual(before, after,
+                         "patch.object on the DB proxy wrote to the live "
+                         "library.db")
+
     def test_repr_does_not_open_the_db(self):
         self.assertIn("not yet opened", repr(dlna_library.DB))
         self.assertIsNone(dlna_library._db_instance)

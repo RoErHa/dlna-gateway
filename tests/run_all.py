@@ -29,6 +29,30 @@ OFFLINE = "--offline" in sys.argv
 FRONTEND = "--frontend" in sys.argv or "--frontend-only" in sys.argv
 FRONTEND_ONLY = "--frontend-only" in sys.argv
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# ── Live-index protection ─────────────────────────────────────────
+# MUST happen before ANY gateway module is imported. `tests/__init__.py`
+# does the same thing, but it only runs when the test PACKAGE is first
+# imported — which, in this script, is far below, at T_UNIT discovery.
+# By then this file has already imported api_playback & friends, and
+# `LibraryDB.__init__(self, db_file: str = DB_FILE)` has bound the LIVE
+# path as a default that a later reassignment cannot reach.
+#
+# Why it matters: `mock.patch.object(DB, "…")` getattrs through the lazy
+# proxy and opens whatever that default points at, running every pending
+# migration. On 2026-09-20 a suite run applied a pending ADD COLUMN to
+# the real library.db. Guarded by
+# tests/test_library_singleton.py::test_a_stray_open_cannot_reach_the_live_library
+sys.path.insert(0, PROJECT)
+import tempfile as _tempfile                                  # noqa: E402
+import dlna_config as _dlna_config                            # noqa: E402
+
+_TEST_DB_DIR = _tempfile.mkdtemp(prefix="dlna-test-db-")
+_dlna_config.DB_FILE = os.path.join(_TEST_DB_DIR, "library.db")
+import atexit as _atexit                                      # noqa: E402
+import shutil as _shutil                                      # noqa: E402
+
+_atexit.register(_shutil.rmtree, _TEST_DB_DIR, ignore_errors=True)
 STATIC = os.path.join(PROJECT, "static")
 
 # Project must be on sys.path so local modules (dlna_*, api_*) can be imported
