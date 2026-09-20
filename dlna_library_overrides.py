@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from dlna_credits import clean_credit
+
 
 log = logging.getLogger("dlna.library")
 
@@ -223,13 +225,27 @@ class OverridesMixin:
             AcoustID worker has filled it in (the recording's original
             release year).
         Frontend prefers `year_original`; if it differs from `year` by
-        more than 2 years, renders as e.g. '1987 (remastered)'."""
+        more than 2 years, renders as e.g. '1987 (remastered)'.
+
+        Also carries `composer`/`lyricist` (2026-09-20), read from the
+        file tags. They ride on THIS request rather than a second one:
+        the now-playing panel already fetches it per track, so the
+        credits line costs no extra round-trip."""
         with self._pool.read() as conn:
             row = conn.execute("""
                 SELECT t.title, t.artist, t.album, t.duration, t.year,
+                       t.composer, t.lyricist,
                        m.year AS year_original
                   FROM tracks t
              LEFT JOIN metadata_overrides m ON m.url = t.url
                  WHERE t.url = ? LIMIT 1
             """, (url,)).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        meta = dict(row)
+        # Display-only junk filter: 8% of this library's credits are
+        # scene adverts (www.t.me/…). '' is the same answer every
+        # caller already gives an untagged track, so no new branch.
+        meta["composer"] = clean_credit(meta.get("composer"))
+        meta["lyricist"] = clean_credit(meta.get("lyricist"))
+        return meta
