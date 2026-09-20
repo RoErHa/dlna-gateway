@@ -115,6 +115,8 @@ class TracksMixin(OverridesMixin):
                 "sample_rate": sr_in if sr_in is not None else sr_url,
                 "year": t.get("year"),
                 "album_key": t.get("album_key", ""),
+                "composer": t.get("composer", ""),
+                "lyricist": t.get("lyricist", ""),
             }
         rows_raw = [_make_row(t) for t in tracks if t.get("url")]
         # Mass INSERTs fire the FTS triggers; heal-and-retry on the
@@ -165,10 +167,10 @@ class TracksMixin(OverridesMixin):
                 "INSERT OR IGNORE INTO tracks "
                 "(udn, obj_id, url, title, artist, album, duration, art, "
                 " mime, genre, file_path, bit_depth, sample_rate, year, "
-                " album_key) "
+                " album_key, composer, lyricist) "
                 "VALUES (:udn,:obj_id,:url,:title,:artist,:album,:duration,"
                 "        :art,:mime,:genre,:file_path,:bit_depth,:sample_rate,"
-                "        :year,:album_key)",
+                "        :year,:album_key,:composer,:lyricist)",
                 rows)
             inserted = conn.execute("SELECT changes()").fetchone()[0]
             # Step 2a: refresh metadata on already-indexed URLs. Step 1's
@@ -194,7 +196,11 @@ class TracksMixin(OverridesMixin):
                 "  sample_rate=:sample_rate, album_key=:album_key, "
                 "  file_path=:file_path, "
                 "  genre = CASE WHEN :genre != '' THEN :genre ELSE genre END, "
-                "  art   = CASE WHEN :art   != '' THEN :art   ELSE art   END "
+                "  art   = CASE WHEN :art   != '' THEN :art   ELSE art   END, "
+                "  composer = CASE WHEN :composer != '' THEN :composer "
+                "             ELSE composer END, "
+                "  lyricist = CASE WHEN :lyricist != '' THEN :lyricist "
+                "             ELSE lyricist END "
                 "WHERE udn=:udn AND url=:url "
                 "  AND (obj_id IS NOT :obj_id OR title IS NOT :title "
                 "       OR artist IS NOT :artist OR album IS NOT :album "
@@ -204,6 +210,8 @@ class TracksMixin(OverridesMixin):
                 "       OR album_key IS NOT :album_key "
                 "       OR file_path IS NOT :file_path "
                 "       OR (:genre != '' AND genre IS NOT :genre) "
+                "       OR (:composer != '' AND composer IS NOT :composer) "
+                "       OR (:lyricist != '' AND lyricist IS NOT :lyricist) "
                 "       OR (:art != '' AND art IS NOT :art))",
                 rows)
             refreshed = max(refresh_cur.rowcount, 0)

@@ -35,7 +35,7 @@ class MigrationsMixin(UniqueMigrationsMixin):
 
     _TRACK_COLS = ("id, udn, obj_id, url, title, artist, album, duration, "
                    "art, mime, genre, file_path, bit_depth, sample_rate, "
-                   "year, album_key")
+                   "year, album_key, composer, lyricist")
 
     def _migrate_fts_update_trigger(self, conn: sqlite3.Connection):
         """2026-07-12: add `tracks_au`, the AFTER UPDATE FTS sync trigger.

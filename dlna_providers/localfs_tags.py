@@ -107,6 +107,29 @@ def _udn_for_root(root: Path) -> str:
 # isn't installed (e.g. CI containers running the UPnP-only path) —
 # only `rescan()` will then raise.
 
+# ── EasyMP4 credit keys ─────────────────────────────────────────
+# mutagen's `easy=True` interface is NOT uniform across containers.
+# FLAC/Ogg expose `composer`/`lyricist` straight from the Vorbis
+# comment, and EasyID3 maps both natively — but **EasyMP4 registers
+# neither**, so an .m4a/.m4b carrying a real `\xa9wrt` credit reads
+# back as blank. That failure is silent and indistinguishable from an
+# untagged file, which is why it is registered here rather than worked
+# around at the call site.
+#
+# Guarded so the module still imports without mutagen (see
+# `_require_mutagen` below) — a UPnP-only setup never installs it.
+try:
+    from mutagen.easymp4 import EasyMP4Tags as _EasyMP4Tags
+
+    _EasyMP4Tags.RegisterTextKey("composer", "\xa9wrt")
+except Exception as _e:                                       # noqa: BLE001
+    # No mutagen, or a version whose easymp4 shape differs. Credits
+    # simply stay blank for MP4; every other format is unaffected —
+    # so this must never be fatal, but it must not be silent either.
+    log.debug(f"localfs_tags: EasyMP4 composer key not registered ({_e}); "
+              f"MP4 credits will read blank")
+
+
 def _require_mutagen():
     try:
         import mutagen          # noqa: F401
@@ -164,6 +187,10 @@ def _read_tags(path: Path) -> dict | None:
         "artist":      _first("artist") or _first("albumartist"),
         "album":       _first("album"),
         "genre":       _first("genre"),
+        # Credits (2026-09-20). Present on ~32% (composer) / ~18%
+        # (lyricist) of this library already, so they cost no network.
+        "composer":    _first("composer"),
+        "lyricist":    _first("lyricist"),
         "duration":    _format_duration(duration_sec),
         "bit_depth":   int(bit_depth) if bit_depth else None,
         "sample_rate": int(sample_rate) if sample_rate else None,

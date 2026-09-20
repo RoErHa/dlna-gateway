@@ -250,6 +250,8 @@ class UniqueMigrationsMixin:
                 sample_rate INTEGER,
                 year        INTEGER,
                 album_key   TEXT DEFAULT '',
+                composer    TEXT DEFAULT '',
+                lyricist    TEXT DEFAULT '',
                 UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
             )
         """)
@@ -261,9 +263,16 @@ class UniqueMigrationsMixin:
                     conn.execute("PRAGMA table_info(_tracks_pre_akwiden)")}
         # album_key backfills as '' (NULLs are DISTINCT in UNIQUE — a NULL
         # would exempt those rows from collision checks entirely).
+        # album_key/composer/lyricist backfill as '' rather than NULL:
+        # they are declared TEXT DEFAULT '' and the refresh guard in
+        # upsert_tracks compares them with != '' , which a NULL never
+        # satisfies. (For album_key a NULL is worse still — NULLs are
+        # DISTINCT in UNIQUE, exempting those rows from collision
+        # checks entirely.)
+        _EMPTY_STR_COLS = ("album_key", "composer", "lyricist")
         select_cols = ", ".join(
             c if c in old_cols
-            else ("'' AS album_key" if c == "album_key" else f"NULL AS {c}")
+            else (f"'' AS {c}" if c in _EMPTY_STR_COLS else f"NULL AS {c}")
             for c in self._TRACK_COLS.split(", "))
         conn.execute(
             f"INSERT OR IGNORE INTO tracks ({self._TRACK_COLS}) "
