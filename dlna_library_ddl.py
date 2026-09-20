@@ -88,4 +88,31 @@ ADD_COLUMN_SQL = [
     # that lost its tag never erases a stored credit.
     "ALTER TABLE tracks ADD COLUMN composer TEXT DEFAULT ''",
     "ALTER TABLE tracks ADD COLUMN lyricist TEXT DEFAULT ''",
+    # 2026-09-20 (step 3): the artist facts the MBID unlocks. All
+    # DISPLAY-layer — nothing here is ever written back to a file, and
+    # `artist_meta.source` continues to describe how the MBID was
+    # resolved, not where these came from.
+    #   born/died/birth_place  MusicBrainz life-span + begin-area
+    #   mb_type/gender         Person vs Group decides which fields the
+    #                          UI can even show — a band has no DOB.
+    #   genres                 MB's curated genre list, comma-joined
+    #   bio/bio_url            Wikipedia extract; CC BY-SA, so bio_url
+    #                          is NOT optional — it is the attribution.
+    #   image_url              Wikimedia Commons (via Wikidata P18)
+    #   notable                Wikidata P800 "notable work"
+    #   top_tracks             ListenBrainz popularity (no API key)
+    "ALTER TABLE artist_meta ADD COLUMN mb_type TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN gender TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN born TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN died TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN birth_place TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN country TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN genres TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN disambiguation TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN bio TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN bio_url TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN image_url TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN notable TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN top_tracks TEXT",
+    "ALTER TABLE artist_meta ADD COLUMN meta_fetched_at INTEGER",
 ]

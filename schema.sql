@@ -157,6 +157,16 @@ CREATE TABLE artist_meta (
                     mbid       TEXT,
                     source     TEXT NOT NULL,
                     fetched_at INTEGER NOT NULL
+                , mb_type TEXT, gender TEXT, born TEXT, died TEXT, birth_place TEXT, country TEXT, genres TEXT, disambiguation TEXT, bio TEXT, bio_url TEXT, image_url TEXT, notable TEXT, top_tracks TEXT, meta_fetched_at INTEGER);
+CREATE TABLE artist_members (
+                    artist_key  TEXT NOT NULL,
+                    member_name TEXT NOT NULL,
+                    member_mbid TEXT,
+                    instruments TEXT NOT NULL DEFAULT '',
+                    begin_date  TEXT NOT NULL DEFAULT '',
+                    end_date    TEXT NOT NULL DEFAULT '',
+                    updated_at  INTEGER NOT NULL,
+                    PRIMARY KEY (artist_key, member_name, begin_date)
                 );
 CREATE TABLE videos (
                     id            TEXT PRIMARY KEY,

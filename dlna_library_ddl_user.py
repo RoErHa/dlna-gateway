@@ -186,4 +186,27 @@ SCHEMA_USER = """
                     source     TEXT NOT NULL,
                     fetched_at INTEGER NOT NULL
                 );
+                -- artist_members (2026-09-20): a band's line-up, with
+                -- instruments and the DATE RANGE of each stint, so
+                -- dlna_lineup.lineup_at can answer "who was in the band
+                -- when this was recorded". Needed because per-recording
+                -- performer credits exist for only ~17% of tracks while
+                -- membership is near-universal for groups.
+                --
+                -- begin_date is IN THE PRIMARY KEY on purpose: a member
+                -- can rejoin, and those stints are distinct rows. Pink
+                -- Floyd's Richard Wright is 1965-1981 AND 1987-2008;
+                -- keying on (artist_key, member_name) alone would
+                -- collapse them and lose The Division Bell.
+                CREATE TABLE IF NOT EXISTS artist_members (
+                    artist_key  TEXT NOT NULL,
+                    member_name TEXT NOT NULL,
+                    member_mbid TEXT,
+                    instruments TEXT NOT NULL DEFAULT '',
+                    begin_date  TEXT NOT NULL DEFAULT '',
+                    end_date    TEXT NOT NULL DEFAULT '',
+                    updated_at  INTEGER NOT NULL,
+                    PRIMARY KEY (artist_key, member_name, begin_date)
+                );
+
 """
