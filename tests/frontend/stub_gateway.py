@@ -42,6 +42,9 @@ class StubGateway:
         self.albums_default: list[dict] = []
         self.tracks_default: list[dict] = []
         self.genres: list[dict] = []
+        # /api/track_meta keyed by track url — the now-playing panel's
+        # year AND credits line both read this one response.
+        self.track_meta: dict[str, dict] = {}
         # artist_albums keyed by artist name
         self.artist_albums: dict[str, list[dict]] = {}
         # album_tracks keyed by (artist, album)
@@ -322,6 +325,13 @@ class _Handler(BaseHTTPRequestHandler):
             total = len(items)
             self._send_json({"items": items[offset:offset + limit],
                              "total": total, "offset": offset, "limit": limit})
+            return
+        if path == "/api/track_meta":
+            meta = gw.track_meta.get(q.get("url", ""))
+            if meta is None:
+                self._send_json({"error": "track not in library"}, 404)
+            else:
+                self._send_json(meta)
             return
         if path == "/api/genres":
             self._send_json(gw.genres)

@@ -96,11 +96,31 @@ function setNpTrack(t){
   const panel = $("np-actions");
   if(npTrack && npTrack.url){
     panel.style.display = "flex";
-    _renderNpYear(npTrack.url);
+    _renderNpMeta(npTrack.url);
   } else {
     panel.style.display = "none";
     $("np-year").textContent = "";
+    $("np-credits").textContent = "";
   }
+}
+
+// Songwriting credits line. Rendered from the SAME /api/track_meta
+// response as the year above — the panel already makes that request
+// per track, so the credits cost no extra round-trip.
+//
+// Phrasing rules, both driven by real data:
+//   * composer == lyricist is COMMON (MusicBrainz returns Freddie
+//     Mercury as both for Bohemian Rhapsody). Printing the name twice
+//     reads as a bug, so that collapses to one "Written by".
+//   * a composer alone IS the songwriter, so it reads "Written by"
+//     too; only a genuine split names the two roles separately.
+// textContent, never innerHTML: this is file-tag text.
+function _creditsLine(composer, lyricist){
+  const c = (composer || "").trim(), l = (lyricist || "").trim();
+  if(c && l && c !== l) return `Music ${c} · Words ${l}`;
+  if(c) return `Written by ${c}`;
+  if(l) return `Words ${l}`;
+  return "";
 }
 
 // Fetch and render the year line under album in the now-playing panel.
@@ -113,12 +133,13 @@ function setNpTrack(t){
 // typical sign of a remaster reissue you own. Same MIN logic as the
 // decade browse (LibraryDB._EFFECTIVE_YEAR).
 let _npYearReqUrl = null;
-async function _renderNpYear(url){
-  if(!url){ $("np-year").textContent = ""; return; }
+async function _renderNpMeta(url){
+  if(!url){ $("np-year").textContent = ""; $("np-credits").textContent = ""; return; }
   // Guard against races where successive setNpTrack() calls fire in
   // close order — only the most-recent URL gets to write the field.
   _npYearReqUrl = url;
   $("np-year").textContent = "";  // clear instantly
+  $("np-credits").textContent = "";
   try{
     const r = await fetch(`/api/track_meta?url=${enc(url)}`);
     if(!r.ok) return;
@@ -139,6 +160,7 @@ async function _renderNpYear(url){
       display = String(fileYear);
     }
     $("np-year").textContent = display;
+    $("np-credits").textContent = _creditsLine(m.composer, m.lyricist);
   }catch(e){ /* best effort — silently fail */ }
 }
 // Persist shuffle preference across reloads
@@ -2671,7 +2693,7 @@ async function control(cmd){
 
 function resetPlayer(){
   _exitRadioMode();
-  $("np-title").textContent="Nothing playing";$("np-artist").textContent="";$("np-album").textContent="";$("np-year").textContent="";
+  $("np-title").textContent="Nothing playing";$("np-artist").textContent="";$("np-album").textContent="";$("np-year").textContent="";$("np-credits").textContent="";
   $("np-meta").textContent="Browse or search your library";
   $("art").textContent="🎵";$("btn-pp").textContent="▶ Play";$("player").className="";
   $("seek-fill").style.width="0%";$("seek-thumb").style.left="0%";
@@ -3130,7 +3152,7 @@ $("edit-save").addEventListener("click", async ()=>{
     if(changed.title)  $("np-title").textContent  = changed.title;
     if(changed.artist) $("np-artist").textContent = changed.artist;
     if(changed.album)  $("np-album").textContent  = changed.album;
-    if("year" in changed) _renderNpYear(npTrack.url);   // refetch + redraw
+    if("year" in changed) _renderNpMeta(npTrack.url);   // refetch + redraw
   }
 });
 
