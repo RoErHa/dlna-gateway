@@ -57,6 +57,7 @@ from dlna_config import DB_FILE
 from db_pool import Pool
 
 from dlna_library_browse import BrowseMixin
+from dlna_library_artists import ArtistsMixin
 from dlna_library_collections import CollectionsMixin
 from dlna_library_migrations import MigrationsMixin
 from dlna_library_schema import SchemaMixin
@@ -83,6 +84,7 @@ log = logging.getLogger("dlna.library")
 # ── LibraryDB ─────────────────────────────────────────────────────
 
 class LibraryDB(SchemaMixin, MigrationsMixin, TracksMixin,
+               ArtistsMixin,
                 BrowseMixin, VideosMixin, CollectionsMixin):
     """
     Thread-safe SQLite wrapper for:
