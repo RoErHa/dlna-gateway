@@ -56,21 +56,51 @@ def _lucene_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _mb_lookup_cover(artist: str, album: str) -> str | None:
+def _audiobooks_udn() -> str:
+    """The audiobooks LocalFs root's udn, or '' when none is configured.
+
+    Imported lazily: `dlna_localfs_wiring` sets it at boot, and this
+    module is imported long before that happens."""
+    try:
+        from dlna_localfs_wiring import AUDIOBOOKS_UDN
+        return AUDIOBOOKS_UDN or ""
+    except Exception as e:                                       # noqa: BLE001
+        log.debug(f"audiobooks udn unavailable ({e}); not skipping any root")
+        return ""
+
+
+def _mb_lookup_cover(artist: str, album: str,
+                     entity: str = "release-group") -> str | None:
     """Look up a cover art URL for (artist, album) via MusicBrainz + CAA.
     Returns a coverartarchive.org URL string on success, None otherwise.
-    Chatty on purpose — every lookup is a single user-visible event."""
-    log.info(f"MB → query  artist={artist!r} album={album!r}")
+    Chatty on purpose — every lookup is a single user-visible event.
+
+    `entity` selects which MusicBrainz level to search, and they are NOT
+    interchangeable. Cover art is attached to a RELEASE — a specific
+    pressing — and a release-group only reports art when one of its
+    releases is flagged as the group cover. Measured on this library's
+    failures, the release level found covers for 10% where the
+    release-group level found 4%:
+
+        Harry Nilsson / Voices of the 70s
+          release-group : 0 groups   -> no art
+          release       : 1 release  -> art FOUND
+
+    Release-group stays FIRST because it is the better answer when it
+    works (one abstract album rather than forty pressings); release is
+    the fallback that rescues compilations."""
+    log.info(f"MB → query  artist={artist!r} album={album!r} "
+             f"as={entity}")
     try:
         # An EMPTY artist means "search by title alone" — the only form
         # that can find a compilation, where the stored artist is one
         # contributing performer rather than the record's artist.
         if artist:
             q = (f'artist:"{_lucene_escape(artist)}" '
-                 f'AND releasegroup:"{_lucene_escape(album)}"')
+                 f'AND {entity.replace("-", "")}:"{_lucene_escape(album)}"')
         else:
             q = f'releasegroup:"{_lucene_escape(album)}"'
-        path = "/ws/2/release-group/?" + urllib.parse.urlencode({
+        path = f"/ws/2/{entity}/?" + urllib.parse.urlencode({
             "query": q, "fmt": "json", "limit": "5",
         })
         conn = http.client.HTTPSConnection("musicbrainz.org", timeout=_MB_TIMEOUT)
@@ -93,7 +123,8 @@ def _mb_lookup_cover(artist: str, album: str) -> str | None:
                 resp.close()
             conn.close()
 
-        groups = data.get("release-groups") or []
+        groups = data.get(f"{entity}s" if entity == "release"
+                          else "release-groups") or []
         if not groups:
             log.info(f"MB ← no match for {artist!r} / {album!r}")
             return None
@@ -110,14 +141,15 @@ def _mb_lookup_cover(artist: str, album: str) -> str | None:
             "coverartarchive.org", timeout=_MB_TIMEOUT)
         resp = None
         try:
-            conn.request("HEAD", f"/release-group/{mbid}/front-500",
+            conn.request("HEAD", f"/{entity}/{mbid}/front-500",
                          headers={"User-Agent": _MB_USER_AGENT})
             resp = conn.getresponse()
             read_capped(resp, what="CoverArtArchive", max_bytes=_JSON_MAX)
             if resp.status in (200, 301, 302, 307):
                 log.info(f"CAA ← HTTP {resp.status} — cover available "
                          f"for mbid={mbid}")
-                return f"https://coverartarchive.org/release-group/{mbid}/front-500"
+                return (f"https://coverartarchive.org/{entity}/{mbid}"
+                        f"/front-500")
             log.info(f"CAA ← HTTP {resp.status} — no front cover for "
                      f"mbid={mbid}")
             return None
@@ -141,23 +173,53 @@ class AlbumArtFetcher:
         self._stop   = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def bare_albums(self) -> list:
-        """Albums that still have no art and have no album_art entry
-        of any source (including 'notfound'). Ordered by track count
-        descending so large albums are resolved first."""
+    def bare_albums(self, *, skip_udns: tuple = (), min_tracks: int = 0,
+                    with_performers: bool = False) -> list:
+        """Albums with no art and no `album_art` row of any source
+        (including 'notfound'). Largest first, so the albums a listener
+        is likeliest to open resolve early.
+
+        The filters are OPT-IN so no existing caller silently narrows,
+        but a live pass showed both are needed — of 1,497 albums it
+        asked MusicBrainz about, 169 were AUDIOBOOKS (the very first
+        query of the run was 'Patrick Rothfuss / The Kingkiller
+        Chronicle Book 2') and 90 were one- or two-track strays: a
+        loose file in its own folder, which has no cover because it is
+        not an album. Both are guaranteed misses that cost a
+        rate-limited request each and cache a `notfound` afterwards.
+
+        `with_performers` adds the folder's distinct-artist count, which
+        is what tells `art_queries` a compilation is a compilation —
+        without it the title-only query, the only form that can find
+        one, never fires."""
+        extra = ""
+        params: list = []
+        if skip_udns:
+            extra += f" AND t.udn NOT IN ({','.join('?' * len(skip_udns))})"
+            params.extend(skip_udns)
+        having = f"HAVING COUNT(*) >= {int(min_tracks)}" if min_tracks else ""
         with self._db._pool.read() as conn:
-            rows = conn.execute("""
-                SELECT t.artist, t.album, COUNT(*) AS n
+            rows = conn.execute(f"""
+                SELECT t.artist, t.album, COUNT(*) AS n,
+                       COUNT(DISTINCT t2.artist) AS performers
                   FROM tracks t
+             LEFT JOIN tracks t2
+                    ON t2.udn = t.udn AND t2.album_key = t.album_key
+                   AND t.album_key != ''
                  WHERE (t.art IS NULL OR t.art = '')
                    AND t.artist != '' AND t.album != ''
+                   {extra}
                    AND NOT EXISTS (
                        SELECT 1 FROM album_art a
                         WHERE a.artist = t.artist
                           AND a.album  = t.album)
                  GROUP BY t.artist, t.album
+                 {having}
                  ORDER BY n DESC
-            """).fetchall()
+            """, params).fetchall()
+        if with_performers:
+            return [(r["artist"], r["album"], r["n"],
+                     max(r["performers"] or 1, 1)) for r in rows]
         return [(r["artist"], r["album"], r["n"]) for r in rows]
 
     def run_once(self) -> dict:
@@ -166,14 +228,22 @@ class AlbumArtFetcher:
         into the current pass (rather than racing as a second thread)."""
         stats = {"total": 0, "found": 0, "notfound": 0, "tracks_updated": 0}
         while not self._stop.is_set():
-            albums = self.bare_albums()
+            # Skip what cannot have an answer: a SECOND LocalFs root
+            # (audiobooks — a music database has never heard of them)
+            # and one-or-two-track strays, which are loose files in
+            # their own folder rather than albums. Measured on a live
+            # pass: 169 and 90 of 1,497 respectively, every one a
+            # guaranteed miss costing a rate-limited request.
+            skip = tuple(u for u in (_audiobooks_udn(),) if u)
+            albums = self.bare_albums(skip_udns=skip, min_tracks=3,
+                                      with_performers=True)
             if not albums:
                 break
             stats["total"] += len(albums)
             eta_s = int(len(albums) * _MB_RATE_LIMIT_SEC)
             log.info(f"AlbumArtFetcher: looking up {len(albums)} bare album(s) "
                      f"(~{eta_s}s at MB rate limit)")
-            for artist, album, n in albums:
+            for artist, album, n, performers in albums:
                 if self._stop.is_set():
                     log.info("AlbumArtFetcher: stop requested — exiting early")
                     break
@@ -182,11 +252,14 @@ class AlbumArtFetcher:
                 # forms — a tidied title, then title-only for a
                 # compilation — are fallbacks. See dlna_art_query.
                 url = None
-                for q_artist, q_album in art_queries(artist, album):
-                    url = _mb_lookup_cover(q_artist, q_album)
-                    if url:
-                        break
-                    if self._stop.is_set():
+                for q_artist, q_album in art_queries(
+                        artist, album, multi_artist=performers > 1):
+                    for entity in ("release-group", "release"):
+                        url = _mb_lookup_cover(q_artist, q_album, entity)
+                        if url or self._stop.is_set():
+                            break
+                        time.sleep(_MB_RATE_LIMIT_SEC)
+                    if url or self._stop.is_set():
                         break
                     time.sleep(_MB_RATE_LIMIT_SEC)
                 if url:
