@@ -111,5 +111,52 @@ class TestChronology(_Base):
         self.assertEqual(got, ["Earlier", "Later"])
 
 
+class TestAlbumDateEverywhere(_Base):
+    """The year was on the artist page but NOWHERE ELSE — not on the
+    Albums browse, not on an open album, not in album_tracks. 96% of
+    this library's albums have one, so the data was never the problem;
+    three queries simply didn't select it (2026-09-21)."""
+
+    def setUp(self):
+        super().setUp()
+        self._add("Bowie", "Hunky Dory", 1971, n=3)
+
+    def test_the_albums_browse_carries_a_year(self):
+        page = self.db.browse_letter(UDN, "albums", "H")
+        row = [r for r in page["items"] if r["album"] == "Hunky Dory"][0]
+        self.assertEqual(row["year"], 1971)
+
+    def test_all_albums_carries_a_year(self):
+        row = [a for a in self.db.all_albums(UDN)
+               if a["album"] == "Hunky Dory"][0]
+        self.assertEqual(row["year"], 1971)
+
+    def test_album_tracks_carry_a_year(self):
+        """So an open album can show its date from any entry point —
+        favourites, a genre, a decade, a search result — without the
+        caller having to carry it in."""
+        tracks = self.db.album_tracks(UDN, "Bowie", "Hunky Dory",
+                                      album_key="Bowie/Hunky Dory")
+        self.assertTrue(tracks)
+        self.assertEqual(tracks[0]["year"], 1971)
+
+    def test_the_original_year_override_wins_there_too(self):
+        """A remaster must show the record's date, not the pressing's —
+        the same rule the artist page already follows."""
+        self._add("Bowie", "Ziggy", 2012, n=2)
+        self.db.metadata_override_set("http://x/Bowie/Ziggy/0", "manual",
+                                      year=1972)
+        row = [a for a in self.db.all_albums(UDN)
+               if a["album"] == "Ziggy"][0]
+        self.assertEqual(row["year"], 1972)
+
+    def test_an_undated_album_reports_none_not_zero(self):
+        """0 would render as a year; None is what 'unknown' must be."""
+        self._add("Bowie", "Undated", None, n=2)
+        row = [a for a in self.db.all_albums(UDN)
+               if a["album"] == "Undated"][0]
+        self.assertIsNone(row["year"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -91,12 +91,17 @@ class BrowseMixin(SearchMixin):
             caller that hasn't moved to album_key — favourites, UPnP,
             Subsonic). Unchanged behaviour."""
         dedup = _dedup_clause("t")
+        # The LEFT JOIN below is 1:1 on url, so row count is unchanged —
+        # this path feeds playback (PWA, Subsonic, UPnP) and must not
+        # gain or lose a track.
         cols = ("t.obj_id as id, t.url, t.title, t.artist, t.album, "
                 "t.album_key, t.duration, t.art, t.mime, t.genre, "
+                f"{_EFFECTIVE_YEAR} as year, "
                 "'audio' as type")
         with self._pool.read() as conn:
             if album_key:
                 base = f"""SELECT {cols} FROM tracks t
+                       LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                             WHERE t.udn=? AND t.album_key=? {{extra}}
                               AND {dedup}
                             ORDER BY t.file_path COLLATE NOCASE, t.title"""
@@ -118,6 +123,8 @@ class BrowseMixin(SearchMixin):
             else:
                 rows = conn.execute(
                     f"""SELECT {cols} FROM tracks t
+                  LEFT JOIN (SELECT url, year FROM metadata_overrides) m
+                         ON m.url = t.url
                        WHERE t.udn=? AND t.album=?
                          AND (? = '' OR t.artist=?)
                          AND {dedup}
@@ -150,8 +157,10 @@ class BrowseMixin(SearchMixin):
                               {_localfs_album_name("t")} as album,
                               {_localfs_album_artist("t")} as artist,
                               COUNT(*) as track_count,
-                              MAX(t.art) as art
+                              MAX(t.art) as art,
+                              MIN({_EFFECTIVE_YEAR}) as year
                        FROM tracks t
+                  LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.album_key != ''
                          AND {dedup}
                        GROUP BY {_localfs_album_group("t")}
@@ -164,8 +173,10 @@ class BrowseMixin(SearchMixin):
                                    THEN 'Various Artists'
                                    ELSE MAX(t.artist) END as artist,
                               COUNT(*) as track_count,
-                              MAX(t.art) as art
+                              MAX(t.art) as art,
+                              MIN({_EFFECTIVE_YEAR}) as year
                        FROM tracks t
+                  LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.album != ''
                          AND {dedup}
                        GROUP BY t.album
@@ -208,7 +219,7 @@ class BrowseMixin(SearchMixin):
                               MAX(t.art) as art,
                               MIN({_EFFECTIVE_YEAR}) as year
                        FROM tracks t
-                       LEFT JOIN metadata_overrides m ON m.url = t.url
+                       LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.album_key != ''
                          AND t.album_key IN (
                              SELECT album_key FROM tracks
@@ -233,7 +244,7 @@ class BrowseMixin(SearchMixin):
                               MAX(t.art) as art,
                               MIN({_EFFECTIVE_YEAR}) as year
                        FROM tracks t
-                       LEFT JOIN metadata_overrides m ON m.url = t.url
+                       LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.artist=?
                          AND {dedup}
                        GROUP BY t.album
@@ -290,7 +301,12 @@ class BrowseMixin(SearchMixin):
                 dedup       = _dedup_clause("t")
                 having      = where_extra.format(col=name)
                 params      = [udn] + ([like] if like else [])
-                base = (f"FROM tracks t WHERE t.udn=? AND t.album_key!='' "
+                # LEFT JOIN so the album's YEAR can be aggregated with
+                # the same effective-year rule the rest of the app uses;
+                # 1:1 on url, so grouping is unaffected.
+                base = (f"FROM tracks t "
+                        f"LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url "
+                        f"WHERE t.udn=? AND t.album_key!='' "
                         f"AND {dedup} GROUP BY {_localfs_album_group('t')} HAVING 1=1 {having}")
                 total = conn.execute(
                     f"SELECT COUNT(*) FROM (SELECT t.album_key {base})",
@@ -299,7 +315,8 @@ class BrowseMixin(SearchMixin):
                     f"""SELECT t.album_key,
                               {name} as album,
                               {artist_expr} as artist,
-                              COUNT(*) as track_count, MAX(t.art) as art
+                              COUNT(*) as track_count, MAX(t.art) as art,
+                              MIN({_EFFECTIVE_YEAR}) as year
                        {base}
                        ORDER BY album COLLATE NOCASE
                        LIMIT ? OFFSET ?""",

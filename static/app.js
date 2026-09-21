@@ -983,6 +983,16 @@ function renderContinueListening(positions){
 // opts.sub(a)      → subtitle text for one album (defaults to artist · N tracks)
 // opts.onOpen(a)   → click on the card
 // opts.onPlay(a)   → click on the ▶ button
+// An album's subtitle. The YEAR leads because it is the one fact that
+// orders a catalogue, and 96% of this library's albums have one. Absent,
+// the line simply starts with the artist rather than showing a gap —
+// an undated album is only called out on an artist page, where its
+// position in the career is the thing being claimed.
+function albumYearSub(a, tail){
+  const y = a.year ? esc(String(a.year)) + " · " : "";
+  return y + tail;
+}
+
 function renderAlbumRows(albums, opts={}){
   const list = opts.into || $("item-list");
   if(!opts.into){ list.innerHTML = ""; }
@@ -1034,7 +1044,7 @@ function renderBrowseItems(items){
     renderAlbumRows(items, {
       sub: a=>{
         const ser=_abSeriesOf(a.album_key||"");
-        return `${esc(a.artist)} · ${a.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}`;
+        return albumYearSub(a, `${esc(a.artist)} · ${a.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}`);
       },
       onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
       onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album, null, a.album_key||""),
@@ -1120,7 +1130,7 @@ async function _showDecadeAlbumsInner(decadeItem){
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load decade albums.</div>'; return; }
   const albums = await r.json();
   renderAlbumRows(albums, {
-    sub:    a=>`${esc(a.artist)} · ${a.track_count} tracks`,
+    sub:    a=>albumYearSub(a, `${esc(a.artist)} · ${a.track_count} tracks`),
     onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
     onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album,
                                {artist:a.artist, album_count:null}, a.album_key||""),
@@ -1151,7 +1161,7 @@ async function _showGenreAlbumsInner(genreItem){
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load genre albums.</div>'; return; }
   const albums = await r.json();
   renderAlbumRows(albums, {
-    sub:    a=>`${esc(a.artist)} · ${a.track_count} tracks`,
+    sub:    a=>albumYearSub(a, `${esc(a.artist)} · ${a.track_count} tracks`),
     onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
     onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album,
                                {artist:a.artist, album_count:null}, a.album_key||""),
@@ -1292,6 +1302,15 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
   const data = await r.json();
   const tracks = data.tracks||[];
+  // The album's date: MIN of its tracks' effective years. Derived from
+  // the DATA we just fetched rather than passed in by the caller, so it
+  // works from every entry point — favourites, a genre, a decade, a
+  // search result — none of which hand us an album row.
+  const _yrs = tracks.map(t=>t.year).filter(Boolean);
+  if(_yrs.length){
+    $("browse-section-title").textContent =
+      (artist || "Various Artists") + "  ·  " + Math.min(..._yrs);
+  }
   renderListAppend({containers:[], items: tracks});
   if(tracks.length > 1){ _wireAlbumFavStar(artist, album, albumKey); }
   if(curServer?.kind==="audiobooks" && tracks.length){
