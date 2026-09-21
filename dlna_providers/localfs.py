@@ -46,17 +46,20 @@ from .localfs_read import ReadMixin
 # Pure helpers moved to localfs_tags 2026-08-20; re-exported here
 # so existing imports (and the tests that patch these names on
 # this module) keep working unchanged.
+from .localfs_art import (  # noqa: F401
+    _extract_art_bytes,
+    _extract_art_hash,
+    _folder_art_path,
+    _sniff_image_mime,
+)
 from .localfs_tags import (  # noqa: F401
     _AUDIO_EXTENSIONS,
     _album_key_for,
-    _extract_art_bytes,
-    _extract_art_hash,
     _format_duration,
     _is_audio_file,
     _mime_for,
     _read_tags,
     _require_mutagen,
-    _sniff_image_mime,
     _track_id_for,
     _udn_for_root,
 )

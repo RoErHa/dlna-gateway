@@ -98,6 +98,7 @@
     "dlna_player_volume.py": 400,
     "dlna_providers/__init__.py": 400,
     "dlna_providers/localfs.py": 400,
+    "dlna_providers/localfs_art.py": 400,
     "dlna_providers/localfs_read.py": 400,
     "dlna_providers/localfs_tags.py": 400,
     "dlna_providers/mock.py": 400,

@@ -26,7 +26,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dlna_providers.localfs_tags import _sniff_image_mime  # noqa: E402
+from dlna_providers.localfs_art import _sniff_image_mime  # noqa: E402
 
 _RASTER = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
