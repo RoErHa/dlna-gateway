@@ -1,4 +1,5 @@
-const APP_CACHE = 'dlna-gw-app-v17';  // v17: ℹ️ Artist panel — index.html gained
+const APP_CACHE = 'dlna-gw-app-v18';  // v18: album rows show the edition year (+ orig.)
+// v17: ℹ️ Artist panel — index.html gained
 //   #np-btn-artist / #artist-modal. Bumped to evict any client holding the OLD
 //   index.html beside the NEW app.js: that pairing threw on the button's
 //   addEventListener and killed the rest of the script, so the app showed full

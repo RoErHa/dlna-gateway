@@ -236,3 +236,29 @@ _EFFECTIVE_YEAR = (
     "NULLIF(t.year, 0), "
     "NULLIF(m.year, 0))"
 )
+
+
+# An album is asked two different questions, and they have different
+# answers. WHICH PRESSING is this? — the sleeve says 2007. WHEN WAS THE
+# MUSIC MADE? — 1967. Reporting only the second dated the three
+# 40th-anniversary discs of *The Piper at the Gates of Dawn* 1967, the
+# same as the original sitting beside them, and dated
+# `VA - 100 Greatest Jazz Icons (2020)` **1946**, its oldest track.
+# So both travel, and the caller decides which to show.
+#
+# MAX decides the EDITION, not MIN. Every mixed-tag-year folder in the
+# reference library (71 of 2,112) is a compilation whose tracks carry
+# their own original years and whose compilation year is the newest of
+# them — and matches the year in the folder name. For an ordinary album
+# every track shares one year, so MIN and MAX agree and the choice never
+# shows. The fallback to the effective year covers a folder that carries
+# no tag year at all, where the MusicBrainz original is all there is.
+#
+# These are ALBUM-level aggregates and assume the same `t` / `m` aliases
+# as _EFFECTIVE_YEAR. The DECADE facet deliberately keeps
+# _EFFECTIVE_YEAR: a 2007 reissue of a 1967 record belongs in the
+# sixties, because that facet asks the second question.
+_ALBUM_EDITION_YEAR = (
+    f"COALESCE(NULLIF(MAX(COALESCE(t.year, 0)), 0), MIN({_EFFECTIVE_YEAR}))"
+)
+_ALBUM_ORIGINAL_YEAR = f"MIN({_EFFECTIVE_YEAR})"

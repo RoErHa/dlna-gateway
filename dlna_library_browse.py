@@ -24,6 +24,8 @@ import logging
 
 from dlna_library_search import SearchMixin
 from dlna_library_sql import (
+    _ALBUM_EDITION_YEAR,
+    _ALBUM_ORIGINAL_YEAR,
     _EFFECTIVE_YEAR,
     _dedup_clause,
     _is_localfs,
@@ -96,7 +98,7 @@ class BrowseMixin(SearchMixin):
         # gain or lose a track.
         cols = ("t.obj_id as id, t.url, t.title, t.artist, t.album, "
                 "t.album_key, t.duration, t.art, t.mime, t.genre, "
-                f"{_EFFECTIVE_YEAR} as year, "
+                f"{_EFFECTIVE_YEAR} as year, NULLIF(t.year, 0) as year_edition, "
                 "'audio' as type")
         with self._pool.read() as conn:
             if album_key:
@@ -158,7 +160,8 @@ class BrowseMixin(SearchMixin):
                               {_localfs_album_artist("t")} as artist,
                               COUNT(*) as track_count,
                               MAX(t.art) as art,
-                              MIN({_EFFECTIVE_YEAR}) as year
+                              {_ALBUM_EDITION_YEAR} as year,
+                              {_ALBUM_ORIGINAL_YEAR} as year_original
                        FROM tracks t
                   LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.album_key != ''
@@ -174,7 +177,8 @@ class BrowseMixin(SearchMixin):
                                    ELSE MAX(t.artist) END as artist,
                               COUNT(*) as track_count,
                               MAX(t.art) as art,
-                              MIN({_EFFECTIVE_YEAR}) as year
+                              {_ALBUM_EDITION_YEAR} as year,
+                              {_ALBUM_ORIGINAL_YEAR} as year_original
                        FROM tracks t
                   LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.album != ''
@@ -217,7 +221,8 @@ class BrowseMixin(SearchMixin):
                               COUNT(*) as folder_tracks,
                               COUNT(DISTINCT t.artist) as folder_artists,
                               MAX(t.art) as art,
-                              MIN({_EFFECTIVE_YEAR}) as year
+                              {_ALBUM_EDITION_YEAR} as year,
+                              {_ALBUM_ORIGINAL_YEAR} as year_original
                        FROM tracks t
                        LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.album_key != ''
@@ -227,8 +232,8 @@ class BrowseMixin(SearchMixin):
                          AND {dedup}
                        GROUP BY {_localfs_album_group("t")}
                        HAVING track_count > 0
-                       ORDER BY MIN({_EFFECTIVE_YEAR}) IS NULL,
-                                MIN({_EFFECTIVE_YEAR}),
+                       ORDER BY {_ALBUM_EDITION_YEAR} IS NULL,
+                                {_ALBUM_EDITION_YEAR},
                                 album COLLATE NOCASE""",
                     (artist, artist, udn, udn, artist)).fetchall()
                 # `own` separates their records from the compilations
@@ -242,14 +247,15 @@ class BrowseMixin(SearchMixin):
                     f"""SELECT t.album, t.artist,
                               COUNT(*) as track_count,
                               MAX(t.art) as art,
-                              MIN({_EFFECTIVE_YEAR}) as year
+                              {_ALBUM_EDITION_YEAR} as year,
+                              {_ALBUM_ORIGINAL_YEAR} as year_original
                        FROM tracks t
                        LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url
                        WHERE t.udn=? AND t.artist=?
                          AND {dedup}
                        GROUP BY t.album
-                       ORDER BY MIN({_EFFECTIVE_YEAR}) IS NULL,
-                                MIN({_EFFECTIVE_YEAR}),
+                       ORDER BY {_ALBUM_EDITION_YEAR} IS NULL,
+                                {_ALBUM_EDITION_YEAR},
                                 t.album COLLATE NOCASE""",
                     (udn, artist)).fetchall()
         return [dict(r) for r in rows]
@@ -316,7 +322,8 @@ class BrowseMixin(SearchMixin):
                               {name} as album,
                               {artist_expr} as artist,
                               COUNT(*) as track_count, MAX(t.art) as art,
-                              MIN({_EFFECTIVE_YEAR}) as year
+                              {_ALBUM_EDITION_YEAR} as year,
+                              {_ALBUM_ORIGINAL_YEAR} as year_original
                        {base}
                        ORDER BY album COLLATE NOCASE
                        LIMIT ? OFFSET ?""",

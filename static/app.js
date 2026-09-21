@@ -983,14 +983,29 @@ function renderContinueListening(positions){
 // opts.sub(a)      → subtitle text for one album (defaults to artist · N tracks)
 // opts.onOpen(a)   → click on the card
 // opts.onPlay(a)   → click on the ▶ button
+// An album carries TWO dates and the server asserts neither: `year` is
+// the edition (what this pressing says it is) and `year_original` the
+// oldest recording on it. Showing only the original dated the three
+// 40th-anniversary Piper discs 1967, the same as the original beside
+// them; showing only the edition loses that a 2007 disc is a 1967
+// record. So the edition leads and the original is named when it is
+// meaningfully older — the same 3-year threshold the now-playing panel
+// uses to say "(remastered)".
+const REMASTER_GAP_YEARS = 3;
+function albumYearLabel(year, original){
+  if(!year) return original ? String(original) : "";
+  return (original && year - original >= REMASTER_GAP_YEARS)
+    ? `${year} · orig. ${original}` : String(year);
+}
+
 // An album's subtitle. The YEAR leads because it is the one fact that
 // orders a catalogue, and 96% of this library's albums have one. Absent,
 // the line simply starts with the artist rather than showing a gap —
 // an undated album is only called out on an artist page, where its
 // position in the career is the thing being claimed.
 function albumYearSub(a, tail){
-  const y = a.year ? esc(String(a.year)) + " · " : "";
-  return y + tail;
+  const lab = albumYearLabel(a.year, a.year_original);
+  return (lab ? esc(lab) + " · " : "") + tail;
 }
 
 function renderAlbumRows(albums, opts={}){
@@ -1236,8 +1251,11 @@ async function _showArtistAlbumsInner(artistItem){
   // and the year is what makes that ordering legible — without it the
   // list just looks unsorted. An undated album says so rather than
   // showing a gap, since it is the reason it sits at the end.
-  const albumSub = a => `${a.year ? esc(String(a.year)) : "year unknown"}`
-    + ` · ${a.track_count} track${a.track_count!==1?"s":""}`;
+  const albumSub = a => {
+    const lab = albumYearLabel(a.year, a.year_original);
+    return (lab ? esc(lab) : "year unknown")
+      + ` · ${a.track_count} track${a.track_count!==1?"s":""}`;
+  };
   renderAlbumRows(own, {...opts, into:list, sub:albumSub});
 
   if(app.length){
@@ -1256,9 +1274,13 @@ async function _showArtistAlbumsInner(artistItem){
       // "1 track of 67" says compilation before the title is read.
       // Appearances keep "1 track of 67" — that says compilation before
       // the title is read, and is more useful here than a year.
-      sub: a=>`${a.year ? esc(String(a.year)) + " · " : ""}`
-           + `${a.track_count} track${a.track_count!==1?"s":""}`
-           + (a.folder_tracks ? ` <span class="ao-of">of ${a.folder_tracks}</span>` : ""),
+      sub: a=>{
+        const lab = albumYearLabel(a.year, a.year_original);
+        return (lab ? esc(lab) + " · " : "")
+             + `${a.track_count} track${a.track_count!==1?"s":""}`
+             + (a.folder_tracks
+                ? ` <span class="ao-of">of ${a.folder_tracks}</span>` : "");
+      },
     });
   }
 }
@@ -1302,14 +1324,18 @@ async function showAlbumTracks(artist, album, artistItem=null, albumKey=""){
   if(!r){ $("item-list").innerHTML='<div class="msg">Could not load tracks.</div>'; return; }
   const data = await r.json();
   const tracks = data.tracks||[];
-  // The album's date: MIN of its tracks' effective years. Derived from
-  // the DATA we just fetched rather than passed in by the caller, so it
-  // works from every entry point — favourites, a genre, a decade, a
-  // search result — none of which hand us an album row.
+  // The album's date, derived from the DATA we just fetched rather than
+  // passed in by the caller, so it works from every entry point —
+  // favourites, a genre, a decade, a search result — none of which hand
+  // us an album row. MAX of the edition years and MIN of the effective
+  // ones, which is what the album-level SQL does one row up.
+  const _eds = tracks.map(t=>t.year_edition).filter(Boolean);
   const _yrs = tracks.map(t=>t.year).filter(Boolean);
-  if(_yrs.length){
+  const _lab = albumYearLabel(_eds.length ? Math.max(..._eds) : null,
+                              _yrs.length ? Math.min(..._yrs) : null);
+  if(_lab){
     $("browse-section-title").textContent =
-      (artist || "Various Artists") + "  ·  " + Math.min(..._yrs);
+      (artist || "Various Artists") + "  ·  " + _lab;
   }
   renderListAppend({containers:[], items: tracks});
   if(tracks.length > 1){ _wireAlbumFavStar(artist, album, albumKey); }

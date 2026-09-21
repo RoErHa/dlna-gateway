@@ -1047,19 +1047,8 @@ real Subsonic album id — the rule is easy to undo by "fixing"
 Reported as "I see the date of the tracks on an album but not the album
 date". Neither missing metadata nor anything the credits sweep would fix
 — **2,153 of 2,238 albums (96%) already had a year**; three queries
-simply never selected one, so the only place a date appeared was the
-now-playing panel, per playing track. `all_albums`, `browse_letter`'s
-album branch and `album_tracks` now all carry it, alongside
-`artist_albums`, which orders an artist's records oldest-first.
-
-- **The album header takes `MIN` of the tracks it just fetched** rather
-  than having a year passed in, so it works from every entry point —
-  favourites, a genre, a decade, a search result — none of which hand
-  the view an album row to read a year off.
-- **Same `_EFFECTIVE_YEAR` rule as everywhere else** (in
-  `dlna_library_sql.py` since two mixins need it): `MIN` of the file tag
-  and the MusicBrainz original, so a remaster shows the RECORD's date,
-  not the pressing's.
+simply never selected one. `all_albums`, `browse_letter`'s album branch
+and `album_tracks` now all carry it, alongside `artist_albums`.
 
 > ⚠ **Join a NARROWED view of `metadata_overrides`, never the table.**
 > It also has `artist` and `album` columns, so joining the whole thing
@@ -1067,7 +1056,71 @@ album branch and `album_tracks` now all carry it, alongside
 > UPnP branches that never got the join failed on `m.year` outright.
 > `LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url`
 > carries only what the expression needs and cannot collide with
-> anything. `tests/test_artist_chronology.py` (12).
+> anything. The same trap bites a second time inside the query:
+> **`year` is also a column of `tracks`**, so a bare `year` in `ORDER BY`
+> resolves against the source row, not the aggregate alias — order by
+> the expression. `tests/test_artist_chronology.py` (12).
+
+#### An album has TWO dates, and reporting one was wrong (2026-09-21)
+
+The first cut dated an album `MIN(_EFFECTIVE_YEAR)` — its oldest
+recording, each track having already been pulled back to its
+MusicBrainz original. The reasoning ("a 2011 remaster of a 1975 album
+belongs at 1975") is sound for a *career view* and was wrong as an
+album's label. Reported from the sofa, confirmed in the data:
+
+```
+Piper … 40th [Disc 1] 2007   tag 2007  no override   -> showed 2007
+Piper … 40th [Disc 2] 2007   tag 2007  override 1967 -> showed 1967
+Piper … 40th [Disc 3] 2007   tag 2007  override 1967 -> showed 1967
+Piper at the Gates of Dawn   tag 1967  no override   -> showed 1967
+```
+
+Two defects, compounding:
+- **The anniversary discs were indistinguishable from the original.**
+- **And only sometimes** — the pull-back needs a `metadata_overrides`
+  row, so whether a folder showed 2007 or 1967 depended on how far
+  `improve_song_years` had got. Same record, same tags, three answers.
+- **`MIN` is nonsense for a compilation**, which is most of the damage:
+  `VA - 100 Greatest Jazz Icons (2020)` showed **1946**, `Now #1s - 70
+  Years … (2022)` showed **1952**, `Kind Of Blue (2022 Remaster)` 1956.
+
+Measured: **842 of 2,249 albums displayed a year that was not their own;
+671 were out by 3+ years.**
+
+An album now reports both facts and asserts neither
+(`_ALBUM_EDITION_YEAR` / `_ALBUM_ORIGINAL_YEAR` in
+`dlna_library_sql.py`):
+
+| field | is | from |
+|---|---|---|
+| `year` | the EDITION — what this pressing says it is | `MAX` of the tracks' tag years |
+| `year_original` | the oldest recording on it | `MIN(_EFFECTIVE_YEAR)`, as before |
+
+- **`MAX` decides the edition, not `MIN`.** Every mixed-tag-year folder
+  in this library (71 of 2,112) is a compilation whose tracks carry
+  their own original years and whose compilation year is the newest of
+  them — and matches the year in the folder name. For an ordinary album
+  every track shares one year, so the choice never shows.
+- **`album_tracks` carries `year_edition` per row** so the album header
+  can still derive its date from the tracks it just fetched, which is
+  what makes it work from favourites, a genre, a decade or a search
+  result — none of which hand the view an album row.
+- **The client owns the display rule**, in ONE place:
+  `albumYearLabel(year, original)` renders `2007 · orig. 1967` at a gap
+  of `REMASTER_GAP_YEARS` (3) or more, else just the year. It is shared
+  by the album rows, the artist page and the album header — the artist
+  page had its own copy of the subtitle and that is exactly how the
+  three drifted apart. Same threshold the now-playing panel uses for
+  "(remastered)".
+- **The chronology sorts by what it displays.** A list whose order
+  disagrees with its own labels reads as a bug.
+
+> **The DECADE facet deliberately still uses `_EFFECTIVE_YEAR`.** "Which
+> decade is this music from" is a different question from "which pressing
+> is this": a 2007 reissue of a 1967 record belongs in the sixties.
+> `tests/test_album_year.py` (12) pins that, and
+> `tests/frontend/test_album_year.py` (7) pins the label.
 
 ### Songwriting credits: composer + lyricist (2026-09-20)
 

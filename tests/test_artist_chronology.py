@@ -6,11 +6,22 @@ An artist page is a career, so it reads best in the order the records
 were made. That means two things: every album row carries a year, and
 the list is ordered by it rather than alphabetically.
 
-The year is the EFFECTIVE year — MIN of the file tag and the
-MusicBrainz original — the same rule the decade browse uses
-(`FacetsMixin._EFFECTIVE_YEAR`). That matters here more than anywhere:
-a 2011 remaster of a 1975 album belongs at 1975, or the evolution the
-ordering exists to show is wrong.
+The year is the EDITION year (2026-09-21, was the effective year).
+A row reports `year` — what this pressing says it is — and
+`year_original`, the oldest recording on it. Both travel; the client
+decides what to show.
+
+That REPLACED "a 2011 remaster of a 1975 album belongs at 1975", which
+read well and did not survive the real library: it dated the three
+40th-anniversary discs of *The Piper at the Gates of Dawn* 1967, the
+same as the original beside them, and only sometimes — the pull-back
+needed a MusicBrainz override, so Disc 1 read 2007 while Discs 2 and 3
+read 1967. See `tests/test_album_year.py` for the full case.
+
+The ORDER follows what each row displays, because a list whose sequence
+disagrees with its own labels reads as a bug. The decade facet still
+uses the effective year: that one really is asking when the music was
+made.
 """
 import os
 import sys
@@ -58,15 +69,16 @@ class TestChronology(_Base):
         self.assertIn("year", row)
         self.assertEqual(row["year"], 1977)
 
-    def test_an_original_year_override_decides_the_position(self):
-        """A remaster must sort where the RECORD belongs, not where the
-        edition was pressed — otherwise the career reads out of order."""
+    def test_the_order_follows_the_year_each_row_displays(self):
+        """A remaster sorts at its own date, which is what its label
+        says. Ordering it at 1972 while the row reads 2012 is the
+        version of this that looks broken."""
         self._add("Bowie", "Ziggy (2012 remaster)", 2012)
         self._add("Bowie", "Aladdin Sane", 1973)
         url = "http://x/Bowie/Ziggy (2012 remaster)/0"
         self.db.metadata_override_set(url, "manual", year=1972)
         got = [a["album"] for a in self.db.artist_albums(UDN, "Bowie")]
-        self.assertEqual(got[0], "Ziggy (2012 remaster)")
+        self.assertEqual(got, ["Aladdin Sane", "Ziggy (2012 remaster)"])
 
     def test_an_album_with_no_year_sorts_last(self):
         """It cannot be placed in the evolution, and guessing a position
@@ -140,15 +152,15 @@ class TestAlbumDateEverywhere(_Base):
         self.assertTrue(tracks)
         self.assertEqual(tracks[0]["year"], 1971)
 
-    def test_the_original_year_override_wins_there_too(self):
-        """A remaster must show the record's date, not the pressing's —
-        the same rule the artist page already follows."""
+    def test_a_remaster_reports_both_of_its_dates(self):
+        """The edition leads and the recording travels with it, so the
+        two can be told apart without either being thrown away."""
         self._add("Bowie", "Ziggy", 2012, n=2)
         self.db.metadata_override_set("http://x/Bowie/Ziggy/0", "manual",
                                       year=1972)
         row = [a for a in self.db.all_albums(UDN)
                if a["album"] == "Ziggy"][0]
-        self.assertEqual(row["year"], 1972)
+        self.assertEqual((row["year"], row["year_original"]), (2012, 1972))
 
     def test_an_undated_album_reports_none_not_zero(self):
         """0 would render as a year; None is what 'unknown' must be."""
