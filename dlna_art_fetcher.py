@@ -19,7 +19,9 @@ import json
 import logging
 import os
 import threading
+import time
 import urllib.parse
+from dlna_art_query import art_queries
 from dlna_xml import read_capped
 
 # Ceiling on a JSON body from an external service. These are answers to
@@ -60,8 +62,14 @@ def _mb_lookup_cover(artist: str, album: str) -> str | None:
     Chatty on purpose — every lookup is a single user-visible event."""
     log.info(f"MB → query  artist={artist!r} album={album!r}")
     try:
-        q = (f'artist:"{_lucene_escape(artist)}" '
-             f'AND releasegroup:"{_lucene_escape(album)}"')
+        # An EMPTY artist means "search by title alone" — the only form
+        # that can find a compilation, where the stored artist is one
+        # contributing performer rather than the record's artist.
+        if artist:
+            q = (f'artist:"{_lucene_escape(artist)}" '
+                 f'AND releasegroup:"{_lucene_escape(album)}"')
+        else:
+            q = f'releasegroup:"{_lucene_escape(album)}"'
         path = "/ws/2/release-group/?" + urllib.parse.urlencode({
             "query": q, "fmt": "json", "limit": "5",
         })
@@ -169,7 +177,18 @@ class AlbumArtFetcher:
                 if self._stop.is_set():
                     log.info("AlbumArtFetcher: stop requested — exiting early")
                     break
-                url = _mb_lookup_cover(artist, album)
+                # The exact (artist, album) is always tried first, so
+                # nothing that resolves today can regress; the looser
+                # forms — a tidied title, then title-only for a
+                # compilation — are fallbacks. See dlna_art_query.
+                url = None
+                for q_artist, q_album in art_queries(artist, album):
+                    url = _mb_lookup_cover(q_artist, q_album)
+                    if url:
+                        break
+                    if self._stop.is_set():
+                        break
+                    time.sleep(_MB_RATE_LIMIT_SEC)
                 if url:
                     with self._db._pool.write() as conn:
                         conn.execute(
