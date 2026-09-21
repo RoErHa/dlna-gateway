@@ -161,5 +161,92 @@ class TestOneFilePathForArtist(_Base):
         self.assertEqual(self.db.one_file_path_for_artist(UDN, "Nobody"), "")
 
 
+class TestArtistInfo(_Base):
+    """The step-3 display columns and the band line-up."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.artist_meta_set("Pink Floyd", mbid="pf", source="search")
+
+    def test_info_round_trip(self):
+        self.db.artist_info_set("Pink Floyd", {
+            "mb_type": "Group", "born": "1965", "died": "2014",
+            "birth_place": "London", "country": "GB",
+            "genres": "progressive rock, psychedelic rock",
+            "bio": "Pink Floyd are an English rock band…",
+            "bio_url": "https://en.wikipedia.org/wiki/Pink_Floyd"})
+        row = self.db.artist_info_get("Pink Floyd")
+        self.assertEqual(row["mb_type"], "Group")
+        self.assertEqual(row["born"], "1965")
+        self.assertEqual(row["mbid"], "pf")          # untouched
+        self.assertTrue(row["meta_fetched_at"])
+
+    def test_info_never_clobbers_the_resolved_mbid_or_source(self):
+        """artist_meta.source describes how the MBID was resolved, not
+        where the biography came from. Writing info must not rewrite
+        it, or a 'manual' resolution silently becomes 'search'."""
+        self.db.artist_meta_set("Pink Floyd", mbid="pf", source="manual")
+        self.db.artist_info_set("Pink Floyd", {"mb_type": "Group"})
+        row = self.db.artist_info_get("Pink Floyd")
+        self.assertEqual(row["source"], "manual")
+        self.assertEqual(row["mbid"], "pf")
+
+    def test_members_round_trip_with_both_stints(self):
+        """Richard Wright twice — begin_date is in the primary key, so
+        1965-1981 and 1987-2008 are separate rows."""
+        self.db.artist_members_set("Pink Floyd", [
+            {"name": "Richard Wright", "instruments": "keyboard",
+             "begin": "1965", "end": "1981", "mbid": "rw"},
+            {"name": "Richard Wright", "instruments": "keyboard",
+             "begin": "1987", "end": "2008-09-15", "mbid": "rw"},
+            {"name": "Nick Mason", "instruments": "drums",
+             "begin": "1965", "end": "", "mbid": "nm"}])
+        got = self.db.artist_members_get("Pink Floyd")
+        self.assertEqual(len(got), 3)
+        wright = [m for m in got if m["member_name"] == "Richard Wright"]
+        self.assertEqual({w["begin_date"] for w in wright}, {"1965", "1987"})
+
+    def test_members_are_REPLACED_not_merged(self):
+        """A re-fetch is a sync: a member MusicBrainz has since removed
+        must disappear, or the line-up only ever grows."""
+        self.db.artist_members_set("Pink Floyd", [
+            {"name": "Syd Barrett", "instruments": "guitar",
+             "begin": "1965", "end": "1968"}])
+        self.db.artist_members_set("Pink Floyd", [
+            {"name": "Nick Mason", "instruments": "drums",
+             "begin": "1965", "end": ""}])
+        got = [m["member_name"] for m in self.db.artist_members_get("Pink Floyd")]
+        self.assertEqual(got, ["Nick Mason"])
+
+    def test_members_survive_clear_udn(self):
+        self.db.upsert_tracks(UDN, [{
+            "id": "1", "url": "http://x/1", "title": "T",
+            "artist": "Pink Floyd", "album": "A", "duration": "0:03:00",
+            "mime": "audio/flac"}])
+        self.db.artist_members_set("Pink Floyd", [
+            {"name": "Nick Mason", "instruments": "drums",
+             "begin": "1965", "end": ""}])
+        self.db.clear(UDN)
+        self.assertEqual(len(self.db.artist_members_get("Pink Floyd")), 1)
+
+    def test_an_unknown_artist_has_no_info_and_no_members(self):
+        self.assertIsNone(self.db.artist_info_get("Nobody"))
+        self.assertEqual(self.db.artist_members_get("Nobody"), [])
+
+    def test_worklist_is_artists_with_an_mbid_and_no_info_yet(self):
+        self.db.artist_meta_set("Elbow", mbid="eb", source="search")
+        self.db.artist_meta_set("Nobody", mbid=None, source="notfound")
+        todo = self.db.artists_needing_info()
+        self.assertIn("Pink Floyd", todo)
+        self.assertIn("Elbow", todo)
+        self.assertNotIn("Nobody", todo)     # no mbid — nothing to fetch with
+
+    def test_worklist_drops_artists_already_fetched(self):
+        """Sticky like every other cache here: a second run resumes."""
+        self.db.artist_meta_set("Elbow", mbid="eb", source="search")
+        self.db.artist_info_set("Pink Floyd", {"mb_type": "Group"})
+        self.assertEqual(self.db.artists_needing_info(), ["Elbow"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

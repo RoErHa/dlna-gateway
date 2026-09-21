@@ -81,6 +81,92 @@ class ArtistsMixin:
             return [dict(r) for r in conn.execute(
                 "SELECT * FROM artist_meta ORDER BY artist COLLATE NOCASE")]
 
+    # Columns artist_info_set may write. Deliberately an ALLOWLIST:
+    # `mbid` and `source` describe how the artist was RESOLVED, not
+    # where the biography came from, and a fetch that rewrote them
+    # would silently turn a hand-made 'manual' decision into 'search'.
+    _INFO_COLS = ("mb_type", "gender", "born", "died", "birth_place",
+                  "country", "genres", "disambiguation", "bio", "bio_url",
+                  "image_url", "notable", "top_tracks")
+
+    def artist_info_set(self, artist: str, fields: dict) -> bool:
+        """Store the display facts for an artist already in the table.
+
+        `meta_fetched_at` is stamped here and is what
+        `artists_needing_info` reads, so a sweep resumes rather than
+        re-spending the API budget."""
+        key = norm_artist(artist)
+        if not key:
+            return False
+        cols = [c for c in self._INFO_COLS if c in fields]
+        sets = ", ".join(f"{c}=?" for c in cols) + ", meta_fetched_at=?"
+        vals = [fields[c] for c in cols] + [int(time.time()), key]
+        with self._pool.write() as conn:
+            cur = conn.execute(
+                f"UPDATE artist_meta SET {sets} WHERE artist_key=?", vals)
+        return cur.rowcount > 0
+
+    def artist_info_get(self, artist: str):
+        return self.artist_meta_get(artist)
+
+    def artist_members_set(self, artist: str, members: list) -> int:
+        """REPLACE this artist's line-up. A re-fetch is a SYNC, not a
+        merge: a member MusicBrainz has since corrected away must
+        disappear, or the line-up only ever grows. Same semantics as
+        tools/immich_people_sync.py."""
+        key = norm_artist(artist)
+        if not key:
+            return 0
+        now = int(time.time())
+        rows = [(key, (m.get("name") or "").strip(), m.get("mbid") or "",
+                 m.get("instruments") or "", m.get("begin") or "",
+                 m.get("end") or "", now)
+                for m in (members or []) if (m.get("name") or "").strip()]
+        with self._pool.write() as conn:
+            conn.execute("DELETE FROM artist_members WHERE artist_key=?",
+                         (key,))
+            conn.executemany(
+                "INSERT OR REPLACE INTO artist_members "
+                "(artist_key, member_name, member_mbid, instruments, "
+                " begin_date, end_date, updated_at) VALUES (?,?,?,?,?,?,?)",
+                rows)
+        return len(rows)
+
+    def artist_members_get(self, artist: str) -> list[dict]:
+        """The stored line-up, oldest joiner first — which is also the
+        order a reader expects to meet a band in."""
+        key = norm_artist(artist)
+        if not key:
+            return []
+        with self._pool.read() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM artist_members WHERE artist_key=? "
+                " ORDER BY begin_date, member_name", (key,))]
+
+    def artist_track_count(self, artist: str) -> int:
+        """How many tracks this artist has, matched on the NORMALISED
+        name so a browse spelling counts a tag spelling's rows too."""
+        key = norm_artist(artist)
+        if not key:
+            return 0
+        with self._pool.read() as conn:
+            rows = conn.execute(
+                "SELECT artist, COUNT(*) n FROM tracks "
+                " WHERE artist <> '' GROUP BY artist").fetchall()
+        return sum(r["n"] for r in rows if norm_artist(r["artist"]) == key)
+
+    def artists_needing_info(self, limit: int = 0) -> list[str]:
+        """Artists with an mbid but no metadata fetched yet. A row
+        without an mbid is skipped — there is nothing to fetch with."""
+        sql = ("SELECT artist FROM artist_meta "
+               " WHERE mbid IS NOT NULL AND mbid <> '' "
+               "   AND (meta_fetched_at IS NULL OR meta_fetched_at = 0) "
+               " ORDER BY artist COLLATE NOCASE")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        with self._pool.read() as conn:
+            return [r["artist"] for r in conn.execute(sql)]
+
     def one_file_path_for_artist(self, udn: str, artist: str) -> str:
         """Any readable file by this artist, for the free tag-reading
         phase of the sweep. Matched on the NORMALISED name so a browse
