@@ -519,6 +519,45 @@ def list_pages():
          "relayed ANY internal HTTP service's body verbatim and /art's "
          "error text was an open/closed/filtered port oracle. Refusals "
          "are logged; the caller gets a uniform failure."),
+        ("P/g35", "dlna_credits.py",
+         "Songwriting credits (2026-09-20): is this composer/lyricist a "
+         "NAME or machine junk? DISPLAY-only — the file tag and the "
+         "tracks row are untouched. 8% of this library's credits are "
+         "scene adverts (www.t.me/…). REJECTED rule, kept as a test: "
+         "\u201ccredits with no A-Za-z letter are junk\u201d matched 55 rows, "
+         "every one a real composer (\u0421\u0442\u0440\u0430\u0432\u0438\u043d\u0441\u043a\u0438\u0439, "
+         "\u041f\u0440\u043e\u043a\u043e\u0444\u044c\u0435\u0432)."),
+        ("P/g36", "dlna_mbid.py",
+         "The artist \u2192 MusicBrainz-id decision, pure. Every external "
+         "source keys off this id, so one wrong match is wrong in four "
+         "places and never invites correction \u2014 it REFUSES rather than "
+         "guesses. &amp; is never split (band names contain it), commas "
+         "never at all, every dash folds to a space (MB spells names "
+         "with typographic dashes), aliases only when nothing matched "
+         "by name, and two artists sharing a name are refused."),
+        ("P/g37", "dlna_lineup.py",
+         "\u201cWho was in the band when this was recorded?\u201d \u2014 pure "
+         "date-intersection over membership. Exists because "
+         "per-recording performer credits cover only ~17% of tracks "
+         "while membership is near-universal. Members REJOIN (Richard "
+         "Wright has two stints), and no year means no claim."),
+        ("P/g38", "dlna_artist_fetch.py",
+         "The artist-metadata sources \u2014 MusicBrainz (identity, "
+         "life-span, genres, members), Wikipedia (bio, stored only WITH "
+         "its url: CC BY-SA attribution), Last.fm (best-known, needs an "
+         "application key). Parsing is split from HTTP so the judgement "
+         "is testable. Owns the `member of band` DIRECTION rule: "
+         "backward = a group's members, forward = a person's bands."),
+        ("P/g39", "dlna_asgi_artist.py",
+         "GET /api/artist_info \u2014 the artist panel's ONE request. Resolves "
+         "the line-up for the track's year and LABELS it (inferred vs "
+         "credits) so the client cannot promote a guess to a fact. Own "
+         "module: dlna_asgi_browse is at 397/400 lines."),
+        ("P/g40", "dlna_library_artists.py",
+         "ArtistsMixin \u2014 artist_meta (id + display facts) and "
+         "artist_members (line-up). Survives clear(udn): each row cost "
+         "a rate-limited round-trip. Keyed by the NORMALISED name so "
+         "spelling variants are one question, not three."),
     ]
     for c, f, r in progs:
         prog_rows.append([C(c), P(f), P(r)])
@@ -580,6 +619,19 @@ def list_pages():
          "(LocalFs URLs are path-stable, so old acoustid rows would re-mask "
          "beets' fresh tags) then reindex LocalFs. <b>--apply --dry-run "
          "--no-clean --no-reindex --no-backup --udn --gateway --db -y</b>."),
+        ("T/a15", "artist_mbid.py",
+         "Resolve every artist to a MusicBrainz id \u2014 the keystone the "
+         "rest of the artist metadata hangs off. Tags first (free, "
+         "exact), then name search. Live: 2,889 artists, 87.8% "
+         "resolved, 85.9% search acceptance. Resumable (sticky "
+         "notfound). <b>--apply --limit N --tags-only -v</b>."),
+        ("T/a16", "artist_meta.py",
+         "Turn each id into the panel's facts: life-span, birthplace, "
+         "genres, biography, best-known, and a band's members with "
+         "instruments + dates. Live: 2,889 in 3h37m, 0 errors. SET "
+         "LASTFM_API_KEY FIRST \u2014 meta_fetched_at marks an artist done, "
+         "so a keyless pass leaves them all without best-known. "
+         "<b>--apply --limit N -v</b>."),
     ]
     for c, f, p in tools:
         tool_rows.append([C(c), P(f), P(p)])
@@ -625,6 +677,14 @@ def list_pages():
         ("E/x6", "nominatim.openstreetmap.org", "GET /reverse — GPS → place "
          "name for video display titles (P/g33). UA + 1.1 s rate limit per "
          "OSM policy; sticky cache in geocode_cache.", RED),
+        ("E/x7", "en.wikipedia.org", "GET /api/rest_v1/page/summary/"
+         "{title} \u2014 artist biography for the artist panel. CC BY-SA: the "
+         "bio is DROPPED if its url is missing, because the link is the "
+         "attribution. Disambiguation stubs refused.", RED),
+        ("E/x8", "ws.audioscrobbler.com", "Last.fm artist.getTopTracks \u2014 "
+         "\u201cbest known for\u201d, ranked by real listening. Needs an "
+         "APPLICATION key (LASTFM_API_KEY); an account password is NOT "
+         "an API credential. Absent \u2192 the block is omitted.", RED),
         ("J/1", "com.roha.dlna-gateway", "LaunchAgent that runs the gateway. "
          "Restart: launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway.",
          GREY),

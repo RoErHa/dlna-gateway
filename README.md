@@ -166,6 +166,12 @@ to `.env` and edit. Variables:
   to MusicBrainz, Cover Art Archive, and radio-browser.info. Their
   ToS requires an identifying email; anonymous-looking requests get
   throttled or blocked.
+- `LASTFM_API_KEY` — optional, powers the *"best known for"* block on
+  the ℹ️ artist panel. This is an **application key**, not your Last.fm
+  account password: read methods authenticate with a key you get
+  instantly at <https://www.last.fm/api/account/create>. Leave it empty
+  and that one block is omitted — everything else in the panel still
+  works.
 - `TAILSCALE_CERT_HOST` — only needed if you use `renew-cert.sh`
   for automated Tailscale cert renewal. Your tailnet hostname,
   e.g. `mymachine.tailXXXXX.ts.net`.
@@ -216,6 +222,24 @@ The headline list above is the short version.
   overrides, then reindex). *(The old in-process AcoustID worker was an
   alternative path; it was removed in 2.0 — it did the same fingerprint →
   MusicBrainz job and collided with beets, which is the better tagger.)*
+- **Songwriting credits.** Composer and lyricist, read straight from the
+  tags already in your files — no network, no lookup. Shown under the
+  year in the now-playing panel: *"Written by Freddie Mercury"*, or
+  *"Music Elton John · Words Bernie Taupin"* when the two differ.
+  Scene-release advertising that some rippers inject into these fields
+  is filtered out of the display.
+- **Artist information (ℹ️).** A panel on the playing track's artist:
+  born/died or formed/ended, birthplace, genres, a biography from
+  Wikipedia (always with its link — the text is CC BY-SA), what they are
+  best known for, and an artist photo. For a band it also shows **the
+  line-up that played on that recording** — names and instruments,
+  resolved to the track's year rather than today's, so a 1967 Pink Floyd
+  track lists Syd Barrett and a 1994 one doesn't. That last part is
+  inferred from membership dates and is labelled as inference; when
+  MusicBrainz names the actual players on a recording, it says
+  *"credited on this recording"* instead. Filled by two offline sweeps
+  (`tools/artist_mbid.py`, then `tools/artist_meta.py`) so opening the
+  panel is a local database read.
 - **Browsable by your renderer (DLNA Media Server).** The gateway also
   announces *itself* as a full DLNA Media Server, so a UPnP renderer like the
   Naim can browse your whole library — Artists / Albums (#-A-Z) / Genres /
@@ -281,7 +305,11 @@ deliberate and test-pinned — see `tests/test_art_safety.py`.
 
 **What does leave your machine**, all over verified TLS: artist/album tags go
 to MusicBrainz + Cover Art Archive while indexing; lyrics lookups send
-title/artist/album/duration to lrclib on demand; and if you enable video,
+title/artist/album/duration to lrclib on demand; **artist names go to
+MusicBrainz, Wikipedia and (if you set a key) Last.fm** when you run the
+two artist-metadata sweeps — those are batch tools you start yourself, not
+background traffic, and the panel then reads only your local database; and
+if you enable video,
 **GPS coordinates from your clips are sent to Nominatim automatically** to
 turn them into place names. That last one is the privacy-relevant one — it is
 inherent to reverse-geocoding, cached per coordinate, and opt-out by leaving
@@ -516,6 +544,10 @@ This project would not exist without:
   — audio-fingerprint metadata recognition, used by the beets
   enrichment batch (`tools/beets_enrich.py`).
 - [lrclib.net](https://lrclib.net/) — on-demand lyrics.
+- [Wikipedia](https://www.wikipedia.org/) — artist biographies, shown
+  under CC BY-SA with attribution and a link back to the article.
+- [Last.fm](https://www.last.fm/) — "best known for" on the artist
+  panel, ranked by real listening data.
 - [radio-browser.info](https://www.radio-browser.info/) — internet
   radio station directory.
 - The [Subsonic API](http://www.subsonic.org/pages/api.jsp) — the

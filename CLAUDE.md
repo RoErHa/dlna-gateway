@@ -108,7 +108,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **90/90 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **99/99 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -379,6 +379,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_asgi_subsonic.py` | The `/rest/*` Subsonic surface (Amperfy/CarPlay). |
 | `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
+| `dlna_asgi_artist.py` | `GET /api/artist_info` — the ℹ️ panel's ONE request. Its own module because `dlna_asgi_browse.py` sits at 397/400, and because the panel is a feature seam that will grow. Resolves the line-up for the track's year and LABELS it, so the PWA can't promote a guess to a fact. |
 | `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
 | `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
@@ -389,7 +390,10 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library.py` | **Composition root only (~150 lines).** `LibraryDB` is assembled from six mixins (below) — each of which may itself inherit one more after the 2026-08-20 size split, ten in the MRO and still disjoint. The `DB`/`INDEXER`/`DEVICE_ROLES`/`ART_FETCHER` singletons are wired here. Until 2026-08-20 this file was **2,912 lines** and `LibraryDB` a 95-method God Object; the split is MIXIN-based precisely so the public `DB.<method>` surface is byte-identical and none of the ~240 call sites changed. |
 | `dlna_library_sql.py` | Pure helpers shared by the mixins — `_norm_title`, `_dedup_clause`, `_parse_audio_params`, `_is_localfs`, the `_localfs_album_*` SQL fragments, `_dur_to_secs`. Dependency-free ON PURPOSE: a mixin importing them from `dlna_library` would be circular AND would fire the `DB = LibraryDB()` module-level singleton (hence every pending migration on the live DB) as a side effect. `dlna_library` re-exports them all, so `from dlna_library import _dedup_clause` still works. |
 | `dlna_library_schema.py` | `SchemaMixin` — the startup sequence (create → alter → migrate → seed) + the Phase-A album-art sibling backfill. Regenerate `schema.sql` after changes. |
-| `dlna_library_ddl.py` | The literal DDL as DATA — `SCHEMA_DDL` (every CREATE TABLE/INDEX/TRIGGER) + `ADD_COLUMN_SQL`. No logic, no imports. |
+| `dlna_library_ddl.py` | Composition root for the DDL — `SCHEMA_DDL` (concatenated from the three modules below) + `ADD_COLUMN_SQL`. Split 2026-09-20 at 399/400 lines. No logic. |
+| `dlna_library_ddl_index.py` | The DERIVED half: `tracks`, FTS5 + sync triggers, `localfs_files`, `index_meta`. Every row here is regenerable by re-reading the music. Concatenated FIRST — the FTS triggers reference `tracks`. |
+| `dlna_library_ddl_user.py` | The half that SURVIVES a rebuild — the twelve tables `clear(udn)` must never touch. Authored by a person, or earned at real cost (Cover Art Archive, lrclib, ~1.2 s per MusicBrainz id). If a table belongs here, adding it to a clear path is data loss, not tidying. |
+| `dlna_library_ddl_video.py` | GWMovies, geocode cache, location overrides, Immich people. Separate because a different client browses it, a different worker fills it, and it carries the project's only privacy-relevant outbound call. |
 | `dlna_library_migrations.py` | `MigrationsMixin` — the in-place migrations + `repair_fts`/`run_with_fts_heal` (the FTS5 shadow-table corruption recovery). |
 | `dlna_library_unique.py` | `UniqueMigrationsMixin` — the three migrations that WIDEN the `tracks` UNIQUE by rebuilding the table. Grouped because each DROPs the FTS triggers and must recreate them, and all three must run before `tracks_au` is added on top. |
 | `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads + the indexer upsert path (incl. the d-id alias dedup). |
@@ -397,6 +401,11 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_browse.py` | `BrowseMixin` — artists/albums/letter-bar/FTS5 search. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
 | `dlna_library_facets.py` | `FacetsMixin` — the tag-sliced facets (genres, decades), their flat track listings, and the play-count-biased radio picker. Owns `_EFFECTIVE_YEAR`. |
 | `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
+| `dlna_credits.py` | Is this songwriting credit a NAME or machine junk? Display-only, shared by every surface that shows composer/lyricist. Exists because 8% of this library's credits are scene adverts (`www.t.me/…`). See **[Songwriting credits](#songwriting-credits-composer--lyricist)**. |
+| `dlna_mbid.py` | "Is this MusicBrainz artist OUR artist?", decided purely. The keystone: one wrong id is wrong in four sources at once, so it REFUSES rather than guesses. Owns the `&`-is-never-split and every-dash-folds-to-a-space rules. |
+| `dlna_lineup.py` | "Who was in the band when this song was recorded?" — pure date-intersection over band membership. Needed because per-recording credits cover only ~17% of tracks while membership is near-universal. |
+| `dlna_artist_fetch.py` | The four artist-metadata sources (MusicBrainz, Wikipedia, Last.fm) with PARSING split from HTTP — the parsers are pure and carry the judgement, so that is where the tests are. Owns the `member of band` DIRECTION rule. |
+| `dlna_library_artists.py` | `ArtistsMixin` — the artist → MBID store, the display facts, and the band line-up. Same `clear(udn)` contract as `album_art`: each row cost a rate-limited round-trip. |
 | `dlna_artist_infer.py` | The pure decision "can we say who performed this, without guessing?" — SHARED by `tools/artist_from_folder.py` (writes the tag) and the worklist sweep (takes what is left), so the two can never disagree. |
 | `dlna_library_worklist.py` | `WorklistMixin` — the "- Unknown Artists -" hand-editing worklist: the one place the gateway admits it cannot do a job in code. Split from `collections` 2026-08-25 when the sweep pushed it past 400 lines. |
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
@@ -492,11 +501,27 @@ Three things there are load-bearing:
   ordering is deliberate, not incidental — don't remove the call because
   "the proxy handles it".
 
+**`patch.object` is the SECOND door, and it is closed in the tests
+(2026-09-21).** The lazy proxy closed the IMPORT door; it could not
+close this one — `mock.patch.object(dlna_asgi.DB, "all_artists", ...)`
+must `getattr` the original in order to restore it, and that getattr
+resolves the proxy, opening the real `library.db` and running every
+pending migration. Observed: a `run_all.py --offline` run applied a
+pending `ALTER TABLE` to the live index. Harmless that time; the three
+UNIQUE migrations REBUILD `tracks`. The proxy cannot refuse the getattr
+(refusing broke 12 tests), so the defence is at the other end —
+**`tests/__init__.py` AND the top of `tests/run_all.py`** both point
+`DB_FILE` at a throwaway. Both are needed: `tests/__init__.py` runs too
+late under `run_all.py`, which imports `api_playback` & friends long
+before discovery, and `def __init__(self, db_file: str = DB_FILE)` binds
+the live path as a DEFAULT ARGUMENT at import time that no later
+reassignment can reach.
+
 Nothing else changed: `DB.<method>` at ~240 call sites, `db._pool`
 reach-ins, and the one-module-binds-`DB` family contracts
 (`api_upnp_ids`, `api_subsonic_proto`, `api_playback_state`) are all
 untouched. `_reset_db_singleton()` exists for tests only and is never
-called by the app. Guarded by `tests/test_library_singleton.py` (10) —
+called by the app. Guarded by `tests/test_library_singleton.py` (12) —
 the import half runs in a SUBPROCESS on purpose, since this process has
 already imported half the app and would be answering for the test runner
 rather than for a clean import.
@@ -513,7 +538,7 @@ fails the suite if it's stale (`tools/regen_schema.py --check` is the
 same gate).
 
 ```
-tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate, year, album_key)
+tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, file_path, bit_depth, sample_rate, year, album_key, composer, lyricist)
   UNIQUE(udn, artist, album, title, album_key, bit_depth, sample_rate)
   -- album_key joined the UNIQUE 2026-07-12 (_migrate_widen_unique_album_key):
   -- two DISTINCT files in different FOLDERS with identical tags (duplicate
@@ -549,6 +574,29 @@ tracks_fts — FTS5 virtual table over (title, artist, album)
   and tracks_au (UPDATE OF title/artist/album — added with the
   retagged-file rescan fix; before it, any in-place metadata UPDATE
   desynced FTS until the next full rebuild).
+  composer + lyricist are read from the file tags (2026-09-20).
+  NOT in the UNIQUE: they say who WROTE the song, so two rows
+  differing only by composer are a retag of one file, not two
+  tracks. Blank-safe on refresh like genre/art.
+artist_meta(artist_key, artist, mbid, source, fetched_at,
+            mb_type, gender, born, died, birth_place, country,
+            genres, disambiguation, bio, bio_url, image_url,
+            notable, top_tracks, meta_fetched_at)
+  PRIMARY KEY (artist_key) — dlna_mbid.norm_artist(artist), so
+  'The Bad Seeds' / 'the bad seeds' / 'Bad Seeds' are ONE row and
+  one question to MusicBrainz, not three.
+  source ∈ {'tag','search','notfound','manual'} and describes how
+  the MBID was RESOLVED, not where the biography came from —
+  artist_info_set must never rewrite it. 'manual' always wins;
+  'notfound' is sticky so a re-run resumes in minutes.
+  Survives clear(udn): each row cost a rate-limited round-trip.
+artist_members(artist_key, member_name, member_mbid, instruments,
+               begin_date, end_date, updated_at)
+  PRIMARY KEY (artist_key, member_name, begin_date)
+  begin_date is IN the key because a member can REJOIN: Pink
+  Floyd's Richard Wright is 1965-1981 AND 1987-2008, and keying
+  on name alone collapses them and loses The Division Bell.
+  A re-fetch is a SYNC (replace), not a merge. Survives clear(udn).
 metadata_overrides(url, artist, album, title, genre, year, updated_at, source)
   source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
   year is the MUSICBRAINZ original release year (release-group's
@@ -981,6 +1029,168 @@ cross-surface class that round-trips the real UPnP container id and the
 real Subsonic album id — the rule is easy to undo by "fixing"
 `artist_albums` to report the aggregate again.
 
+### Songwriting credits: composer + lyricist (2026-09-20)
+
+`tracks.composer` / `tracks.lyricist`, read straight from the tags
+already on disk. Measured over 1,500 files with EXACT per-format keys:
+**composer 32.3%, lyricist 18.4%**. (A first measurement said 46% — it
+matched `composer` as a SUBSTRING and counted empty `composersort`
+fields. Measure on whole keys.)
+
+Three things are load-bearing:
+
+- **mutagen's `easy=True` is NOT uniform.** FLAC and MP3 expose both
+  fields natively; **EasyMP4 registers neither**, so an `.m4a` holding a
+  real `©wrt` credit reads back blank — indistinguishable from an
+  untagged file. `dlna_providers/localfs_tags.py` registers the key at
+  import (guarded, so the module still imports without mutagen). One
+  line, no second file open on a 26k-file scan.
+- **A new column must join the change-guard, not just the SET.** Step 2a
+  of `upsert_tracks` only fires when its WHERE clause sees a difference.
+  A `beet parentwork` run writes ONLY the composer, so a guard that
+  doesn't mention it leaves the row stale forever and reports 0
+  refreshed. `tests/test_credits.py` (15) has that trap as a test; it
+  genuinely reddens with the clause removed.
+- **The three UNIQUE migrations rebuild `tracks` from their own
+  hardcoded DDL** — a third copy of the schema. New columns must be
+  added to `_TRACK_COLS` too, and backfill as `''` not NULL: they are
+  `TEXT DEFAULT ''` and the refresh guard compares with `!= ''`, which
+  a NULL never satisfies.
+
+Blank-safe on refresh like genre/art: a file that lost its tag never
+erases a stored credit.
+
+**Display is filtered** (`dlna_credits.clean_credit`). Scene releases
+advertise in the tag fields — 691 of 8,570 credited tracks (8%) carry
+`www.t.me/pmedia_music` or `www.thenzbplace.com`, so the panel read
+"Words www.t.me/pmedia_music". Both rules were measured against ALL
+2,447 distinct credit values: each matches exactly 2, zero false
+positives. Only a REPEATED punctuation run condemns a value, so
+`J.S. Bach` survives.
+
+> ⚠ **The rule that was tried and REJECTED**: "a credit with no A-Za-z
+> letter is junk". It matched 55 rows, every one a real composer —
+> Стравинский, Прокофьев, Чайковский, Рахманинов, Ջիվան Գասպարյան.
+> Hiding the Russian composers from a classical library is the opposite
+> of the feature. Same lesson as `is_a_performer_name`'s
+> `allow_numeric` (112, 911, 98° are bands): a shape test that encodes
+> "looks English" erases real data. **Never require a particular
+> script.** `tests/test_credit_cleaning.py` (12) names that class after
+> it.
+
+Shown in the now-playing panel under the year, off the SAME
+`/api/track_meta` request (`tests/frontend/test_credits.py` pins it at
+one). `composer == lyricist` is common — MusicBrainz returns Freddie
+Mercury as both for *Bohemian Rhapsody* — and renders once, as
+"Written by"; a genuine split reads "Music X · Words Y".
+
+### Artist metadata — the MBID keystone, and who was in the band
+
+`artist_meta` + `artist_members`, filled by two sweeps. **Coverage on
+this library: 2,889 of 3,289 artists resolved (87.8%)**, of which 443
+cost no network at all.
+
+**Everything keys off a MusicBrainz artist id**, which is why resolving
+it is its own step: MusicBrainz, Wikidata, Wikipedia and ListenBrainz
+all take the same key, so one wrong id is wrong in four places at once
+— and a wrong id is worse than none, because a blank invites a fix while
+a plausible biography for the *other* band called Nirvana never gets
+questioned. `dlna_mbid.accept_match` therefore **refuses rather than
+guesses**, exactly like `dlna_artist_infer`.
+
+Rules that took evidence rather than reasoning (all in
+`tests/test_mbid_match.py` (27)):
+
+- **`&` is NEVER split, only fallen back to.** `Nick Cave & The Bad
+  Seeds`, `Billy Larkin & The Delegates` and `Jr Walker & The All Stars`
+  are single acts that match whole; eager splitting breaks all three.
+  Trying the split form only AFTER the full name fails still rescues
+  `Hans Zimmer & Benjamin Wallfisch` at no risk. **Commas are never
+  split at all** — `Anderson, Bruford, Wakeman, Howe` is the band.
+- **Every dash folds to a SPACE.** MusicBrainz spells names with
+  TYPOGRAPHIC dashes while tags use ASCII hyphen-minus, or nothing:
+  `Bachman-Turner Overdrive` (U+002D) vs MB's U+2013, `Jean Michel
+  Jarre` (space) vs MB's U+2010. Both were refused **at score 100**.
+  Folding to a space (not deleting) is what makes the second pair work.
+- **Aliases are consulted only when nothing matched by name** —
+  `Gonzales` → *Chilly Gonzales*, `AC-DC` → *AC/DC*. They ride on the
+  same response, so it costs no request.
+- **Two MB artists sharing a name are refused outright.** Widening the
+  match without widening the ambiguity guard silently reintroduces the
+  namesake problem it exists to prevent.
+
+MB's `score` is TEXT relevance, not correctness — `Elbo` scores 100 for
+`Elbow` — so the name comparison does the real work.
+
+**The 400 that remain refused are media problems, not matcher
+problems**: misspellings in the tags (`Harry Nilson`, `Edvart Greig`,
+`Credence Clearwater Revival`), song titles sitting in the artist field,
+comma-joined multi-artist credits, surname-only entries. A fuzzy rule
+loose enough to catch `Edvart Greig` would start attaching the wrong
+artist to things. They stay sticky; clear them selectively after a
+retag.
+
+#### The line-up, and why it is inferred
+
+Measured against the live API: **per-RECORDING performer credits exist
+for only ~17% of this library's tracks** (release-level ~22%) — Pink
+Floyd's *Shine On You Crazy Diamond* has none. A credits-only feature
+would be blank four times in five. Band MEMBERSHIP is near-universal for
+groups AND carries instruments plus date ranges, so
+`dlna_lineup.lineup_at` intersects those ranges with the recording's
+year. `tests/test_lineup.py` (13):
+
+- **Members rejoin.** Richard Wright is TWO rows on Pink Floyd
+  (1965–1981, 1987–2008), which is why `begin_date` is in
+  `artist_members`' PRIMARY KEY. A first-match lookup reports him absent
+  from *The Division Bell*, which he played on.
+- **No year means no answer.** The claim is "who was in the band THEN";
+  with no year there is no claim, and returning the full roster would
+  assert something different and wrong.
+- **A member with no dates is always included** — MB often has the
+  membership without the range, and dropping them makes a band look
+  emptier than it was.
+
+> ⚠ **`member of band` runs in BOTH directions.** On a Group,
+> `direction='backward'` names the members; on a Person,
+> `direction='forward'` names the bands that person joined. Read without
+> checking, David Bowie's panel lists Tin Machine and The Konrads as his
+> LINE-UP — which is what happened the first time real data was pulled.
+> Filtering turns the bug into a second feature: **"Also played in"**.
+
+**It is inference and the UI says so.** `/api/artist_info` returns
+`lineup_tier` — `inferred` for a line-up derived from membership dates,
+`credits` when MB names the players on that recording — and the PWA
+renders amber vs green. The tier comes from the server and is never
+derived client-side, so presenting a guess as a fact cannot be a
+one-line mistake.
+
+#### Sources, and what each is for
+
+| Source | Gives | Key |
+|---|---|---|
+| MusicBrainz | identity, life-span, birthplace, genres, **members with instruments + dates** | none (UA + 1 req/s) |
+| Wikipedia | the biography paragraph | none |
+| Last.fm | "best known for", by actual listening | `LASTFM_API_KEY` |
+
+**Last.fm needs a registered APPLICATION key**, not an account password
+— the same trap AcoustID's two key types set. Register at
+`https://www.last.fm/api/account/create`; absent, the block is omitted
+and nothing else changes. Live coverage: **best-known 100%, birth/formed
+92%, biography 74%, photo 67%**, 1,175 bands with line-ups over 12,101
+member rows.
+
+**A bio is DROPPED when its url is missing.** The text is CC BY-SA and
+the link IS the attribution, so they travel together or not at all. A
+disambiguation stub is refused too — a wrong answer dressed as a right
+one. Photos route through the existing `/art?url=` proxy, so
+`art_cache/` already handles fetch-once storage and is already
+gitignored.
+
+**ListenBrainz was evaluated and dropped**: it served top-recordings
+without a key, then began answering `401 UNAUTHORIZED` mid-session. Its
+data is thinner than Last.fm's anyway.
+
 ### Indexer-side dedup (AssetUPnP virtual-album aliases)
 
 Diagnosed 2026-05-28: AssetUPnP exposes the SAME physical file under
@@ -1025,6 +1235,21 @@ etc.).
 ### Frontend
 
 `static/index.html` + `static/app.js` (PWA, ~3,000 lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
+
+**A missing control must not kill `app.js` (2026-09-21).** `app.js` is
+ONE long script, so a top-level `$("id").addEventListener(...)` on an
+element that isn't there throws and **kills every line below it** — the
+app paints its full chrome and never loads content, in every library,
+with nothing in the log. That is not hypothetical: a half-updated
+Service Worker cache pairs an OLD `index.html` with a NEW `app.js`, and
+adding the ℹ️ button did exactly this to a live client. The tell was
+"works on iOS but not on Mac" — iOS had a matching pair of files.
+**New controls bind through `bindClick(id, handler)`**, which warns and
+skips when the element is absent: a missing button is cosmetic, a dead
+`app.js` is the whole application. Bump `APP_CACHE` when `index.html`
+gains an element `app.js` reaches for — the guard makes the mismatch
+survivable, the bump is what ends it. Guarded by
+`tests/frontend/test_artist_panel.py::test_a_missing_control_cannot_kill_app_js`.
 
 **Service Worker cache tiers (`static/sw.js`).** Three caches: `APP_CACHE`
 (app shell — **network-first** as of 2026-06-27, was stale-while-revalidate),
@@ -1818,6 +2043,10 @@ installs. Rules that keep it sane:
   silently never loaded" failure mode is gone (guarded by
   `tests/test_env_loader.py`). Real process env (shell export,
   `launchctl setenv`) still wins over `.env` for ad-hoc overrides.
+- **`LASTFM_API_KEY`** (optional) powers the artist panel's "best
+  known for". It is an APPLICATION key from
+  `https://www.last.fm/api/account/create` — **an account password is
+  not an API credential**. Absent, that one block is omitted.
 - Editing the plist itself needs a full `launchctl bootout` +
   `bootstrap` (a `kickstart -k` does NOT re-read plist env — and
   bootout is async: retry the bootstrap if it fails with I/O error).
@@ -1943,6 +2172,20 @@ launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
 # or, equivalently, with a venv/deps refresh first:
 ./setup.sh --restart
 ```
+
+> ⚠ **A restart can fail for a reason that is nothing to do with the
+> app.** `SoftResourceLimits → NumberOfProcesses` in the plist is
+> RLIMIT_NPROC, which counts **every process this UID owns**, not the
+> gateway's. At 512 a busy desktop (72 Safari WebContent helpers alone,
+> 547 total) put the machine over it, and hypercorn could not fork its
+> resource_tracker: `BlockingIOError: [Errno 35]` from
+> `hypercorn/run.py`'s `ctx.Event()` — *before any app code loads*, so
+> it looks nothing like an app fault, and `KeepAlive` respawn-loops on
+> it (53 runs on 2026-09-20). It only bites at START, which is why a
+> long-running gateway survives a busy desktop and only the next restart
+> fails. Raised to 2048 (system soft limit is 2666). **Check
+> `ps -u $(id -u) | wc -l` before blaming your code.** A plist change
+> needs `bootout` + `bootstrap`, not `kickstart`.
 
 `kill <pid> && ./setup.sh --run` is wrong — launchd will respawn the old copy before the manual one starts, leading to port conflicts.
 
@@ -3282,6 +3525,69 @@ folders — 113 named, 24 structural, 5,528 track rows; playlists went
 39 → 176. Rejected as intended: the 126-artist junk drawer, the
 guest-heavy Eminem/Santana/Rod Stewart records, and a 53-track
 Tchaikovsky box at 11% performers-per-track.
+
+### `tools/artist_mbid.py`
+
+Resolves every artist to a MusicBrainz id — the keystone the rest of the
+artist metadata hangs off. Two phases, cheapest first: read the
+`musicbrainz_artistid` the file already carries (free, exact, immune to
+the namesake problem), then search by name with
+`dlna_mbid.accept_match` deciding what to believe.
+
+Live result: **2,889 artists, 2,841→2,889 resolved (443 from tags, 2,446
+by search), 400 refused, 85.9% search acceptance.** Resumable — a row of
+ANY source including the sticky `notfound` means "already asked", so a
+second run costs minutes rather than hours.
+
+Skips names that aren't artists before spending a request, via the UPnP
+tree's own `_is_junk_name`: the first live pass sent 12 of 23 searches to
+things like `13. My Girl - The Temptations` and `07`. Note
+`is_a_performer_name` is NOT the right guard here — it needs
+`allow_numeric=True` (112 and 10CC are real bands) and with that flag it
+accepts everything, junk included.
+
+```bash
+python3 tools/artist_mbid.py                     # preview
+python3 tools/artist_mbid.py --tags-only --apply # the free phase only
+python3 tools/artist_mbid.py --apply             # the full sweep (~2h)
+python3 -m unittest tests.test_mbid_match -v     # 27 tests
+```
+
+To retry refusals after retagging files:
+`sqlite3 library.db "DELETE FROM artist_meta WHERE source='notfound'"`.
+
+### `tools/artist_meta.py`
+
+Turns each MBID into the facts the ℹ️ panel shows: identity, life-span,
+birthplace, genres, biography, best-known tracks, and — for a band — the
+members with their instruments and date ranges. Runs after
+`artist_mbid.py`.
+
+Live: **2,889 artists in 3h37m, zero errors** — best-known 100%,
+birth/formed 92%, biography 74%, photo 67%, 1,175 line-ups over 12,101
+member rows. Resumable via `meta_fetched_at`.
+
+> ⚠ **Set `LASTFM_API_KEY` BEFORE the first run.** `meta_fetched_at`
+> marks an artist done, so a pass without the key leaves every artist
+> with an empty "best known for" and skips them on any re-run.
+
+KNOWN LIMIT: Wikipedia is looked up by ARTIST NAME. MusicBrainz no
+longer carries direct wikipedia links (it points at Wikidata), and
+resolving through Wikidata would add two requests per artist to an
+already hour-long pass. A wrong title usually lands on a disambiguation
+stub, which `parse_wikipedia` refuses — so the shortcut costs a missing
+biography, never a wrong one.
+
+Known inefficiency: it fetched 2,889 and wrote 2,858 rows — spelling
+variants that normalise to one key were each fetched. 31 duplicate
+requests, harmless.
+
+```bash
+python3 tools/artist_meta.py                  # preview
+python3 tools/artist_meta.py --apply --limit 50
+python3 tools/artist_meta.py --apply          # the full pass (~1h)
+python3 -m unittest tests.test_artist_fetch -v   # 24 tests
+```
 
 ### `tools/audit_playlist_orphans.py`
 
