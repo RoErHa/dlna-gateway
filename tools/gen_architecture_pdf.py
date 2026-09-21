@@ -20,7 +20,8 @@ import os
 from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
+from reportlab.graphics.shapes import (Drawing, Rect, String, Line,
+                                       Polygon, Circle)
 from reportlab.platypus import (SimpleDocTemplate, PageBreak, Paragraph,
                                 Spacer, Table, TableStyle, KeepTogether)
 
@@ -278,6 +279,172 @@ def build_diagram():
         txt(d, cx + 44, cy - 19, what, size=6.5, color=INK)
         txt(d, cx + 9, cy - 29, cost, size=6.3, color=GREY)
 
+    return d
+
+
+# ── the rings: what feeds what ───────────────────────────────────────
+# A second, deliberately different view. The journeys page shows
+# SEQUENCE — the order things happen in. This one shows STRUCTURE: what
+# the app is made of, and which outside thing acts on which layer.
+#
+# Three concentric layers, because that is genuinely the dependency
+# order and not a decorative choice:
+#
+#   CONTENT      what you own. Files, and the index over them. Every
+#                other layer is worthless without it, and it is the only
+#                layer that can be rebuilt from the disk alone.
+#   ENRICHMENT   what we have LEARNED about that content — art, lyrics,
+#                credits, artist facts, book series, video people. None
+#                of it is regenerable from the files, which is why every
+#                table here survives clear(udn).
+#   SURFACES     the four ways it is consumed. They are peers: same
+#                index, four protocols, no privileged client.
+#
+# Arrows point INWARD, at the layer each service actually touches. The
+# colour is the target layer, so you can see at a glance that the great
+# majority of the outside world feeds enrichment, not content.
+
+RING_ACTORS = [
+    # (label, detail, angle°, target ring 1|2|3)
+    # ── content: the sources of what you own (left) ──────────────
+    ("LocalFs roots",   "music · books · video",        168, 1),
+    ("Immich import",   "phone clips → GWMovies",       192, 1),
+    ("UPnP servers",    "MinimServer & friends",        144, 1),
+    ("radio-browser",   "station catalogue",            216, 1),
+    # ── enrichment: almost everything outside (top + right) ──────
+    ("beets",           "canonical tags → the FILES",   120, 2),
+    ("AcoustID",        "fingerprints, via beets",       98, 2),
+    ("MusicBrainz",     "ids · facts · works",           76, 2),
+    ("Cover Art Archive", "album covers",                54, 2),
+    ("Last.fm",         "best known for",                32, 2),
+    ("Wikipedia",       "biographies · CC BY-SA",        10, 2),
+    ("Wikimedia",       "artist photos",                348, 2),
+    ("lrclib",          "lyrics",                       326, 2),
+    ("OpenLibrary",     "book author · series",         304, 2),
+    ("Nominatim",       "GPS → place name",             282, 2),
+    ("Immich ML",       "face recognition → people",    260, 2),
+    # ── surfaces: how they are reached (bottom) ──────────────────
+    ("Tailscale",       "remote, no port forwarding",   238, 3),
+    ("LAN",             "SSDP · DLNA · direct bytes",  356, 3),
+]
+
+# Angles chosen to sit BETWEEN neighbouring actor arrows — the arrows
+# must cross this ring to reach enrichment, so the boxes go in the gaps
+# rather than in their path.
+# On the DIAGONALS, and in the gaps between neighbouring actor arrows
+# (actors sit every ~22°, so their midpoints are the only clear slots).
+# Keeping 90° and 270° free is what lets the ring LABELS sit on the
+# ring itself without a box landing on them.
+SURFACES = [("PWA", "browse · play · info", 43),
+            ("Naim", "DLNA MediaServer", 132),
+            ("CarPlay", "Subsonic / Amperfy", 227),
+            ("LG TV", "video tree", 315)]
+
+
+def _pol(cx, cy, r, deg):
+    a = math.radians(deg)
+    return cx + r * math.cos(a), cy + r * math.sin(a)
+
+
+def build_rings():
+    d = Drawing(W, H)
+    txt(d, 6, H - 15, "DLNA Gateway — What feeds what",
+        size=15, bold=True, color=INK)
+    txt(d, 6, H - 28,
+        "The same system by STRUCTURE rather than sequence · arrows point "
+        "at the layer each service actually touches",
+        size=8, color=GREY)
+
+    cx, cy = W / 2, H / 2 - 18
+    R1, R2, R3 = 104, 176, 250
+
+    # rings, outermost first so the inner ones paint on top
+    d.add(Circle(cx, cy, R3, fillColor=BLUE_L, strokeColor=BLUE,
+                 strokeWidth=1.2))
+    d.add(Circle(cx, cy, R2, fillColor=AMBER_L, strokeColor=AMBER,
+                 strokeWidth=1.2))
+    d.add(Circle(cx, cy, R1, fillColor=GREEN_L, strokeColor=GREEN,
+                 strokeWidth=1.4))
+
+    # ── centre: CONTENT ──────────────────────────────────────────
+    txt(d, cx, cy + 46, "CONTENT", size=12, color=GREEN, bold=True,
+        anchor='middle')
+    for i, ln in enumerate([
+            "the files you own, and the",
+            "index over them",
+            "",
+            "tracks · videos · album_key",
+            "FTS5 · localfs_files",
+            "",
+            "the ONLY layer rebuildable",
+            "from the disk alone"]):
+        txt(d, cx, cy + 28 - i * 10.5, ln, size=7, color=INK, anchor='middle')
+
+    # ── ENRICHMENT band ──────────────────────────────────────────
+    txt(d, cx, cy + R1 + 46, "ENRICHMENT", size=11, color=AMBER, bold=True,
+        anchor='middle')
+    txt(d, cx, cy + R1 + 34, "what we have LEARNED about it", size=7,
+        color=INK, anchor='middle')
+    txt(d, cx, cy - R1 - 26,
+        "album_art · lyrics · track_credits · artist_meta",
+        size=7, color=INK, anchor='middle')
+    txt(d, cx, cy - R1 - 36,
+        "artist_members · book_meta · video_people · overrides",
+        size=7, color=INK, anchor='middle')
+    txt(d, cx, cy - R1 - 50,
+        "none of it regenerable from the files —", size=6.8,
+        color=AMBER, anchor='middle')
+    txt(d, cx, cy - R1 - 59,
+        "which is why every table here survives clear(udn)", size=6.8,
+        color=AMBER, anchor='middle')
+
+    # ── SURFACES ring ────────────────────────────────────────────
+    txt(d, cx, cy + (R2 + R3) / 2 + 4, "SURFACES", size=11, color=BLUE,
+        bold=True, anchor='middle')
+    txt(d, cx, cy + (R2 + R3) / 2 - 8, "one index · four protocols",
+        size=7, color=INK, anchor='middle')
+    for name, detail, deg in SURFACES:
+        sx, sy = _pol(cx, cy, (R2 + R3) / 2, deg)
+        box(d, sx - 46, sy - 15, 92, 30, white, BLUE, rx=4, sw=1.0)
+        txt(d, sx, sy + 3, name, size=8.5, color=BLUE, bold=True,
+            anchor='middle')
+        txt(d, sx, sy - 9, detail, size=6.3, color=INK, anchor='middle')
+
+    # ── the outside world ────────────────────────────────────────
+    TARGET = {1: (R1, GREEN), 2: (R2, AMBER), 3: (R3, BLUE)}
+    for label, detail, deg, ring in RING_ACTORS:
+        rr, colr = TARGET[ring]
+        bw, bh = 132, 30
+        bx, by = _pol(cx, cy, R3 + 78, deg)
+        box(d, bx - bw / 2, by - bh / 2, bw, bh, white, colr, rx=4, sw=1.0)
+        txt(d, bx, by + 3, label, size=8, color=colr, bold=True,
+            anchor='middle')
+        txt(d, bx, by - 8, detail, size=6.3, color=INK, anchor='middle')
+        # Arrow from the box edge inward. The box is axis-aligned, so
+        # the clearance depends on the angle: a box at 180° has to be
+        # escaped sideways (half its WIDTH), one at 90° vertically.
+        a = math.radians(deg)
+        clear = max(abs(math.cos(a)) * (bw / 2), abs(math.sin(a)) * (bh / 2)) + 6
+        x1, y1 = _pol(cx, cy, R3 + 78 - clear, deg)
+        x2, y2 = _pol(cx, cy, rr + 3, deg)
+        arrow(d, x1, y1, x2, y2, colr, w=1.0)
+
+    # ── legend ───────────────────────────────────────────────────
+    lx, ly = 12, 74
+    box(d, lx, ly - 54, 236, 66, white, GREY, rx=5, sw=0.9)
+    txt(d, lx + 9, ly, "ARROW COLOUR = THE LAYER IT ACTS ON", size=7,
+        color=INK, bold=True)
+    for i, (c, t) in enumerate([
+            (GREEN, "content — what you own"),
+            (AMBER, "enrichment — what we learned about it"),
+            (BLUE, "surfaces — how it is reached")]):
+        arrow(d, lx + 12, ly - 14 - i * 13, lx + 36, ly - 14 - i * 13, c, w=1.2)
+        txt(d, lx + 43, ly - 17 - i * 13, t, size=6.8, color=INK)
+
+    txt(d, W - 12, 20,
+        "Most of the outside world feeds ENRICHMENT, not content: the "
+        "library is yours, the facts about it are borrowed.",
+        size=7.5, color=GREY, anchor='end')
     return d
 
 
@@ -933,7 +1100,12 @@ def main():
                             topMargin=14, bottomMargin=14,
                             title="DLNA Gateway — Architecture",
                             author="dlna-gateway")
-    story = [build_diagram(), PageBreak()] + list_pages()
+    # Page 1 = the journeys (sequence). Page 2 = the rings
+    # (structure). Deliberately BOTH: one answers 'what happens
+    # when', the other 'what feeds what', and neither substitutes
+    # for the other. Reference tables follow.
+    story = ([build_diagram(), PageBreak(),
+              build_rings(), PageBreak()] + list_pages())
     doc.build(story)
     print("wrote", out)
 
