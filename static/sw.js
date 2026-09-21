@@ -1,4 +1,9 @@
-const APP_CACHE = 'dlna-gw-app-v16';  // v16: Videos location browse groups country → location
+const APP_CACHE = 'dlna-gw-app-v17';  // v17: ℹ️ Artist panel — index.html gained
+//   #np-btn-artist / #artist-modal. Bumped to evict any client holding the OLD
+//   index.html beside the NEW app.js: that pairing threw on the button's
+//   addEventListener and killed the rest of the script, so the app showed full
+//   chrome and no content (2026-09-21). bindClick() now makes that survivable —
+//   this bump is what gets the matching HTML out to clients in the first place.
 const ART_CACHE = 'dlna-gw-art-v3';   // v3: /art gained &size= — evict the full-res originals cached under the old size-less urls
 const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
 
