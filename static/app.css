@@ -592,3 +592,50 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 .ao-list{ margin-top: 6px; }
 .ao-of{ color: var(--ink-dim-soft); }
 @media (prefers-reduced-motion: reduce){ .ao-chev{ transition: none; } }
+
+/* ── ℹ️ Artist panel (step 3) ──────────────────────────────────────
+   Roomier than the lyrics modal on purpose: the line-up needs a name
+   column and an instruments column that don't wrap into each other.
+   The photo is deliberately small — recognisable at arm's length
+   without becoming the subject of a panel whose point is the facts. */
+.ab-ident{display:flex;gap:14px;align-items:flex-start;margin-bottom:12px}
+.ab-photo{width:88px;height:88px;flex:none;border-radius:var(--r);
+  border:1px solid var(--border);object-fit:cover;background:var(--raised)}
+.ab-facts{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.ab-fact{display:flex;gap:8px;font-size:var(--fs-sub)}
+.ab-fact dt{color:var(--ink-dim-soft);flex:none;width:52px}
+.ab-fact dd{margin:0;color:var(--ink)}
+.ab-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:3px}
+.ab-chips .chip{border:1px solid var(--border);border-radius:99px;
+  padding:1px 8px;font-size:var(--fs-micro);color:var(--ink-dim)}
+.ab-bio{background:var(--raised);border:1px solid var(--border);
+  border-radius:var(--r);padding:12px 14px;margin:0 0 12px;
+  font-size:13px;line-height:1.6;color:var(--ink)}
+.ab-attrib{display:block;margin-top:9px;font-size:var(--fs-micro);
+  color:var(--ink-dim-soft)}
+.ab-attrib a{color:var(--ink-dim)}
+.ab{display:flex;flex-direction:column;gap:7px;margin-bottom:12px}
+.ab-label{font-size:var(--fs-micro);letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink-dim-soft);margin:0;
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+/* Fact and inference must never look alike — see _renderArtist. */
+.tier{border-radius:99px;padding:0 7px;font-size:9px;letter-spacing:.09em;
+  border:1px solid currentColor}
+.t-fact{color:var(--green)}
+.t-inf{color:var(--amber)}
+.ab-lineup{display:flex;flex-direction:column}
+.ab-mem{display:flex;gap:12px;padding:5px 0;align-items:baseline;
+  border-bottom:1px solid var(--border);font-size:var(--fs-sub)}
+.ab-mem:last-child{border-bottom:none}
+.ab-mem b{font-weight:500;color:var(--ink);flex:none;min-width:130px}
+.ab-mem span{color:var(--ink-dim);flex:1;min-width:0}
+.ab-pills{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0}
+.ab-pills li{list-style:none;border:1px solid var(--border);
+  border-radius:var(--r);padding:3px 9px;font-size:var(--fs-sub);color:var(--ink)}
+.ab-lib{font-size:var(--fs-sub);color:var(--ink-dim);margin:0}
+.ab-lib b{color:var(--amber);font-weight:500}
+@media (max-width:520px){
+  .ab-ident{flex-direction:column}
+  .ab-mem{flex-direction:column;gap:2px}
+  .ab-mem b{min-width:0}
+}

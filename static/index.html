@@ -128,6 +128,7 @@
       <button class="btn" id="np-btn-add"  title="Add to playlist…"  style="font-size:12px;padding:5px 12px">＋ Playlist</button>
       <button class="btn" id="np-btn-edit" title="Edit metadata"     style="font-size:12px;padding:5px 12px">✏️ Edit</button>
       <button class="btn" id="np-btn-lyrics" title="Fetch lyrics"    style="font-size:12px;padding:5px 12px">📜 Lyrics</button>
+      <button class="btn" id="np-btn-artist" title="About this artist" style="font-size:12px;padding:5px 12px">ℹ️ Artist</button>
     </div>
     <div class="seek-section" id="seek-section">
       <div class="seek-track" id="seek-track">
@@ -223,6 +224,18 @@
     <pre id="lyrics-body" style="flex:1;overflow-y:auto;background:var(--raised);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;color:var(--ink);font-family:var(--fm);font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;margin:0;min-height:120px;max-height:60vh">Loading…</pre>
     <div class="modal-footer">
       <button class="btn" id="lyrics-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Artist info modal (ℹ️ Artist) — see dlna_asgi_artist.py -->
+<div class="modal-overlay" id="artist-modal">
+  <div class="modal" style="max-width:640px;width:95%;max-height:84vh;display:flex;flex-direction:column">
+    <h2 id="artist-modal-title">ℹ️ Artist</h2>
+    <p class="modal-sub" id="artist-modal-sub">—</p>
+    <div id="artist-body" style="flex:1;overflow-y:auto;min-height:120px"></div>
+    <div class="modal-footer">
+      <button class="btn" id="artist-close">Close</button>
     </div>
   </div>
 </div>

@@ -161,6 +161,13 @@ async function _renderNpMeta(url){
     }
     $("np-year").textContent = display;
     $("np-credits").textContent = _creditsLine(m.composer, m.lyricist);
+    // Stash the year for the ℹ️ panel's line-up lookup. PLAYER_play
+    // doesn't carry a year onto npTrack, and this response already has
+    // one — so the panel costs no extra request.
+    // year_original (the MusicBrainz first-release year) is preferred
+    // over the file's edition year on purpose: a 2011 remaster of a
+    // 1975 album must resolve the 1975 line-up, not today's.
+    if(npTrack && npTrack.url === url) npTrack.year = m.year_original || m.year;
   }catch(e){ /* best effort — silently fail */ }
 }
 // Persist shuffle preference across reloads
@@ -3171,6 +3178,112 @@ $("np-btn-add").addEventListener("click",(e)=>{
 });
 
 // ── Lyrics modal ──────────────────────────────────────────────────
+// Bind a click handler that TOLERATES a missing element.
+//
+// `$("id").addEventListener(...)` at top level throws when the element
+// isn't there, and because this file is one long script that kills
+// every line below it — the app never initialises and the user sees
+// the full chrome with no content. That is not hypothetical: it is
+// what a half-updated Service Worker cache produces, an OLD
+// index.html paired with a NEW app.js, and it happened on 2026-09-21
+// the first time a button was added here.
+//
+// A missing button is a cosmetic loss; a dead app.js is the whole
+// application. So new controls bind through this.
+function bindClick(id, handler){
+  const el = $(id);
+  if(!el){ console.warn("bindClick: no #" + id + " in this document"); return false; }
+  el.addEventListener("click", handler);
+  return true;
+}
+
+// ── ℹ️ Artist panel ───────────────────────────────────────────────
+// One /api/artist_info request; the server has already resolved the
+// line-up for the track's year and labelled it, so nothing here
+// decides anything — it renders.
+//
+// The two labels are NOT interchangeable: "credited on this recording"
+// is what MusicBrainz says about this take, "line-up in 1975" is
+// inferred from membership date ranges. Presenting a guess in a fact's
+// voice is the thing dlna_artist_infer exists to avoid, so the tier
+// comes from the server and is never derived here.
+function _artistBlock(label, inner, tier){
+  const t = tier ? ` <span class="tier ${tier==="credits"?"t-fact":"t-inf"}">`
+                   + esc(tier==="credits"?"from credits":"inferred") + `</span>` : "";
+  return `<div class="ab"><p class="ab-label">${esc(label)}${t}</p>${inner}</div>`;
+}
+
+function _renderArtist(d){
+  const P = [];
+  // A band has no date of birth — mb_type decides the labels.
+  const isGroup = (d.mb_type || "").toLowerCase() === "group";
+  const life = [];
+  if(d.born) life.push(`<div class="ab-fact"><dt>${isGroup?"Formed":"Born"}</dt>`
+      + `<dd>${esc(d.born)}${d.birth_place?" · "+esc(d.birth_place):""}</dd></div>`);
+  if(d.died) life.push(`<div class="ab-fact"><dt>${isGroup?"Ended":"Died"}</dt>`
+      + `<dd>${esc(d.died)}</dd></div>`);
+  const chips = (d.genres||[]).map(g=>`<span class="chip">${esc(g)}</span>`).join("");
+  if(life.length || chips){
+    P.push(`<div class="ab-ident">`
+      + (d.image_url ? `<img class="ab-photo" loading="lazy" src="${esc(artUrl(d.image_url, ART_THUMB))}" alt="">` : "")
+      + `<div class="ab-facts"><dl>${life.join("")}</dl>`
+      + (chips?`<div class="ab-chips">${chips}</div>`:"") + `</div></div>`);
+  }
+  // Bio and its link travel together: the text is CC BY-SA and the
+  // link IS the attribution. The server never sends one without the
+  // other, and this never renders one without the other.
+  if(d.bio && d.bio_url){
+    P.push(`<p class="ab-bio">${esc(d.bio)}`
+      + `<span class="ab-attrib">From Wikipedia, `
+      + `<a href="${esc(d.bio_url)}" target="_blank" rel="noopener">`
+      + `${esc(d.artist)}</a> · CC BY-SA</span></p>`);
+  }
+  if((d.lineup||[]).length){
+    const rows = d.lineup.map(m=>`<div class="ab-mem"><b>${esc(m.name)}</b>`
+      + `<span>${esc(m.instruments||"")}</span></div>`).join("");
+    const label = d.lineup_tier === "credits"
+      ? "Credited on this recording"
+      : "Line-up in " + (d.lineup_year || "");
+    P.push(_artistBlock(label, `<div class="ab-lineup">${rows}</div>`, d.lineup_tier));
+  }
+  if((d.top_tracks||[]).length){
+    P.push(_artistBlock("Best known for",
+      `<ul class="ab-pills">` + d.top_tracks.map(t=>`<li>${esc(t)}</li>`).join("") + `</ul>`, ""));
+  }
+  if((d.also_in||[]).length){
+    P.push(_artistBlock("Also played in",
+      `<ul class="ab-pills">` + d.also_in.map(t=>`<li>${esc(t)}</li>`).join("") + `</ul>`, ""));
+  }
+  if(d.track_count){
+    P.push(`<p class="ab-lib"><b>${d.track_count}</b> track`
+      + (d.track_count===1?"":"s") + ` in your library</p>`);
+  }
+  return P.join("");
+}
+
+bindClick("np-btn-artist", async ()=>{
+  if(!npTrack || !npTrack.artist){ toast("Nothing playing"); return; }
+  const overlay = $("artist-modal"), body = $("artist-body");
+  $("artist-modal-title").textContent = "ℹ️ " + npTrack.artist;
+  $("artist-modal-sub").textContent = npTrack.title || "";
+  body.innerHTML = '<p class="ab-lib">Loading…</p>';
+  overlay.classList.add("open");
+  let q = "/api/artist_info?artist=" + encodeURIComponent(npTrack.artist);
+  if(npTrack.year) q += "&year=" + encodeURIComponent(npTrack.year);
+  let r, d;
+  try { r = await api(q); } catch(e){ r = null; }
+  if(!r){ body.innerHTML = '<p class="ab-lib">Error contacting gateway.</p>'; return; }
+  if(r.status === 404){
+    body.innerHTML = '<p class="ab-lib">No information for this artist yet.</p>';
+    return;
+  }
+  try { d = await r.json(); } catch(e){
+    body.innerHTML = '<p class="ab-lib">Bad response.</p>'; return; }
+  $("artist-modal-sub").textContent = d.disambiguation || npTrack.title || "";
+  body.innerHTML = _renderArtist(d);
+});
+bindClick("artist-close", ()=> $("artist-modal").classList.remove("open"));
+
 $("np-btn-lyrics").addEventListener("click", async ()=>{
   if(!npTrack || !npTrack.url){ toast("Nothing playing"); return; }
   const overlay = $("lyrics-modal");

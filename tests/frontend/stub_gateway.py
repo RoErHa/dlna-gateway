@@ -42,6 +42,9 @@ class StubGateway:
         self.albums_default: list[dict] = []
         self.tracks_default: list[dict] = []
         self.genres: list[dict] = []
+        # /api/artist_info — the artist panel's single request.
+        # None = the artist has no facts, and the stub answers 404.
+        self.artist_info: dict | None = None
         # /api/track_meta keyed by track url — the now-playing panel's
         # year AND credits line both read this one response.
         self.track_meta: dict[str, dict] = {}
@@ -325,6 +328,12 @@ class _Handler(BaseHTTPRequestHandler):
             total = len(items)
             self._send_json({"items": items[offset:offset + limit],
                              "total": total, "offset": offset, "limit": limit})
+            return
+        if path == "/api/artist_info":
+            if gw.artist_info is None:
+                self._send_json({"error": "artist not in library"}, 404)
+            else:
+                self._send_json(gw.artist_info)
             return
         if path == "/api/track_meta":
             meta = gw.track_meta.get(q.get("url", ""))
