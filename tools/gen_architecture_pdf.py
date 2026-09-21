@@ -558,8 +558,14 @@ def list_pages():
          "Browser-audio HTTP proxy /stream (Range pass-through, 5-min idle "
          "timeout) + proxy_radio_stream /radio_stream (ICY de-interleave)."),
         ("P/g17", "dlna_art_fetcher.py",
-         "AlbumArtFetcher — MusicBrainz release-group + Cover Art Archive "
-         "lookup; sticky notfound cache; ~1 req/s."),
+         "AlbumArtFetcher \u2014 MusicBrainz release-group THEN release + "
+         "Cover Art Archive lookup; sticky notfound cache; ~1 req/s. "
+         "Art attaches to a RELEASE, so a release-group reports none "
+         "unless a pressing is flagged as its cover \u2014 which is why "
+         "compilations need the fallback. bare_albums() takes three "
+         "opt-in filters (skip audiobooks, skip 1-2 track strays, report "
+         "the performer count) because a rate-limited budget spent on "
+         "impossible questions is the whole cost."),
         ("P/g19", "dlna_lyrics.py",
          "On-demand lrclib lyrics; cached in the lyrics table; sticky "
          "positive + negative."),
@@ -678,6 +684,32 @@ def list_pages():
          "the line-up for the track's year and LABELS it (inferred vs "
          "credits) so the client cannot promote a guess to a fact. Own "
          "module: dlna_asgi_browse is at 397/400 lines."),
+        ("P/g41", "dlna_art_query.py",
+         "The PURE half of a cover lookup: one (artist, album) \u2192 an "
+         "ORDERED list of attempts. The exact pair is ALWAYS first so "
+         "nothing that resolves today can regress; looser forms follow "
+         "in increasing order of risk, and title-only is offered only "
+         "for multi-artist folders where the artist is guaranteed to "
+         "fail. tidy_album is LOOKUP ONLY \u2014 a loose query wastes one "
+         "request, a loose identity merges two albums."),
+        ("P/g42", "dlna_providers/localfs_art.py",
+         "What an album LOOKS like: the embedded picture, and the cover "
+         "file sitting BESIDE the music when there is none. Choosing "
+         "which image is the whole problem \u2014 \u201cbiggest wins\u201d picks "
+         "back.jpg, \u201cfirst wins\u201d picks a 75px WMP thumbnail, so "
+         "selection is name-first with a size floor only as a last "
+         "resort, and rejections match whole WORDS (\u201ccd\u201d would eat "
+         "\u201cACDC - cover.jpg\u201d). A disc subfolder also looks in its "
+         "parent; an ordinary folder never climbs."),
+        ("P/g43", "dlna_library_credits.py",
+         "CreditsMixin \u2014 track_credits, composer/lyricist browsed off "
+         "MusicBrainz works for the ~68% of tracks whose files carry "
+         "none. Not tracks.composer, because clear(udn) would throw away "
+         "a night's fetching. THE FILE TAG WINS on read."),
+        ("P/g44", "dlna_library_search.py",
+         "SearchMixin \u2014 the FTS5 free-text question, split from browse "
+         "at exactly 400 lines. Navigating a hierarchy and answering a "
+         "question are different jobs with different semantics."),
         ("P/g40", "dlna_library_artists.py",
          "ArtistsMixin \u2014 artist_meta (id + display facts) and "
          "artist_members (line-up). Survives clear(udn): each row cost "

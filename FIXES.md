@@ -17,6 +17,91 @@ the symptom looked like something it wasn't.
 
 ---
 
+## 568404d — 20260921 — 849 covers found, 67 albums gained one
+
+**Symptom.** "Why do so many Pink Floyd albums have no covers?" 23% of
+albums were bare, and a full fetcher pass over 1,497 of them returned
+**32**. A 2% hit rate against a service that demonstrably has the art.
+
+**What it wasn't.** Not MusicBrainz being thin, and not rate-limiting.
+Sampling the 3,998 sticky `notfound` rows showed the sources answering
+perfectly well — to a *different* question:
+
+```
+Pink Floyd | Ummagumma                 -> musicbrainz   FOUND
+Pink Floyd | Ummagumma - Studio Album  -> notfound      never will be
+```
+
+One album, two rows, opposite fates, decided by a suffix the ripper
+added. That reframed the whole thing: **the query was the defect, not
+the lookup.**
+
+**Four separate causes, all of them "a question with no possible
+answer".** Each was found by reading what the fetcher actually sent, not
+by reasoning about what it should send:
+
+1. **169 of the 1,497 were AUDIOBOOKS.** `bare_albums()` had no udn
+   filter, so the second LocalFs root was swept along with the music.
+   The literal first query of the run asked a *music* database for
+   `artist='Patrick Rothfuss' album='The Kingkiller Chronicle Book 2'`,
+   then cached the miss as a `notfound` against a book.
+2. **90 were one- or two-track strays** — a loose file in its own
+   folder. It has no cover because it is not an album.
+3. **`multi_artist` never reached `art_queries`.** The title-only query
+   — the only form that can find a compilation, and one
+   `tests/test_art_query.py` already covered — had never run in
+   production. The tests passed; the wiring did not exist.
+4. **The ENDPOINT was wrong for compilations.** Cover art attaches to a
+   **release**; a *release-group* reports art only when one of its
+   releases is flagged as the group cover:
+
+   ```
+   Harry Nilsson / Voices of the 70s
+     release-group : 0 groups   -> no art
+     release       : 1 release  -> art FOUND   (verified live)
+   ```
+
+**Proof.** After the four fixes the same fetcher ran at **78%** (849
+found / 239 notfound). Separately, reading the cover file sitting
+*beside* the music — which the indexer had never looked at, only
+embedded pictures — found art in 95 of 506 bare folders (19%).
+
+**The trap inside the fix.** Picking which image in a folder is the
+front cover is the whole problem, and both obvious rules are wrong:
+
+```
+front.jpg          2927px  2032 KB
+albumartsmall.jpg    75px     3 KB   <- "first wins" picks this
+back.jpg           2900px  3015 KB   <- "biggest wins" picks this
+```
+
+Only the NAME says which one is the front. Selection is name-first with
+a size floor as a last resort, and rejections match **whole words** —
+rejecting anything containing `cd` throws away `ACDC - cover.jpg`. Same
+substring trap `_is_junk_name` already documents, one domain over.
+
+**What the numbers did NOT do.** 849 covers found produced **+67
+folder-albums**. That is structural, not a regression: `album_art` is
+keyed `(artist, album)` while a LocalFs album is a **folder**. Expect
+the mismatch whenever those two identities meet — it is worth stating
+out loud before quoting any art statistic.
+
+**The honest stopping point.** Coverage went 77% → **85.1%** (1,913 of
+2,248). Of the 402 art-less albums at audit time, ~60% are
+compilation-shaped names no database holds (`Billboard Top 100 of
+1970`), ~22% are the strays, and only ~17% look like real releases.
+`beet fetchart` was evaluated and declined — beets knows 709 of 2,248
+albums and just **three** of the 402 without art, because the albums
+beets could not import are the same albums Cover Art Archive cannot
+find, for the same reason. A Discogs integration was scoped and also
+declined: the release-vs-release-group fix already recovers the one
+category Discogs would have served.
+
+**A measurement that was reported wrong, and corrected.** The dry run
+was quoted as "17% of notfound rows get a better query". That was 664
+rows whose query *shape* changed — not hits. Actual conversion was ~2%
+on that biased sample. Query shapes are not outcomes.
+
 ## 339eed0 — 20260921 — the full UI, no content, and "works on iOS but not Mac"
 
 **Symptom.** "Not seeing any content in music or audio books." Both
@@ -193,93 +278,3 @@ Resolving a root anywhere other than through `WATCH` — a `Path.exists()`
 at boot whose False means "off". And "simplifying" `add_allowed_root`
 into an in-place append, or dropping its `Path.resolve()`, both of which
 leave the code looking right and the volume unserved.
-
-## 254a54b — 20260910 — "nothing plays, every song skips" was an unmounted drive
-
-**Reported as:** "check the log — nothing is playing, every song is skipping."
-
-The log said it in one line, at boot, 61 minutes before the first skip:
-
-```
-15:22:43 [WARNING] dlna.localfs.wiring: LocalFs root not found:
-         /Volumes/SAMDATA/Music — skipping (is the volume mounted / unlocked?)
-```
-
-and then said something else about four thousand times:
-
-```
-16:23:52 [WARNING] dlna.ssrf: SSRF guard: refused stream of
-         'http://192.168.1.125:8200/localfs/stream/a67a204f6bb383ad'
-         — private destination ... is not a known device
-16:23:52 [INFO ] dlna.client: client_log[audio_error] code=4
-         codeName=unsupported title=Feel Like Makin' Love network_state=3
-```
-
-`/Volumes/SAMDATA` was not mounted. The disk was attached and healthy
-(`disk10s1`, APFS, 3.5 TB) but **encrypted and locked**, which macOS does
-not mount at all — so the path simply did not exist.
-
-### Why one missing volume broke three libraries
-
-`maybe_start_localfs` returned when the MUSIC root was absent, and it did so
-**before starting the file server**. Everything downstream hangs off that
-server, so:
-
-* **the audiobooks died too** — on `SAMDATA-1TB`, mounted and fine. The video
-  and audiobook roots each degraded gracefully with a warning; the music root
-  was a hard gate on the whole function.
-* **`/api/servers` returned `[]`**, because the synthetic `MediaServer` entries
-  are registered by that same function.
-* **so every fetch was refused.** `dlna_ssrf.guard` lets a private destination
-  through only when its host is a device in `SERVERS`/`RENDERERS` — that is
-  precisely how `:8200` is normally allowed. With nothing registered, the file
-  server was a stranger on the LAN.
-
-The relay then did its job correctly (§*Two things the relay must keep doing*):
-a non-200 is not media, so it refused rather than handing `<audio>` a 403 body
-labelled `audio/flac`. The PWA saw `MediaError.code 4` and skipped. At one
-track per second, that reads as "every song skips" — not as "a disk is
-missing", which is what it was.
-
-**The fix is not the mount.** Unlocking the volume restored playback in one
-restart (26,477 files rescanned, 0 new, 0 changed, 0 removed — nothing had
-drifted). The fix is that a missing root must disable only itself:
-`_resolve_root` resolves the three independently and the server starts on
-whatever is present.
-
-### The same bug from the other side, on the Naim
-
-The PWA and Subsonic both degraded cleanly — they read the server registry, so
-music stopped being offered. The UPnP tree did not, and would have shown a
-library that could not play a byte:
-
-```python
-"SELECT udn FROM tracks GROUP BY udn ORDER BY COUNT(*) DESC LIMIT 1"
-```
-
-**`tracks` outlives its files.** With the volume gone, the 26,362 music rows
-were still the majority of the index, so `DB.primary_udn()` handed the Naim a
-full Artists/Albums/Genres tree in which every play 404s. Browsing works,
-which is what makes it convincing. `api_upnp_ids.music_udn()` now asks which
-music library is *serving* — a registered `MediaServer` being the evidence —
-and the root offers those three containers only while one is.
-
-### What would re-introduce it
-
-* **Gating the whole wiring on any single root again.** Each root is optional
-  and independent; the server needs only one of them to be worth starting.
-* **Starting the file server with an empty `allowed_roots`.** That is a server
-  that refuses every path while looking alive — worse than no server, because
-  the SSRF guard would then allow URLs that can never resolve.
-* **Reading an EMPTY server registry as "nothing is live."** The SSDP announcer
-  starts *before* `maybe_start_localfs`, so a control point browsing in that
-  window would be told the library is empty, and a client that caches an empty
-  tree is a worse failure than the stale one this fixed. Only
-  registered-but-no-music returns `''`.
-* **Answering "which library?" from row counts alone**, anywhere. The index
-  knows what was once there, never what is reachable now.
-
-Guarded by `tests/test_localfs_wiring.py` (19) and
-`tests/test_upnp_music_liveness.py` (16). Seven of those fail against the old
-code — verified by reverting each half and re-running, because a regression
-test that passes either way is worse than none.

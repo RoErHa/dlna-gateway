@@ -223,7 +223,7 @@ The headline list above is the short version.
 - **PWA web UI.** Letter-indexed browse (artists / albums / tracks /
   genres / decades), FTS5 search (type-ahead: the last word matches as
   a prefix), playlists, album-level favourites, lyrics (via lrclib),
-  album art (sibling → MusicBrainz / Cover Art Archive fallback). For
+  album art, and an album's release year everywhere it is listed. For
   RoHaLocalFS, albums group by folder (one folder = one album);
   compilations whose tracks are scattered across per-artist folders can
   be surfaced as playlists with `tools/compilation_playlists.py`.
@@ -236,12 +236,15 @@ The headline list above is the short version.
   overrides, then reindex). *(The old in-process AcoustID worker was an
   alternative path; it was removed in 2.0 — it did the same fingerprint →
   MusicBrainz job and collided with beets, which is the better tagger.)*
-- **Songwriting credits.** Composer and lyricist, read straight from the
-  tags already in your files — no network, no lookup. Shown under the
-  year in the now-playing panel: *"Written by Freddie Mercury"*, or
-  *"Music Elton John · Words Bernie Taupin"* when the two differ.
-  Scene-release advertising that some rippers inject into these fields
-  is filtered out of the display.
+- **Songwriting credits.** Composer and lyricist, shown under the year
+  in the now-playing panel: *"Written by Freddie Mercury"*, or
+  *"Music Elton John · Words Bernie Taupin"* when the two differ. Read
+  first from the tags already in your files; for everything else,
+  `tools/track_credits.py` fills the gaps from MusicBrainz in one
+  offline sweep (about 32% of tracks are tagged, about 74% end up
+  credited). **Your tags always win** — the lookup fills blanks, it
+  never corrects you. Scene-release advertising that some rippers inject
+  into these fields is filtered out of the display.
 - **Artist information (ℹ️).** A panel on the playing track's artist:
   born/died or formed/ended, birthplace, genres, a biography from
   Wikipedia (always with its link — the text is CC BY-SA), what they are
@@ -254,6 +257,12 @@ The headline list above is the short version.
   *"credited on this recording"* instead. Filled by two offline sweeps
   (`tools/artist_mbid.py`, then `tools/artist_meta.py`) so opening the
   panel is a local database read.
+- **Album covers, from four places in order.** An embedded picture; a
+  cover image sitting **beside** the music in its folder (`front.jpg`
+  and friends — chosen by NAME, because the largest file in a folder is
+  usually the *back* of the sleeve); a sibling track that has one; and
+  finally MusicBrainz + Cover Art Archive. Covers are cached in their
+  own table so a rebuild-index never loses them.
 - **Browsable by your renderer (DLNA Media Server).** The gateway also
   announces *itself* as a full DLNA Media Server, so a UPnP renderer like the
   Naim can browse your whole library — Artists / Albums (#-A-Z) / Genres /

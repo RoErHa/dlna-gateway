@@ -108,7 +108,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **99/99 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **103/103 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -398,7 +398,9 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_unique.py` | `UniqueMigrationsMixin` — the three migrations that WIDEN the `tracks` UNIQUE by rebuilding the table. Grouped because each DROPs the FTS triggers and must recreate them, and all three must run before `tracks_au` is added on top. |
 | `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads + the indexer upsert path (incl. the d-id alias dedup). |
 | `dlna_library_overrides.py` | `OverridesMixin` — the `metadata_overrides` display layer. Protects the two invariants: `manual` always wins, and its `year` is display-only (never COALESCEd back into `tracks`). |
-| `dlna_library_browse.py` | `BrowseMixin` — artists/albums/letter-bar/FTS5 search. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
+| `dlna_library_browse.py` | `BrowseMixin` — NAVIGATION through the hierarchy: artists, albums, the letter bar, an artist's chronology. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
+| `dlna_library_search.py` | `SearchMixin` — the FTS5 free-text question and the query semantics that come with it (implicit AND, last-term prefix, punctuation-only tokens dropped). Split from `browse` 2026-09-21 at exactly 400 lines; the seam is real — navigating a tree and answering a question are different jobs. |
+| `dlna_library_credits.py` | `CreditsMixin` — the `track_credits` store (MusicBrainz composer/lyricist for the tracks whose files carry none). Same survives-`clear(udn)` family as `album_art` and `lyrics`: every row cost a rate-limited round-trip. |
 | `dlna_library_facets.py` | `FacetsMixin` — the tag-sliced facets (genres, decades), their flat track listings, and the play-count-biased radio picker. Owns `_EFFECTIVE_YEAR`. |
 | `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
 | `dlna_credits.py` | Is this songwriting credit a NAME or machine junk? Display-only, shared by every surface that shows composer/lyricist. Exists because 8% of this library's credits are scene adverts (`www.t.me/…`). See **[Songwriting credits](#songwriting-credits-composer--lyricist)**. |
@@ -411,11 +413,12 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
 | `dlna_library_radio.py` | `RadioFavouritesMixin` — the saved internet-radio stations. Enforces the 25-station cap SERVER-side (`DB.RADIO_FAV_MAX`); same `clear(udn)` survival contract. |
 | `dlna_indexer.py` | `Indexer` — background crawler that walks a MediaServer and populates LibraryDB |
-| `dlna_art_fetcher.py` | `AlbumArtFetcher` — Phase B MusicBrainz + Cover Art Archive lookup |
+| `dlna_art_fetcher.py` | `AlbumArtFetcher` — Phase B MusicBrainz + Cover Art Archive lookup. |
+| `dlna_art_query.py` | The PURE half of that lookup: `tidy_album()` + `art_queries()` turn one `(artist, album)` into an ORDERED list of attempts. Separate module because a cover query is a guess with a cost, and the ordering rule — exact first, always — is the thing that must never be edited casually. LOOKUP ONLY: never identity, never display. |
 | `dlna_devices.py` | `DeviceRoleCache` — in-memory mirror of device_roles for zero-latency classification |
 | `db_pool.py` | SQLite connection pool — WAL mode, thread-local connections, write serialization |
 | `dlna_config.py` | Constants (`DB_FILE`, `CFG_FILE`, `LOG_FILE`), logging setup, config load/save |
-| `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (pure per-file helpers — the album-key folder identity and the namespace-salted track id), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
+| `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (what a file SAYS about itself — the album-key folder identity and the namespace-salted track id), `localfs_art.py` (what the album LOOKS like — embedded pictures, and the folder-image fallback that is the only half reading sibling files), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
 | `dlna_localfs_http.py` | The PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200), and `resolve_within` — the containment test every byte route asks before opening a file (path COMPONENTS, not string prefixes; returns the RESOLVED path so the caller cannot re-open the original through a TOCTOU gap). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
 | `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. REGISTERS THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — with `dlna_localfs_watch.WATCH`, and owns what BRINGING ONE UP means: ensure the one file server (started by the first root to arrive, widened by each later one), construct a `LocalFsProvider` with the LAN-IP `base_url`, bind it via `dlna_providers.bind_provider`, add a synthetic `MediaServer` to `SERVERS`, and scan it in the background. See **[One unmounted volume must not take the others down](#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
@@ -611,6 +614,16 @@ device_roles(udn, name, location, host, is_server, is_renderer, first_seen, last
 album_art(artist, album, art_url, source, updated_at)
   PRIMARY KEY (artist, album)
   source ∈ {'sibling', 'musicbrainz', 'notfound', 'manual'}
+track_credits(url, composer, lyricist, work_mbid, source, fetched_at)
+  PRIMARY KEY (url)
+  source ∈ {'musicbrainz', 'notfound', 'manual'}
+  Composer/lyricist for the ~68% of tracks whose FILES carry neither,
+  browsed off MusicBrainz works (2026-09-21, step 4). Deliberately NOT
+  tracks.composer: clear(udn) DELETEs tracks, and a rebuild-index would
+  throw away a whole night's fetching. Same survives-a-rebuild family as
+  lyrics / album_art / play_counts. THE FILE TAG WINS on read —
+  COALESCE(NULLIF(t.composer,''), c.composer) — because MusicBrainz is
+  filling gaps here, not correcting what the owner has.
 play_counts(url, count, last_played)
   PRIMARY KEY (url)
   Incremented by LibraryDB.radio_tracks(); persists across rebuild-index.
@@ -1009,7 +1022,7 @@ directly** on all three. Folding is what stops compilations burying real
 albums; with none to bury it would leave a page holding a single
 collapsed row, one tap from that artist's only music.
 
-Guarded by `tests/frontend/test_appears_on.py` (9),
+Guarded by `tests/frontend/test_appears_on.py` (11),
 `tests/test_appears_on_devices.py` (10) and the classification tests in
 `tests/test_album_grouping.py`.
 
@@ -1028,6 +1041,33 @@ Guarded by `tests/test_album_grouping.py` (44), including a
 cross-surface class that round-trips the real UPnP container id and the
 real Subsonic album id — the rule is easy to undo by "fixing"
 `artist_albums` to report the aggregate again.
+
+#### An album's date, on every surface (2026-09-21)
+
+Reported as "I see the date of the tracks on an album but not the album
+date". Neither missing metadata nor anything the credits sweep would fix
+— **2,153 of 2,238 albums (96%) already had a year**; three queries
+simply never selected one, so the only place a date appeared was the
+now-playing panel, per playing track. `all_albums`, `browse_letter`'s
+album branch and `album_tracks` now all carry it, alongside
+`artist_albums`, which orders an artist's records oldest-first.
+
+- **The album header takes `MIN` of the tracks it just fetched** rather
+  than having a year passed in, so it works from every entry point —
+  favourites, a genre, a decade, a search result — none of which hand
+  the view an album row to read a year off.
+- **Same `_EFFECTIVE_YEAR` rule as everywhere else** (in
+  `dlna_library_sql.py` since two mixins need it): `MIN` of the file tag
+  and the MusicBrainz original, so a remaster shows the RECORD's date,
+  not the pressing's.
+
+> ⚠ **Join a NARROWED view of `metadata_overrides`, never the table.**
+> It also has `artist` and `album` columns, so joining the whole thing
+> made every bare `album`/`artist` in an `ORDER BY` ambiguous, and the
+> UPnP branches that never got the join failed on `m.year` outright.
+> `LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url`
+> carries only what the expression needs and cannot collide with
+> anything. `tests/test_artist_chronology.py` (12).
 
 ### Songwriting credits: composer + lyricist (2026-09-20)
 
@@ -1083,6 +1123,40 @@ Shown in the now-playing panel under the year, off the SAME
 one). `composer == lyricist` is common — MusicBrainz returns Freddie
 Mercury as both for *Bohemian Rhapsody* — and renders once, as
 "Written by"; a genuine split reads "Music X · Words Y".
+
+#### Step 4 — the two thirds with no tag, via MusicBrainz works (2026-09-21)
+
+Tags answered 32%. The other ~18,000 tracks were filled from MusicBrainz
+into `track_credits`, taking live coverage to **73.9% (26,750 music
+tracks; 11,025 matched, 6,067 sticky `notfound`, 0 errors, ~2 h)**.
+
+**The ROUTE is the whole design.** The obvious one —
+search-recording → recording → work — is three rate-limited requests per
+song: 15,805 distinct songs, about **16 hours**, which does not fit a
+night. Browsing each **artist's works** returns up to 100 at a time, each
+already carrying its composer/lyricist relations: ~3,700 requests, about
+**1.2 hours**. That is the direct payoff from having resolved artists to
+MBIDs first — 2,307 artists with an mbid cover 95% of the composer-less
+tracks. It is what the keystone was for.
+
+- **Results go to `track_credits`, never `tracks.composer`.** A rescan is
+  blank-safe, but `clear(udn)` DELETEs `tracks` and a rebuild-index would
+  throw away the whole night.
+- **The file tag wins on read** —
+  `COALESCE(NULLIF(t.composer,''), c.composer)` in `track_meta_by_url`.
+  MusicBrainz is filling gaps, not correcting the owner.
+- **The work browse is deliberately BROAD** — it returns works the artist
+  is related to in any way, so Brian May's "Driven by You" comes back
+  under Pink Floyd. Harmless, because the caller only looks up titles of
+  tracks it already holds BY THAT ARTIST, so a stray work never matches.
+- **`writer` stands in for an absent composer.** MusicBrainz uses it when
+  the music/words split was never recorded; dropping it loses a real
+  credit. "reconstructed by" and friends are not authorship.
+- **Unmatched tracks get a sticky `notfound`** — without it a second pass
+  re-asks all 6,067 and costs another night.
+
+`tests/test_track_credits.py` (10). Run it with
+`python3 tools/track_credits.py --apply`; retry one by deleting its row.
 
 ### Artist metadata — the MBID keystone, and who was in the band
 
@@ -2065,7 +2139,7 @@ album_art(artist, album, art_url, source, updated_at)
 ### How it fills up
 
 - **Phase A — sibling harvest** (`dlna_library.LibraryDB._backfill_album_art`): instantaneous SQL pass. Runs at end of every `upsert_tracks(udn, rows)` call (i.e. after each indexer run) and once at startup as a migration. Harvests per-album art from tracks that brought their own art (source = `'sibling'`) and applies it onto sibling tracks of the same `(artist, album)` that were missing one.
-- **Phase B — external lookup** (`dlna_library.AlbumArtFetcher`, singleton `ART_FETCHER`): event-driven background worker. Fires on two hooks only — (1) a one-shot startup scan 120s after boot (`ART_FETCHER.start_initial_scan()` in `dlna_gateway.main`) to catch albums left bare by a previous interrupted run, and (2) `ART_FETCHER.trigger()` at the tail of every successful `Indexer._run()` so new bare albums from a fresh crawl get looked up immediately. No periodic poll. Walks `bare_albums()` (tracks with no art AND no `album_art` row of any source), queries MusicBrainz release-group → HEADs `coverartarchive.org/release-group/{mbid}/front-500`, writes hits as `source='musicbrainz'` and misses as `source='notfound'`. Rate-limited to ~1 req/sec (`_MB_RATE_LIMIT_SEC = 1.1`) per MusicBrainz ToS. If a trigger arrives while a scan is in flight, it's a no-op — the ongoing `run_once()` re-queries `bare_albums()` between batches and absorbs the new work into the current pass.
+- **Phase B — external lookup** (`dlna_library.AlbumArtFetcher`, singleton `ART_FETCHER`): event-driven background worker. Fires on two hooks only — (1) a one-shot startup scan 120s after boot (`ART_FETCHER.start_initial_scan()` in `dlna_gateway.main`) to catch albums left bare by a previous interrupted run, and (2) `ART_FETCHER.trigger()` at the tail of every successful `Indexer._run()` so new bare albums from a fresh crawl get looked up immediately. No periodic poll. Walks `bare_albums(*, skip_udns, min_tracks, with_performers)` (tracks with no art AND no `album_art` row of any source — see §"Four things the fetcher was asking" for what those three opt-in filters exclude and why), asks each query `dlna_art_query.art_queries()` hands it, and for each resolves MusicBrainz **release-group first, then release** → HEADs `coverartarchive.org/{entity}/{mbid}/front-500`, writing hits as `source='musicbrainz'` and misses as `source='notfound'`. Rate-limited to ~1 req/sec (`_MB_RATE_LIMIT_SEC = 1.1`) per MusicBrainz ToS. If a trigger arrives while a scan is in flight, it's a no-op — the ongoing `run_once()` re-queries `bare_albums()` between batches and absorbs the new work into the current pass.
 
 ### What survives a rebuild-index
 
@@ -2088,6 +2162,162 @@ DELETE FROM album_art WHERE source='notfound';
 ```
 
 Those albums become bare again and get looked up on the next `ART_FETCHER.trigger()` — which means either a rebuild-index of any server, or a gateway restart (the 120s startup scan).
+
+### Phase A2 — the cover that sits BESIDE the music (2026-09-21)
+
+The indexer only ever read **embedded** pictures, so an album whose cover
+is a separate file in its folder showed none at all. Measured live: of
+506 art-less album-folders, 99 had an image sitting right there that was
+never looked at. `dlna_providers/localfs_art.py` finds a usable cover in
+**95 of the 506 (19%)**.
+
+**Choosing WHICH image is the whole problem.** From those same folders:
+
+```
+front.jpg          2927px  2032 KB
+folder.jpg         1123px   425 KB
+cover.jpg           300px    36 KB
+albumartsmall.jpg    75px     3 KB   <- Windows Media Player
+back.jpg           2900px  3015 KB   <- the BACK of the sleeve
+label.jpg          2840px  1801 KB   <- the disc label
+```
+
+"First image wins" picks the 75px thumbnail. **"Biggest wins" picks the
+BACK COVER** — it is the largest file in that list. Only the NAME says
+which one is the front, so selection is **name-first**, with a size floor
+only as a last resort.
+
+- **Rejections match whole WORDS, never substrings.** Rejecting anything
+  containing `cd` throws away `ACDC - cover.jpg`. Same trap
+  `_is_junk_name` documents, one domain over.
+- **A `CD1`/`Disc 2` subfolder also looks in its PARENT** — a box set's
+  single cover sits beside the disc folders, not inside each. An ordinary
+  folder never climbs, or every album under a genre folder would inherit
+  a stray image from it.
+- **WMP's `_large` variant is recognised BY NAME**, not left to the byte
+  floor: measured at 6–14 KB (~200px), most sat just under it. A floor is
+  the wrong instrument for a file that declares its own variant; `_small`
+  is still rejected. Worth 23 of the 95.
+- **12 MB cap, MIME sniffed from magic bytes** — same rules as embedded
+  art (§"Can a media file phone home?"). An embedded picture is bounded
+  by its audio file; a folder of 3 MB sleeve scans is not.
+
+The fallback lives inside **`_extract_art_bytes`**, the ONE function both
+the scanner and `/localfs/art/<id>` call — so one change indexes the
+cover AND serves it, with no new route, no schema change, no URL change.
+Its two early returns (mutagen cannot open the file / does not recognise
+it) now fall THROUGH to the fallback: a file with no readable tags is
+exactly when the folder cover is the only one there.
+`tests/test_folder_art.py` (23).
+
+### Ask a question the cover sources can ANSWER (2026-09-21)
+
+3,998 albums sat in `album_art` as a sticky `notfound`. Sampling showed
+the **sources were never the bottleneck — the QUESTION was**:
+
+```
+Pink Floyd | Ummagumma                 -> musicbrainz   FOUND
+Pink Floyd | Ummagumma - Studio Album  -> notfound      never will be
+```
+
+One album, two rows, opposite fates, decided by a suffix the ripper
+added. And for compilations the question is unanswerable in principle:
+*"does Harry Nilsson have an album called Voices of the 70s?"* No — it
+isn't his; he is one contributing performer.
+
+**`dlna_art_query.art_queries()` returns ORDERED attempts.** The exact
+`(artist, album)` is **always first**, so nothing that resolves today can
+regress; looser forms follow in increasing order of risk — a tidied title
+is still that album, while title-only could in principle return a
+different record of the same name, so it is offered **only for
+multi-artist folders**, where including the artist is guaranteed to fail.
+
+- **`tidy_album` is for LOOKUP ONLY** — never identity, never display. A
+  too-loose query costs one wasted request; a too-loose identity merges
+  two albums.
+- Edition words are stripped only **after a dash at the END**: "Sign o'
+  the Times - Live in Paris" is a title, "Ummagumma - Studio Album" is a
+  marker. A name made entirely of cruft is handed back **unchanged**
+  rather than emptied — an empty query searches for everything and caches
+  the miss.
+- **No new external source was added.** Dropping the artist and searching
+  Cover Art Archive by title alone found covers for 3 of 4 such albums
+  using the service we already have; iTunes and Deezer both scored 1/4 on
+  the same failures, and iTunes' single "hit" was the wrong release.
+
+`tests/test_art_query.py` (14).
+
+### Four things the fetcher was asking that could not have an answer (2026-09-21)
+
+A live pass over 1,497 "bare" albums returned **32 covers**. The low
+yield was not bad luck — a rate-limited budget was being spent on
+impossible questions. All four filters are **opt-in**, so no existing
+caller silently narrows.
+
+- **169 were AUDIOBOOKS.** `bare_albums()` had no udn filter, so the
+  second LocalFs root was swept along with the music. The very first
+  query of the run asked MusicBrainz for
+  `artist='Patrick Rothfuss' album='The Kingkiller Chronicle Book 2'` —
+  of a *music* database — and then cached the miss as a `notfound`
+  against a book. `skip_udns` / `_audiobooks_udn()`.
+- **90 were one- or two-track STRAYS** — a loose file in its own folder.
+  It has no cover because it is not an album; every one is a guaranteed
+  miss. `min_tracks`.
+- **`multi_artist` never reached `art_queries`**, so the title-only query
+  — the only form that can find a compilation, and the one
+  `tests/test_art_query.py` already covered — never ran in production.
+  `bare_albums` now reports the folder's distinct-performer count, which
+  is what makes the decision possible at all.
+- **The ENDPOINT was wrong for compilations.** Cover art attaches to a
+  **release** — a specific pressing — while a *release-group* reports art
+  only when one of its releases is flagged as the group cover:
+
+  ```
+  Harry Nilsson / Voices of the 70s
+    release-group : 0 groups   -> no art
+    release       : 1 release  -> art FOUND   (verified live)
+  ```
+
+  Measured 10% vs 4% over ten current failures. **Release-group stays
+  FIRST** — it is the better answer when it works, one abstract album
+  rather than forty pressings — and release is the fallback that rescues
+  compilations.
+
+After the fix the same fetcher ran at a **78% hit rate** (849 found / 239
+notfound) against ~2% before.
+
+### Where album art actually stands — and why the ceiling is low
+
+Measured on the live library after all of the above:
+
+```
+album_art     musicbrainz 2,198 · sibling 11,397 · notfound 239
+albums w/art  1,913 / 2,248 (85.1%)     was 77%
+folders       fully covered 1,855 · PARTLY 58 · NONE 335
+tracks w/art  25,056 / 26,750 (93.7%)
+```
+
+> **849 covers found yielded only +67 folder-albums**, and the mismatch
+> is structural, not a bug: `album_art` is keyed `(artist, album)` while
+> a LocalFs album is a **FOLDER**. The same shape shows up every time
+> these two identities meet; expect it when reading any art statistic.
+
+**The remaining 335 are a media problem.** Of 402 art-less albums at the
+time of the audit, **~60% are compilation-shaped names no database holds**
+(`Billboard Top 100 of 1970`, `Greatest Hits Collection 60s`) and ~22%
+are the one-or-two-track strays. Only ~17% look like real releases. Two
+options were evaluated and **both declined**:
+
+- **`beet fetchart`** — beets knows 709 of 2,248 albums and just **THREE**
+  of the 402 without art. The albums beets could not import are the same
+  albums Cover Art Archive cannot find, for the same reason.
+- **Discogs** — has a free API and would have served the compilation
+  category, but the release-vs-release-group fix above already recovers
+  it from a source we are already using and already rate-limit correctly.
+  Not worth a fifth external dependency for what is left.
+
+Stop here unless the tags change. The lever that remains is retagging,
+not another lookup service.
 
 ## FIXES.md — the rolling why-log
 
@@ -2729,12 +2959,14 @@ reverse-geocoding (cached per coordinate, ~1 req/s); the opt-out is leaving
 
 ## External services (outbound HTTP)
 
-The gateway is LAN-only except for album-art, lyrics, and radio-catalogue lookups. All over TLS:
+The gateway is LAN-only except for album-art, artist-metadata, songwriting-credit, lyrics and radio-catalogue lookups. All over TLS:
 
 | Host | Purpose | Method + path |
 |---|---|---|
-| `musicbrainz.org` | Resolve `(artist, album)` → release-group MBID | `GET /ws/2/release-group/?query=…&fmt=json&limit=5` |
-| `coverartarchive.org` | Confirm a front cover exists for that MBID | `HEAD /release-group/{mbid}/front-500` — 200/301/302/307 counts as "have it", 404 counts as "no cover" |
+| `musicbrainz.org` | Resolve `(artist, album)` → release-group MBID; resolve an artist name → artist MBID; browse an artist's **works** for composer/lyricist; fetch an artist's life-span, genres and band members | `GET /ws/2/release-group/?query=…`, `/ws/2/release/?query=…`, `/ws/2/artist/?query=…`, `/ws/2/artist/{mbid}?inc=…`, `GET /ws/2/work?artist={mbid}&inc=artist-rels&limit=100` — all `&fmt=json` |
+| `coverartarchive.org` | Confirm a front cover exists for that MBID | `HEAD /release-group/{mbid}/front-500`, falling back to `/release/{mbid}/front-500` — 200/301/302/307 counts as "have it", 404 counts as "no cover". Art attaches to a RELEASE; a release-group only reports one when a release is flagged as its cover, which is why compilations need the fallback |
+| `en.wikipedia.org` | The biography paragraph + the artist photo behind the ℹ️ panel | `GET /api/rest_v1/page/summary/{title}` — CC BY-SA, so **the text is dropped when its url is missing**: the link IS the attribution and they travel together or not at all |
+| `ws.audioscrobbler.com` | "Best known for", by actual listening | `GET /2.0/?method=artist.gettoptracks&api_key=…` — needs a registered APPLICATION key (`LASTFM_API_KEY`), not an account password. Absent → the block is omitted and nothing else changes |
 | `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
 | `*.api.radio-browser.info` | Internet-radio station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&hidebroken=true` — see the "Internet radio" section |
 
@@ -3586,7 +3818,29 @@ requests, harmless.
 python3 tools/artist_meta.py                  # preview
 python3 tools/artist_meta.py --apply --limit 50
 python3 tools/artist_meta.py --apply          # the full pass (~1h)
-python3 -m unittest tests.test_artist_fetch -v   # 24 tests
+python3 -m unittest tests.test_artist_fetch -v   # 32 tests
+```
+
+### `tools/track_credits.py`
+
+Step 4 of the enrichment chain: composer/lyricist from MusicBrainz for
+the tracks whose files carry none. Runs after `artist_mbid.py`, because
+it browses each **artist's works** (up to 100 per request, each already
+carrying its writer relations) rather than resolving track → recording →
+work — the difference between ~1.2 h and ~16 h. See
+§"Step 4 — the two thirds with no tag" for the rules.
+
+Live: **11,025 matched, 6,067 sticky `notfound`, 0 errors, ~2 h** —
+composer coverage 32% → **73.9%**. Resumable: a row of any source,
+including the negative, means "already asked". DRY-RUN by default.
+
+```bash
+python3 tools/track_credits.py                     # preview
+python3 tools/track_credits.py --apply --limit 20  # a bounded pass
+python3 tools/track_credits.py --apply             # the full sweep
+python3 -m unittest tests.test_track_credits -v    # 10 tests
+# retry one track:
+sqlite3 library.db "DELETE FROM track_credits WHERE source='notfound' AND url='…'"
 ```
 
 ### `tools/audit_playlist_orphans.py`
