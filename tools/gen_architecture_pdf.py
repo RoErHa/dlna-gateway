@@ -35,10 +35,22 @@ GREEN_L = HexColor(0xdcf5e4)
 GREY_L  = HexColor(0xeceef1)
 RED_L   = HexColor(0xffe4e1)
 GW_L    = HexColor(0xeef1f7)
+
+# Two more lane colours for the 2026-09-21 four-journey redraw. AMBER is
+# the BATCH lane — work you start yourself, which by definition cannot
+# affect playback; it doubles as the batch tag in the externals panel.
+# PINK is the video lane, the only journey with machine learning in it.
+AMBER   = HexColor(0x9a5b00)
+AMBER_L = HexColor(0xfcf2e2)
+PINK    = HexColor(0xa8326b)
+PINK_L  = HexColor(0xfbe9f1)
 GW_TILE = HexColor(0xffffff)
 INK     = HexColor(0x24292f)
 
-W, H = 1120, 720   # drawing canvas
+# Canvas aspect must match the PAGE, or reportlab scales to fit the
+# wider dimension and leaves a band of dead paper. A3 landscape is
+# 1190x842pt = 1.414; 1120x792 is the same ratio.
+W, H = 1120, 792   # drawing canvas — A3-landscape aspect
 
 
 # ── tiny drawing helpers ─────────────────────────────────────────────
@@ -83,246 +95,192 @@ def tile(d, x, y, w, h, title, lines, accent):
 
 
 # ── build the diagram ────────────────────────────────────────────────
+# Redrawn 2026-09-21 as FOUR JOURNEYS rather than four static columns.
+#
+# The old drawing was a map of boxes that exist: it answered "what
+# modules are there" but not "how does this work", you could not trace a
+# track from disk to speaker, and it silently omitted four external
+# services. Worse, it gave no way to tell a service hit WHILE YOU LISTEN
+# from one hit by a batch tool you run yourself — which is the only
+# distinction that matters operationally, because just five of them can
+# affect playback.
+#
+# Each lane reads left to right and answers one question. The node
+# tables overleaf (P/T/D/E/J) are unchanged — they were always the
+# reference half and they work.
+
+LANES = [
+    ("1", "A track reaches your ears",
+     "what happens when you press play", GREEN, GREEN_L, [
+        ("Files on disk",
+         ["Music, audiobooks and video on", "external volumes, read-only."],
+         "/Volumes/SAMDATA  (D/3)"),
+        ("Index",
+         ["Tags read once per file;", "a folder is an album."],
+         "P/g10 localfs · P/g9 indexer"),
+        ("library.db",
+         ["One SQLite index. WAL,", "FTS5 search, per-thread conns."],
+         "P/g7 LibraryDB · P/g8 pool"),
+        ("Choose",
+         ["Browse or search, then queue", "to a renderer or the browser."],
+         "P/g20 api_browse · P/g15 player"),
+        ("Bytes move",
+         ["The renderer pulls from :8200", "ITSELF — the gateway is not in",
+          "the audio path. Browser audio", "uses the Range proxy."],
+         "P/g11 localfs_server · P/g16 /stream"),
+     ]),
+    ("2", "The library learns what it knows",
+     "batch tools you run; never during playback", AMBER, AMBER_L, [
+        ("Tag in place",
+         ["beets writes clean tags and", "MBIDs into the files."],
+         "T/a13 beets_enrich · T/a14 post_beets"),
+        ("Resolve artists",
+         ["Artist to MusicBrainz id.", "THE KEYSTONE: four sources",
+          "key off it.  2,889/3,289."],
+         "T/a15 artist_mbid"),
+        ("Fetch facts",
+         ["Life-span, birthplace, genres,", "biography, best-known, and",
+          "band line-ups with dates."],
+         "T/a16 artist_meta"),
+        ("Fetch credits",
+         ["Composer/lyricist by browsing", "each artist's WORKS — 100 per",
+          "request, an hour not sixteen."],
+         "T/a17 track_credits"),
+        ("Housekeeping",
+         ["Orphan relinks, duplicate and", "corrupt-file audits, playlist",
+          "repair.  All dry-run by default."],
+         "T/a2-a12"),
+     ]),
+    ("3", "A phone clip becomes a browsable memory",
+     "the only journey with machine learning in it", PINK, PINK_L, [
+        ("iPhone to Immich",
+         ["Phone backup. Immich runs FACE", "RECOGNITION in its own Postgres",
+          "— never written into the files."],
+         "Immich  (separate service)"),
+        ("Import originals",
+         ["Copies Immich's originals, never", "its transcodes. Dedup by BLAKE2b",
+          "content hash."],
+         "T/a18 immich_import"),
+        ("Scan and title",
+         ["Every 5 min. Titles from METADATA,", "not filenames: GPS reverse-geocoded",
+          "plus capture time. No GPS? inferred", "from temporal neighbours."],
+         "P/g31 video_index · P/g33 geocode"),
+        ("Pull the ML back",
+         ["Person tags over Immich's REST API,", "matched by SHA1 CONTENT CHECKSUM",
+          "— Immich's paths are container", "paths and cannot be mapped."],
+         "T/a19 immich_people_sync"),
+        ("Browse it",
+         ["By date, country/place, person,", "or all. Native on the TV; the PWA",
+          "gets an on-demand HLS transcode."],
+         "P/g23 upnp_browse_video · P/g32 ffmpeg"),
+     ]),
+    ("4", "Four ways to reach the same library",
+     "one index, four protocols", BLUE, BLUE_L, [
+        ("PWA  (P/c1)",
+         ["Browse, playback, lyrics, the", "artist panel, video."],
+         "HTTPS/2 :8443 · /api/*"),
+        ("Naim  (D/1)",
+         ["Browses the gateway AS a DLNA", "Media Server; pulls bytes itself."],
+         "UPnP SOAP :8765 /gw/*"),
+        ("CarPlay  (P/c2)",
+         ["Amperfy over Tailscale, including", "audiobook bookmarks."],
+         "Subsonic /rest/*"),
+        ("LG TV  (D/5)",
+         ["The GWMovies tree; plays HEVC", "and MKV natively."],
+         "UPnP · no transcode"),
+        ("Renderers, generally",
+         ["Any UPnP MediaRenderer. Volume via", "RenderingControl — hardware, so",
+          "the audio stays bit-perfect."],
+         "P/g14 avtransport"),
+     ]),
+]
+
+# Every external service, and WHEN it is reached. `live` can affect
+# playback; `batch` cannot, because you started it yourself.
+EXTERNALS = [
+    ("musicbrainz.org", "live", "Release-group for album art; artist facts and works for the sweeps.", "1 req/s · UA required"),
+    ("coverartarchive.org", "live", "Front-cover presence for an album MBID.", "follows 307 to archive.org"),
+    ("lrclib.net", "live", "Lyrics, on the button. Cached forever, hit or miss.", "once per track URL"),
+    ("*.api.radio-browser.info", "live", "Internet-radio station catalogue.", "DNS round-robin · HLS filtered"),
+    ("nominatim.openstreetmap.org", "live", "GPS to place name for video titles. THE PRIVACY-RELEVANT ONE.", "1.1 s/req · sticky cache · opt-out"),
+    ("upload.wikimedia.org", "live", "Artist photos, through the /art proxy and its disk cache.", "freely licensed · cached"),
+    ("en.wikipedia.org", "batch", "Artist biographies. CC BY-SA: stored only WITH its url.", "no key · 74% coverage"),
+    ("ws.audioscrobbler.com", "batch", "Last.fm best-known-for, ranked by real listening.", "APPLICATION key · 100%"),
+    ("openlibrary.org", "batch", "Audiobook author, title and series number.", "~1 req/s · EN/NL only"),
+    ("api.acoustid.org", "batch", "Fingerprints, reached ONLY by beets in its own process.", "beets' own key"),
+]
+
+
 def build_diagram():
     d = Drawing(W, H)
 
-    # title
-    txt(d, 6, H - 16, "DLNA Gateway — Architecture (2.1 · ASGI/Hypercorn)",
+    txt(d, 6, H - 15, "DLNA Gateway — Architecture (2.1 · ASGI/Hypercorn)",
         size=15, bold=True, color=INK)
-    txt(d, 6, H - 30,
-        "What runs where · stream colours show direction/scope · node codes "
-        "(P/T/D/E/J) index into the lists overleaf",
+    txt(d, 6, H - 28,
+        "Four journeys, each read left to right · node codes (P/T/D/E/J) "
+        "index into the lists overleaf",
         size=8, color=GREY)
 
-    # ── CLIENTS (blue) ───────────────────────────────────────────────
-    cluster(d, 8, 380, 198, 270, "CLIENTS  (inbound)", BLUE, BLUE_L)
-    tile(d, 18, 540, 178, 92, "P/c1  PWA front-end", [
-        "static/: index.html, app.js,",
-        "app.css, sw.js, manifest.json",
-        "SW: APP shell network-first,",
-        "ART cache-first, API SWR",
-        "MediaSession, offline shell,",
-        "video player (hls.js vendored)",
-    ], BLUE)
-    tile(d, 18, 398, 178, 110, "P/c2  Subsonic client", [
-        "Amperfy / substreamer /",
-        "play:Sub  (3rd-party iOS app)",
-        "→ CarPlay over Tailscale",
-        "talks /rest/* to the gateway,",
-        "not to the music server",
-    ], BLUE)
+    # ── the four lanes ───────────────────────────────────────────────
+    LANE_H, GAP = 122, 10
+    top = H - 42
+    for n, title, question, accent, light, steps in LANES:
+        y = top - LANE_H
+        box(d, 6, y, W - 12, LANE_H, light, accent, rx=6, sw=1.2)
+        box(d, 6, y + LANE_H - 17, W - 12, 17, accent, accent, rx=6, sw=0)
+        txt(d, 13, y + LANE_H - 12.5, f"JOURNEY {n}", size=7.5,
+            color=white, bold=True)
+        txt(d, 72, y + LANE_H - 12.5, title, size=9, color=white, bold=True)
+        txt(d, 72 + 5.2 * len(title), y + LANE_H - 12.5, f"   — {question}",
+            size=7.5, color=white)
 
-    # ── GATEWAY PROCESS (centre) ─────────────────────────────────────
-    gx, gw_ = 228, 478
-    cluster(d, gx, 180, gw_, 468,
-            "GATEWAY PROCESS   (Hypercorn serves P/g27 dlna_asgi:app; "
-            "P/g1 start_background_services spawns daemon threads)", INK, GW_L)
-    ix, iw = gx + 9, gw_ - 18
+        sw_ = (W - 22) / len(steps)
+        for i, (head, lines, mod) in enumerate(steps):
+            x = 11 + i * sw_
+            if i:
+                d.add(Line(x - 3, y + 6, x - 3, y + LANE_H - 22,
+                           strokeColor=accent, strokeWidth=0.5))
+            txt(d, x + 3, y + LANE_H - 33, head, size=8.4, color=accent,
+                bold=True)
+            yy = y + LANE_H - 44
+            for ln in lines:
+                txt(d, x + 3, yy, ln, size=7.0, color=INK)
+                yy -= 9.4
+            txt(d, x + 3, y + 8, mod, size=6.6, color=GREY)
+            # the flow itself: one arrow between consecutive steps
+            if i < len(steps) - 1:
+                arrow(d, x + sw_ - 9, y + LANE_H - 34,
+                      x + sw_ - 1, y + LANE_H - 34, accent, w=1.0)
+        top = y - GAP
 
-    tile(d, ix, 580, iw, 44,
-         "HTTP edge  (Hypercorn ASGI · TLS+HTTP/2 :8443 · plain :8765)", [
-        "P/g27 dlna_asgi (FastAPI)  P/g28 dlna_asgi_bridge (legacy shim)  "
-        "P/g30 dlna_events (SSE /api/events)",
-    ], INK)
-    tile(d, ix, 524, iw, 50, "API handlers  (/api/*  /rest/*  /gw/*)", [
-        "P/g20 api_browse   P/g21 api_playback   P/g22 api_playlists",
-        "P/g23 api_upnp (gateway-as-MediaServer, incl. Videos folder)   "
-        "P/g24 api_subsonic   P/g25 api_radio",
-    ], INK)
-    tile(d, ix, 470, iw, 48, "Playback & control", [
-        "P/g15 dlna_player  (RendererQueue / QUEUES per UDN)",
-        "P/g14 dlna_avtransport (AVTransport+RenderingControl SOAP)   "
-        "P/g16 dlna_stream_proxy (/stream)",
-    ], GREEN)
-    tile(d, ix, 426, iw, 38, "Discovery", [
-        "P/g4 dlna_discovery (SSDP, heartbeat, subnet scan)   "
-        "P/g5 dlna_registry   P/g6 dlna_devices",
-    ], GREEN)
-    tile(d, ix, 352, iw, 68, "Library & index", [
-        "P/g7 dlna_library (LibraryDB: tracks/FTS5 w/ auto-heal + type-ahead/"
-        "playlists/overrides/videos…)",
-        "P/g8 db_pool (SQLite WAL pool)   P/g9 dlna_indexer (crawler)",
-        "P/g10 dlna_providers/ (seam: upnp, localfs, mock)   "
-        "P/g13 dlna_content (ContentDirectory SOAP)",
-        "DATA → SQLite library.db   ·   config.json · gateway.log",
-    ], GREY)
-    tile(d, ix, 300, iw, 46, "LocalFs serving  (RoHaLocalFS)", [
-        "P/g11 dlna_localfs_server — bit-perfect file server :8200 "
-        "(Range/206, DLNA headers)",
-        "/localfs/stream + /localfs/art + /localfs/video   "
-        "P/g12 dlna_localfs_wiring",
-    ], GREEN)
-    tile(d, ix, 246, iw, 48, "Video  (GWMovies — V0–V3)", [
-        "P/g31 dlna_video_index (5-min incremental scan → videos table)   "
-        "P/g32 dlna_ffmpeg (probe/poster/",
-        "HLS transcode)   PWA: /api/videos + /video/<id> + /video_hls "
-        "(hls.js)   LG: /gw Videos folder",
-    ], GREEN)
-    tile(d, ix, 184, iw, 56, "Background fetchers  (event-driven, TLS out)", [
-        "P/g17 dlna_art_fetcher (MusicBrainz + Cover Art Archive)   "
-        "P/g29 dlna_art_cache (disk bytes)",
-        "P/g19 dlna_lyrics (lrclib)   P/g33 dlna_geocode (Nominatim place "
-        "names, sticky cache)",
-        "P/g26 dlna_config (logging/config)   P/g34 dlna_ssrf (outbound-fetch guard)",
-    ], RED)
+    # ── externals ────────────────────────────────────────────────────
+    ex_h = top - 6
+    box(d, 6, 6, W - 12, ex_h, white, GREY, rx=6, sw=1.0)
+    box(d, 6, ex_h - 11, W - 12, 17, GREY, GREY, rx=6, sw=0)
+    txt(d, 13, ex_h - 6, "EXTERNAL SERVICES", size=7.5, color=white,
+        bold=True)
+    txt(d, 118, ex_h - 6,
+        "LIVE = can affect playback · BATCH = only while a tool you "
+        "started is running", size=7.5, color=white)
 
-    # ── LAN DEVICES (green) ──────────────────────────────────────────
-    dx = 718
-    cluster(d, dx, 180, 246, 468, "LAN DEVICES  (direct, HTTP/SOAP — no TLS)",
-            GREEN, GREEN_L)
-    tile(d, dx + 10, 528, 226, 92, "D/1  Naim Uniti  (renderer)", [
-        "UPnP MediaRenderer",
-        "← AVTransport/RenderingControl",
-        "  SOAP (SetURI/Play/Vol/poll)",
-        "→ pulls audio BYTES from :8200",
-        "also browses gateway playlists",
-        "  (UPnP control point)",
-    ], GREEN)
-    tile(d, dx + 10, 440, 226, 80, "D/2  UPnP MediaServer", [
-        "MinimServer / generic UPnP",
-        "(AssetUPnP — decommissioned)",
-        "via P/g10 UpnpProvider +",
-        "P/g13 ContentDirectory SOAP",
-    ], GREEN)
-    tile(d, dx + 10, 376, 226, 56, "D/5  LG TV  (webOS)", [
-        "DLNA control point + player",
-        "browses /gw (incl. Videos),",
-        "pulls bytes from :8200",
-    ], GREEN)
-    tile(d, dx + 10, 284, 226, 84, "D/3  Media files", [
-        "/Volumes/SAMDATA/Music +",
-        "/Volumes/SAMDATA/GWMovies",
-        "(external drive, read-only)",
-        "audio: P/g9-11 index + serve",
-        "video: P/g31 scan, :8200 serve",
-    ], GREEN)
-    tile(d, dx + 10, 202, 226, 74, "D/4  Local binaries", [
-        "fpcalc — beets fingerprints (T/a13)",
-        "ffmpeg/ffprobe — video probe/",
-        "poster/HLS transcode (P/g32)",
-    ], GREY)
-
-    # ── EXTERNAL services (red) ──────────────────────────────────────
-    ex = 974
-    cluster(d, ex, 306, 142, 342, "EXTERNAL  (TLS out)", RED, RED_L)
-    exb = [
-        ("E/x1  musicbrainz.org", "release-group MBID, year"),
-        ("E/x2  coverartarchive", "front-cover presence"),
-        ("E/x3  lrclib.net", "on-demand lyrics"),
-        ("E/x4  radio-browser", "station catalogue"),
-        ("E/x5  api.acoustid.org", "beets tool only (T/a13)"),
-        ("E/x6  nominatim (OSM)", "GPS → place, video titles"),
-    ]
-    ey = 568
-    for code, desc in exb:
-        box(d, ex + 9, ey, 124, 42, GW_TILE, RED, rx=4, sw=0.9)
-        txt(d, ex + 14, ey + 30, code, size=7.2, bold=True, color=RED)
-        txt(d, ex + 14, ey + 19, desc, size=6.4, color=INK)
-        ey -= 48
-
-    # ── TOOLS (grey) ─────────────────────────────────────────────────
-    cluster(d, 8, 8, 700, 164, "MAINTENANCE TOOLS  (tools/*.py — operate "
-            "directly on library.db / music root)", GREY, GREY_L)
-    tools = [
-        "T/a1  regen_schema.py", "T/a2  prune_empty_music_dirs.py",
-        "T/a3  find_corrupt_audio.py", "T/a4  find_duplicate_audio.py",
-        "T/a6  relink_orphan_overrides.py",
-        "T/a7  relink_playlists_to_localfs.py", "T/a8  audit_override_mismatches.py",
-        "T/a9  correct_year_drift.py", "T/a10 improve_song_years.py",
-        "T/a11 localfs_scan.py", "T/a12 localfs_serve.py",
-        "T/a13 beets_enrich.py", "T/a14 post_beets_reindex.py",
-    ]
-    col_w = 232
-    for i, t in enumerate(tools):
-        cx = 18 + (i % 3) * col_w
-        cy = 126 - (i // 3) * 26
-        box(d, cx, cy, col_w - 12, 20, GW_TILE, GREY, rx=3, sw=0.8)
-        txt(d, cx + 6, cy + 6, t, size=7, color=INK)
-
-    # ── SCHEDULED JOBS / SCRIPTS (grey) ──────────────────────────────
-    cluster(d, 718, 8, 246, 164, "SCHEDULED JOBS & SCRIPTS  (launchd)",
-            GREY, GREY_L)
-    jobs = [
-        ("J/1  com.roha.dlna-gateway", "runs the gateway (launchd)"),
-        ("J/2  cert-renew + renew-cert.sh", "weekly TLS cert (Mon 04:30)"),
-        ("J/4  setup.sh", "venv + run / restart / probe"),
-    ]
-    jy = 124
-    for code, desc in jobs:
-        box(d, 728, jy, 226, 26, GW_TILE, GREY, rx=3, sw=0.8)
-        txt(d, 734, jy + 15, code, size=7, bold=True, color=INK)
-        txt(d, 734, jy + 5, desc, size=6.3, color=GREY)
-        jy -= 32
-
-    # ── LEGEND ───────────────────────────────────────────────────────
-    lx, ly, lw, lh = 974, 8, 142, 290
-    box(d, lx, ly, lw, lh, white, INK, rx=6, sw=1.3)
-    txt(d, lx + 8, ly + lh - 14, "LEGEND — stream colours", size=8.2,
-        bold=True, color=INK)
-    leg = [
-        (BLUE,  "FROM", "inbound client → gateway"),
-        (GREEN, "TO", "gateway ↔ LAN device"),
-        (GREY,  "INTERNAL", "within gateway / DB /"),
-        (RED,   "EXTERNAL", "gateway → internet (TLS)"),
-    ]
-    yy = ly + lh - 36
-    for col, name, desc in leg:
-        arrow(d, lx + 10, yy + 4, lx + 40, yy + 4, col, w=2.4)
-        txt(d, lx + 46, yy + 8, name, size=7.2, bold=True, color=col)
-        txt(d, lx + 46, yy - 1, desc, size=6.1, color=INK)
-        yy -= 30
-    txt(d, lx + 8, yy + 4, "Node codes", size=7.6, bold=True, color=INK)
-    yy -= 11
-    for line in ["P = program / module", "T = maintenance tool",
-                 "D = LAN device", "E = external service",
-                 "J = scheduled job / script"]:
-        txt(d, lx + 10, yy, line, size=6.3, color=INK)
-        yy -= 10
-    txt(d, lx + 8, yy - 2, "Dashed = optional /", size=6.2, color=GREY)
-    txt(d, lx + 8, yy - 11, "intermittent path", size=6.2, color=GREY)
-
-    # ── ARROWS ───────────────────────────────────────────────────────
-    # FROM: clients → HTTP edge (blue)
-    arrow(d, 206, 590, 228, 606, BLUE, 1.8)
-    arrow(d, 206, 452, 228, 596, BLUE, 1.8)
-    txt(d, 150, 662, "HTTPS:8443 / HTTP:8765", size=6.3, color=BLUE, bold=True)
-    txt(d, 150, 654, "(Tailscale / LAN)", size=6.0, color=BLUE)
-    # FROM: Naim browses gateway playlists (blue dashed, control-point)
-    arrow(d, 718, 545, 706, 540, BLUE, 1.4, dash=[3, 2])
-    # FROM: LG TV browses the /gw MediaServer incl. Videos (blue dashed)
-    arrow(d, 718, 404, 706, 398, BLUE, 1.4, dash=[3, 2])
-
-    # TO: gateway playback → Naim control (green)
-    arrow(d, 706, 484, 718, 575, GREEN, 1.9)
-    txt(d, 600, 492, "AVTransport SOAP", size=6.3, color=GREEN, bold=True)
-    txt(d, 600, 484, "(control · volume)", size=6.0, color=GREEN)
-    # TO: Naim/LG pull bytes from :8200 (green)
-    arrow(d, 718, 555, 706, 335, GREEN, 1.9)
-    txt(d, 582, 322, "HTTP Range → media bytes", size=6.3, color=GREEN, bold=True)
-    txt(d, 582, 314, ":8200 (bit-perfect)", size=6.0, color=GREEN)
-    # TO: providers/content ↔ UPnP MediaServer (green)
-    arrow(d, 706, 386, 718, 468, GREEN, 1.6, dash=[4, 2])
-    txt(d, 598, 396, "ContentDirectory SOAP", size=6.0, color=GREEN)
-    # TO: localfs/library ↔ media files (green)
-    arrow(d, 706, 308, 718, 320, GREEN, 1.7)
-    txt(d, 636, 296, "read / serve", size=6.0, color=GREEN)
-
-    # EXTERNAL: fetchers → external services (red)
-    arrow(d, 706, 222, 974, 430, RED, 2.0)
-    txt(d, 620, 208, "TLS lookups →", size=6.4, color=RED, bold=True)
-
-    # INTERNAL: local binaries → fetchers/video (grey)
-    arrow(d, 718, 220, 706, 210, GREY, 1.4)
-    # INTERNAL: tools → gateway DB (grey)
-    arrow(d, 360, 172, 360, 348, GREY, 1.5, dash=[4, 2])
-    txt(d, 600, 358, "T/* write library.db", size=6.2, color=GREY)
-    # INTERNAL: jobs → gateway (grey, launchctl kickstart — see J/1)
-    arrow(d, 770, 172, 706, 200, GREY, 1.5, dash=[4, 2])
+    cols, colw = 3, (W - 26) / 3
+    rows = (len(EXTERNALS) + cols - 1) // cols
+    rh = (ex_h - 26) / rows
+    for i, (host, when, what, cost) in enumerate(EXTERNALS):
+        cx = 13 + (i % cols) * colw
+        cy = ex_h - 24 - (i // cols) * rh
+        acc = GREEN if when == "live" else AMBER
+        d.add(Rect(cx, cy - rh + 5, 3.2, rh - 8, fillColor=acc,
+                   strokeColor=acc))
+        txt(d, cx + 9, cy - 10, host, size=7.6, color=INK, bold=True)
+        txt(d, cx + 9, cy - 19, f"[{when.upper()}]",
+            size=6.4, color=acc, bold=True)
+        txt(d, cx + 44, cy - 19, what, size=6.5, color=INK)
+        txt(d, cx + 9, cy - 29, cost, size=6.3, color=GREY)
 
     return d
 
 
-# ── reference list pages ─────────────────────────────────────────────
 def list_pages():
     ss = getSampleStyleSheet()
     body = ParagraphStyle('body', parent=ss['BodyText'], fontSize=7.6,
