@@ -457,6 +457,13 @@ def list_pages():
                         spaceBefore=4, spaceAfter=6, textColor=INK)
     note = ParagraphStyle('note', parent=body, fontSize=7.2,
                           textColor=HexColor(0x57606a))
+    # The program inventory is the list a reader actually works through,
+    # and it was 37 rows crammed onto page 3 with 7 stranded on an
+    # otherwise empty page 4. Its own roomier style spreads it across
+    # both pages instead of filling one and spilling.
+    prog = ParagraphStyle('prog', parent=body, fontSize=8.8, leading=12.2)
+    prog_code = ParagraphStyle('prog_code', parent=prog,
+                               fontName='Helvetica-Bold')
 
     def P(s, st=body):
         return Paragraph(s, st)
@@ -464,7 +471,7 @@ def list_pages():
     def C(s):
         return Paragraph(s, code)
 
-    def make_table(rows, widths, header_bg):
+    def make_table(rows, widths, header_bg, pad=2.5):
         t = Table(rows, colWidths=widths, repeatRows=1)
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), header_bg),
@@ -477,8 +484,8 @@ def list_pages():
              [white, HexColor(0xf6f8fa)]),
             ('LEFTPADDING', (0, 0), (-1, -1), 4),
             ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('TOPPADDING', (0, 0), (-1, -1), pad),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), pad),
         ]))
         return t
 
@@ -656,8 +663,9 @@ def list_pages():
          "tracks row are untouched. 8% of this library's credits are "
          "scene adverts (www.t.me/…). REJECTED rule, kept as a test: "
          "\u201ccredits with no A-Za-z letter are junk\u201d matched 55 rows, "
-         "every one a real composer (\u0421\u0442\u0440\u0430\u0432\u0438\u043d\u0441\u043a\u0438\u0439, "
-         "\u041f\u0440\u043e\u043a\u043e\u0444\u044c\u0435\u0432)."),
+         "every one a real composer \u2014 Stravinsky, Prokofiev, "
+         "Tchaikovsky and Rachmaninov tagged in CYRILLIC, Djivan "
+         "Gasparyan in ARMENIAN. Never require a particular script."),
         ("P/g36", "dlna_mbid.py",
          "The artist \u2192 MusicBrainz-id decision, pure. Every external "
          "source keys off this id, so one wrong match is wrong in four "
@@ -717,8 +725,8 @@ def list_pages():
          "question are different jobs with different semantics."),
     ]
     for c, f, r in progs:
-        prog_rows.append([C(c), P(f), P(r)])
-    story.append(make_table(prog_rows, [38, 200, 822], INK))
+        prog_rows.append([P(c, prog_code), P(f, prog), P(r, prog)])
+    story.append(make_table(prog_rows, [44, 224, 792], INK, pad=4.5))
     story.append(PageBreak())
 
     # ---- Tools ----
