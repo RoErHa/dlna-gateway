@@ -199,8 +199,8 @@ LANES = [
 # Every external service, and WHEN it is reached. `live` can affect
 # playback; `batch` cannot, because you started it yourself.
 EXTERNALS = [
-    ("musicbrainz.org", "live", "Release-group for album art; artist facts and works for the sweeps.", "1 req/s · UA required"),
-    ("coverartarchive.org", "live", "Front-cover presence for an album MBID.", "follows 307 to archive.org"),
+    ("musicbrainz.org", "live", "Release-group AND release for album art; artist facts and works for the sweeps.", "1 req/s · UA required"),
+    ("coverartarchive.org", "live", "Front cover for an album MBID — release-group first, then release.", "art attaches to a RELEASE · 307 to archive.org"),
     ("lrclib.net", "live", "Lyrics, on the button. Cached forever, hit or miss.", "once per track URL"),
     ("*.api.radio-browser.info", "live", "Internet-radio station catalogue.", "DNS round-robin · HLS filtered"),
     ("nominatim.openstreetmap.org", "live", "GPS to place name for video titles. THE PRIVACY-RELEVANT ONE.", "1.1 s/req · sticky cache · opt-out"),
@@ -820,10 +820,15 @@ def list_pages():
          "gateway's /gw MediaServer (incl. the Videos folder) and pulls "
          "bytes from :8200. Plays HEVC/MKV natively — the PWA transcode "
          "path is browser-only.", GREEN),
-        ("E/x1", "musicbrainz.org", "GET /ws/2/release-group — MBID + original "
-         "year. UA + 1.1 s rate limit required.", RED),
-        ("E/x2", "coverartarchive.org", "HEAD /release-group/{mbid}/front-500 "
-         "— cover presence.", RED),
+        ("E/x1", "musicbrainz.org", "GET /ws/2/release-group and /release — album "
+         "MBID + original year; /artist — the artist MBID every other source "
+         "keys off; /work?artist= — composer and lyricist, 100 per request. "
+         "UA + 1.1 s rate limit required.", RED),
+        ("E/x2", "coverartarchive.org", "HEAD /release-group/{mbid}/front-500, "
+         "then /release/{mbid}/front-500 — cover presence. Art attaches to a "
+         "RELEASE; a release-group reports one only when a pressing is "
+         "flagged as its cover, which is why compilations need the "
+         "fallback.", RED),
         ("E/x3", "lrclib.net", "GET /api/get — on-demand lyrics for the "
          "playing track.", RED),
         ("E/x4", "*.api.radio-browser.info", "GET /json/stations/search — "
