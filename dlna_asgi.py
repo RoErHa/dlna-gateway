@@ -61,6 +61,7 @@ from dlna_config import VERSION, raise_fd_limit  # noqa: F401
 from dlna_events import EVENTS
 
 # ── Re-exports: route handlers + helpers the tests reach for ─────────
+import dlna_asgi_artist  # noqa: F401
 from dlna_asgi_browse import (  # noqa: F401
     _SSE_HEARTBEAT_SEC, album_favourite_check, album_favourites, album_tracks,
     artist_albums, artist_tracks, artists, albums, book_meta_all_route,
@@ -192,6 +193,7 @@ app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url=None,
 # ── Router includes ──────────────────────────────────────────────────
 # Grouped by surface; see the module docstring for why order is free.
 app.include_router(dlna_asgi_browse.router)
+app.include_router(dlna_asgi_artist.router)
 app.include_router(dlna_asgi_media.router)
 app.include_router(dlna_asgi_video.router)
 app.include_router(dlna_asgi_upnp.router)
