@@ -684,6 +684,11 @@ def list_pages():
          "the line-up for the track's year and LABELS it (inferred vs "
          "credits) so the client cannot promote a guess to a fact. Own "
          "module: dlna_asgi_browse is at 397/400 lines."),
+        ("P/g40", "dlna_library_artists.py",
+         "ArtistsMixin \u2014 artist_meta (id + display facts) and "
+         "artist_members (line-up). Survives clear(udn): each row cost "
+         "a rate-limited round-trip. Keyed by the NORMALISED name so "
+         "spelling variants are one question, not three."),
         ("P/g41", "dlna_art_query.py",
          "The PURE half of a cover lookup: one (artist, album) \u2192 an "
          "ORDERED list of attempts. The exact pair is ALWAYS first so "
@@ -710,11 +715,6 @@ def list_pages():
          "SearchMixin \u2014 the FTS5 free-text question, split from browse "
          "at exactly 400 lines. Navigating a hierarchy and answering a "
          "question are different jobs with different semantics."),
-        ("P/g40", "dlna_library_artists.py",
-         "ArtistsMixin \u2014 artist_meta (id + display facts) and "
-         "artist_members (line-up). Survives clear(udn): each row cost "
-         "a rate-limited round-trip. Keyed by the NORMALISED name so "
-         "spelling variants are one question, not three."),
     ]
     for c, f, r in progs:
         prog_rows.append([C(c), P(f), P(r)])
