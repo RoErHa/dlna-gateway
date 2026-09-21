@@ -44,18 +44,32 @@ or locked to one platform.
   editions, compilations scattered across folders, FTS corruption, renderers
   that stop answering — are handled because they had to be.
 
-| Now playing | Internet radio |
+| An album, with its date | Now playing — year and songwriting credit |
 |---|---|
-| ![Now playing](docs/img/now-playing.png) | ![Radio stations](docs/img/radio.png) |
+| ![An open album](docs/img/album-open.png) | ![Now playing](docs/img/now-playing.png) |
 
-| Audiobooks — continue listening | On a phone |
-|---|---|
-| ![Audiobook shelf](docs/img/audiobooks.png) | <img src="docs/img/mobile-browse.png" width="300" alt="Phone layout"> |
+![The artist panel](docs/img/artist-panel.png)
+
+The **ℹ️ artist panel**: life-span, birthplace, genres, a biography with its
+Wikipedia credit, what they are best known for, and — for a band — *the
+line-up that played on that recording*, resolved to the track's year rather
+than today's. Filled by two offline sweeps, so opening it is a local
+database read.
+
+| Internet radio | Audiobooks — continue listening | On a phone |
+|---|---|---|
+| ![Radio stations](docs/img/radio.png) | ![Audiobook shelf](docs/img/audiobooks.png) | <img src="docs/img/mobile-browse.png" width="220" alt="Phone layout"> |
 
 > Screenshots are generated from a synthetic library by
 > `tools/screenshots.py`, which drives the same stub the browser test suite
 > uses — so they are reproducible, and they are not anyone's listening
-> history.
+> history. Artist and album **names** are real where an invented one would
+> teach nothing (an artist panel is about dates and places you can check);
+> everything that would raise a licence question is not. Cover art and the
+> artist portrait are **generated**, never fetched — the real Commons
+> portraits are CC BY-SA and require naming the photographer, which a
+> screenshot cannot carry. The biography is Wikipedia's, and the panel
+> renders its credit and link in frame.
 
 ---
 

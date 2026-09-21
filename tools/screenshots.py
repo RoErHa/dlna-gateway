@@ -33,6 +33,7 @@ itself, this is not part of `run_all.py` and a clone without them is fine.
 from __future__ import annotations
 
 import argparse
+import re
 import colorsys
 import hashlib
 import io
@@ -67,6 +68,51 @@ ALBUMS = [
     ("Kestrel Road", "Open Country", 11),
     ("Lantern Ridge", "Winterlight", 9),
 ]
+
+# One REAL artist, for the shots where an invented name would teach
+# nothing — an artist panel is about dates, places and a career, and
+# "Alder & Ash" has none of those a reader can check.
+#
+# What is safe here and what is not:
+#   * a performer's NAME and an album TITLE are not copyrightable — fine
+#   * the biography is Wikipedia's, CC BY-SA, and the panel renders its
+#     credit + link IN FRAME, so the screenshot carries its own attribution
+#   * the PHOTO is the one thing that would not. Commons portraits are
+#     CC BY-SA and require naming the photographer, which a screenshot
+#     cannot do — so this generates a placeholder instead of fetching one.
+#     No attribution gap, and the tool still runs offline.
+DEMO_ARTIST = "David Bowie"
+DEMO_ALBUM = "Hunky Dory"
+DEMO_YEAR = 1971
+DEMO_TRACKS = [
+    ("Changes", "0:03:37"), ("Oh! You Pretty Things", "0:03:12"),
+    ("Eight Line Poem", "0:02:55"), ("Life on Mars?", "0:03:55"),
+    ("Kooks", "0:02:53"), ("Quicksand", "0:05:06"),
+    ("Fill Your Heart", "0:03:10"), ("Andy Warhol", "0:03:54"),
+    ("Song for Bob Dylan", "0:04:13"), ("Queen Bitch", "0:03:20"),
+    ("The Bewlay Brothers", "0:05:29"),
+]
+DEMO_ARTIST_INFO = {
+    "artist": DEMO_ARTIST, "mbid": "5441c29d", "mb_type": "Person",
+    "gender": "Male", "born": "1947-01-08", "died": "2016-01-10",
+    "birth_place": "Brixton", "country": "GB",
+    "disambiguation": "English singer\u2010songwriter",
+    "genres": ["art rock", "glam rock", "alternative rock", "pop",
+               "rock", "art pop"],
+    "bio": ("David Robert Jones, known as David Bowie, was an English "
+            "singer, songwriter and actor. Regarded as among the most "
+            "influential musicians of the 20th century, he was known for "
+            "his frequent reinvention and visual presentation, and is "
+            "often referred to as the \u201cchameleon of rock\u201d."),
+    "bio_url": "https://en.wikipedia.org/wiki/David_Bowie",
+    "image_url": "stub://portrait/David Bowie",
+    "top_tracks": ["Starman", "Heroes", "Space Oddity", "Ziggy Stardust",
+                   "Changes"],
+    "also_in": ["Tin Machine", "The Konrads", "The Riot Squad",
+                "Davy Jones & The Lower Third"],
+    "lineup": [], "lineup_year": None, "lineup_tier": "",
+    "track_count": 246,
+}
 
 BOOKS = [
     ("Ada Fairweather", "The Cartographer's Apprentice", "Northreach #1"),
@@ -146,6 +192,29 @@ def _seed(gateway) -> None:
         gateway.add_album(artist, album, n, art=f"stub://cover/{album}")
         gateway.add_artist(artist, 1, n, art=f"stub://cover/{album}")
 
+    # The demo album, with a date and real songwriting credits — the two
+    # things the 2026-09-20/21 work added and that the older captures
+    # cannot show.
+    gateway.add_album(DEMO_ARTIST, DEMO_ALBUM, len(DEMO_TRACKS),
+                      art=f"stub://cover/{DEMO_ALBUM}", year=DEMO_YEAR)
+    gateway.add_artist(DEMO_ARTIST, 1, len(DEMO_TRACKS),
+                       art=f"stub://cover/{DEMO_ALBUM}")
+    for title, dur in DEMO_TRACKS:
+        gateway.add_track(DEMO_ARTIST, DEMO_ALBUM, title, duration=dur,
+                          art=f"stub://cover/{DEMO_ALBUM}", year=DEMO_YEAR,
+                          composer=DEMO_ARTIST, lyricist=DEMO_ARTIST)
+    # showAlbumTracks passes an album_key, and the stub resolves that
+    # through its own by-key map — populated here so the demo album
+    # opens the same way a LocalFs folder-album does.
+    gateway.album_tracks_by_key["bowie/hunky"] = \
+        gateway.album_tracks[(DEMO_ARTIST, DEMO_ALBUM)]
+    gateway.artist_albums[DEMO_ARTIST] = [{
+        "artist": DEMO_ARTIST, "album": DEMO_ALBUM, "year": DEMO_YEAR,
+        "track_count": len(DEMO_TRACKS), "folder_tracks": len(DEMO_TRACKS),
+        "folder_artists": 1, "own": True, "album_key": "bowie/hunky",
+        "art": f"stub://cover/{DEMO_ALBUM}"}]
+    gateway.artist_info = DEMO_ARTIST_INFO
+
     first_artist, first_album, _ = ALBUMS[0]
     for i, title in enumerate(
             ["Clearwater", "Riverbend", "Slack Tide", "The Undertow",
@@ -190,7 +259,15 @@ def _route_covers(page) -> None:
             cache[key] = _cover_png(key)
         route.fulfill(status=200, content_type="image/png", body=cache[key])
 
-    page.route("**/art*", handler)
+    # A REGEX, not the glob `**/art*` — that also matches
+    # `/api/artist_info`, which got fulfilled with a PNG and made the
+    # artist panel render "Bad response." The art route is always
+    # `/art?url=…`, so anchor on the query.
+    page.route(re.compile(r"/art\?"), handler)
+    # The artist portrait arrives through the SAME /art proxy, so the
+    # handler above already serves it a generated image. That is
+    # deliberate: the real Wikimedia portraits are CC BY-SA and require
+    # naming the photographer, which a screenshot cannot carry.
 
 
 def _boot(page, base_url: str) -> None:
@@ -222,6 +299,41 @@ def cap_album_grid(page, stub):
         "document.querySelectorAll('#item-list .row').length > 0", timeout=8000)
     page.wait_for_timeout(600)
     _shot(page, "album-grid")
+
+
+def cap_album_open(page, stub):
+    """An open album: its own DATE beside the artist in the header, and
+    a track list. Added 2026-09-21 — albums gained a date everywhere."""
+    page.set_viewport_size(DESKTOP)
+    _boot(page, stub.base_url)
+    page.evaluate("""(a) => showAlbumTracks(a[0], a[1],
+                     {artist:a[0]}, 'bowie/hunky')""",
+                  [DEMO_ARTIST, DEMO_ALBUM])
+    page.wait_for_function(
+        "document.querySelectorAll('#item-list .row').length > 3", timeout=8000)
+    page.wait_for_timeout(700)
+    _shot(page, "album-open")
+
+
+def cap_artist_panel(page, stub):
+    """The info panel: life-span, birthplace, genres, an attributed
+    biography, best-known-for, and the bands a person played in."""
+    page.set_viewport_size(DESKTOP)
+    _boot(page, stub.base_url)
+    page.evaluate("""(a) => showAlbumTracks(a[0], a[1],
+                     {artist:a[0]}, 'bowie/hunky')""",
+                  [DEMO_ARTIST, DEMO_ALBUM])
+    page.wait_for_function(
+        "document.querySelectorAll('#item-list .row').length > 3", timeout=8000)
+    page.locator("#item-list .row").first.click()
+    page.wait_for_timeout(900)
+    page.locator("#np-btn-artist").click()
+    page.wait_for_selector("#artist-modal.open", timeout=6000)
+    page.wait_for_function(
+        "!document.getElementById('artist-body').textContent.includes('Loading')",
+        timeout=8000)
+    page.wait_for_timeout(700)
+    _shot(page, "artist-panel")
 
 
 def cap_now_playing(page, stub):
@@ -309,6 +421,8 @@ def cap_audiobooks(page, stub):
 
 CAPTURES = {
     "album-grid": cap_album_grid,
+    "album-open": cap_album_open,
+    "artist-panel": cap_artist_panel,
     "now-playing": cap_now_playing,
     "mobile-browse": cap_mobile,
     "radio": cap_radio,

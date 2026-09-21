@@ -102,21 +102,34 @@ class StubGateway:
         )
 
     def add_album(self, artist: str, album: str, track_count: int = 10,
-                  art: str = "") -> None:
+                  art: str = "", year: int | None = None) -> None:
         self.albums_default.append(
-            {"artist": artist, "album": album,
+            {"artist": artist, "album": album, "year": year,
              "track_count": track_count, "art": art}
         )
 
     def add_track(self, artist: str, album: str, title: str,
                   url: str | None = None, duration: str = "0:03:30",
-                  art: str = "") -> dict:
+                  art: str = "", year: int | None = None,
+                  composer: str = "", lyricist: str = "") -> dict:
         url = url or f"http://stub/{artist}/{album}/{title}.flac".replace(" ", "_")
         t = {
             "url": url, "title": title, "artist": artist, "album": album,
             "duration": duration, "art": art, "type": "audio",
             "id": f"track:{title}", "mime": "audio/flac",
         }
+        # Only when SET. A `"year": None` on every fixture leaks a Python
+        # None into tests that interpolate a track dict straight into JS,
+        # where it reads as the identifier `None` and throws.
+        if year is not None:
+            t["year"] = year
+        if year or composer or lyricist:
+            # /api/track_meta feeds the now-playing year AND credits line
+            self.track_meta[url] = {
+                "title": title, "artist": artist, "album": album,
+                "year": year, "year_original": None,
+                "composer": composer, "lyricist": lyricist,
+            }
         self.tracks_default.append(t)
         self.album_tracks.setdefault((artist, album), []).append(t)
         return t
