@@ -209,4 +209,20 @@ SCHEMA_USER = """
                     PRIMARY KEY (artist_key, member_name, begin_date)
                 );
 
+                -- track_credits (2026-09-21, step 4): composer/lyricist
+                -- fetched from MusicBrainz for the ~68% of tracks whose
+                -- FILES carry none. Its own table, not tracks.composer,
+                -- because clear(udn) DELETEs tracks and a rebuild-index
+                -- would throw away hours of rate-limited lookups.
+                -- The FILE TAG WINS on read: these fill gaps, they do
+                -- not correct the library. Sticky 'notfound' like lyrics.
+                CREATE TABLE IF NOT EXISTS track_credits (
+                    url        TEXT PRIMARY KEY,
+                    composer   TEXT,
+                    lyricist   TEXT,
+                    work_mbid  TEXT,
+                    source     TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
+
 """

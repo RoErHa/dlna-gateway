@@ -228,16 +228,26 @@ class OverridesMixin:
         more than 2 years, renders as e.g. '1987 (remastered)'.
 
         Also carries `composer`/`lyricist` (2026-09-20), read from the
-        file tags. They ride on THIS request rather than a second one:
+        file tags and — where the file has none — from `track_credits`,
+        fetched from MusicBrainz (2026-09-21). The file tag always wins. They ride on THIS request rather than a second one:
         the now-playing panel already fetches it per track, so the
         credits line costs no extra round-trip."""
         with self._pool.read() as conn:
             row = conn.execute("""
                 SELECT t.title, t.artist, t.album, t.duration, t.year,
-                       t.composer, t.lyricist,
+                       -- The FILE TAG WINS. track_credits fills the ~68%
+                       -- of tracks whose files carry no composer; it
+                       -- never corrects one that does. NULLIF because
+                       -- the column defaults to '' , which COALESCE
+                       -- would otherwise treat as a real value.
+                       COALESCE(NULLIF(t.composer, ''), c.composer)
+                           AS composer,
+                       COALESCE(NULLIF(t.lyricist, ''), c.lyricist)
+                           AS lyricist,
                        m.year AS year_original
                   FROM tracks t
              LEFT JOIN metadata_overrides m ON m.url = t.url
+             LEFT JOIN track_credits c ON c.url = t.url
                  WHERE t.url = ? LIMIT 1
             """, (url,)).fetchone()
         if not row:

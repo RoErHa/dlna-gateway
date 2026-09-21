@@ -15,7 +15,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dlna_artist_fetch import (parse_lastfm_top, parse_mb_artist,   # noqa: E402
-                               parse_mb_members, parse_wikipedia)
+                               parse_mb_members, parse_mb_works,
+                               parse_wikipedia)
 
 # Trimmed to the fields the parsers read, values verbatim from MB.
 BOWIE = {
@@ -225,6 +226,75 @@ class TestParseLastfmTop(unittest.TestCase):
     def test_error_or_empty_document_is_safe(self):
         self.assertEqual(parse_lastfm_top({"error": 6}), [])
         self.assertEqual(parse_lastfm_top(None), [])
+
+
+WORKS = {"work-count": 3, "works": [
+    {"id": "w1", "title": "Money", "relations": [
+        {"target-type": "artist", "type": "composer",
+         "artist": {"name": "Roger Waters"}},
+        {"target-type": "artist", "type": "lyricist",
+         "artist": {"name": "Roger Waters"}}]},
+    {"id": "w2", "title": "A Wonderful One", "relations": [
+        {"target-type": "artist", "type": "writer",
+         "artist": {"name": "Pink Floyd"}},
+        {"target-type": "artist", "type": "reconstructed by",
+         "artist": {"name": "Ill Poetic"}}]},
+    {"id": "w3", "title": "Us and Them", "relations": [
+        {"target-type": "artist", "type": "composer",
+         "artist": {"name": "Roger Waters"}},
+        {"target-type": "artist", "type": "composer",
+         "artist": {"name": "Richard Wright"}}]},
+]}
+
+
+class TestParseMbWorks(unittest.TestCase):
+    """Browsing an artist's WORKS returns up to 100 at a time, each
+    already carrying its composer/lyricist. That is what makes step 4
+    affordable: one request per 100 songs instead of three per track —
+    ~1.5 hours for this library instead of ~16."""
+
+    def test_titles_map_to_their_credits(self):
+        m = parse_mb_works(WORKS)
+        self.assertEqual(m["money"]["composer"], "Roger Waters")
+        self.assertEqual(m["money"]["lyricist"], "Roger Waters")
+
+    def test_the_work_mbid_is_kept(self):
+        self.assertEqual(parse_mb_works(WORKS)["money"]["work_mbid"], "w1")
+
+    def test_several_composers_are_joined_in_order(self):
+        self.assertEqual(parse_mb_works(WORKS)["us and them"]["composer"],
+                         "Roger Waters, Richard Wright")
+
+    def test_writer_stands_in_for_an_absent_composer(self):
+        """MusicBrainz uses `writer` when the music/words split is not
+        recorded. Dropping it would lose a real credit."""
+        self.assertEqual(parse_mb_works(WORKS)["a wonderful one"]["composer"],
+                         "Pink Floyd")
+
+    def test_unrelated_relation_types_are_ignored(self):
+        """'reconstructed by' is not a songwriting credit."""
+        self.assertNotIn("Ill Poetic",
+                         parse_mb_works(WORKS)["a wonderful one"]["composer"])
+
+    def test_titles_are_normalised_for_matching(self):
+        """A file says "Money"; MB may say "money" or use a curly
+        apostrophe. Matching is on the same normalised key the dedup
+        path uses."""
+        doc = {"works": [{"id": "x", "title": "Pigs (Three Different Ones)",
+                          "relations": [{"target-type": "artist",
+                                         "type": "composer",
+                                         "artist": {"name": "RW"}}]}]}
+        self.assertIn("pigs (three different ones)", parse_mb_works(doc))
+
+    def test_a_work_with_no_credits_is_omitted(self):
+        """Storing an empty credit would mark the track done while
+        teaching us nothing."""
+        doc = {"works": [{"id": "x", "title": "Untitled", "relations": []}]}
+        self.assertEqual(parse_mb_works(doc), {})
+
+    def test_empty_document_is_safe(self):
+        self.assertEqual(parse_mb_works({}), {})
+        self.assertEqual(parse_mb_works(None), {})
 
 
 if __name__ == "__main__":

@@ -1222,7 +1222,13 @@ async function _showArtistAlbumsInner(artistItem){
   const list = $("item-list");
   list.innerHTML = "";
   list.classList.add("grid");
-  renderAlbumRows(own, {...opts, into:list, sub:a=>`${a.track_count} tracks`});
+  // The artist page is a CAREER: the server returns these oldest-first,
+  // and the year is what makes that ordering legible — without it the
+  // list just looks unsorted. An undated album says so rather than
+  // showing a gap, since it is the reason it sits at the end.
+  const albumSub = a => `${a.year ? esc(String(a.year)) : "year unknown"}`
+    + ` · ${a.track_count} track${a.track_count!==1?"s":""}`;
+  renderAlbumRows(own, {...opts, into:list, sub:albumSub});
 
   if(app.length){
     // ALWAYS folded. The point of the split is that an artist's own page
@@ -1238,7 +1244,10 @@ async function _showArtistAlbumsInner(artistItem){
     renderAlbumRows(app, {...opts,
       into: wrap.querySelector(".ao-list"),
       // "1 track of 67" says compilation before the title is read.
-      sub: a=>`${a.track_count} track${a.track_count!==1?"s":""}`
+      // Appearances keep "1 track of 67" — that says compilation before
+      // the title is read, and is more useful here than a year.
+      sub: a=>`${a.year ? esc(String(a.year)) + " · " : ""}`
+           + `${a.track_count} track${a.track_count!==1?"s":""}`
            + (a.folder_tracks ? ` <span class="ao-of">of ${a.folder_tracks}</span>` : ""),
     });
   }

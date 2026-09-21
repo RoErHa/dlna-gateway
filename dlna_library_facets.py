@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 
 from dlna_library_sql import (
+    _EFFECTIVE_YEAR as _EFFECTIVE_YEAR_SQL,
     _dedup_clause,
     _is_localfs,
     _localfs_album_artist,
@@ -48,12 +49,9 @@ class FacetsMixin:
     # (would show as "decade 0" otherwise). Now-playing displays a
     # different rule (prefer mb_year as "the original recording",
     # annotate as "(remastered)" when file>>mb) — see _renderNpYear.
-    _EFFECTIVE_YEAR = (
-        "COALESCE("
-        "CASE WHEN t.year > 0 AND m.year > 0 THEN MIN(t.year, m.year) END, "
-        "NULLIF(t.year, 0), "
-        "NULLIF(m.year, 0))"
-    )
+    # The shared expression (dlna_library_sql) — kept as a class
+    # attribute so the many f-strings below read unchanged.
+    _EFFECTIVE_YEAR = _EFFECTIVE_YEAR_SQL
 
     def all_genres(self, udn: str) -> list:
         """All distinct genres with album/track counts, A-Z. Counts are

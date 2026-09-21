@@ -168,6 +168,14 @@ CREATE TABLE artist_members (
                     updated_at  INTEGER NOT NULL,
                     PRIMARY KEY (artist_key, member_name, begin_date)
                 );
+CREATE TABLE track_credits (
+                    url        TEXT PRIMARY KEY,
+                    composer   TEXT,
+                    lyricist   TEXT,
+                    work_mbid  TEXT,
+                    source     TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
 CREATE TABLE videos (
                     id            TEXT PRIMARY KEY,
                     udn           TEXT NOT NULL,

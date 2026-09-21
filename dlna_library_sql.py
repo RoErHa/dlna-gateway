@@ -219,3 +219,20 @@ def _dur_to_secs(dur: str) -> int:
     except (ValueError, TypeError, AttributeError):
         pass        # documented contract: unparseable → -1
     return -1
+
+
+# The effective YEAR of a track: MIN of the file-tag year and the
+# MusicBrainz original where both exist, else whichever is set. Shared
+# by decade bucketing (FacetsMixin) and the artist chronology
+# (BrowseMixin.artist_albums), which is why it lives here rather than on
+# either mixin — a cross-mixin reference would be an inheritance
+# accident waiting to break when one of them moves.
+#
+# Assumes the query aliases `tracks` as `t` and LEFT JOINs
+# `metadata_overrides` as `m`.
+_EFFECTIVE_YEAR = (
+    "COALESCE("
+    "CASE WHEN t.year > 0 AND m.year > 0 THEN MIN(t.year, m.year) END, "
+    "NULLIF(t.year, 0), "
+    "NULLIF(m.year, 0))"
+)

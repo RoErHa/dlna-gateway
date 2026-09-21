@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import logging
 
-from dlna_library_facets import FacetsMixin
+from dlna_library_search import SearchMixin
 from dlna_library_sql import (
+    _EFFECTIVE_YEAR,
     _dedup_clause,
     _is_localfs,
     _localfs_album_artist,
@@ -36,97 +37,10 @@ from dlna_library_sql import (
 log = logging.getLogger("dlna.library")
 
 
-class BrowseMixin(FacetsMixin):
+class BrowseMixin(SearchMixin):
     """See module docstring. Mixed into `LibraryDB`; never instantiated
     on its own — it relies on `self._pool` from the host class."""
 
-    # ── FTS5 search ───────────────────────────────────────────────
-
-    def search(self, udn: str, query: str, limit: int = 300) -> dict:
-        """
-        Full-text search returning tracks, distinct albums, distinct artists.
-        Browse-side dedup is applied: lower-quality 16-bit duplicates of
-        a 24-bit track are hidden. See `_dedup_clause` docstring.
-        """
-        # Type-ahead semantics (2026-07-03): each whitespace-separated
-        # term must match (FTS5 implicit AND) and the LAST term matches
-        # as a prefix — "essential chil" finds "Essential Classical
-        # Chillout". The old single-quoted-phrase form made any partial
-        # final word match NOTHING, which read as missing content in
-        # clients that search per keystroke (Amperfy, the PWA box).
-        # Punctuation-only tokens ("-", "&", "/") tokenize to nothing in
-        # FTS5 and would AND-blank the whole query — drop them.
-        terms = [t.replace('"', '""') for t in query.split()
-                 if any(c.isalnum() for c in t)]
-        if not terms:
-            return {"tracks": [], "albums": [], "artists": []}
-        fts_q = " ".join(f'"{t}"' for t in terms[:-1]) + \
-                (" " if len(terms) > 1 else "") + f'"{terms[-1]}"*'
-        dedup = _dedup_clause("t")
-        with self._pool.read() as conn:
-
-            tracks = conn.execute(
-                f"""SELECT t.obj_id as id, t.url, t.title, t.artist, t.album,
-                          t.album_key, t.duration, t.art, t.mime, 'audio' as type
-                   FROM tracks_fts f
-                   JOIN tracks t ON t.id = f.rowid
-                   WHERE tracks_fts MATCH ? AND t.udn = ?
-                     AND {dedup}
-                   ORDER BY t.artist, t.album, t.title
-                   LIMIT ?""",
-                (fts_q, udn, limit)).fetchall()
-
-            if _is_localfs(udn):
-                albums = conn.execute(
-                    f"""SELECT t.album_key,
-                              {_localfs_album_name("t")} as album,
-                              {_localfs_album_artist("t")} as artist,
-                              COUNT(*) as track_count,
-                              MAX(t.art) as art
-                       FROM tracks_fts f
-                       JOIN tracks t ON t.id = f.rowid
-                       WHERE tracks_fts MATCH ? AND t.udn = ?
-                         AND t.album_key != ''
-                         AND {dedup}
-                       GROUP BY {_localfs_album_group("t")}
-                       ORDER BY album
-                       LIMIT 100""",
-                    (fts_q, udn)).fetchall()
-            else:
-                albums = conn.execute(
-                    f"""SELECT t.artist, t.album,
-                              COUNT(*) as track_count,
-                              MAX(t.art) as art
-                       FROM tracks_fts f
-                       JOIN tracks t ON t.id = f.rowid
-                       WHERE tracks_fts MATCH ? AND t.udn = ?
-                         AND t.album != ''
-                         AND {dedup}
-                       GROUP BY t.artist, t.album
-                       ORDER BY t.artist, t.album
-                       LIMIT 100""",
-                    (fts_q, udn)).fetchall()
-
-            artists = conn.execute(
-                f"""SELECT t.artist,
-                          COUNT(DISTINCT t.album) as album_count,
-                          COUNT(*) as track_count,
-                          MAX(t.art) as art
-                   FROM tracks_fts f
-                   JOIN tracks t ON t.id = f.rowid
-                   WHERE tracks_fts MATCH ? AND t.udn = ?
-                     AND t.artist != ''
-                     AND {dedup}
-                   GROUP BY t.artist
-                   ORDER BY t.artist
-                   LIMIT 50""",
-                (fts_q, udn)).fetchall()
-
-        return {
-            "tracks":  [dict(r) for r in tracks],
-            "albums":  [dict(r) for r in albums],
-            "artists": [dict(r) for r in artists],
-        }
     def primary_udn(self, among=None) -> str:
         """The udn of the library to expose as 'the' gateway MediaServer —
         the server owning the most tracks (in this single-library deployment,
@@ -270,7 +184,16 @@ class BrowseMixin(FacetsMixin):
         the rule exists. `HAVING track_count > 0` keeps out folders where
         none of the tracks are theirs. Non-localfs sources keep the
         legacy (artist, album) grouping. See CLAUDE.md, "Show me this
-        artist"."""
+        artist".
+
+        ORDERED OLDEST FIRST (2026-09-21), because an artist page is a
+        career and reads best in the order the records were made. The
+        year is the EFFECTIVE year — MIN of the file tag and the
+        MusicBrainz original, the same rule the decade browse uses — so
+        a 2011 remaster of a 1975 album sits at 1975 rather than at the
+        end. `year IS NULL` sorts first in SQLite's ASC, hence the
+        explicit leading term: an undated album goes LAST, since
+        placing it first would misrepresent it as the earliest work."""
         dedup = _dedup_clause("t")
         with self._pool.read() as conn:
             if _is_localfs(udn):
@@ -282,8 +205,10 @@ class BrowseMixin(FacetsMixin):
                                   as track_count,
                               COUNT(*) as folder_tracks,
                               COUNT(DISTINCT t.artist) as folder_artists,
-                              MAX(t.art) as art
+                              MAX(t.art) as art,
+                              MIN({_EFFECTIVE_YEAR}) as year
                        FROM tracks t
+                       LEFT JOIN metadata_overrides m ON m.url = t.url
                        WHERE t.udn=? AND t.album_key != ''
                          AND t.album_key IN (
                              SELECT album_key FROM tracks
@@ -291,7 +216,9 @@ class BrowseMixin(FacetsMixin):
                          AND {dedup}
                        GROUP BY {_localfs_album_group("t")}
                        HAVING track_count > 0
-                       ORDER BY album COLLATE NOCASE""",
+                       ORDER BY MIN({_EFFECTIVE_YEAR}) IS NULL,
+                                MIN({_EFFECTIVE_YEAR}),
+                                album COLLATE NOCASE""",
                     (artist, artist, udn, udn, artist)).fetchall()
                 # `own` separates their records from the compilations
                 # they merely appear on — decided here so every surface
@@ -303,12 +230,16 @@ class BrowseMixin(FacetsMixin):
                 rows = conn.execute(
                     f"""SELECT t.album, t.artist,
                               COUNT(*) as track_count,
-                              MAX(t.art) as art
+                              MAX(t.art) as art,
+                              MIN({_EFFECTIVE_YEAR}) as year
                        FROM tracks t
+                       LEFT JOIN metadata_overrides m ON m.url = t.url
                        WHERE t.udn=? AND t.artist=?
                          AND {dedup}
                        GROUP BY t.album
-                       ORDER BY album COLLATE NOCASE""",
+                       ORDER BY MIN({_EFFECTIVE_YEAR}) IS NULL,
+                                MIN({_EFFECTIVE_YEAR}),
+                                t.album COLLATE NOCASE""",
                     (udn, artist)).fetchall()
         return [dict(r) for r in rows]
     def browse_letter(self, udn: str, mode: str, letter: str,

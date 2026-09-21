@@ -639,3 +639,9 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
   .ab-mem{flex-direction:column;gap:2px}
   .ab-mem b{min-width:0}
 }
+/* Desktop has the room the phone doesn't, so the photo gets 10% more
+   of it (88 -> 97px). Keyed on the same >=1024px zone the three-column
+   layout uses, so a tablet upright keeps the compact size. */
+@media (min-width:1024px){
+  .ab-photo{width:97px;height:97px}
+}

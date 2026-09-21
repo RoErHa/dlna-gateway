@@ -33,6 +33,8 @@ import os
 import urllib.parse
 import urllib.request
 
+from dlna_library_sql import _norm_title
+
 log = logging.getLogger("dlna.artist.fetch")
 
 MB_ROOT = "https://musicbrainz.org/ws/2"
@@ -164,6 +166,57 @@ def parse_lastfm_top(doc, limit: int = 5) -> list[str]:
     return out
 
 
+# Relation types that ARE a songwriting credit. `writer` is MusicBrainz's
+# answer when the music/words split isn't recorded, so it stands in for
+# an absent composer rather than being dropped. Everything else on a
+# work ("reconstructed by", "arranger", "translator") is not authorship.
+_COMPOSER_RELS = ("composer",)
+_LYRICIST_RELS = ("lyricist",)
+_WRITER_RELS = ("writer",)
+
+
+def parse_mb_works(doc) -> dict:
+    """An artist's works, keyed by NORMALISED title -> credits.
+
+    Browsing works by artist returns up to 100 at a time, each already
+    carrying its composer/lyricist relations. That is what makes step 4
+    affordable: ONE request per 100 songs instead of three per track —
+    about 1.5 hours across this library rather than 16.
+
+    Keyed on `_norm_title` (the dedup path's normaliser: diacritics,
+    smart quotes, case, whitespace) because a file tag and a MusicBrainz
+    work title differ in exactly those ways.
+
+    A work with no songwriting credit is OMITTED — storing an empty one
+    would mark the track done while teaching us nothing."""
+    out: dict[str, dict] = {}
+    for w in ((doc or {}).get("works") or []):
+        title = _norm_title(w.get("title") or "")
+        if not title:
+            continue
+        comp, lyr, writ = [], [], []
+        for r in (w.get("relations") or []):
+            if r.get("target-type") != "artist":
+                continue
+            name = ((r.get("artist") or {}).get("name") or "").strip()
+            if not name:
+                continue
+            t = r.get("type")
+            if t in _COMPOSER_RELS:
+                comp.append(name)
+            elif t in _LYRICIST_RELS:
+                lyr.append(name)
+            elif t in _WRITER_RELS:
+                writ.append(name)
+        composer = ", ".join(comp) or ", ".join(writ)
+        lyricist = ", ".join(lyr)
+        if not composer and not lyricist:
+            continue
+        out.setdefault(title, {"composer": composer, "lyricist": lyricist,
+                               "work_mbid": w.get("id") or ""})
+    return out
+
+
 # ── fetching (network) ───────────────────────────────────────────
 
 def _get(url: str, headers: dict | None = None):
@@ -178,6 +231,13 @@ def fetch_mb_artist(mbid: str):
     link — `inc` is why this is not four round-trips."""
     return _get(f"{MB_ROOT}/artist/{urllib.parse.quote(mbid)}"
                 f"?inc=artist-rels+genres+url-rels&fmt=json")
+
+
+def fetch_mb_works(artist_mbid: str, offset: int = 0, limit: int = 100):
+    """One page of an artist's works, WITH their credit relations."""
+    return _get(f"{MB_ROOT}/work?artist={urllib.parse.quote(artist_mbid)}"
+                f"&inc=artist-rels&fmt=json&limit={int(limit)}"
+                f"&offset={int(offset)}")
 
 
 def fetch_wikipedia(title: str):

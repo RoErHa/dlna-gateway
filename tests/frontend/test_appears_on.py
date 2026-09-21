@@ -147,3 +147,36 @@ def test_an_artist_with_only_appearances_gets_them_directly(app, gateway):
     titles = app.eval_on_selector_all(
         "#item-list > .row .row-title", "els => els.map(e => e.textContent)")
     assert titles == ["Comp A", "Comp B"]
+
+
+def test_own_albums_show_their_year_oldest_first(app, gateway):
+    """The artist page is a career — the server orders oldest-first and
+    the year is what makes that ordering legible (2026-09-21)."""
+    gateway.artist_albums["Bowie"] = [
+        {"album": "Hunky Dory", "artist": "Bowie", "track_count": 11,
+         "folder_tracks": 11, "folder_artists": 1, "own": True,
+         "album_key": "Bowie/Hunky Dory", "art": "", "year": 1971},
+        {"album": "Heroes", "artist": "Bowie", "track_count": 10,
+         "folder_tracks": 10, "folder_artists": 1, "own": True,
+         "album_key": "Bowie/Heroes", "art": "", "year": 1977},
+    ]
+    app.evaluate("""() => showArtistAlbums({artist:'Bowie'});""")
+    app.wait_for_selector("#item-list .row", timeout=3000)
+    subs = app.locator("#item-list .row-sub").all_text_contents()
+    assert "1971" in subs[0]
+    assert "1977" in subs[1]
+    titles = app.locator("#item-list .row-title").all_text_contents()
+    assert titles[:2] == ["Hunky Dory", "Heroes"]
+
+
+def test_an_undated_album_says_so(app, gateway):
+    """It sits last precisely because it has no year; a blank would look
+    like a rendering gap instead of the reason."""
+    gateway.artist_albums["Bowie"] = [
+        {"album": "Undated Bootleg", "artist": "Bowie", "track_count": 3,
+         "folder_tracks": 3, "folder_artists": 1, "own": True,
+         "album_key": "Bowie/Undated", "art": "", "year": None},
+    ]
+    app.evaluate("""() => showArtistAlbums({artist:'Bowie'});""")
+    app.wait_for_selector("#item-list .row", timeout=3000)
+    assert "year unknown" in app.locator("#item-list .row-sub").first.text_content()
