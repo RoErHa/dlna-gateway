@@ -223,7 +223,10 @@ The headline list above is the short version.
 - **PWA web UI.** Letter-indexed browse (artists / albums / tracks /
   genres / decades), FTS5 search (type-ahead: the last word matches as
   a prefix), playlists, album-level favourites, lyrics (via lrclib),
-  album art, and an album's release year everywhere it is listed. For
+  album art, and an album's date everywhere it is listed — the edition's
+  own year, naming the original alongside when the two differ ("2007 ·
+  orig. 1967"), so a reissue is never mistaken for the first pressing.
+  For
   RoHaLocalFS, albums group by folder (one folder = one album);
   compilations whose tracks are scattered across per-artist folders can
   be surfaced as playlists with `tools/compilation_playlists.py`.

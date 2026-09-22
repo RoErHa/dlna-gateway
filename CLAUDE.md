@@ -2408,11 +2408,15 @@ notfound) against ~2% before.
 Measured on the live library after all of the above:
 
 ```
-album_art     musicbrainz 2,198 · sibling 11,397 · notfound 239
-albums w/art  1,913 / 2,248 (85.1%)     was 77%
-folders       fully covered 1,855 · PARTLY 58 · NONE 335
-tracks w/art  25,056 / 26,750 (93.7%)
+album_art     sibling 11,424 · musicbrainz 2,217 · notfound 239
+albums w/art  1,933 / 2,264 (85.4%)     was 77%
+folders       fully covered 1,875 · PARTLY 58 · NONE 331
+tracks w/art  25,245 / 26,905 (93.8%)
 ```
+
+(Re-measured 2026-09-22, after the `localfs-art:` marker repair below
+filled 1,099 art-less tracks. The figures move with the library; treat
+them as a scale, not a contract.)
 
 > **849 covers found yielded only +67 folder-albums**, and the mismatch
 > is structural, not a bug: `album_art` is keyed `(artist, album)` while

@@ -527,10 +527,10 @@ def list_pages():
          "DeviceRoleCache — in-memory mirror of device_roles for zero-latency "
          "classification."),
         ("P/g7", "dlna_library.py",
-         "LibraryDB — SQLite index, FTS5 search, playlists, album_art, "
-         "play_counts, lyrics, metadata_overrides, favourites, radio, "
-         "videos + geocode_cache. Composition root for DB-owning "
-         "singletons + fetchers."),
+         "LibraryDB \u2014 SQLite index, FTS5 search, playlists, album_art, "
+         "play_counts, lyrics, track_credits, metadata_overrides, "
+         "favourites, radio, videos + geocode_cache. Composition root "
+         "for DB-owning singletons + fetchers."),
         ("P/g8", "db_pool.py",
          "SQLite connection pool — WAL, thread-local conns, write "
          "serialization."),
@@ -723,6 +723,24 @@ def list_pages():
          "SearchMixin \u2014 the FTS5 free-text question, split from browse "
          "at exactly 400 lines. Navigating a hierarchy and answering a "
          "question are different jobs with different semantics."),
+        ("P/g45", "dlna_library_sql.py",
+         "The pure SQL the mixins share, and the place the cross-cutting "
+         "rules live so two callers cannot disagree. Owns the folder-album "
+         "identity, the dedup clause, and an album's TWO dates: `year` is "
+         "the EDITION (MAX of the tracks\u2019 tag years) and `year_original` "
+         "the oldest recording (MIN of the effective year). Reporting only "
+         "the second dated three 40th-anniversary Piper discs 1967 \u2014 the "
+         "same as the original beside them \u2014 and a 2020 jazz compilation "
+         "1946. The DECADE facet still asks the second question on "
+         "purpose."),
+        ("P/g46", "dlna_library_schema.py",
+         "Startup sequence (create \u2192 alter \u2192 migrate \u2192 seed) + the "
+         "Phase-A album-art sibling harvest. That harvest is MARKER-AWARE: "
+         "a scan writes `localfs-art:<sha1>` into tracks.art as a "
+         "placeholder and only _rescan heals it into a URL \u2014 a heal that "
+         "covered `tracks` and not `album_art`, so 3,982 cached covers "
+         "were strings that could never be fetched. It now heals first, "
+         "then refuses to harvest another, in both directions."),
     ]
     for c, f, r in progs:
         prog_rows.append([P(c, prog_code), P(f, prog), P(r, prog)])
