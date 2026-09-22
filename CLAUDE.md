@@ -2086,6 +2086,34 @@ remain unrecoverable — no pre-relink backup survives.
   then removed (2026-05-31, negligible benefit in peak mode + broke
   browser bit-perfect — see "Volume control"). Not tracked anymore;
   a future perceptual/LUFS feature would be a fresh decision.
+- ~~DSD / `.dsf` playback~~ — **CLOSED 2026-09-22: not worth building.**
+  Measured before deciding, so it need not be re-derived:
+  - **`easy=True` returns RAW ID3 FRAMES for DSF.** A hand-built DSF with
+    real tags read back `keys=['TALB','TCOM','TIT2','TPE1']` and
+    `title -> None`, so `_read_tags` yielded title=filename-stem and
+    artist/album/genre/composer/year all EMPTY. Every DSF would index
+    fine and browse as an untagged stray in `- Unknown Artists -`. Same
+    class as the EasyMP4 composer trap, but for every field — and
+    AcoustID/beets cannot fingerprint DSD, so there is no recovery path
+    except hand-tagging.
+  - **`_dedup_clause` hides DSD behind PCM.** DSD reports
+    `bits_per_sample = 1`, so any 16- or 24-bit copy of the same track
+    outranks it: seeding a 24/96 FLAC and a DSD64 of one track stored 2
+    rows and browsed **1**, the FLAC. Silent.
+  - **It would play on ONE surface.** No browser decodes DSD (`<audio>`
+    → `MediaError code 4`), and neither does Amperfy, so the PWA and
+    CarPlay are out. Transcoding to PCM would fix that and break
+    non-negotiable rule #1. UPnP-to-the-Naim only.
+  - **~6× the bytes**: DSD64 stereo is ~5.6 Mbit/s ≈ 42 MB/min, so a
+    45-minute album is ~1.9 GB against ~300 MB for 16/44.1 FLAC.
+
+  Three small fixes would have made it work — map the ID3 frames for
+  DSF, add `audio/x-dsf`/`audio/x-dff` to `_GW_SOURCE_PROTOCOLS` (which
+  advertises `audio/dsd` while the server sends `audio/x-dsf`), and
+  decide what the dedup clause should do with a 1-bit format. None were
+  built. **`.dsf`/`.dff` stay in `_AUDIO_EXTENSIONS` on purpose**: a
+  stray file then indexes quietly instead of erroring, it just will not
+  carry tags.
 
 ### Audiophile notes
 
