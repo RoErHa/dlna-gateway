@@ -133,13 +133,43 @@ class SchemaMixin:
             udn_clause = " AND udn = ?"
             params     = (udn,)
 
+        # A `localfs-art:<sha1>` value is a MARKER, not an address: the
+        # scan writes it before the embedded bytes are read, and
+        # LocalFsProvider._rescan heals it into a real /localfs/art/<id>
+        # URL once the base URL is known. That heal only ever covered
+        # `tracks`. Harvesting one into album_art therefore cached a
+        # cover that can never be fetched — and INSERT OR IGNORE made it
+        # permanent. 3,982 rows had it on the live library, which is what
+        # made five Queen albums 404 while `tracks` looked fine.
+        #
+        # Heal first, then refuse to harvest another. Healing is keyed on
+        # the marker so a MusicBrainz or hand-set cover is never touched,
+        # and a marker whose album has no healed track yet is LEFT — the
+        # next scan will get it, whereas deleting the row would make the
+        # album bare and send it to MusicBrainz for an hour.
+        conn.execute("""
+            UPDATE album_art
+               SET art_url = (
+                   SELECT MIN(t.art) FROM tracks t
+                    WHERE t.artist = album_art.artist
+                      AND t.album  = album_art.album
+                      AND t.art != '' AND t.art NOT LIKE 'localfs-art:%')
+             WHERE art_url LIKE 'localfs-art:%'
+               AND EXISTS (
+                   SELECT 1 FROM tracks t
+                    WHERE t.artist = album_art.artist
+                      AND t.album  = album_art.album
+                      AND t.art != '' AND t.art NOT LIKE 'localfs-art:%')
+        """)
+
         before_rowid = conn.execute(
             "SELECT COALESCE(MAX(ROWID), 0) FROM album_art").fetchone()[0]
         conn.execute(f"""
             INSERT OR IGNORE INTO album_art (artist, album, art_url, source)
             SELECT artist, album, MIN(art), 'sibling'
               FROM tracks
-             WHERE artist != '' AND album != '' AND art != ''{udn_clause}
+             WHERE artist != '' AND album != '' AND art != ''
+               AND art NOT LIKE 'localfs-art:%'{udn_clause}
              GROUP BY artist, album
         """, params)
 
@@ -163,6 +193,7 @@ class SchemaMixin:
                AND EXISTS (
                    SELECT 1 FROM album_art
                     WHERE album_art.artist = tracks.artist
-                      AND album_art.album  = tracks.album){udn_clause}
+                      AND album_art.album  = tracks.album
+                      AND album_art.art_url NOT LIKE 'localfs-art:%'){udn_clause}
         """, params)
         return harvested, cur.rowcount or 0

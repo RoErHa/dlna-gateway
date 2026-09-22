@@ -2263,6 +2263,42 @@ it) now fall THROUGH to the fallback: a file with no readable tags is
 exactly when the folder cover is the only one there.
 `tests/test_folder_art.py` (23).
 
+### A marker is not a URL — `localfs-art:` in `album_art` (2026-09-22)
+
+A LocalFs scan writes **`localfs-art:<sha1>`** into `tracks.art` as a
+placeholder: the embedded picture's bytes are not read until serve time,
+so at scan time all there is is a hash. `LocalFsProvider._rescan` heals
+those into real `<base_url>/localfs/art/<obj_id>` URLs once the base URL
+is known.
+
+**That heal only ever covered `tracks`.** The Phase-A sibling harvest
+(`_backfill_album_art`) copies `MIN(art)` straight out of `tracks`, so a
+harvest running before the heal stored the marker in `album_art` — and
+`INSERT OR IGNORE` guaranteed it was never replaced. **3,982 rows** on
+this library held an unfetchable string.
+
+It hid because `tracks` was clean (0 markers), so the PWA reads fine; the
+exposure is everything that reads `album_art` DIRECTLY — Subsonic /
+CarPlay cover art and the favourites list. It surfaced as five Queen
+albums whose covers 404'd (`/art refused or failed (404) … Upstream 404`
+in `gateway.log`), and those five were FLACs with **no embedded picture
+at all** — `tracks.art` pointed at art that had never existed.
+
+Both halves of the harvest are now marker-aware:
+- **It heals first**, keyed on the marker, so a MusicBrainz or hand-set
+  cover is never touched.
+- **Then it refuses to harvest another**, so the row cannot come back.
+- **A marker whose album has no healed track is LEFT, not deleted.**
+  Deleting makes the album bare, which sends it to MusicBrainz — an hour
+  of rate-limited lookups to repair a cache. The next scan gets it.
+- **The harvest's second half** pushes `album_art.art_url` back onto
+  art-less tracks, so a stored marker could travel INTO `tracks`; that
+  direction is guarded too.
+
+Live repair: **3,982 → 120**, plus 1,099 art-less tracks filled. All 120
+remaining are ORPHANS — their album no longer exists in `tracks` — so
+they are inert. `tests/test_album_art_sentinel.py` (7).
+
 ### Ask a question the cover sources can ANSWER (2026-09-21)
 
 3,998 albums sat in `album_art` as a sticky `notfound`. Sampling showed
