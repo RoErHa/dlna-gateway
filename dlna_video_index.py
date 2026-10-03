@@ -35,8 +35,13 @@ def video_id(rel_path: str) -> str:
     return hashlib.sha1(rel_path.encode("utf-8")).hexdigest()[:16]
 
 
-def _walk(root: Path):
-    for dirpath, _dirs, files in os.walk(root, followlinks=False):
+def _walk(root: Path, errors: list = None):
+    """Yield video files under `root`. os.walk SWALLOWS directory errors by
+    default, so a volume that drops mid-walk reads as an empty tree; pass
+    `errors` to learn that the walk was incomplete."""
+    onerror = errors.append if errors is not None else None
+    for dirpath, _dirs, files in os.walk(root, followlinks=False,
+                                         onerror=onerror):
         for name in files:
             if os.path.splitext(name)[1].lower() in VIDEO_EXTS:
                 yield Path(dirpath) / name
@@ -167,7 +172,8 @@ def scan_videos(root, udn: str, db, base_url: str, *, force: bool = False,
                 for v in db.all_videos(udn)}
     seen, batch = set(), []
     scanned = added = skipped = 0
-    for path in _walk(root):
+    walk_errors: list = []
+    for path in _walk(root, walk_errors):
         try:
             st = path.stat()
             rel = str(path.relative_to(root))
@@ -186,6 +192,21 @@ def scan_videos(root, udn: str, db, base_url: str, *, force: bool = False,
             db.upsert_videos(udn, batch); added += len(batch); batch = []
     if batch:
         db.upsert_videos(udn, batch); added += len(batch)
+    # Pruning trusts the walk to have SEEN everything that still exists. Two
+    # walks cannot be trusted: one that hit a directory error (a volume
+    # going away mid-scan), and one that found nothing at all where the
+    # index holds rows. The second happened on 2026-10-03: the walk saw 0
+    # files, pruned all 4,104 videos, and the next scan re-probed and
+    # re-geocoded every one of them. An emptied video folder is not a
+    # reason to wipe the index; a scan with force=True still can.
+    if walk_errors or (scanned == 0 and existing):
+        log.warning("video scan %s: walk %s — NOT pruning %d indexed "
+                    "video(s); is the volume mounted?", root,
+                    f"hit {len(walk_errors)} error(s) ({walk_errors[0]})"
+                    if walk_errors else "found no files",
+                    len(existing))
+        return {"scanned": scanned, "added": added, "skipped": skipped,
+                "pruned": 0, "overrides_applied": 0, "missing_root": True}
     pruned = db.prune_videos(udn, seen)
     applied = apply_location_overrides(db, udn)
     # A rescan that changed nothing is not news, and at one line every five

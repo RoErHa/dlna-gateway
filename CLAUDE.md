@@ -445,7 +445,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `api_playback_state.py` | Shared runtime handles + request helpers for the `api_playback` family. |
 | `api_radio.py` | Internet-radio API handlers (`/api/radio/*` — search, favourites, nowplaying). |
 | `dlna_lyrics.py` | On-demand lyrics fetch via lrclib.net (the network half; the cache lives in `LibraryDB`). |
-| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. Together those two were **295 of 400 lines**. |
+| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. **That scanner never prunes on an untrustworthy walk** (2026-10-04): `os.walk` swallows directory errors, so a drive dropping mid-scan reads as an empty tree — on 2026-10-03 a walk that saw 0 files pruned all 4,104 videos, and the next scan re-probed and re-geocoded every one. A walk that hit an error, or saw nothing while the index holds rows, now WARNs and prunes nothing (`force=True` still clears). `tests/test_video_scan.py`. Together those two were **295 of 400 lines**. |
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
@@ -637,6 +637,7 @@ videos(id, udn, url, title, file_path, ..., created, location,
        location_name, country, poster, ...)
   id = sha1(rel_path)[:16], udn = uuid:localfs-movies. Populated by
   dlna_video_index.scan_videos (5-min periodic). See docs/VIDEO_SUPPORT.md.
+  A scan whose walk errored or saw 0 files never prunes (2026-10-04).
 video_location_overrides(video_id, location_name, country, source, updated_at)
   source ∈ {'inferred_same_day', 'inferred_window', 'inferred_country',
   'manual'} — locations for GPS-less videos, written by
@@ -2323,9 +2324,17 @@ Both halves of the harvest are now marker-aware:
   art-less tracks, so a stored marker could travel INTO `tracks`; that
   direction is guarded too.
 
-Live repair: **3,982 → 120**, plus 1,099 art-less tracks filled. All 120
+Live repair: **3,982 → 120**. All 120
 remaining are ORPHANS — their album no longer exists in `tracks` — so
-they are inert. `tests/test_album_art_sentinel.py` (7).
+they are inert. `tests/test_album_art_sentinel.py` (9).
+
+> **Correction (2026-10-04): the "1,099 art-less tracks filled" reported
+> with this repair was never real.** Those tracks belong to `notfound`
+> albums, whose `art_url` is `''`; the harvest's second half copied that
+> empty string onto them, counted the no-op as a fill, and logged
+> `filled=1099` on EVERY boot. The fill now requires a non-empty
+> `art_url`. A boot line that reports the same non-zero number every
+> time is a no-op being counted, not a repair that keeps undoing itself.
 
 ### Ask a question the cover sources can ANSWER (2026-09-21)
 
@@ -2414,8 +2423,8 @@ folders       fully covered 1,875 · PARTLY 58 · NONE 331
 tracks w/art  25,245 / 26,905 (93.8%)
 ```
 
-(Re-measured 2026-09-22, after the `localfs-art:` marker repair below
-filled 1,099 art-less tracks. The figures move with the library; treat
+(Re-measured 2026-09-22, after the `localfs-art:` marker repair below.
+The figures move with the library; treat
 them as a scale, not a contract.)
 
 > **849 covers found yielded only +67 folder-albums**, and the mismatch

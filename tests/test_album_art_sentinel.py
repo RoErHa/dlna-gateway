@@ -133,5 +133,29 @@ class TestTheMarkerCannotTravelIntoTracks(_Base):
                             for a in arts), arts)
 
 
+class TestANotfoundRowFillsNothing(_Base):
+    def test_a_notfound_row_is_not_counted_as_a_fill(self):
+        """A `notfound` row carries art_url='' — copying it onto an
+        art-less track changes nothing, and reporting it did logged
+        `filled=1099` on every boot (2026-10-04) for the same 1,099."""
+        self._add("Ghost", "Bare", "")
+        with self.db._pool.write() as c:
+            c.execute("INSERT OR REPLACE INTO album_art "
+                      "(artist, album, art_url, source, updated_at) "
+                      "VALUES ('Ghost','Bare','','notfound',0)")
+            _, filled = self.db._backfill_album_art(c)
+        self.assertEqual(filled, 0)
+
+
+class TestTheLoudnessDropIsReportedOnce(_Base):
+    def test_no_drop_message_when_there_was_nothing_to_drop(self):
+        """The table went in 2026-05; logging its removal on every boot
+        made each restart look like it had just run a migration."""
+        with self.assertLogs("dlna.library", "DEBUG") as cm:
+            LibraryDB(db_file=self._path)
+        self.assertFalse(any("track_loudness" in m and "dropped" in m
+                             for m in cm.output), cm.output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

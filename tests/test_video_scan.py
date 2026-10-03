@@ -237,6 +237,39 @@ class TestScan(unittest.TestCase):
                             poster_dir=self.posters)
         self.assertEqual(ep.call_args.kwargs.get("when"), "0")
 
+    def test_an_empty_walk_never_prunes_an_indexed_library(self):
+        # 2026-10-03: the walk saw 0 files and pruned all 4,104 videos.
+        self._mkfile("a.mov")
+        self._mkfile("b.mov")
+        self._scan()
+        for f in ("a.mov", "b.mov"):
+            os.unlink(os.path.join(self.root, f))
+        st = self._scan()
+        self.assertEqual(st["pruned"], 0)
+        self.assertTrue(st["missing_root"])
+        self.assertEqual(len(self.db.all_videos(UDN)), 2)
+
+    def test_a_walk_error_never_prunes(self):
+        # A directory that errors mid-walk must not read as "files gone".
+        self._mkfile("keep/a.mov")
+        self._mkfile("lost/b.mov")
+        self._scan()
+        real_walk = os.walk
+        def flaky_walk(top, **kw):
+            for dirpath, dirs, files in real_walk(top, **kw):
+                if dirpath.endswith("lost"):
+                    kw["onerror"](OSError(5, "Input/output error", dirpath))
+                    continue
+                yield dirpath, dirs, files
+        with mock.patch.object(vix.os, "walk", flaky_walk):
+            st = self._scan()
+        self.assertEqual(st["pruned"], 0)
+        self.assertEqual(len(self.db.all_videos(UDN)), 2)
+
+    def test_an_empty_root_with_an_empty_index_is_not_an_alarm(self):
+        st = self._scan()
+        self.assertFalse(st["missing_root"])
+
     def test_missing_root(self):
         st = vix.scan_videos("/no/such/dir", UDN, self.db, "http://h:8200")
         self.assertTrue(st["missing_root"])

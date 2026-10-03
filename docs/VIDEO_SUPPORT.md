@@ -158,6 +158,9 @@ store it in `videos.title` so browse/sort/search are simple.
   PERIODICALLY**: an initial scan at boot, then every `VIDEO_SCAN_INTERVAL_SEC`
   (default 300 s) — incremental (skips unchanged, prunes removed) so new clips
   appear without a restart and a steady library is near-free.
+  **Pruning trusts the walk only when it is complete** (2026-10-04): a walk
+  that hit a directory error, or found 0 files while the index holds rows,
+  prunes nothing and WARNs — a dropped drive once pruned all 4,104 videos.
 - **DB methods**: `upsert_videos(udn, rows)`, `all_videos(udn)` (newest-first /
   by folder), `video_by_id(id)`, `clear_videos(udn)`.
 - **Tests** (planned name; shipped as `tests/test_video_db.py` +

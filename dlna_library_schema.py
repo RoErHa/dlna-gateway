@@ -53,9 +53,13 @@ class SchemaMixin:
         # the now-unused measurements table. Idempotent.
         try:
             with self._pool.write() as conn:
+                existed = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='track_loudness'").fetchone()
                 conn.execute("DROP TABLE IF EXISTS track_loudness")
-            log.info("DB migration: dropped track_loudness "
-                     "(loudness normalization removed)")
+            if existed:
+                log.info("DB migration: dropped track_loudness "
+                         "(loudness normalization removed)")
         except sqlite3.Error as e:
             log.debug(f"track_loudness drop skipped ({e})")
         # 2026-05-25: widen tracks UNIQUE to include bit_depth + sample_rate
@@ -194,6 +198,9 @@ class SchemaMixin:
                    SELECT 1 FROM album_art
                     WHERE album_art.artist = tracks.artist
                       AND album_art.album  = tracks.album
+                      -- a 'notfound' row carries art_url='' : copying it
+                      -- is a no-op that counted 1,099 "filled" every boot
+                      AND album_art.art_url != ''
                       AND album_art.art_url NOT LIKE 'localfs-art:%'){udn_clause}
         """, params)
         return harvested, cur.rowcount or 0
