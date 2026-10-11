@@ -10,6 +10,7 @@ Standalone test (runs SSDP for 20 s and prints found devices):
     python dlna_discovery.py
 """
 import logging
+import os
 import re
 import socket
 import threading
@@ -44,12 +45,21 @@ from dlna_registry import (  # noqa: F401 — re-exported for callers
 log = logging.getLogger("dlna.discovery")
 
 
-# Hardcoded policy: the gateway tracks exactly one external MediaServer —
-# AssetUPnP. Other discovered MediaServers (Naim Uniti playqueue, LG TV
-# media share, Plex DLNA, etc.) are dropped at discovery time, even if
-# they're valid UPnP, so the UI never shows competing libraries.
-# The gateway's own self-announce is excluded separately via gw_udn.
-ALLOWED_SERVER_NAME_PREFIX = "Asset UPnP"
+# Which external MediaServers the gateway tracks is CONFIGURED, not
+# hardcoded: `UPNP_SERVER_ALLOW` in .env is a comma-separated list of
+# friendly-name prefixes (case-insensitive), e.g. "MinimServer".
+# Unset or empty → NO external server is tracked, and the LocalFs
+# libraries are the only sources. Everything else that answers SSDP as a
+# MediaServer (an LG TV's media share, Plex DLNA, …) is dropped here so
+# the source picker never shows libraries nobody asked for. The
+# gateway's own self-announce is excluded separately via gw_udn.
+# Read at call time, so an .env edit needs only a restart.
+def server_allowed(name: str, allow: str | None = None) -> bool:
+    if allow is None:
+        allow = os.environ.get("UPNP_SERVER_ALLOW", "")
+    prefixes = [p.strip().lower() for p in allow.split(",") if p.strip()]
+    low = (name or "").lower()
+    return any(low.startswith(p) for p in prefixes)
 
 
 
@@ -151,8 +161,8 @@ def _fetch_device(location: str,
                 rc_url = ctrl
 
         if cd_url and "MediaServer" in dev_type and not av_url:
-            if not name.startswith(ALLOWED_SERVER_NAME_PREFIX):
-                log.debug(f"Ignoring non-allowlisted MediaServer {name!r} @ {host}")
+            if not server_allowed(name):
+                log.debug(f"Ignoring MediaServer not in UPNP_SERVER_ALLOW {name!r} @ {host}")
             else:
                 DEVICE_ROLES.mark(udn, name, location=location, host=host, is_server=True)
                 srv = MediaServer(

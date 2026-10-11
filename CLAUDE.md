@@ -2013,6 +2013,13 @@ installs. Rules that keep it sane:
   silently never loaded" failure mode is gone (guarded by
   `tests/test_env_loader.py`). Real process env (shell export,
   `launchctl setenv`) still wins over `.env` for ad-hoc overrides.
+- **`UPNP_SERVER_ALLOW`** (optional) — comma-separated friendly-name
+  prefixes of external UPnP MediaServers to index (e.g. `MinimServer`).
+  Unset = none; every other LAN MediaServer is dropped at discovery so
+  a TV's media share never shows up as a source
+  (`dlna_discovery.server_allowed`). Replaced a hardcoded `"Asset UPnP"`
+  prefix that, once that server was retired, refused every external
+  server.
 - **`LASTFM_API_KEY`** (optional) powers the artist panel's "best
   known for". It is an APPLICATION key from
   `https://www.last.fm/api/account/create` — **an account password is
