@@ -43,7 +43,7 @@ class TestHeartbeatLocalFs(unittest.TestCase):
 
     def test_real_server_is_probed(self):
         reg = ServerRegistry()
-        reg.add(self._mk("uuid:asset-1", "http://192.168.1.50:26125/desc.xml"))
+        reg.add(self._mk("uuid:upnp-1", "http://192.168.1.50:26125/desc.xml"))
         with mock.patch.object(d, "SERVERS", reg), \
              mock.patch("urllib.request.urlopen") as up:
             d._heartbeat_once()
@@ -51,13 +51,13 @@ class TestHeartbeatLocalFs(unittest.TestCase):
 
     def test_real_server_offline_after_two_fails(self):
         reg = ServerRegistry()
-        reg.add(self._mk("uuid:asset-1", "http://192.168.1.50:26125/desc.xml"))
+        reg.add(self._mk("uuid:upnp-1", "http://192.168.1.50:26125/desc.xml"))
         with mock.patch.object(d, "SERVERS", reg), \
              mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
             d._heartbeat_once()
-            self.assertTrue(reg.is_online("uuid:asset-1"))   # 1 fail: still online
+            self.assertTrue(reg.is_online("uuid:upnp-1"))   # 1 fail: still online
             d._heartbeat_once()
-            self.assertFalse(reg.is_online("uuid:asset-1"))  # 2 fails: offline
+            self.assertFalse(reg.is_online("uuid:upnp-1"))  # 2 fails: offline
 
 
 if __name__ == "__main__":

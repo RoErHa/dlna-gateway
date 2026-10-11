@@ -7,7 +7,7 @@ def test_page_loads_and_shows_server_status(app, gateway):
     # offline). The default stub server is online, so its name shows with no
     # offline marker.
     opts = app.locator("#source-sel").text_content()
-    assert "AssetUPnP" in opts, f"got: {opts!r}"
+    assert "MinimServer" in opts, f"got: {opts!r}"
     assert "(offline)" not in opts, f"got: {opts!r}"
 
 

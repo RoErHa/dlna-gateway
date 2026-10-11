@@ -23,7 +23,7 @@ _STALE_SEC = 300
 
 @dataclass
 class MediaServer:
-    """A UPnP ContentDirectory server (AssetUPnP, MinimServer, …)."""
+    """A UPnP ContentDirectory server (MinimServer, …)."""
     udn:         str
     name:        str
     location:    str

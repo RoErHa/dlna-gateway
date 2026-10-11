@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/test_providers_seam.py — exercises the dlna_providers seam
-(Phase 0 of the AssetUPnP migration).
+tests/test_providers_seam.py — exercises the dlna_providers seam.
 
 Covers:
   1. Dataclass shape (Artist, Album, Track) — frozen, defaults.

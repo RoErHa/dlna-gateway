@@ -153,7 +153,7 @@ class Indexer:
 
         try:
             # Find Album Artist/Album container.
-            # Servers like AssetUPnP/MinimServer/Jellyfin expose it at root.
+            # Servers like MinimServer/Jellyfin expose it at root.
             # Plex nests it one level under a "Music" container.
             ALBUM_TITLES = ("Album Artist / Album", "Album Artist",
                             "Albums", "By Album")

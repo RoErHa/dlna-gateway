@@ -1,7 +1,7 @@
 """
 dlna_localfs_wiring.py — boot-time wiring of the LocalFs provider.
 
-Phase 4 of the AssetUPnP migration. Kept in its own module to keep
+Kept in its own module to keep
 `dlna_gateway.py` slim (the run_all.py lint enforces < 350 lines).
 
 `maybe_start_localfs()` wires up to THREE independent libraries — music
@@ -28,7 +28,7 @@ Whenever a root activates, it:
   4. Binds the provider to its synthesised UDN via
      `dlna_providers.bind_provider`, and inserts a matching
      `MediaServer` record into `SERVERS` so api_browse exposes it
-     alongside any AssetUPnP / MinimServer entries.
+     alongside any UPnP MediaServer entries.
   5. Kicks off a background initial scan. Subsequent runs are
      incremental thanks to the `localfs_files` (mtime, size) cache
      introduced in P2.

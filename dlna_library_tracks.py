@@ -7,10 +7,7 @@ and the `metadata_overrides` display layer.
 Split out of dlna_library.py (2026-08-20). See dlna_library_schema.py
 for why these are mixins rather than collaborators.
 
-Two invariants worth keeping in view when editing:
-  * `upsert_tracks` dedups AssetUPnP virtual-album aliases by
-    (d_id, _norm_title(title)) — d-id alone is NOT a per-file id and
-    collides across ~41% of the library.
+An invariant worth keeping in view when editing:
   * `metadata_overrides.source='manual'` always wins; `year` there is
     the MusicBrainz ORIGINAL year and is display-only — it is never
     COALESCEd back into `tracks`.
@@ -21,11 +18,8 @@ import logging
 
 from dlna_library_overrides import OverridesMixin
 from dlna_library_sql import (
-    _d_id,
     _dur_to_secs,
     _is_localfs,
-    _norm_title,
-    _parse_audio_params,
 )
 
 log = logging.getLogger("dlna.library")
@@ -45,8 +39,7 @@ class TracksMixin(OverridesMixin):
     def album_count(self, udn: str) -> int:
         """Number of albums for the source's browse view. LocalFs counts
         distinct FOLDERS (album_key) — matching the folder-grouped Albums
-        list; other sources count distinct (artist, album) pairs, matching
-        AssetUPnP's display count."""
+        list; other sources count distinct (artist, album) pairs."""
         with self._pool.read() as conn:
             if _is_localfs(udn):
                 row = conn.execute(
@@ -60,45 +53,20 @@ class TracksMixin(OverridesMixin):
             return row[0] if row else 0
     def upsert_tracks(self, udn: str, tracks: list) -> int:
         """
-        Insert tracks, deduplicating on (udn, d_id, lower(title)) where
-        d_id is the `d-<n>` AssetUPnP URL segment.
-
-        Why d_id+title and not just url: AssetUPnP exposes the SAME
-        physical file under multiple "browse-tree paths" — both the
-        real album (e.g. "Kasabian") AND any compilation albums the
-        user has set up ("Music From the OC: Mix 5"). Each path gets
-        a different `co-<hash>` segment in the URL, but the `d-<n>`
-        part stays the same. Without this dedup, the index sees the
-        same file 2x and the row count balloons (confirmed 2026-05-28:
-        22k physical files → 40k rows). HTTP HEAD of the duplicate
-        URLs confirms byte-identical Content-Length on both sides.
-
-        Dedup is in Python (within-batch) and against any pre-existing
-        rows for this UDN. URLs without a recognisable d-id (non-
-        AssetUPnP servers) fall through to the wide UNIQUE constraint
-        and never trigger d-id dedup. The FIRST URL seen wins; later
-        aliases for the same (d_id, title) are skipped.
+        Insert tracks for `udn`; duplicates are skipped by the wide
+        UNIQUE and by UNIQUE(udn, url).
 
         Returns number of rows actually inserted.
         """
         if not tracks:
             return 0
-        # Parse bit_depth + sample_rate from the URL at row-build time.
-        # AssetUPnP URLs include `/b<bits>/f<rate>/`; non-AssetUPnP
-        # servers usually don't, in which case both stay None and the
-        # UNIQUE treats NULLs as distinct (so no cross-server collisions).
+        # bit_depth + sample_rate come from the provider (LocalFs reads
+        # them from the audio container via mutagen); absent, both stay
+        # None and the UNIQUE treats NULLs as distinct.
         # year is the file-tag year (DIDL-Lite dc:date / upnp:originalTrackDate),
         # parsed in dlna_content._parse_didl.
         def _make_row(t: dict) -> dict:
             url = t.get("url", "")
-            # bit_depth + sample_rate: prefer caller-supplied values
-            # (LocalFsProvider reads them straight from the audio
-            # container via mutagen) and fall back to the AssetUPnP
-            # URL-pattern parser. UPnP items don't have the fields →
-            # URL parse; LocalFs items do → mutagen wins.
-            bd_in = t.get("bit_depth")
-            sr_in = t.get("sample_rate")
-            bd_url, sr_url = _parse_audio_params(url)
             return {
                 "udn": udn,
                 "obj_id": t.get("id", ""),
@@ -111,57 +79,20 @@ class TracksMixin(OverridesMixin):
                 "mime": t.get("mime", ""),
                 "genre": t.get("genre", ""),
                 "file_path": t.get("file_path", ""),
-                "bit_depth": bd_in if bd_in is not None else bd_url,
-                "sample_rate": sr_in if sr_in is not None else sr_url,
+                "bit_depth": t.get("bit_depth"),
+                "sample_rate": t.get("sample_rate"),
                 "year": t.get("year"),
                 "album_key": t.get("album_key", ""),
                 "composer": t.get("composer", ""),
                 "lyricist": t.get("lyricist", ""),
             }
-        rows_raw = [_make_row(t) for t in tracks if t.get("url")]
+        rows = [_make_row(t) for t in tracks if t.get("url")]
         # Mass INSERTs fire the FTS triggers; heal-and-retry on the
         # recurring shadow-table corruption. Body is retry-safe
         # (INSERT OR IGNORE / UPDATE OR IGNORE throughout).
-        return self.run_with_fts_heal(self._upsert_tracks_body, udn, rows_raw)
-    def _upsert_tracks_body(self, udn: str, rows_raw: list) -> int:
+        return self.run_with_fts_heal(self._upsert_tracks_body, udn, rows)
+    def _upsert_tracks_body(self, udn: str, rows: list) -> int:
         with self._pool.write() as conn:
-            # Build the (d_id, _norm_title(title)) dedup set: existing
-            # rows for this UDN + within-batch tracking. Non-AssetUPnP
-            # URLs have d_id=None and are NOT deduped this way — they
-            # fall through to the wider UNIQUE constraint.
-            #
-            # The post-COALESCE-mismatch race that motivated an earlier
-            # override-aware path is already resolved by _norm_title's
-            # apostrophe/diacritic normalisation: the new raw title and
-            # the existing post-COALESCE title both normalise to the
-            # same key. Considering the override title here would over-
-            # collapse legitimately-distinct recordings that happen to
-            # share a d-id (e.g. 3 Doors Down "Be Like That" vs
-            # "Be Like That (acoustic)"), so we don't.
-            seen: set[tuple[str, str]] = set()
-            for (existing_url, existing_title) in conn.execute(
-                "SELECT url, title FROM tracks WHERE udn=?", (udn,)
-            ).fetchall():
-                d = _d_id(existing_url)
-                if d:
-                    seen.add((d, _norm_title(existing_title)))
-
-            rows: list[dict] = []
-            n_aliased = 0
-            for r in rows_raw:
-                d = _d_id(r["url"])
-                if d:
-                    key = (d, _norm_title(r["title"]))
-                    if key in seen:
-                        n_aliased += 1
-                        continue
-                    seen.add(key)
-                rows.append(r)
-            if n_aliased:
-                log.info(f"upsert_tracks [{udn[:12]}…]: dropped "
-                         f"{n_aliased} alias row(s) "
-                         f"(same d-id + title via different browse path)")
-
             # Step 1: insert new tracks (skip duplicates)
             conn.executemany(
                 "INSERT OR IGNORE INTO tracks "

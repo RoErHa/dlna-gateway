@@ -25,7 +25,6 @@ import logging
 import re
 import sqlite3
 
-from dlna_library_sql import _parse_audio_params
 
 log = logging.getLogger("dlna.library")
 
@@ -43,7 +42,7 @@ class UniqueMigrationsMixin:
         Detection: if `tracks.bit_depth` column already exists, the
         migration has run. Otherwise: drop FTS triggers, rename old
         table, create new table with widened UNIQUE and the two new
-        columns, INSERT-with-parsed-URLs into new, drop old, recreate
+        columns (NULL for every carried-over row), INSERT into new, drop old, recreate
         triggers, rebuild FTS5 index. Idempotent.
 
         Heavy on row count but fast in practice (~100ms on 25k rows).
@@ -64,7 +63,7 @@ class UniqueMigrationsMixin:
             "  FROM tracks").fetchall()
         n_old = len(old_rows)
         log.info(f"DB migration: widening tracks UNIQUE; rebuilding "
-                 f"{n_old:,} row(s) with parsed bit_depth + sample_rate")
+                 f"{n_old:,} row(s)")
 
         # Triggers reference the table being renamed — drop first so
         # they don't end up pointing at the obsolete renamed table.
@@ -93,7 +92,7 @@ class UniqueMigrationsMixin:
         """)
         inserts = []
         for r in old_rows:
-            bd, sr = _parse_audio_params(r["url"])
+            bd, sr = None, None   # the old schema never recorded them
             # album_key may predate this row if the column-add migration
             # ran first (it normally does); carry it, default '' otherwise.
             ak = r["album_key"] if "album_key" in r.keys() else ""

@@ -1,21 +1,13 @@
 """
 dlna_providers.localfs — `LocalFsProvider`, the in-process backend.
 
-Phase 2 of the AssetUPnP migration. Walks a music root on disk,
-reads tags + embedded art via `mutagen`, and populates the gateway's
-existing `library.db` under a synthesised UDN of its own. The
-existing browse / search / API paths work against the new UDN
-without any further changes — the proof of P2 is that
-`SELECT COUNT(*) FROM tracks WHERE udn = '<localfs-udn>'` matches
-the AssetUPnP UDN's count (modulo cosmetic differences in
-file/folder layout).
+Walks a music root on disk, reads tags + embedded art via `mutagen`,
+and populates the gateway's `library.db` under a synthesised UDN of
+its own. The browse / search / API paths work against that UDN with
+no provider-specific code.
 
-Per CLAUDE.md → "Library backend migration (in flight)":
-
-- Pure read, zero risk, runs alongside AssetUPnP. No file serving in
-  P2; `stream_url()` raises NotImplementedError.
 - Stable track IDs: `sha1(rel_path)[:16]`. Survive renumbering
-  across rescans — the lesson from AssetUPnP's d-id chaos.
+  across rescans.
 - Per-file (mtime, size) cache in `library.db.localfs_files` so
   rescans only re-tag changed files.
 - Transactional commits — the served view is never half-updated.

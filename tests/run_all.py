@@ -648,7 +648,7 @@ try:
           len(_methods) >= 95, f"got {len(_methods)}, expected >= 95")
     check("Helper re-exports still importable",
           all(hasattr(_L, _h) for _h in
-              ("_dedup_clause", "_parse_audio_params", "_norm_title",
+              ("_dedup_clause", "_norm_title",
                "_dur_to_secs", "FAVOURITES_ID")))
     check("Every mixin module under 600 lines",
           all(len(v.split("\n")) < 600 for k, v in lib_files.items()),

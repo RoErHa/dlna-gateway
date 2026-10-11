@@ -4,13 +4,13 @@
 def test_source_dropdown_shows_server_name(page, stub, gateway):
     # The standalone disc-dot/label was removed; server name + online
     # state now live in the SRC dropdown options.
-    gateway.servers = [{"udn": "uuid:asset-1", "name": "AssetUPnP",
+    gateway.servers = [{"udn": "uuid:upnp-1", "name": "MinimServer",
                         "online": True, "tracks": 1234}]
     page.goto(stub.base_url + "/")
     page.wait_for_function(
         "document.querySelectorAll('#source-sel option').length >= 1 && "
         "document.querySelector('#source-sel option').textContent"
-        ".includes('AssetUPnP')",
+        ".includes('MinimServer')",
         timeout=5000,
     )
 

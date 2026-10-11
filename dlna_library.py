@@ -66,17 +66,15 @@ from dlna_library_tracks import TracksMixin
 from dlna_library_videos import VideosMixin
 
 # Re-exported so the historical `from dlna_library import _dedup_clause`
-# / `_parse_audio_params` / `FAVOURITES_ID` import form keeps working.
+# / `FAVOURITES_ID` import form keeps working.
 from dlna_library_sql import (  # noqa: F401  (re-export)
     FAVOURITES_ID,
-    _d_id,
     _dedup_clause,
     _dur_to_secs,
     _is_localfs,
     _localfs_album_artist,
     _localfs_album_name,
     _norm_title,
-    _parse_audio_params,
 )
 
 log = logging.getLogger("dlna.library")

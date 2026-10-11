@@ -688,8 +688,8 @@ function showTab(tab){
 }
 
 // ── Servers (source) ─────────────────────────────────────────────
-// Multiple music servers can now coexist (AssetUPnP + the in-process
-// LocalFs backend, plus any future Plex/Jellyfin provider). The header
+// Multiple music servers can coexist (the in-process LocalFs
+// libraries, a UPnP server, plus any future Plex/Jellyfin provider). The header
 // carries a SRC dropdown (#source-sel) to switch the active source; the
 // disc-dot still shows the active source's online status.
 let renderers = {};   // udn → MediaRenderer

@@ -10,54 +10,16 @@ module-level singleton (and therefore every pending migration against
 the live library.db) as a side effect of importing a helper.
 
 Everything here is a pure function of its arguments: string
-normalisation, URL parsing, and SQL-fragment builders. No I/O, no DB
+normalisation and SQL-fragment builders. No I/O, no DB
 handle, no global state beyond compiled regexes.
 
 `dlna_library` re-exports all of these, so the historical
-`from dlna_library import _dedup_clause, _parse_audio_params` import
+`from dlna_library import _dedup_clause` import
 form still works unchanged.
 """
 import re
 
 FAVOURITES_ID = "__favourites__"
-
-
-# AssetUPnP encodes the source file's bit depth and sample rate in
-# the URL path (e.g. `/c2/b16/f44100/...` or `/c2/b24/f96000/...`).
-# We parse these out at index time to populate tracks.bit_depth and
-# tracks.sample_rate, which participate in the UNIQUE constraint so
-# 16-bit and 24-bit copies of the same (artist, album, title)
-# coexist as distinct rows. Browse-side queries then prefer the
-# higher-quality version. Other UPnP MediaServers usually don't
-# embed these in the URL; for them we leave both columns NULL.
-_AUDIO_PARAMS_RE = re.compile(r"/b(\d+)/f(\d+)/")
-_D_ID_RE         = re.compile(r"/(d-?\d+)-co")
-
-
-def _parse_audio_params(url: str):
-    """Return (bit_depth, sample_rate) parsed from an AssetUPnP-style
-    URL, or (None, None) if the pattern doesn't match. Both values
-    are integers when present (bit_depth in bits, sample_rate in Hz)."""
-    if not url:
-        return None, None
-    m = _AUDIO_PARAMS_RE.search(url)
-    if not m:
-        return None, None
-    try:
-        return int(m.group(1)), int(m.group(2))
-    except (ValueError, TypeError):
-        return None, None
-
-
-def _d_id(url: str):
-    """Extract the d-id portion of an AssetUPnP URL, or None for
-    non-AssetUPnP URLs. Used as one half of the (d_id, lower(title))
-    dedup key in upsert_tracks — see the 'AssetUPnP virtual albums'
-    note in the docstring for upsert_tracks for the why."""
-    if not url:
-        return None
-    m = _D_ID_RE.search(url)
-    return m.group(1) if m else None
 
 
 # Lazy unicodedata import keeps module load cheap on the hot path.
@@ -99,10 +61,9 @@ def _dedup_clause(outer_alias: str = "t") -> str:
 
     Excludes the current row when a same-(udn,artist,album,title) row
     with strictly higher (bit_depth, sample_rate) exists. NULL values
-    are treated as 0 (lowest), so any non-NULL beats a NULL — giving
-    AssetUPnP-served tracks a clean prefer-24-bit, prefer-higher-rate
-    ordering, without affecting non-AssetUPnP servers (all NULL → all
-    treated as equal → all survive).
+    are treated as 0 (lowest), so any non-NULL beats a NULL — a clean
+    prefer-24-bit, prefer-higher-rate ordering, while sources that
+    report neither (all NULL → all treated as equal) all survive.
 
     Use only in BROWSE views — listings the user sees in the UI.
     The AcoustID worker, playlists, and radio scans should NOT dedup

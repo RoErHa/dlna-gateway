@@ -1,8 +1,8 @@
 """
 dlna_providers — the LibraryProvider seam.
 
-The gateway speaks to library backends (AssetUPnP, MinimServer, Plex,
-Jellyfin, our own in-process LocalFs) through this one Protocol.
+The gateway speaks to library backends (MinimServer or any UPnP server,
+Plex, Jellyfin, our own in-process LocalFs) through this one Protocol.
 Adding a new backend means creating one file under this package that
 implements the Protocol and registers itself via @register_provider.
 The gateway core never imports a backend directly.

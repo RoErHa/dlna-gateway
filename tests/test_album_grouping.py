@@ -22,7 +22,7 @@ from dlna_library import LibraryDB
 from dlna_library_sql import is_own_album
 
 LF = "uuid:localfs-test"          # _is_localfs() → True
-UPNP = "uuid:asset-1"             # legacy (artist, album) grouping
+UPNP = "uuid:upnp-1"             # legacy (artist, album) grouping
 
 
 def _row(track_id, album_key, artist, album, title, file_path):

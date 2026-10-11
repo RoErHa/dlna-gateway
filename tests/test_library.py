@@ -391,16 +391,18 @@ class TestAlbumKeyUniqueMigration(unittest.TestCase):
 
     def test_upnp_empty_album_key_semantics_unchanged(self):
         """UPnP rows have album_key='' — same-tag same-quality rows still
-        collide exactly as before the widening. (AssetUPnP-style URLs so
-        bit_depth/sample_rate parse; NULL bd/sr rows never collided even
-        pre-widening — NULLs are distinct in UNIQUE.)"""
+        collide exactly as before the widening. (Explicit bit_depth/
+        sample_rate; NULL bd/sr rows never collided even pre-widening —
+        NULLs are distinct in UNIQUE.)"""
         self._make_old_db(0)
         db = LibraryDB(db_file=self._path)
         rows = [
-            {"id": "c1", "url": "http://u:26125/c2/b16/f44100/d-1-coA.flac",
-             "title": "Song", "artist": "A", "album": "Al"},
-            {"id": "c2", "url": "http://u:26125/c2/b16/f44100/d-2-coB.flac",
-             "title": "Song", "artist": "A", "album": "Al"},
+            {"id": "c1", "url": "http://u/c1.flac", "title": "Song",
+             "artist": "A", "album": "Al", "bit_depth": 16,
+             "sample_rate": 44100},
+            {"id": "c2", "url": "http://u/c2.flac", "title": "Song",
+             "artist": "A", "album": "Al", "bit_depth": 16,
+             "sample_rate": 44100},
         ]
         db.upsert_tracks("uuid:upnp-server", rows)
         self.assertEqual(db.track_count("uuid:upnp-server"), 1)

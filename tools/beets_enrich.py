@@ -6,8 +6,7 @@ Implements the "beets import" stage from docs/enrichment.md: beets reads
 MusicBrainz + AcoustID and writes clean tags + MBIDs **into the files**,
 in place. The gateway's mutagen indexer then reads those enriched tags on
 the next re-index — beets is an upstream batch stage, never a live
-metadata authority (that would re-create the AssetUPnP dual-source-of-
-truth problem).
+metadata authority (that would create a second source of truth).
 
 This is a thin, SAFE wrapper around the external `beet` CLI. Its whole job
 is to guarantee the non-negotiable invariant from the doc — tag IN PLACE:

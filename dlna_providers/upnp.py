@@ -1,11 +1,10 @@
 """
-dlna_providers.upnp — `UpnpProvider` for AssetUPnP, MinimServer, or any
-generic UPnP ContentDirectory MediaServer.
+dlna_providers.upnp — `UpnpProvider` for MinimServer or any generic
+UPnP ContentDirectory MediaServer.
 
-Phase 1 of the AssetUPnP migration. This is a thin wrapper: every
-ContentDirectory call delegates to `dlna_content.cd_browse / cd_search
-/ browse_all` (the existing SOAP client). Pure refactor — no
-behavioural change. The Indexer and api_browse stop importing
+A thin wrapper: every ContentDirectory call delegates to
+`dlna_content.cd_browse / cd_search / browse_all` (the SOAP client).
+The Indexer and api_browse stop importing
 `dlna_content` directly; they fetch a provider via `get_provider(udn)`
 and call its wire-level helpers.
 
@@ -59,8 +58,7 @@ log = logging.getLogger("dlna.providers.upnp")
 
 @register_provider("upnp")
 class UpnpProvider:
-    """LibraryProvider backed by a UPnP MediaServer (AssetUPnP,
-    MinimServer, Plex's DLNA face, Jellyfin's DLNA face).
+    """LibraryProvider backed by a UPnP MediaServer (MinimServer, Plex's DLNA face, Jellyfin's DLNA face).
 
     `server` accepts either a `dlna_registry.MediaServer` dataclass or
     any object exposing `.udn`, `.name`, `.control_url`, `.base_url`.

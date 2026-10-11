@@ -4,16 +4,8 @@ tools/localfs_scan.py — Phase 2 driver for the LocalFsProvider.
 
 Walks a music root through `dlna_providers.localfs.LocalFsProvider`
 and populates `library.db` under the provider's synthesised UDN.
-Lets you compare the LocalFs view against the AssetUPnP view without
-having to wire LocalFs into the running gateway.
-
-The migration plan's P2 done-when criterion is:
-
-> the new index matches Asset's view — same album/track counts,
-> art present, oddities logged. Pure read, zero risk, runs alongside
-> Asset.
-
-This tool is the manual proof:
+Lets you scan and inspect a LocalFs index without wiring it into the
+running gateway:
 
     # Run an incremental scan (only changed/new files re-tagged):
     python3 tools/localfs_scan.py --root /Volumes/SAMDATA/Music
@@ -22,7 +14,6 @@ This tool is the manual proof:
     python3 tools/localfs_scan.py --root /Volumes/SAMDATA/Music --force
 
     # Show track counts for every UDN currently in library.db
-    # (matches what AssetUPnP indexed against what LocalFs indexed):
     python3 tools/localfs_scan.py --compare
 
 The scan output is logged on the same stdlib `logging` config the
@@ -138,7 +129,7 @@ def main(argv=None) -> int:
     print(f"tracks in library.db for this UDN: "
           f"{db.track_count(provider.udn):,}")
     print()
-    print("Compare against AssetUPnP via `--compare`.")
+    print("Compare UDN counts via `--compare`.")
     return 0
 
 

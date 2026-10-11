@@ -1,14 +1,14 @@
 """
 Frontend tests for the SRC (library source) dropdown.
 
-Added when the LocalFs backend started coexisting with AssetUPnP in
+Covers more than one MediaServer in
 SERVERS — the PWA now needs a picker to switch the active source. The
 pre-existing suite only seeds a single server, so these tests cover the
 genuinely new multi-server *switching* path (selectSource → re-browse
 against the new UDN). Uses the page/stub/gateway fixtures (not `app`) so
 servers can be seeded BEFORE navigation.
 """
-ASSET = {"udn": "uuid:asset-1", "name": "AssetUPnP",
+ASSET = {"udn": "uuid:upnp-1", "name": "MinimServer",
          "online": True, "tracks": 28868}
 LOCALFS = {"udn": "uuid:localfs-abc", "name": "LocalFs",
            "online": True, "tracks": 23823}
@@ -30,17 +30,17 @@ def test_source_dropdown_lists_both_servers(page, stub, gateway):
         "document.querySelectorAll('#source-sel option').length >= 2",
         timeout=5000)
     options = " | ".join(page.locator("#source-sel option").all_text_contents())
-    assert "AssetUPnP" in options and "LocalFs" in options
+    assert "MinimServer" in options and "LocalFs" in options
 
 
 def test_selecting_source_browses_new_udn(page, stub, gateway):
     gateway.servers = [ASSET, LOCALFS]
     gateway.add_artist("ABBA")
     _boot(page, stub)
-    # First server adopted on init → browse fired against AssetUPnP.
+    # First server adopted on init → browse fired against it.
     first = gateway.wait_for_request("/api/browse_letter", method="GET")
     assert first is not None
-    assert first["query"].get("udn") == "uuid:asset-1"
+    assert first["query"].get("udn") == "uuid:upnp-1"
 
     gateway.clear_requests()
     page.select_option("#source-sel", "uuid:localfs-abc")
@@ -62,10 +62,10 @@ def test_disc_status_follows_active_source(page, stub, gateway):
          "online": False, "tracks": 0},
     ]
     _boot(page, stub)
-    # Active source starts as the first server (AssetUPnP, online → no marker).
-    assert page.eval_on_selector("#source-sel", "el => el.value") == "uuid:asset-1"
+    # Active source starts as the first server (the UPnP server, online → no marker).
+    assert page.eval_on_selector("#source-sel", "el => el.value") == "uuid:upnp-1"
     asset_opt = page.locator(
-        "#source-sel option", has_text="AssetUPnP").text_content()
+        "#source-sel option", has_text="MinimServer").text_content()
     assert "(offline)" not in asset_opt
 
     page.select_option("#source-sel", "uuid:localfs-abc")

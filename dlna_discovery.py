@@ -159,11 +159,10 @@ def _fetch_device(location: str,
                     udn=udn, name=name, location=location,
                     control_url=cd_url, base_url=base)
                 servers.add(srv)
-                # Bind a LibraryProvider for this UDN — Phase 1 of the
-                # AssetUPnP migration. Every UPnP server gets a
-                # UpnpProvider; the api_browse and Indexer paths look
-                # this up via get_provider(udn). See CLAUDE.md
-                # "Library backend migration (in flight)" for the plan.
+                # Bind a LibraryProvider for this UDN. Every UPnP server
+                # gets a UpnpProvider; the api_browse and Indexer paths
+                # look this up via get_provider(udn). See CLAUDE.md
+                # "Library backend — LocalFs" for the seam.
                 # Re-binding on re-probe is intentional (control_url
                 # may have changed).
                 from dlna_providers import bind_provider
@@ -209,7 +208,7 @@ def _register_location(location: str, gw_udn: str = ""):
                         "clearing (a flood, or a device rotating its URL)")
             _seen_locations.clear()
         _seen_locations.add(location)
-    time.sleep(1.5)   # let AssetUPnP finish booting if just started
+    time.sleep(1.5)   # let a just-started server finish booting
     before_servers = {s.udn for s in SERVERS.all()}
     _fetch_device(location, SERVERS, RENDERERS, gw_udn)
     # Call indexer hook for any newly added servers

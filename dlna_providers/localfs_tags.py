@@ -77,8 +77,8 @@ def _album_key_for(rel_path: str) -> str:
 
 
 def _track_id_for(rel_path: str, namespace: str = "") -> str:
-    """Stable per-file identifier — survives rescans. The lesson
-    from AssetUPnP's `d-<id>` was: NEVER auto-increment. Use a
+    """Stable per-file identifier — survives rescans. NEVER
+    auto-increment. Use a
     content-derived hash of the relative path so renaming a file
     legitimately produces a new id while a re-walk produces the same
     id.
@@ -201,7 +201,7 @@ def _read_tags(path: Path) -> dict | None:
 
 
 def _format_duration(seconds: float) -> str:
-    """Render seconds → AssetUPnP-shaped `H:MM:SS.fff` string so
+    """Render seconds → UPnP-shaped `H:MM:SS.fff` string so
     `dlna_player._dur_to_sec` accepts it identically."""
     if not seconds or seconds < 0:
         return ""

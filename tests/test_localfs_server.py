@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/test_localfs_server.py — the in-process file server (Phase 3
-of the AssetUPnP migration).
+tests/test_localfs_server.py — the in-process file server.
 
 Coverage:
 

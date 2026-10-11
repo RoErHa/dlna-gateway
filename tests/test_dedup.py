@@ -2,13 +2,10 @@
 """
 tests/test_dedup.py — tests for the option-7 schema change.
 
-Three concerns:
-  1. `_parse_audio_params` extracts (bit_depth, sample_rate) from
-     AssetUPnP-style URLs (`/b16/f44100/`).
-  2. `_migrate_widen_tracks_unique` rebuilds an old-schema `tracks`
-     table with the widened UNIQUE and backfills the new columns
-     from parsed URLs; idempotent.
-  3. Browse-view query methods (album_tracks, search, all_albums,
+Two concerns:
+  1. `_migrate_widen_tracks_unique` rebuilds an old-schema `tracks`
+     table with the widened UNIQUE; idempotent.
+  2. Browse-view query methods (album_tracks, search, all_albums,
      artist_albums, all_artists, genre_*) hide lower-quality
      duplicates via `_dedup_clause`.
 
@@ -25,50 +22,13 @@ PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT not in sys.path:
     sys.path.insert(0, PROJECT)
 
-from dlna_library import (LibraryDB, _parse_audio_params, _dedup_clause)
+from dlna_library import (LibraryDB, _dedup_clause)
 
 
-# Real AssetUPnP URLs from the production library captured 2026-05-25.
 _URL_16BIT = ("http://192.168.1.125:26125/content/c2/b16/f44100/"
               "d-6034886842893489109-co45798ECD833FFD6F.flac")
 _URL_24BIT = ("http://192.168.1.125:26125/content/c2/b24/f96000/"
               "d3571337766393215143-coC7284C5E.flac")
-
-
-# ── _parse_audio_params ───────────────────────────────────────────
-
-class TestParseAudioParams(unittest.TestCase):
-
-    def test_16bit_44100(self):
-        self.assertEqual(_parse_audio_params(_URL_16BIT), (16, 44100))
-
-    def test_24bit_96000(self):
-        self.assertEqual(_parse_audio_params(_URL_24BIT), (24, 96000))
-
-    def test_24bit_192000(self):
-        url = "http://x/c2/b24/f192000/d-abc.flac"
-        self.assertEqual(_parse_audio_params(url), (24, 192000))
-
-    def test_32bit_dsd(self):
-        # DSD streams via AssetUPnP have unusual bit-depth markers
-        # too — make sure the regex doesn't hard-code 16/24.
-        url = "http://x/c2/b32/f352800/d-abc.dsf"
-        self.assertEqual(_parse_audio_params(url), (32, 352800))
-
-    def test_no_pattern_returns_none(self):
-        for url in (
-            "http://x/foo.mp3",
-            "http://other-server/audio/track.flac",
-            "file:///Users/me/Music/song.m4a",
-            "http://x/b16f44100/missing-slashes.flac",   # no slashes
-            "http://x/x16/f44100/wrong-prefix.flac",     # no 'b'
-        ):
-            with self.subTest(url=url):
-                self.assertEqual(_parse_audio_params(url), (None, None))
-
-    def test_empty_or_none_returns_none(self):
-        self.assertEqual(_parse_audio_params(""),   (None, None))
-        self.assertEqual(_parse_audio_params(None), (None, None))
 
 
 # ── _migrate_widen_tracks_unique ──────────────────────────────────
@@ -109,7 +69,7 @@ def _build_old_schema_db(path: str) -> None:
     """)
     # Insert representative rows: a 16/24-bit pair (will only fit ONE in
     # the old schema because of the narrow UNIQUE — the OLD schema doesn't
-    # support having both), one unique track, one non-AssetUPnP URL.
+    # support having both), one unique track, one other URL.
     conn.execute("INSERT INTO tracks (udn, obj_id, url, title, artist, album) "
                  "VALUES (?,?,?,?,?,?)",
                  ("uuid:test", "obj1", _URL_16BIT, "Track One", "A", "Album X"))
@@ -147,22 +107,6 @@ class TestMigration(unittest.TestCase):
             sql = conn.execute("SELECT sql FROM sqlite_master "
                                "WHERE name='tracks'").fetchone()[0]
             self.assertIn("bit_depth, sample_rate", sql)
-
-    def test_migration_backfills_from_url(self):
-        _build_old_schema_db(self._path)
-        db = LibraryDB(db_file=self._path)
-        with db._pool.read() as conn:
-            row16 = conn.execute(
-                "SELECT bit_depth, sample_rate FROM tracks WHERE url=?",
-                (_URL_16BIT,)).fetchone()
-            row_random = conn.execute(
-                "SELECT bit_depth, sample_rate FROM tracks WHERE url=?",
-                ("http://x/random.mp3",)).fetchone()
-        self.assertEqual((row16["bit_depth"], row16["sample_rate"]),
-                         (16, 44100), "AssetUPnP URL must backfill")
-        self.assertEqual((row_random["bit_depth"], row_random["sample_rate"]),
-                         (None, None),
-                         "non-AssetUPnP URL must leave NULL")
 
     def test_migration_preserves_all_rows(self):
         _build_old_schema_db(self._path)
@@ -318,7 +262,7 @@ class TestBrowseDedup(unittest.TestCase):
                          "non-NULL row must win over NULL")
 
     def test_two_null_tracks_both_survive(self):
-        # Two non-AssetUPnP tracks with NULL params and the same
+        # Two tracks with NULL params and the same
         # (artist, album, title) — they shouldn't dedup against each
         # other (NULL = NULL = 0; neither is strictly greater).
         with self.db._pool.write() as conn:
@@ -489,18 +433,7 @@ class TestUpsertFillsAudioParams(unittest.TestCase):
     def tearDown(self):
         os.unlink(self._path)
 
-    def test_upsert_parses_assetupnp_url(self):
-        n = self.db.upsert_tracks(self.udn, [
-            {"id": "1", "url": _URL_24BIT, "title": "T", "artist": "A",
-             "album": "Al"}])
-        self.assertGreater(n, 0)
-        with self.db._pool.read() as conn:
-            row = conn.execute(
-                "SELECT bit_depth, sample_rate FROM tracks WHERE url=?",
-                (_URL_24BIT,)).fetchone()
-        self.assertEqual((row["bit_depth"], row["sample_rate"]), (24, 96000))
-
-    def test_upsert_leaves_non_assetupnp_null(self):
+    def test_upsert_without_params_leaves_null(self):
         self.db.upsert_tracks(self.udn, [
             {"id": "1", "url": "http://foreign/track.mp3",
              "title": "T", "artist": "A", "album": "Al"}])
@@ -514,213 +447,18 @@ class TestUpsertFillsAudioParams(unittest.TestCase):
     def test_upsert_16_and_24_coexist(self):
         # The crucial test: with the widened UNIQUE, INSERT OR IGNORE
         # accepts both rows. (Before the fix, the second would silently
-        # vanish into the OR IGNORE.) 16-bit and 24-bit copies have
-        # DIFFERENT d-ids in AssetUPnP, so the d-id+title dedup added
-        # 2026-05-28 doesn't interfere.
+        # vanish into the OR IGNORE.)
         self.db.upsert_tracks(self.udn, [
             {"id": "1", "url": _URL_16BIT, "title": "Same", "artist": "A",
-             "album": "Same"},
+             "album": "Same", "bit_depth": 16, "sample_rate": 44100},
             {"id": "2", "url": _URL_24BIT, "title": "Same", "artist": "A",
-             "album": "Same"}])
+             "album": "Same", "bit_depth": 24, "sample_rate": 96000}])
         with self.db._pool.read() as conn:
             n = conn.execute(
                 "SELECT COUNT(*) FROM tracks "
                 "WHERE artist='A' AND album='Same' AND title='Same'"
             ).fetchone()[0]
         self.assertEqual(n, 2, "16-bit + 24-bit pair must both survive INSERT")
-
-
-# ── upsert_tracks (d-id + title) virtual-album dedup ──────────────
-
-class TestUpsertVirtualAlbumDedup(unittest.TestCase):
-    """AssetUPnP exposes the SAME physical file under multiple browse
-    paths (real album + 'Music From the OC: Mix 5' compilation, etc.)
-    with different co-hash but the SAME d-id. upsert_tracks dedups
-    these on (d_id, lower(title)) so the index doesn't double-count
-    them. Confirmed 2026-05-28: HTTP HEAD on alias URLs returns
-    byte-identical Content-Length on every sample."""
-
-    _BASE = "http://srv/content/c2/b16/f44100"
-
-    def setUp(self):
-        self._fd, self._path = tempfile.mkstemp(suffix=".db")
-        os.close(self._fd)
-        self.db  = LibraryDB(db_file=self._path)
-        self.udn = "uuid:test"
-
-    def tearDown(self):
-        os.unlink(self._path)
-
-    def _alias(self, d_id: str, co_hash: str) -> str:
-        return f"{self._BASE}/{d_id}-co{co_hash}.flac"
-
-    def _count(self):
-        with self.db._pool.read() as conn:
-            return conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
-
-    def test_two_aliases_in_same_batch_collapse_to_one(self):
-        # Same file (d-12345) indexed twice under different album names.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d12345", "AAA"),
-             "title": "Reason Is Treason", "artist": "Kasabian",
-             "album": "Kasabian"},
-            {"id": "b", "url": self._alias("d12345", "BBB"),
-             "title": "Reason Is Treason", "artist": "Kasabian",
-             "album": "Music From the OC: Mix 5"},
-        ])
-        self.assertEqual(self._count(), 1,
-                         "Same d-id + same title → must collapse to ONE row")
-
-    def test_second_batch_alias_skipped(self):
-        # First crawl adds the file. Second crawl tries to add an alias
-        # — must be ignored (existing row check, not just within-batch).
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d12345", "AAA"),
-             "title": "Reason Is Treason", "artist": "Kasabian",
-             "album": "Kasabian"},
-        ])
-        self.db.upsert_tracks(self.udn, [
-            {"id": "b", "url": self._alias("d12345", "BBB"),
-             "title": "Reason Is Treason", "artist": "Kasabian",
-             "album": "Music From the OC: Mix 5"},
-        ])
-        self.assertEqual(self._count(), 1)
-
-    def test_same_d_id_different_title_BOTH_survive(self):
-        # The Kryptonite/Down Poison case: same d-id (AssetUPnP collides
-        # within the same album) but the titles ARE different. Both
-        # rows MUST be preserved.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d99999", "AAA"),
-             "title": "Kryptonite",  "artist": "3 Doors Down",
-             "album": "The Better Life"},
-            {"id": "b", "url": self._alias("d99999", "BBB"),
-             "title": "Down Poison", "artist": "3 Doors Down",
-             "album": "The Better Life"},
-        ])
-        self.assertEqual(self._count(), 2,
-                         "Same d-id BUT different title MUST keep both rows")
-
-    def test_title_normalisation_case_insensitive(self):
-        # 'Reason Is Treason' vs 'reason is treason' should collapse
-        # — AssetUPnP sometimes exposes the same file with case-only
-        # title variations.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d12345", "AAA"),
-             "title": "Reason Is Treason", "artist": "Kasabian",
-             "album": "Kasabian"},
-            {"id": "b", "url": self._alias("d12345", "BBB"),
-             "title": "reason is treason", "artist": "Kasabian",
-             "album": "Music From the OC: Mix 5"},
-        ])
-        self.assertEqual(self._count(), 1)
-
-    def test_non_assetupnp_url_not_deduped_by_d_id(self):
-        # URLs without a d-id pattern fall through to the wide UNIQUE
-        # constraint and are NOT touched by d-id dedup. With NULL
-        # bit_depth/sample_rate (no AssetUPnP /b/f pattern), SQLite
-        # treats each row as distinct in UNIQUE — so two foreign URLs
-        # with the same metadata survive as 2 rows. The dedup fix
-        # added 2026-05-28 explicitly does NOT alter this.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": "http://foreign/track1.mp3",
-             "title": "T", "artist": "A", "album": "AL"},
-            {"id": "b", "url": "http://foreign/track2.mp3",
-             "title": "T", "artist": "A", "album": "AL"},
-        ])
-        self.assertEqual(self._count(), 2,
-                         "Non-AssetUPnP URLs should survive — d-id dedup "
-                         "must not affect them")
-
-    def test_within_batch_first_url_wins(self):
-        # Verify the FIRST URL in the batch is kept; the alias is
-        # discarded. Order in the input list matters.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "first",  "url": self._alias("d12345", "AAA"),
-             "title": "T", "artist": "A", "album": "Real"},
-            {"id": "second", "url": self._alias("d12345", "BBB"),
-             "title": "T", "artist": "A", "album": "Compilation"},
-        ])
-        with self.db._pool.read() as conn:
-            row = conn.execute(
-                "SELECT album FROM tracks WHERE artist='A' AND title='T'"
-            ).fetchone()
-        self.assertEqual(row["album"], "Real")
-
-    def test_curly_apostrophe_normalised(self):
-        # The Marillion / 10cc / Uriah Heep case from the post-rebuild
-        # audit 2026-05-28: same song, same d-id, but one row had the
-        # raw DIDL-Lite ASCII apostrophe and the other had the
-        # AcoustID-corrected curly U+2019. Dedup must treat them as
-        # equal.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d12345", "AAA"),
-             "title": "Art for Art's Sake",   # ASCII apostrophe
-             "artist": "10cc", "album": "The Definitive Collection"},
-            {"id": "b", "url": self._alias("d12345", "BBB"),
-             "title": "Art for Art’s Sake",   # curly apostrophe
-             "artist": "10cc", "album": "The Very Best Of 10cc"},
-        ])
-        self.assertEqual(self._count(), 1)
-
-    def test_curly_existing_row_against_ascii_new_row(self):
-        # Real-world race that motivated the apostrophe normalisation:
-        # First upsert lands the row, COALESCE-applies its override
-        # which rewrites tracks.title with a curly apostrophe. Second
-        # upsert comes in with a raw ASCII apostrophe title — the
-        # dedup MUST still match against the curly post-COALESCE
-        # title in the existing row.
-        url_a = self._alias("d12345", "AAA")
-        url_b = self._alias("d12345", "BBB")
-        # Pre-seed an override that will rewrite url_a's title to
-        # curly during the COALESCE pass.
-        with self.db._pool.write() as conn:
-            conn.execute(
-                "INSERT INTO metadata_overrides "
-                "(url, artist, album, title, source) "
-                "VALUES (?,?,?,?, 'acoustid')",
-                (url_a, "10cc", "The Definitive Collection",
-                 "Art for Art’s Sake"))   # curly
-        # First upsert lands url_a — gets its title rewritten by
-        # COALESCE to the curly variant.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": url_a, "title": "Art for Art's Sake",
-             "artist": "10cc", "album": "The Definitive Collection"}])
-        # Second upsert: same song, ASCII apostrophe in the raw title.
-        # Existing row's title is now curly — _norm_title catches it.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "b", "url": url_b, "title": "Art for Art's Sake",
-             "artist": "10cc", "album": "The Very Best Of 10cc"}])
-        self.assertEqual(self._count(), 1)
-
-    def test_diacritic_difference_normalised(self):
-        # 'Une Nuit a Paris' vs 'Une Nuit à Paris' — NFKD strips the
-        # combining mark, so these are equal under the new norm.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d12345", "AAA"),
-             "title": "Une Nuit a Paris", "artist": "10cc",
-             "album": "Original Soundtrack"},
-            {"id": "b", "url": self._alias("d12345", "BBB"),
-             "title": "Une Nuit à Paris", "artist": "10cc",
-             "album": "Special Edition"},
-        ])
-        self.assertEqual(self._count(), 1)
-
-    def test_bracketed_annotation_kept_distinct(self):
-        # Important counter-test: 'Wiggle It' and 'Wiggle It (club mix)'
-        # are different recordings even when AssetUPnP collides their
-        # d-ids. Dedup must NOT collapse them.
-        self.db.upsert_tracks(self.udn, [
-            {"id": "a", "url": self._alias("d12345", "AAA"),
-             "title": "Wiggle It", "artist": "2 in a Room",
-             "album": "Greatest Hits"},
-            {"id": "b", "url": self._alias("d12345", "BBB"),
-             "title": "Wiggle It (The club mix)", "artist": "2 in a Room",
-             "album": "Max Mix"},
-        ])
-        self.assertEqual(self._count(), 2,
-                         "Bracketed-mix annotation = different recording, "
-                         "must stay as 2 rows")
 
 
 # ── _dedup_clause smoke: SQL syntax is valid ──────────────────────

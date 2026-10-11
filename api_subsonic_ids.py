@@ -109,7 +109,7 @@ def _radio_id_decode(s: str) -> str | None:
 
 def _default_udn() -> str:
     """Subsonic clients have no notion of UPnP servers; pick one. The
-    user's setup has exactly one MediaServer (AssetUPnP). Prefer the
+    user's setup normally has one music library. Prefer the
     first online server, fall back to any known one, fall back to a
     udn pulled straight from the tracks table for offline / cold-cache
     cases."""

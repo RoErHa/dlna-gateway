@@ -9,7 +9,7 @@ sent.
 
 Why a stub instead of the real gateway: the real gateway needs UPnP
 devices on the network and a SQLite library. Tests must be deterministic
-and runnable on CI without an AssetUPnP server.
+and runnable on CI without a real media server.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class StubGateway:
     def __init__(self) -> None:
         # Default state — overridden by tests as needed
         self.servers: list[dict] = [
-            {"udn": "uuid:asset-1", "name": "AssetUPnP", "online": True, "tracks": 1234}
+            {"udn": "uuid:upnp-1", "name": "MinimServer", "online": True, "tracks": 1234}
         ]
         self.renderers: list[dict] = []  # tests can populate
         # /api/libraries — configured LocalFs roots and whether each one's

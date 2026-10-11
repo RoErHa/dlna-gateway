@@ -1,7 +1,7 @@
 """
 dlna_localfs_server.py — the LocalFsProvider's in-process file server.
 
-Phase 3 of the AssetUPnP migration. Serves the bytes that
+Serves the bytes that
 LocalFsProvider's track_ids point at, with:
 
   * Range support (`Accept-Ranges: bytes`, `206 Partial Content`,

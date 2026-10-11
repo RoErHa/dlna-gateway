@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-tests/test_provider_localfs.py — LocalFsProvider (Phase 2 of the
-AssetUPnP migration). Mocks the filesystem walk and mutagen so no
+tests/test_provider_localfs.py — LocalFsProvider. Mocks the filesystem walk and mutagen so no
 real audio files / mutagen invocations are needed.
 
 Covered:

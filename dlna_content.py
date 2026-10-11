@@ -6,8 +6,7 @@ dlna_content.py — UPnP ContentDirectory SOAP client (Browse + Search).
   cd_search()   — FTS search (three parallel SOAP calls)
   browse_all()  — Paginate through every page of a container
 
-After Phase 1 of the AssetUPnP migration, this module is reached
-ONLY via `dlna_providers/upnp.py` (the `UpnpProvider` wraps these
+This module is reached ONLY via `dlna_providers/upnp.py` (the `UpnpProvider` wraps these
 functions behind the `LibraryProvider` seam). AVTransport (renderer
 control) lives in `dlna_avtransport` and is imported from there
 directly — the legacy re-export shim was removed.
@@ -33,7 +32,7 @@ _CD_NS  = "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
 _DC_NS  = "http://purl.org/dc/elements/1.1/"
 _UPP_NS = "urn:schemas-upnp-org:metadata-1-0/upnp/"
 
-# Limit concurrent SOAP connections to AssetUPnP — it has a small pool
+# Limit concurrent SOAP connections — some servers have a small pool
 _SOAP_SEM = threading.Semaphore(3)
 
 
@@ -43,7 +42,7 @@ def _get_lan_source_ip(target_host: str) -> tuple:
     """
     Return the local LAN IP used to reach target_host.
     Forces SOAP connections through the real network interface, not loopback,
-    so AssetUPnP (which rejects same-machine requests) sees a LAN source IP.
+    so servers that reject same-machine requests see a LAN source IP.
     """
     try:
         target_ip = target_host.split(":")[0]
@@ -63,7 +62,7 @@ def _soap_post(host: str, path: str, body: bytes, action: str) -> tuple:
     """
     Send a SOAP POST; return (http_status, response_text).
     Gated through _SOAP_SEM so at most 3 requests are in-flight.
-    Binds to the LAN IP so AssetUPnP does not see a loopback source.
+    Binds to the LAN IP so the server does not see a loopback source.
     """
     with _SOAP_SEM:
         src = _get_lan_source_ip(host)
@@ -131,7 +130,7 @@ def cd_browse(control_url: str, object_id: str = "0",
         if status == 200:
             return _parse_didl(raw)
 
-        # 500 from some servers (e.g. AssetUPnP on startup, or fussy filter)
+        # 500 from some servers (e.g. on startup, or a fussy filter)
         # — retry once with wildcard filter before giving up
         if status == 500:
             log.debug(f"Browse SOAP 500 — retrying with filter=* @ {control_url}")
@@ -261,7 +260,7 @@ def _parse_didl(soap_xml: str) -> dict:
 def cd_search(control_url: str, query: str, count: int = 200) -> dict:
     """
     Run three parallel UPnP searches (title / artist / album) and merge.
-    Falls back gracefully — AssetUPnP sometimes rejects Search entirely.
+    Falls back gracefully — some servers reject Search entirely.
     """
     criteria = [
         f'dc:title contains "{query}"',
@@ -335,10 +334,7 @@ def cd_search(control_url: str, query: str, count: int = 200) -> dict:
     return {"containers": containers, "items": items}
 
 
-# The AVTransport re-export shim that used to live here (forwarding to
-# dlna_avtransport for the benefit of dlna_player / api_playback)
-# was removed during Phase 1 of the AssetUPnP migration. AVTransport
-# callers now import from dlna_avtransport directly — that module is
+# AVTransport callers import from dlna_avtransport directly — that module is
 # the single source of truth for renderer-control SOAP. This file
 # stays focused on ContentDirectory (Browse / Search) and is reached
 # only via dlna_providers/upnp.py.

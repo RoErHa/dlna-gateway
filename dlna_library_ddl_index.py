@@ -19,14 +19,13 @@ from __future__ import annotations
 
 SCHEMA_INDEX = """
 
-                -- bit_depth + sample_rate are parsed from the URL by
-                -- _parse_audio_params (AssetUPnP pattern /b<NN>/f<MMMMM>/).
-                -- They participate in the UNIQUE so a 16-bit and 24-bit
+                -- bit_depth + sample_rate come from the provider (LocalFs
+                -- reads them from the audio container). They participate in the UNIQUE so a 16-bit and 24-bit
                 -- copy of the same (artist, album, title) coexist as
                 -- distinct rows — the gateway's browse-side filter then
                 -- shows only the higher-quality winner in browse listings.
-                -- For non-AssetUPnP MediaServers that don't encode these
-                -- in the URL, both columns stay NULL; SQLite treats NULLs
+                -- For sources that don't report them, both columns stay
+                -- NULL; SQLite treats NULLs
                 -- as distinct in UNIQUE, so such tracks don't collide
                 -- with each other either.
                 -- album_key (the LocalFs FOLDER identity) joined the UNIQUE
@@ -64,11 +63,9 @@ SCHEMA_INDEX = """
                     udn        TEXT PRIMARY KEY,
                     indexed_at TEXT
                 );
-                -- LocalFs scanner's per-file cache (Phase 2 of the AssetUPnP
-                -- migration). Lets incremental rescans skip unchanged files.
+                -- LocalFs scanner's per-file cache. Lets incremental rescans skip unchanged files.
                 -- Path is the absolute path on disk. Stable obj_id is
-                -- sha1(rel_path)[:16] — survives renumbering across rescans
-                -- the way AssetUPnP's d-id never did.
+                -- sha1(rel_path)[:16] — survives renumbering across rescans.
                 CREATE TABLE IF NOT EXISTS localfs_files (
                     path         TEXT PRIMARY KEY,
                     mtime        REAL    NOT NULL,
