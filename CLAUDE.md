@@ -94,7 +94,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **103/103 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **104/104 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -408,6 +408,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_localfs_http.py` | The PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200), and `resolve_within` — the containment test every byte route asks before opening a file (path COMPONENTS, not string prefixes; returns the RESOLVED path so the caller cannot re-open the original through a TOCTOU gap). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
 | `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. REGISTERS THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — with `dlna_localfs_watch.WATCH`, and owns what BRINGING ONE UP means: ensure the one file server (started by the first root to arrive, widened by each later one), construct a `LocalFsProvider` with the LAN-IP `base_url`, bind it via `dlna_providers.bind_provider`, add a synthetic `MediaServer` to `SERVERS`, and scan it in the background. See **[One unmounted volume must not take the others down](#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
+| `dlna_walk.py` | Can this directory walk be trusted to say a file is GONE? The pure rule (`trusted_removals`) the music rescan asks before deleting `tracks` rows: `os.walk` swallows directory errors, so an unreadable folder reads as deleted; a walk that saw no audio at all is a drive gone wrong, not a library emptied. Holds back only the removals UNDER an errored folder, so one permanently unreadable folder never freezes removal everywhere. See **[A rescan may only call a file gone when the walk looked](#a-rescan-may-only-call-a-file-gone-when-the-walk-looked-2026-10-10)**. |
 | `dlna_localfs_watch.py` | WHEN each root gets wired — the half `maybe_start_localfs` used to answer once, at boot, and get wrong on a reboot that outran the drive. Holds each configured root's state (`waiting` / `active`), activates it exactly once when its volume is present, re-checks the rest every `$LOCALFS_ROOT_RECHECK_SEC` (30 s) on a thread that retires when nothing is waiting, and — the part the log alone never achieved — backs `GET /api/libraries` + a `libraries` SSE event so the PWA can name the drive to mount. Deliberately generic: it knows "a labelled path that may appear", never music/video/books. See **[A root is asked for ONCE](#a-root-is-asked-for-once-and-boot-is-the-wrong-moment-2026-09-12)**. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position/seek) |
@@ -431,7 +432,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `api_playback_state.py` | Shared runtime handles + request helpers for the `api_playback` family. |
 | `api_radio.py` | Internet-radio API handlers (`/api/radio/*` — search, favourites, nowplaying). |
 | `dlna_lyrics.py` | On-demand lyrics fetch via lrclib.net (the network half; the cache lives in `LibraryDB`). |
-| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. **That scanner never prunes on an untrustworthy walk** (2026-10-04): `os.walk` swallows directory errors, so a drive dropping mid-scan reads as an empty tree — on 2026-10-03 a walk that saw 0 files pruned all 4,104 videos, and the next scan re-probed and re-geocoded every one. A walk that hit an error, or saw nothing while the index holds rows, now WARNs and prunes nothing (`force=True` still clears). `tests/test_video_scan.py`. Together those two were **295 of 400 lines**. |
+| `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. **That scanner never prunes on an untrustworthy walk** (2026-10-04): `os.walk` swallows directory errors, so a drive dropping mid-scan reads as an empty tree — on 2026-10-03 a walk that saw 0 files pruned all 4,104 videos, and the next scan re-probed and re-geocoded every one. A walk that hit an error, or saw nothing while the index holds rows, now WARNs and prunes nothing (`force=True` still clears). `tests/test_video_scan.py`. The music scanner got the same guard, finer-grained, via `dlna_walk.py`. Together those two were **295 of 400 lines**. |
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
@@ -780,6 +781,34 @@ Guarded by `tests/test_localfs_watch.py` (25),
 halves: neutering the re-check reddens 7 of 8 late-mount tests, and
 neutering `add_allowed_root` reddens the three that assert what the
 one file server ends up allowed to serve.
+
+### A rescan may only call a file gone when the walk looked (2026-10-10)
+
+A LocalFs rescan decides "removed" by ABSENCE: a cached path the walk
+did not visit is treated as deleted, and its `tracks` row goes with it.
+The video scanner proved how badly that reads a failing drive — on
+2026-10-03 a walk that saw 0 files pruned all 4,104 videos. The music
+scanner had the same shape with three holes, all now closed through
+`dlna_walk.trusted_removals`:
+
+- **A folder that fails to list.** `os.walk` swallows directory errors
+  by default, so an I/O error or a drive dropping mid-scan made
+  everything under that folder read as deleted. The walk now records
+  them (`onerror`), and removals UNDER an errored folder are held back.
+  Only under it — a single permanently unreadable folder must not freeze
+  removal across the whole library. Matched on path COMPONENTS, so an
+  error on `Lost` never shields `Lost Tapes` (§Security posture 8's trap).
+- **A walk that found no audio.** `probe()` refuses an EMPTY root, but a
+  stale mount point holding a few leftover folders passes it. Zero audio
+  seen against a non-empty index now removes nothing.
+- **A file whose `stat` fails** was left out of `seen_paths`, so one
+  unreadable file was deleted from the index. Unreadable is not gone.
+
+Each case WARNs naming what it held back. Consequence worth knowing:
+deleting the LAST audio file under a root no longer de-indexes it —
+that is indistinguishable from the drive going wrong. Guarded by
+`tests/test_walk_trust.py` (9); the three rescan cases fail against the
+old code, and a control proves a real deletion is still removed.
 
 ### Folder-album identity — and the one folder it gets wrong (2026-08-25)
 

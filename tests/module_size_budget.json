@@ -112,6 +112,7 @@
     "dlna_ssrf.py": 400,
     "dlna_stream_proxy.py": 400,
     "dlna_video_index.py": 400,
+    "dlna_walk.py": 400,
     "dlna_xml.py": 400,
     "hypercorn_conf.py": 400
   }

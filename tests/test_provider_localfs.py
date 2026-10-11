@@ -326,6 +326,9 @@ class TestRescan(unittest.TestCase):
         self.assertEqual(stats["changed"] + stats["new"], 1)
 
     def test_rescan_detects_removed_files(self):
+        # A second file stays: a walk that sees NO audio is refused as a
+        # drive gone wrong, not a library emptied (tests/test_walk_trust.py).
+        self._write_file("Artist/Album/keep.flac")
         f = self._write_file("Artist/Album/song.flac")
         p = LocalFsProvider(self.db, self.root)
         with patch("dlna_providers.localfs._require_mutagen"), \
@@ -337,7 +340,7 @@ class TestRescan(unittest.TestCase):
             f.unlink()
             stats = p.rescan()
         self.assertEqual(stats["removed"], 1)
-        self.assertEqual(self.db.track_count(p.udn), 0)
+        self.assertEqual(self.db.track_count(p.udn), 1)
 
     def test_rescan_detects_changed_files(self):
         f = self._write_file("Artist/Album/song.flac")

@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 from typing import Any
 from collections.abc import Iterator
+from dlna_walk import trusted_removals
 
 from .localfs_read import ReadMixin
 # Pure helpers moved to localfs_tags 2026-08-20; re-exported here
@@ -153,17 +154,19 @@ class LocalFsProvider(ReadMixin):
         }
         cache = self._load_cache()
         seen_paths: set[str] = set()
+        walk_errors: list[OSError] = []
         new_rows: list[dict] = []
         cache_writes: list[tuple] = []
         scan_epoch = int(time.time())
 
-        for fs_path in self._walk_audio():
+        for fs_path in self._walk_audio(walk_errors):
             stats["scanned"] += 1
             try:
                 st = fs_path.stat()
             except OSError as e:
                 log.warning(f"LocalFs: stat failed for {fs_path}: {e}")
                 stats["malformed"] += 1
+                seen_paths.add(str(fs_path))   # unreadable is not GONE
                 continue
             abs_path = str(fs_path)
             seen_paths.add(abs_path)
@@ -220,7 +223,14 @@ class LocalFsProvider(ReadMixin):
                 stats["changed"] += 1
 
         # Files in cache that we didn't see this walk → removed
-        removed_paths = [p for p in cache.keys() if p not in seen_paths]
+        # — but only where the walk can vouch for it. os.walk SWALLOWS
+        # directory errors, so a folder that failed to list reads as empty
+        # and everything under it as deleted; and a walk that saw no audio
+        # at all is a drive gone wrong, not a library emptied (the video
+        # scanner pruned 4,104 rows that way on 2026-10-03).
+        removed_paths = trusted_removals(
+            [p for p in cache.keys() if p not in seen_paths],
+            walk_errors, bool(seen_paths))
         stats["removed"] = len(removed_paths)
 
         # Single transaction: upsert new/changed + update cache +
@@ -334,12 +344,13 @@ class LocalFsProvider(ReadMixin):
 
     # ── Internal helpers ─────────────────────────────────────────
 
-    def _walk_audio(self) -> Iterator[Path]:
+    def _walk_audio(self, errors: list = None) -> Iterator[Path]:
         """Yield every audio file under the root. Symlinks are NOT
         followed — mirrors the safety choice in
-        tools/find_corrupt_audio.py."""
+        tools/find_corrupt_audio.py. Directory errors go to `errors`."""
         for dirpath, dirnames, filenames in os.walk(
-                self._root, followlinks=False):
+                self._root, followlinks=False,
+                onerror=errors.append if errors is not None else None):
             # Skip macOS Trash + hidden directories
             dirnames[:] = [d for d in dirnames
                            if not d.startswith(".") and d != ".Trashes"]
