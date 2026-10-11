@@ -4,34 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Does
 
-DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It discovers UPnP MediaServers (AssetUPnP, MinimServer, Jellyfin, Plex) on the local network, indexes their music into a local SQLite DB, and exposes a PWA web UI for browsing and playback. Playback targets: UPnP MediaRenderers (Naim Uniti, etc.) and browser audio. The gateway also announces itself as a UPnP MediaServer so UPnP renderers can browse its playlists directly.
+DLNA Gateway is a Python-based UPnP/DLNA music library gateway. It indexes music from its own in-process LocalFs backend (and any UPnP MediaServer such as MinimServer) into a local SQLite DB, and exposes a PWA web UI for browsing and playback. Playback targets: UPnP MediaRenderers (Naim Uniti, etc.) and browser audio. The gateway also announces itself as a UPnP MediaServer so UPnP renderers can browse its playlists directly.
 
-> **Backend migration COMPLETE (2026-05-31).** AssetUPnP has been
-> replaced by an in-process indexer + bit-perfect file server
-> (**RoHaLocalFS**), and the AssetUPnP-shaped code path was generalised
-> into a pluggable **`LibraryProvider` seam** so the gateway can speak to
-> any of: AssetUPnP/MinimServer (UpnpProvider, kept), Plex, Jellyfin, or
-> the in-process LocalFs backend. See **[Library backend — LocalFs](#library-backend--localfs-migration-complete)**
-> below for the architecture; phase history is in `docs/MIGRATION_PLAN.md`.
+The live library backend is **RoHaLocalFS** (an in-process indexer +
+bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
+**[Library backend — LocalFs](#library-backend--localfs)**.
 
 ## Branching
 
 **Work happens on `main`.** There is one branch and one checkout
-(`~/dlna-gateway-2.0` — the directory name is vestigial; there is no sibling
-1.x tree any more). Commit on `main`, run the gates, deploy with
+(`~/dlna-gateway-2.0` — the directory name is vestigial). Commit on `main`, run the gates, deploy with
 `launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway`.
 
-Until 2026-08-20 the model was "develop on a `2.0` branch, merge to `main`",
-which is why ~93 `merge 2.0:` commits sit in the history and why the older
-runbooks under `docs/` describe that flow. At v2.1.0 the branch was retired:
-`main` was byte-identical to it, the name had become misleading (the shipping
-version is 2.1.0), and a single-developer repo gained nothing from the
-indirection. Nothing was lost — every commit it carried is reachable from
-`main`.
-
 Releases are tagged (`v2.1.0`). Tags are cheap and mark points worth
-returning to; the pre-release and 1.x markers were pruned once 1.x was fully
-decommissioned.
+returning to.
 
 ## Running the Gateway
 
@@ -85,7 +71,7 @@ the gate, a wrong unit count fails the unit test.
 
 **ruff** (`pyproject.toml`): rules chosen because each catches a defect
 class, not a style preference — `F, E9, W, B, RET, UP, C4, PIE, ASYNC`.
-**ASYNC matters most here**: the whole 2.0 edge is an ASGI app, and one
+**ASYNC matters most here**: the whole edge is an ASGI app, and one
 blocking call inside an `async def` serialises every request. It already
 caught four real ones — `os.path.isfile()` on the **external SAMDATA
 volume** inside the video routes, where a spun-down USB disk stalls the
@@ -208,8 +194,8 @@ python3 tests/subsonic_verify.py
 python3 tests/subsonic_verify.py --seed 42 --reps 5 --art-sample 40
 ```
 
-`tests/load_stream.py` guards the **threadpool-starvation regression** (the 2.0
-"stops after one track" origin bug): it fires N concurrent full `/stream` pulls
+`tests/load_stream.py` guards the **threadpool-starvation regression** (the
+"stops after one track" bug): it fires N concurrent full `/stream` pulls
 at the live gateway (real track URLs from `library.db`) and asserts **zero
 failures + an optional p95 threshold** (`--max-p95`). Live-gateway + opt-in like
 `chaos.py` (NOT in `run_all.py`). Prints p50/p95/max + throughput so before/after
@@ -369,8 +355,8 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 
 | File | Responsibility |
 |---|---|
-| `dlna_gateway.py` | Module wiring + `start_background_services()` (spawns the daemon threads). **2.0:** no longer the process entry — the `dlna_asgi` lifespan calls it so `hypercorn dlna_asgi:app` boots the whole gateway. Its own stdlib HTTP edge + TLS were removed. |
-| `dlna_asgi.py` | **2.0 — THE server (Hypercorn owns the whole edge).** FastAPI app; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, the Subsonic byte methods, and the **Naim-facing `/gw/*` UPnP surface** (device.xml/desc.xml/events/control on the plain `:8765` bind — Cleanup C folded it in here, retiring the separate `dlna_server.py` device server + `run-2.0.sh`). Remaining legacy handlers run via the bridge. Lifespan boots `start_background_services`. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
+| `dlna_gateway.py` | Module wiring + `start_background_services()` (spawns the daemon threads). Not the process entry — the `dlna_asgi` lifespan calls it so `hypercorn dlna_asgi:app` boots the whole gateway. |
+| `dlna_asgi.py` | **THE server (Hypercorn owns the whole edge).** FastAPI app; terminates **TLS + HTTP/2** (ALPN) on `:8443` + plain on `:8765`, owns the `tailscale cert`. Native routes for the read API, `/art`, `/stream` + `/radio_stream` relays, static/PWA, the Subsonic byte methods, and the **Naim-facing `/gw/*` UPnP surface** (device.xml/desc.xml/events/control on the plain `:8765` bind). Remaining legacy handlers run via the bridge. Lifespan boots `start_background_services`. `docs_url=None` (no Swagger CDN call). Run: `./run-2.0-asgi.sh`. |
 | `dlna_asgi_bridge.py` | Shim that runs the legacy `(h, params)` handlers unchanged inside the ASGI app (fake `h` captures `_json`/`_html`/`_xml_response`/`send_error`; runs in a threadpool). Routes are rewritten native one batch at a time, then dropped from the bridge. |
 | `dlna_asgi_state.py` | The shared runtime handles every ASGI route module binds against. Split from `dlna_asgi.py` 2026-08-20 (it had reached 1,156 lines). |
 | `dlna_asgi_browse.py` | The JSON read API: library navigation, index status, playlists, favourites, radio, lyrics, audiobook positions, and the SSE stream. |
@@ -380,8 +366,8 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
 | `dlna_asgi_artist.py` | `GET /api/artist_info` — the ℹ️ panel's ONE request. Its own module because `dlna_asgi_browse.py` sits at 397/400, and because the panel is a feature seam that will grow. Resolves the line-up for the track's year and LABELS it, so the PWA can't promote a guess to a fact. |
-| `dlna_art_cache.py` | **2.0.** On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
-| `dlna_events.py` | **2.0.** `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
+| `dlna_art_cache.py` | On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
+| `dlna_events.py` | `EventBus`/`EVENTS` (thread-safe publish → asyncio loop) + native `GET /api/events` (SSE). Publishers: RendererQueue state, index-status transitions, discovery changes. The PWA opens an `EventSource` as a polling accelerator (fallback intact). |
 | `dlna_routes.py` | `GET_ROUTES` / `POST_ROUTES` path → handler maps |
 | `dlna_discovery.py` | Device-description fetch/registration + the server heartbeat. Composition point: re-exports the SSDP and probe surfaces so `dlna_discovery.<name>` resolves as it always has. |
 | `dlna_discovery_ssdp.py` | The SSDP multicast side — periodic M-SEARCH + the NOTIFY listener. Owns the SSDP wire constants. |
@@ -396,7 +382,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_ddl_video.py` | GWMovies, geocode cache, location overrides, Immich people. Separate because a different client browses it, a different worker fills it, and it carries the project's only privacy-relevant outbound call. |
 | `dlna_library_migrations.py` | `MigrationsMixin` — the in-place migrations + `repair_fts`/`run_with_fts_heal` (the FTS5 shadow-table corruption recovery). |
 | `dlna_library_unique.py` | `UniqueMigrationsMixin` — the three migrations that WIDEN the `tracks` UNIQUE by rebuilding the table. Grouped because each DROPs the FTS triggers and must recreate them, and all three must run before `tracks_au` is added on top. |
-| `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads + the indexer upsert path (incl. the d-id alias dedup). |
+| `dlna_library_tracks.py` | `TracksMixin` — `tracks` writes/reads + the indexer upsert path. |
 | `dlna_library_overrides.py` | `OverridesMixin` — the `metadata_overrides` display layer. Protects the two invariants: `manual` always wins, and its `year` is display-only (never COALESCEd back into `tracks`). |
 | `dlna_library_browse.py` | `BrowseMixin` — NAVIGATION through the hierarchy: artists, albums, the letter bar, an artist's chronology. Owns the two cross-cutting rules: `_dedup_clause` (browse views only) and `_is_localfs` folder-album identity. |
 | `dlna_library_search.py` | `SearchMixin` — the FTS5 free-text question and the query semantics that come with it (implicit AND, last-term prefix, punctuation-only tokens dropped). Split from `browse` 2026-09-21 at exactly 400 lines; the seam is real — navigating a tree and answering a question are different jobs. |
@@ -549,11 +535,9 @@ tracks(id, udn, obj_id, url, title, artist, album, duration, art, mime, genre, f
   -- collision semantics are unchanged. Same-folder same-tag files still
   -- collide (true tag ambiguities — fix by retagging).
   UNIQUE(udn, url) via idx_tracks_udn_url  -- created by _migrate_unique_url
-  bit_depth + sample_rate are parsed from the URL at index time
-  (AssetUPnP pattern /b<N>/f<MMMMM>/). They participate in UNIQUE so a
-  16-bit and 24-bit copy of the same album coexist as distinct rows.
-  The separate UNIQUE(udn, url) index dedups same-URL inserts (AssetUPnP
-  serves each file via multiple browse-container paths).
+  bit_depth + sample_rate participate in UNIQUE so a 16-bit and
+  24-bit copy of the same album coexist as distinct rows.
+  The separate UNIQUE(udn, url) index dedups same-URL inserts.
   Browse-side queries hide lower-quality dupes via _dedup_clause.
   year is the FILE-TAG year (DIDL-Lite dc:date / upnp:originalTrackDate),
   parsed by dlna_content._parse_didl. Frontend prefers
@@ -603,8 +587,7 @@ artist_members(artist_key, member_name, member_mbid, instruments,
 metadata_overrides(url, artist, album, title, genre, year, updated_at, source)
   source ∈ {'manual', 'acoustid', 'notfound', 'video_skip'}
   year is the MUSICBRAINZ original release year (release-group's
-  first-release-date) — captured historically by the AcoustID worker
-  (removed in 2.0); nowadays written by tools/improve_song_years.py /
+  first-release-date) — written by tools/improve_song_years.py /
   correct_year_drift.py as source='manual'.
 index_meta(udn, indexed_at)
 playlists(id, name, created_at, sort_order)
@@ -1319,47 +1302,6 @@ gitignored.
 without a key, then began answering `401 UNAUTHORIZED` mid-session. Its
 data is thinner than Last.fm's anyway.
 
-### Indexer-side dedup (AssetUPnP virtual-album aliases)
-
-Diagnosed 2026-05-28: AssetUPnP exposes the SAME physical file under
-multiple browse paths — the real album AND any "virtual compilation"
-albums (Greatest Hits, Best Of, Music From the OC: Mix 5, case-only
-album variants like `Live in Armenia` vs `Live In Armenia`, etc.).
-HTTP HEAD of paired URLs returns byte-identical Content-Length on
-~99% of pairs. Pre-dedup row counts were ~1.82× the actual file
-count (40,662 rows for ~22k files).
-
-`upsert_tracks` dedups by `(d_id, _norm_title(title))` keyed against
-both existing rows and the in-flight batch:
-
-- `d_id` = the `d-<n>-co` segment of the AssetUPnP URL. d-id is NOT
-  a per-file identifier — it collides across distinct files. Pure
-  d-id matching would over-collapse; combining with title catches
-  the virtual-album case while preserving genuine d-id collisions
-  (Kryptonite + Down Poison sharing `d-4591903772373150829` stay
-  as 2 rows because their titles differ).
-- `_norm_title` = NFKD diacritic stripping + smart-apostrophe/quote
-  → ASCII + lower + whitespace collapse. Catches the AcoustID-
-  corrected-vs-raw race where the existing tracks.title has a curly
-  apostrophe (rewritten by COALESCE) and the incoming raw title has
-  ASCII apostrophe. Keeps bracketed annotations IN the key so
-  legit-distinct recordings ("Be Like That" / "Be Like That
-  (acoustic)" sharing d-id within the same album) survive as 2 rows.
-
-**Known limitation:** when two genuinely distinct files coincidentally
-share a d-id AND the same title (Pink Floyd "Comfortably Numb" on
-The Wall vs on Shine On compilation — 47 MB vs 42 MB, definitely
-different bytes), the dedup currently collapses them. The track is
-still playable via every other album, so the cost is one "original
-album" browse-row missing per such collision. Accepted as
-right-enough; HTTP-HEAD-based dedup with Content-Length in the key
-remains an option if this bites more often.
-
-Two rebuilds collapsed 40,662 → 30,292 → 28,868. Remaining ~6,000
-"extras" above the ~22k distinct-file count are largely correct
-distinctions (live recordings, acoustic versions, extended mixes,
-etc.).
-
 ### Frontend
 
 `static/index.html` + `static/app.js` (PWA, ~3,000 lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
@@ -1413,12 +1355,12 @@ delete + re-add the home-screen icon). Guarded by
 (poison the live cache → reload → app must still render) and
 `test_sw_navigation_is_network_first`.
 
-**Source picker (`#source-sel`).** When more than one MediaServer is in `SERVERS` (e.g. AssetUPnP + LocalFs coexisting), the header carries a `SRC` dropdown next to the `OUT` (renderer) picker. `selectSource(udn)` swaps the active `curServer`, resets browse navigation, and reloads the library (or re-runs the active search). `refreshServers()` populates it via `rebuildSourceSel()` (💾 icon for `uuid:localfs-*`, 🗄 otherwise) and `updateDiscStatus()` keeps the header disc-dot tracking the active source. Regression-guarded by `tests/frontend/test_source_picker.py`.
+**Source picker (`#source-sel`).** When more than one MediaServer is in `SERVERS` (e.g. music + audiobooks, or a UPnP server alongside LocalFs), the header carries a `SRC` dropdown next to the `OUT` (renderer) picker. `selectSource(udn)` swaps the active `curServer`, resets browse navigation, and reloads the library (or re-runs the active search). `refreshServers()` populates it via `rebuildSourceSel()` (💾 icon for `uuid:localfs-*`, 🗄 otherwise) and `updateDiscStatus()` keeps the header disc-dot tracking the active source. Regression-guarded by `tests/frontend/test_source_picker.py`.
 
 ### Concurrency Notes
 
 - All DB writes are serialized through `db_pool`'s write lock; reads use thread-local connections in WAL mode.
-- SOAP calls to UPnP servers are throttled by a semaphore (max 3 concurrent) in `dlna_content.py` to avoid overwhelming servers like AssetUPnP.
+- SOAP calls to UPnP servers are throttled by a semaphore (max 3 concurrent) in `dlna_content.py` to avoid overwhelming slow UPnP servers.
 - Device registries use `threading.Lock` for thread-safe access.
 - `RendererQueue.snapshot()` is cached for 500ms and coalesced across concurrent callers: only the first cache-miss fires SOAP; subsequent callers during the fetch return the stale cache immediately rather than block. Prevents N polling browser tabs from stacking N SOAP round-trips.
 - The two SOAP calls inside `snapshot()` (GetTransportInfo + GetPositionInfo) run in parallel threads — halves snapshot latency under load, caps at ~6s on an unresponsive renderer instead of 12s.
@@ -1440,7 +1382,7 @@ Each renderer (UDN) owns its own `RendererQueue` in `QUEUES`. Architectural rule
 
 - `PROXY_IDLE_SEC = 300` (module-level so tests can monkey-patch) — if the browser stops consuming bytes for 5 minutes (laptop suspended, tab closed without clean FIN), the proxy tears down the upstream connection. On laptop wake, the user starts playback again from the beginning; there's no resume.
 - Every session logs `proxy_stream ▶ START host/path` and `proxy_stream ■ END host/path sent=N bytes in Xs reason=<r>` with reason ∈ `{upstream_eof, client_idle_timeout, client_closed, error:<Type>}`.
-- The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from the file server — RoHaLocalFS on `:8200` since the 2026-05-31 migration); the proxy only matters for browser-audio playback.
+- The gateway is NOT in the audio path for UPnP renderers (the renderer streams directly from the file server — RoHaLocalFS on `:8200`); the proxy only matters for browser-audio playback.
 - No HTTP keep-alive — `Connection: close` on both ends. Each browser Range request opens a new upstream TCP connection. On LAN this is ~1ms; on Tailscale it's ~50-100ms per seek. Acceptable for current load; would need a connection pool if users start complaining about seek latency over the tailnet.
 
 #### Two things the relay must keep doing (2026-08-25)
@@ -1816,26 +1758,14 @@ cp com.roha.dlna-cert-renew.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.roha.dlna-cert-renew.plist
 ```
 
-### HTTP/2 · HTTP/3 · TLS — DONE in 2.0 (roadmap retained for history)
+### HTTP/2 · TLS
 
-> **✅ 2.0 — SHIPPED (cutover 2026-06-08/09).** HTTP/2 + app-owned TLS is
-> **done**: the gateway is a **Hypercorn + FastAPI ASGI app (`dlna_asgi.py` +
-> `dlna_asgi_bridge.py`)** that **terminates TLS and negotiates HTTP/2 (ALPN)
-> natively** on `:8443` (plain HTTP on `:8765`), using a `tailscale cert`-issued
-> cert (cert-renewal machinery kept, now Hypercorn-owned). The Naim-facing
-> `/gw/*` UPnP surface (on the plain `:8765` bind, folded into the ASGI app by
-> Cleanup C) and RoHaLocalFS (`:8200`) stay plain HTTP for the Naim.
-> HTTP/3 (QUIC) is a later `--quic-bind` add. **`tailscale serve` was tried and
-> dropped** (broken on this mini's Tailscale `:443`) — the app owning TLS is the
-> chosen end-state. Verified trusted h2 over the tailnet hostname. Full detail:
-> `docs/BUILDING_2.0.md`, `docs/ARCHITECTURE.PDF`.
-> **Everything below this line is the pre-2.0 (1.x stdlib) state, kept for
-> historical context — it no longer describes what runs.**
-
-> *(Historical pre-2.0 detail — the stdlib HTTP/1.1 analysis, the h2/h3*
-> *option matrix, and the reverse-proxy recommendation — stubbed
-> 2026-07-08 to keep CLAUDE.md under 150k. Full text:*
-> *`git show c7e7c42:CLAUDE.md`.)*
+Hypercorn terminates TLS and negotiates HTTP/2 (ALPN) on `:8443`, using the
+`tailscale cert` above; `:8765` (incl. the Naim-facing `/gw/*` surface) and
+the LocalFs file server (`:8200`) stay plain HTTP for the renderers. HTTP/3
+would be a `--quic-bind` add. **`tailscale serve` was tried and dropped**
+(broken on this mini's Tailscale `:443`) — the app owning TLS is the chosen
+end-state.
 
 ### Mobile / PWA testing checklist
 
@@ -1851,48 +1781,13 @@ Because there's no automated test coverage for on-device behavior (iOS Safari, A
 
 When something goes wrong, the diagnostic order is (1) `gateway.log` `dlna.client` entries for browser-side events, (2) `/tmp/dlna-gateway.err` for server-thread crashes, (3) Safari DevTools Web Inspector for pre-report JS errors.
 
-## Library backend — LocalFs (migration complete)
+## Library backend — LocalFs
 
-> **Status: migration complete (2026-05-31).** AssetUPnP is
-> decommissioned; **RoHaLocalFS** (in-process indexer + bit-perfect file
-> server) is the live backend. This section is now architecture
-> reference — the seam, the providers, the non-negotiable rules — plus a
-> condensed **Status — migration COMPLETE** summary below. The
-> blow-by-blow phase history (P0–P6) lives in `docs/MIGRATION_PLAN.md`.
-
-**Original goal.** Replace AssetUPnP with an in-process indexer + file server,
-**while generalising the AssetUPnP-shaped code into a `LibraryProvider`
-seam** so the gateway can speak to any of: AssetUPnP, MinimServer,
-Plex, Jellyfin, or our own in-process backend, modularly.
-
-### Why we're doing this
-
-Current chain:
-
-```
-dlna-gateway  --SOAP Browse-->  AssetUPnP  -->  files  -->  Naim (renderer)
-```
-
-There are **two sources of truth** — AssetUPnP's internal index and
-the gateway's view of it — coupled over UPnP, which is a coarse,
-lossy channel. On rescan, AssetUPnP can renumber object IDs,
-mishandle `UpdateID`/`SystemUpdateID`, and serve a half-built tree.
-The gateway then has to defensively re-walk and retry SOAP. This is
-the source of the recurring "hours fixing the gateway" pain, and is
-the cause of every category in the d-id-collision / aliasing / orphan
-saga that produced `tools/relink_orphan_overrides.py`,
-`tools/audit_override_mismatches.py`, and the `upsert_tracks` dedup
-work (see those sections below).
-
-Target chain:
-
-```
-dlna-gateway (owns index + serves files for the LocalFs provider)
-                    ↓ AVTransport
-                  Naim (renderer)
-```
-
-One index, owned by us, scanned on our terms.
+**RoHaLocalFS is the live backend**: in-process indexer + bit-perfect file
+server (`:8200`), folder-based album grouping, gapless auto-advance via
+`SetNextAVTransportURI` (Naim-verified). The gateway owns the one index and
+scans on its own terms. `UpnpProvider` is kept — it is how MinimServer / any
+generic UPnP server is supported.
 
 ### Non-negotiable rules
 
@@ -1901,21 +1796,11 @@ One index, owned by us, scanned on our terms.
    source file. The same rule that applies to the existing browser
    `/stream` proxy (`dlna_stream_proxy.proxy_stream`) applies to the
    new file server.
-2. **Additive & parallel.** The new backend runs *alongside*
-   AssetUPnP against the same (read-only) music folder, on its own
-   HTTP port. AssetUPnP is untouched until we choose to stop it.
-3. **Reversible.** Backend selection is a config flag. We can flip
-   back to AssetUPnP (or any other provider) at any point until
-   final decommission.
-4. **No big-bang cutover.** Real listening is not affected until
-   Phase 4, and even then AssetUPnP remains as a one-flag fallback.
-5. **Modular by default.** Adding a new provider must NOT require
+2. **Modular by default.** Adding a new provider must NOT require
    touching the gateway core — it's a new file implementing
-   `LibraryProvider`, registered with `dlna_providers`. The
-   migration is the *first* user of the seam, not a permanent
-   exception to it.
+   `LibraryProvider`, registered with `dlna_providers`.
 
-### Target architecture — the `LibraryProvider` seam
+### The `LibraryProvider` seam
 
 A thin provider interface decouples the gateway from the backend
 choice. **Multiple implementations coexist**; each renderer/UDN
@@ -1928,7 +1813,7 @@ directly.
 from typing import Protocol, Iterator
 
 class LibraryProvider(Protocol):
-    """One library source — AssetUPnP, MinimServer, Plex, Jellyfin,
+    """One library source — a UPnP server, Plex, Jellyfin,
     or our in-process LocalFs implementation. Implementations live
     under dlna_providers/<name>.py and register themselves via
     @register_provider('<name>')."""
@@ -1966,14 +1851,11 @@ class LibraryProvider(Protocol):
   `Content-Range`), or seeking and sometimes playback start will
   break.
 - **DLNA response headers** (`contentFeatures.dlna.org`,
-  `transferMode.dlna.org`) are required and will need iteration
-  against the real Naim. Handle serving manually rather than via a
-  framework static-file helper, so these can be set.
+  `transferMode.dlna.org`) are required. Serving is hand-rolled rather
+  than a framework static-file helper, so these can be set.
 - **SSDP is not required** for the LocalFs file server. The gateway
-  pushes URIs to the Naim via `AVTransport`. The new server is just
-  an HTTP file server on its own port; no UPnP device advertisement
-  needed. (Running both servers is therefore safe — separate index
-  DBs, separate HTTP ports, SSDP multicast coexists by design.)
+  pushes URIs to the Naim via `AVTransport`; the file server is just
+  an HTTP server on its own port, with no device advertisement.
 - **The gateway's own SSDP announcer** (the "gateway-as-MediaServer
   for Naim playlists" feature, currently in `api_upnp.py`) is
   unaffected. It announces the *gateway's own* playlist tree, not
@@ -1985,103 +1867,22 @@ Each provider lives at `dlna_providers/<name>.py`:
 
 | File | Backend | Wire protocol | Notes |
 |---|---|---|---|
-| `dlna_providers/upnp.py` | AssetUPnP, MinimServer | UPnP SOAP (ContentDirectory) | Wraps the existing `dlna_content.py` + `dlna_discovery.py` paths. Becomes the FIRST provider extracted, by definition (it's all current behaviour). |
-| `dlna_providers/plex.py` | Plex Media Server | Plex HTTP API | Native API exposes richer metadata (ratings, playcount, smart playlists). Requires PLEX_TOKEN. |
-| `dlna_providers/jellyfin.py` | Jellyfin | Jellyfin/Emby HTTP API | Open-source equivalent to Plex. Token-based auth. |
-| `dlna_providers/localfs.py` | The new in-process backend | Filesystem + in-process HTTP file server | The destination of the migration. Owns SQLite index AND audio serving. |
+| `dlna_providers/upnp.py` | MinimServer, any UPnP server | UPnP SOAP (ContentDirectory) | Wraps `dlna_content.py` + `dlna_discovery.py`. |
+| `dlna_providers/localfs.py` | The in-process backend (live) | Filesystem + in-process HTTP file server | Owns the SQLite index AND audio serving. |
+| `dlna_providers/plex.py` / `jellyfin.py` | Plex / Jellyfin | Their HTTP APIs | **Not built** — weekend projects on the proven seam. |
 
-**Discovery vs. configuration.** UPnP providers are still discovered
-via SSDP (today's path). Plex / Jellyfin / LocalFs are configured
+**Discovery vs. configuration.** UPnP providers are discovered
+via SSDP. Plex / Jellyfin / LocalFs are configured
 via `config.json` because they have no SSDP advertisement (or, in
 LocalFs's case, no separate device). The provider registry chooses
 which implementation handles a given UDN based on the device's
 declared `name`/`model` or the explicit config block.
 
-### Mapping today's code to the seam
-
-Phase 0 is mechanical refactoring — no behaviour change:
-
-| Today | After Phase 0 |
-|---|---|
-| `dlna_content.cd_browse / cd_search` | `dlna_providers/upnp.py` (called via the seam) |
-| `dlna_indexer.Indexer._run` | unchanged; just calls `provider.list_albums(...)` instead of `cd_browse` directly |
-| `dlna_discovery.SERVERS` | gains a `provider:` field on each entry — points to the constructed `LibraryProvider` |
-| `dlna_player.RendererQueue._send_current` | unchanged; AVTransport `SetURI` still takes a `stream_url` string. The string just comes from `provider.stream_url(track_id)`. |
-
-The non-UPnP providers (`plex.py`, `jellyfin.py`, `localfs.py`) only
-appear in later phases.
-
-### Status — migration COMPLETE (2026-05-31)
-
-All phases P0–P6 are done and verified. AssetUPnP is decommissioned
-(switched off, its `tracks` rows deleted, playlists relinked to LocalFs
-via `tools/relink_playlists_to_localfs.py`). **RoHaLocalFS is the live
-backend**: in-process indexer + bit-perfect file server (`:8200`),
-folder-based album grouping, gapless auto-advance (Naim-verified). The
-`UpnpProvider` class is **kept** — it's how MinimServer / any generic
-UPnP server is supported going forward; only the AssetUPnP binary is
-retired.
-
-The detailed phase-by-phase record lives in `docs/MIGRATION_PLAN.md`.
-What shipped:
-
-- **P0–P1** — `LibraryProvider` seam + registry; `UpnpProvider` wraps the
-  existing UPnP SOAP path (no functional change).
-- **P2–P3** — `LocalFsProvider` (mutagen index, content-hashed track ids,
-  mtime/size cache) + `dlna_localfs_server.py` (Range-aware, DLNA-headered,
-  bit-perfect file server on `:8200`, embedded-art route).
-- **P4** — boot wiring (`dlna_localfs_wiring.maybe_start_localfs`), real
-  Naim-fetchable URLs, gapless via `SetNextAVTransportURI` + C6 TrackURI
-  auto-advance tracking.
-- **P5–P6** — ran live alongside AssetUPnP, then decommissioned it;
-  playlists/favourites relinked to LocalFs.
-
-Post-migration follow-ups: split-folder tidiness (optional) and the
-non-AssetUPnP providers (Plex/Jellyfin) as weekend projects on the
-proven seam — see Open questions below.
-
-**Library-completeness audit (2026-07-12).** LocalFs serves the same
-music root AssetUPnP did, so file-level completeness is disk vs index:
-26,129 audio files on disk, 25,893 tracks rows → **236 files invisible**
-to the gateway, all swallowed by the wide UNIQUE at insert time (140
-duplicate-edition copies in sibling folders + 96 distinct files with
-colliding tags). **RESOLVED same day** by widening the UNIQUE with
-`album_key` (`_migrate_widen_unique_album_key` — a beets-retag attempt
-failed first: chroma fingerprints rate-limited to 0 candidates AND the
-non-standard editions / off-MB scene comps never reach quiet-mode's
-strong-match bar). Post-migration force rescan: 25,893 → 26,051 rows.
-The remaining **78** unindexed files are SAME-folder same-tag collisions
-(alternate takes tagged identically, disc-subfolder folding putting two
-"Jamming"s in one album_key, untagged "NN Track.flac" junk) — genuine
-tag ambiguities; fix by real retagging (interactive `beets --timid`
-session) if ever worth it. The full audit report — and the proposed
-**audiobooks plan** (second LocalFs root + `playback_positions`
-cross-session resume; P1–P5) — was written up in a local-only report
-(`REPORTS.html`, kept on the maintainer's machine and deliberately not in
-the repo: it is this library's own numbers, not project documentation).
-The findings that matter are summarised right here. The bigger find: **10,859 of 10,890 manual
-`metadata_overrides` are ORPHANED** — 10,810 still key on dead AssetUPnP
-`:26125` URLs (the ~10k `improve_song_years` year corrections + user
-edits) and 49 on the old `:8201` LocalFs port, so the original-year
-display has been inert since the decommission. **RECOVERED same day** by
-`tools/relink_overrides_to_localfs.py` (see its section below): 46
-port-healed, 8,087 orphans transplanted onto 8,009 live URLs, 650
-orphaned notfound rows pruned; live manual overrides went 31 → 7,976 and
-`year_original` display works again. 2,726 unmatched orphans kept
-(inert). The 2026-05-31 playlist-relink casualties (744 removed rows)
-remain unrecoverable — no pre-relink backup survives.
-
 ### Open questions
 
-- **Plex/Jellyfin priority.** Build both in Phase 2-3 only if the
-  LocalFs path proves the seam works. If the seam's clean,
-  third-party providers become weekend projects, not a blocker
-  for the migration.
-- **Mixed-provider browse.** When the user has both an AssetUPnP
-  device AND a LocalFs library, does the PWA show two separate
-  trees or merge? Default: **separate trees, switchable from a
-  source picker**, mirroring today's per-UDN browse. Merge-view
-  is post-MVP.
+- **Mixed-provider browse.** With more than one source, the PWA shows
+  separate trees switchable from the source picker; a merged view is
+  not built.
 - ~~ReplayGain / loudness~~ — CLOSED 2026-07-12: pass tags through,
   never act on them (bit-perfect). Loudness normalization was built
   then removed (2026-05-31, negligible benefit in peak mode + broke
@@ -2118,27 +1919,12 @@ remain unrecoverable — no pre-relink backup survives.
 
 ### Audiophile notes
 
-**Sound quality: no change.** The Naim fetches the file over TCP,
-buffers it, and clocks it to its own DAC with its own clock. TCP
-is error-corrected, so identical bytes arrive regardless of which
-server sent them; the buffer absorbs network timing. A server
-delivering unmodified files has no path to the analog output
-other than "which bytes." Same bytes in → same sound out. The
-Phase 3 checksum makes this certain. ("Server X sounds warmer
-than server Y" does not apply to bit-identical local serving.)
-
-**The only two ways to make it *worse* than AssetUPnP** — both
-completeness, not capability:
-
-1. **Gapless.** AssetUPnP does it well; ours will only be as good
-   as the `SetNextAVTransportURI` queueing. This is the one
-   audible regression risk, and it bites hardest on segued /
-   continuous material. Test ruthlessly in Phase 4.
-2. **Format coverage.** AssetUPnP transparently handles DSD,
-   high-res PCM, ReplayGain tags, embedded art. The scanner must
-   read those tags and the server must serve DSD/high-res with
-   correct MIME so the Naim accepts them. Verify the exact Uniti
-   model's PCM/DSD ceiling so nothing is silently rejected.
+The Naim fetches the file over TCP, buffers it, and clocks it to its own
+DAC. Identical bytes in → identical sound out; the `sha256` check below
+makes that certain. The only audible risks are completeness, not
+capability: **gapless** (only as good as the `SetNextAVTransportURI`
+queueing — test on segued material) and **format coverage** (correct MIME
+so the Naim accepts high-res).
 
 ### Testing quick-reference
 
@@ -2148,19 +1934,18 @@ completeness, not capability:
   track boundaries.
 - **Format**: at least one each of FLAC 16/44, FLAC 24/96, FLAC
   24/192, DSF (DSD64), MP3.
-- **Multi-provider**: configure both UpnpProvider (against
-  AssetUPnP) and LocalFsProvider; verify both browse trees render
-  and both can play to the Naim.
+- **Multi-provider**: configure a UpnpProvider alongside
+  LocalFsProvider; verify both browse trees render and both can play
+  to the Naim.
 
 ## Dependencies
 
-**NOT all optional** — that changed at the 2.0 cutover and this section said
-otherwise until 2026-08-21. `requirements.txt` is the canonical list and
+**NOT all optional.** `requirements.txt` is the canonical list and
 explains each entry; the short version:
 
 | Package | Needed for |
 |---|---|
-| `fastapi` · `starlette` · `hypercorn` | **REQUIRED.** The gateway IS `dlna_asgi:app`; without these there is no server at all (the stdlib HTTP edge they once supplemented was deleted in Cleanup C). |
+| `fastapi` · `starlette` · `hypercorn` | **REQUIRED.** The gateway IS `dlna_asgi:app`; without these there is no server at all. |
 | `mutagen` | **Required by the LocalFs backend** — i.e. in practice. Absent, the gateway still boots and serves, and the scan fails loudly with the install command. Only a UPnP-provider setup runs without it. |
 | `watchdog` | Incremental rescans (`LocalFsProvider.watch_changes`). |
 | `Pillow` | Cover-art downscaling. Absent → full-resolution originals, i.e. slower, never broken. |
@@ -2177,7 +1962,7 @@ External CLI binaries — optional per feature:
 
 | Binary | Used by | Install |
 |---|---|---|
-| `fpcalc` (Chromaprint) | the **beets** enrichment tool (`tools/beets_enrich.py` via pyacoustid) — the in-process AcoustID worker was removed in 2.0 | `brew install chromaprint` |
+| `fpcalc` (Chromaprint) | the **beets** enrichment tool (`tools/beets_enrich.py` via pyacoustid) | `brew install chromaprint` |
 | `beet` (beets) | metadata enrichment batch (`tools/beets_enrich.py`) | `brew install beets` — NOT pip (Homebrew python upgrades wipe a pip install); then add `musicbrainzngs` + `pyacoustid` to the keg venv — see `requirements.txt` → "beets enrichment toolchain" |
 
 Both workers `_find_*()` walk Homebrew install locations explicitly because launchd-spawned processes have a minimal PATH; missing binaries are detected at scan-start and the worker bails without poisoning its sticky-negative cache.
@@ -2770,8 +2555,7 @@ GET /api/album_favourites/remove?artist=X&album=Y
 
 `api_upnp._gw_browse` exposes the gateway as a MediaServer the Naim browses
 directly (no PWA). **Root container "0" lists five children:** `Artists`,
-`Albums`, `Genres` (the **full library** — added 2026-06-12, since AssetUPnP's
-decommission left nothing for the Naim to browse the whole library over UPnP),
+`Albums`, `Genres` (the **full library**),
 then `⭐ Favourite Albums` and `Playlists` — plus a sixth, `📹 Videos`, only
 when GWMovies is enabled + populated.
 
@@ -2817,7 +2601,7 @@ show exactly what a client requests, in order:
   `M-SEARCH` so a control point's *active* search finds the server, not only a
   passively-caught NOTIFY.
 
-All four `/gw/*` route groups are native in `dlna_asgi.py` (Cleanup C) on the
+All four `/gw/*` route groups are native in `dlna_asgi.py` on the
 plain `:8765` bind. Regression-guarded by `tests/test_upnp_album_favourites.py`
 (`TestContentDirectorySCPD`, `TestContentDirectoryActions`, `TestConnectionManager`,
 `TestGenaEvents`, `TestMSearchResponder`).
@@ -3100,9 +2884,8 @@ The gateway is LAN-only except for album-art, artist-metadata, songwriting-credi
 | `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
 | `*.api.radio-browser.info` | Internet-radio station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&hidebroken=true` — see the "Internet radio" section |
 
-(`api.acoustid.org` was in this table until 2026-07-12 — the in-process
-AcoustID worker was removed in 2.0; beets calls AcoustID from its own
-process now. The key-types bullet below is kept for beets debugging.)
+(beets calls AcoustID from its own process; the key-types bullet below is
+kept for beets debugging.)
 
 Required contract:
 
@@ -3177,35 +2960,22 @@ immediately and is sticky for the rest of the queue.
 | `tests/test_player_volume.py` | first track sets `STARTUP_VOLUME` once, GetVolume never called, no per-track re-assert, trim composes around the baseline, trim resets on a new queue |
 | `tests/frontend/test_vol_extras.py` | UPnP volume body asserts `action=trim_db` (relative offset, not absolute) + `device="upnp:<udn>"` |
 
-## Metadata enrichment via AcoustID (REMOVED in 2.0)
+## `metadata_overrides` invariants
 
-> **⛔ REMOVED (2026-06-11).** The in-process AcoustID worker is gone — under
-> Option A, **beets is the sole metadata authority** (see "beets vs the
-> AcoustID worker"). Deleted: `dlna_acoustid.py`, the `ACOUSTID_FETCHER`
-> singleton + wiring, the `/api/acoustid/*` endpoints, the worker-only
-> LibraryDB methods, and the weekly retry agent. **Still present (data, not
-> the worker):** the `metadata_overrides` table incl. historical
-> `source='acoustid'` rows, and the tools that operate on them
-> (`tools/post_beets_reindex.py` clears acoustid rows after a beets run;
-> `audit_override_mismatches.py`, `correct_year_drift.py`,
-> `improve_song_years.py`, `find_duplicate_audio.py` read them).
->
-> Still-relevant invariants that OUTLIVED the worker:
-> - `metadata_overrides.source ∈ {manual, acoustid, notfound, video_skip}`;
->   a row of ANY source means "processed"; `manual` always wins; sticky
->   negatives are released by deleting the row.
-> - The 16/24-bit duplicate handling (wide UNIQUE incl. bit_depth/
->   sample_rate + `_dedup_clause` browse filter + `idx_tracks_udn_url`) is
->   ACTIVE schema behaviour documented in the "Database Schema" section
->   comments and `tests/test_dedup.py`.
-> - Year model: `tracks.year` = file-tag year; `metadata_overrides.year` =
->   original release year; display prefers the override
->   (`_renderNpYear`, "(remastered)" at 3+ year gap); guarded by
->   `tests/test_year.py`.
->
-> The full historical write-up (worker design, transient-vs-permanent
-> failure split, confidence threshold, weekly retry agent, backfill
-> procedures) is in git history: `git show 7478064^:CLAUDE.md`.
+beets is the sole metadata authority (see `tools/beets_enrich.py`); there is
+no in-process tagger. Historical `source='acoustid'` rows remain as data —
+`tools/post_beets_reindex.py` clears them after a beets run so file tags show
+through.
+
+- `metadata_overrides.source ∈ {manual, acoustid, notfound, video_skip}`;
+  a row of ANY source means "processed"; `manual` always wins; sticky
+  negatives are released by deleting the row.
+- The 16/24-bit duplicate handling (wide UNIQUE incl. bit_depth/
+  sample_rate + `_dedup_clause` browse filter + `idx_tracks_udn_url`) is
+  documented in the "Database Schema" comments and `tests/test_dedup.py`.
+- Year model: `tracks.year` = file-tag year; `metadata_overrides.year` =
+  original release year; display prefers the override
+  (`_renderNpYear`, "(remastered)" at 3+ year gap); `tests/test_year.py`.
 
 ## Bit-perfect notes
 
@@ -3214,7 +2984,7 @@ No resampler, EQ, mixer, or DSP exists anywhere in the playback
 code. Confirmed by audit on 2026-05-11.
 
 **Naim / UPnP path.** The gateway is not in the audio path. The file
-server (RoHaLocalFS since the 2026-05-31 migration; AssetUPnP before it)
+server (RoHaLocalFS)
 serves bytes directly to the renderer; the gateway only sends
 `AVTransport::SetURI` + `Play` SOAP. The startup volume and the user
 trim slider are applied via `RenderingControl::SetVolume` SOAP, which
@@ -3372,11 +3142,10 @@ python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --hard-delete -y
 
 The gateway frontend never references files in the music root
 directly — every `tracks.art` and `album_art.art_url` value in
-`library.db` is `http://` or `https://` (AssetUPnP-served or Cover
-Art Archive). Album art is fetched through `/art` proxying an HTTP
-URL, never a filesystem path. Music-less directories are also
-not indexed by AssetUPnP (it indexes albums = folders with audio
-files), so they have no entry in the gateway DB at all. Pruning
+`library.db` is `http://` or `https://` (the LocalFs file server or
+Cover Art Archive). Album art is fetched through `/art` proxying an
+HTTP URL, never a filesystem path. Music-less directories hold no
+audio, so the indexer has no entry for them at all. Pruning
 them is invisible to the gateway.
 
 #### Tests
@@ -3552,88 +3321,6 @@ unreadable files recorded separately (not auto-deleted). Run standalone:
 
 ```bash
 python3 -m unittest tools.test_find_corrupt_audio -v
-```
-
-### `tools/find_duplicate_audio.py`
-
-Finds **duplicate audio FILES on disk** — two or more physical files
-that AcoustID identified as the same recording (same post-correction
-`(artist, album, title)` in `metadata_overrides`). Surfaced 2026-05-27
-after the full re-fingerprint pass left ~20k unsynced "phantom"
-tracks (same recording on disk multiple times — different folders /
-formats / sources, all matched by fingerprint to the same metadata).
-
-#### Winner-selection ranking
-
-Within each duplicate group the tool picks ONE winner to keep; the
-rest are loser candidates:
-
-1. Higher `bit_depth` (24 > 16)
-2. Higher `sample_rate` (96000 > 44100)
-3. Larger `file_size` (proxy for less compression / higher bitrate)
-4. Alphabetical URL (deterministic tiebreaker)
-
-NULL bit_depth / sample_rate count as 0 (lowest) so any quality-tagged
-row beats an untagged one.
-
-#### "Lose nothing" guarantee
-
-- **Single-file groups** (unique recordings) are NEVER touched.
-- A 16-bit file is kept whenever it's the only copy of its recording.
-- Default mode is REPORT ONLY — writes `duplicate-audio.txt` and exits.
-- `--trash` moves loser files to macOS Trash via `osascript` (recoverable from Finder for ~30 days).
-- `--hard-delete` is opt-in permanent `unlink()` (NOT recoverable).
-- `--trash` / `--hard-delete` both require confirmation prompt unless `-y`.
-- Ambiguous URL→path mappings (multiple disk files with the same Content-Length) and missing matches are flagged in the report and SKIPPED from any action.
-
-#### URL→path mapping
-
-AssetUPnP URLs don't expose file paths. The tool reconstructs the
-mapping by:
-1. HTTP HEAD each URL → `Content-Length`.
-2. Walk SAMDATA → `{file_size_bytes: [Path, ...]}` index.
-3. Match each URL's Content-Length to disk files. Exactly one match → confident. Multiple → ambiguous, skip with warning. None → missing.
-
-File size is essentially unique for multi-MB audio files; collisions
-on short MP3s are rare and reported rather than guessed.
-
-#### Usage
-
-```bash
-# Default — scan, build the report, no action:
-python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music
-
-# Verbose (per-URL ambiguity / not-found logs):
-python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music -v
-
-# Move losers to Trash, with confirmation:
-python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --trash
-
-# Non-interactive permanent delete (NOT recoverable):
-python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --hard-delete -y
-```
-
-#### Post-cleanup workflow
-
-After trashing duplicate files:
-1. **Rescan AssetUPnP** so it drops the now-missing URLs from its UPnP responses.
-2. **Trigger a gateway rebuild-index** (`POST /api/index/rebuild` or PWA → settings → Rebuild). The indexer's `clear(udn)` wipes the old `tracks` rows and re-crawls AssetUPnP cleanly.
-3. **`metadata_overrides` is unaffected** — keyed by URL; the rows for deleted files become orphans, harmless. (Prune orphans later with manual SQL if desired.)
-
-#### Tests
-
-`tools/test_find_duplicate_audio.py` — 24 tests over a throw-away DB
-+ tempdir. Cover: duplicate-group identification (only acoustid source,
-only ≥2 members, NULL/empty metadata excluded), ranking algorithm
-(bit_depth wins > sample_rate within bit-depth > file size within
-quality > alpha tiebreaker, NULL counted as 0), disk walk (size index
-correctness, non-audio skipped, zero-size skipped, symlinks not
-followed), URL→path resolution (unique-size confident, ambiguous-size
-skipped, missing-size reported), report file shape (KEEP / TRASH
-markers, metadata + path columns).
-
-```bash
-python3 -m unittest tools.test_find_duplicate_audio -v
 ```
 
 ### `tools/immich_import.py`
@@ -3990,7 +3677,7 @@ hands that 404 to `<audio>` as audio — see **Two things the relay must keep
 doing** — but the row stays dead until it is repaired, which is what this is
 for.)
 
-Matching ladder, same as the 2.0 migration tools, both sides normalised
+Matching ladder, both sides normalised
 (diacritics, smart quotes, case, whitespace) so a retag doesn't break it:
 **(artist, album, title)** strong → **(artist, title)** song-level (the album
 name legitimately differs between a compilation and the original release).
@@ -4017,208 +3704,13 @@ port change healed `metadata_overrides` but nobody healed playlists) — and
 **2 kept**: two whole-album Harmonium files since split into per-track files,
 which have no single successor row and are the owner's call to re-add.
 
-### `tools/relink_orphan_overrides.py`
+### One-shot migration tools (historical)
 
-Recovers orphan `metadata_overrides` rows after an AssetUPnP rescan
-rotated co-hashes. AssetUPnP URLs look like
-`…/c2/b16/f44100/d<track-id>-co<container-hash>.ext`. After a major
-rescan, the indexer crawls in brand-new URLs and every existing
-`metadata_overrides` row points at the OLD URL the indexer no longer
-sees. The tool matches orphans → current bare tracks by **d-id +
-fuzzy (artist, title)** and rewrites `metadata_overrides.url` in place.
-
-Surfaced 2026-05-27 when a duplicate-cleanup-driven AssetUPnP rescan
-left 37,943 metadata_overrides rows orphaned; the d-id relink
-recovered 19,149 of them (the other 18,794 were genuinely
-trashed-file casualties, since pruned).
-
-#### d-id is NOT a per-file identifier
-
-Surfaced 2026-05-28: d-id collides systematically. Of 22,394 distinct
-d-ids in the live library, ~9,200 (~41%) appear in tracks with
-multiple `(artist, title)` pairs. Categories: same song on two
-albums (compilations), same album's adjacent tracks (e.g. 3 Doors
-Down's Kryptonite + Down Poison sharing `d-4591903772373150829`),
-and same file indexed via two browse-tree paths with different
-tags. AssetUPnP's d-id is closer to "(album-bucket, track-position)
-hash" than to "physical-file hash".
-
-Therefore relinking by d-id alone WOULD silently re-attach overrides
-to wrong tracks. The tool now requires BOTH d-id match AND a fuzzy
-similarity ≥ `_FUZZY_FLOOR` (0.55) on normalised `(artist, title)`.
-Punctuation/diacritics/bracketed annotations are stripped before
-comparison; collaboration-credit variation (`"A; B"` vs `"A feat. B"`)
-passes; truly-different songs fail.
-
-For damage from earlier d-id-only relinks, see
-`tools/audit_override_mismatches.py`.
-
-#### Safety
-
-- **Dry-run by default.** `--apply` is opt-in.
-- Idempotent — a second run finds no orphans and does nothing.
-- d-ids that resolve to multiple bare tracks (shouldn't happen given
-  `UNIQUE(udn,url)`, but defended against) are reported as
-  `ambiguous` and skipped.
-- Two orphans claiming the same new URL: first wins, second skipped
-  as `ambiguous`.
-- URLs without a recognisable d-id (non-AssetUPnP / hand-edited) are
-  counted as `no_d` and left alone.
-- **mismatch** (NEW): d-id matched but fuzzy (artist, title) check
-  failed — skipped, reported as `mismatch`.
-
-#### Usage
-
-```bash
-# Dry-run (default) — preview what would be relinked:
-python3 tools/relink_orphan_overrides.py
-
-# Apply the relinks:
-python3 tools/relink_orphan_overrides.py --apply
-
-# Custom DB path:
-python3 tools/relink_orphan_overrides.py --db /path/to/library.db --apply
-```
-
-#### Tests
-
-`tools/test_relink_orphan_overrides.py` — 16 unit tests over a
-throw-away temp DB. Cover: `_d_id` parsing (positive + negative
-ids, non-AssetUPnP URLs); co-hash rotation relink; dry-run does
-not mutate; no-match (trashed file) reported as `no_match`; missing
-d-id reported as `no_d`; idempotent (second run is a no-op);
-ambiguous d-id skipped; two orphans for the same d-id → one
-relinks, one ambiguous; **fuzzy-match guard** — genuine collision
-blocked, punctuation difference accepted, collaboration-credit
-variation accepted, bracketed annotation ignored, completely-
-different song blocked, empty metadata treated as mismatch.
-
-```bash
-python3 -m unittest tools.test_relink_orphan_overrides -v
-```
-
-### `tools/relink_playlists_to_localfs.py`
-
-Repoints `playlist_tracks` (and the `__favourites__` playlist) at
-RoHaLocalFS after AssetUPnP is decommissioned. When the UPnP backend is
-switched off, every playlist row still holds its dead
-`http://<host>:26125/...` URL and playback times out
-(`proxy_stream … reason=error:TimeoutError`). The tool rewrites each
-row's `url` + `art` to the matching LocalFs track by NORMALISED metadata —
-(artist, album, title) strong, then (artist, title) song-level (album
-differs: compilation vs original, AcoustID-corrected album) — and
-**removes** rows with no LocalFs match (the migration consequence: those
-files aren't in the LocalFs library, which is a subset of what AssetUPnP
-served). Rows that would collide on `UNIQUE(pl_id, url)` after a relink
-are removed as duplicates. Also prunes `album_favourites` that no longer
-match any LocalFs album.
-
-A "LocalFs row" is any url containing `/localfs/stream/`, so already-
-relinked rows are skipped — **idempotent**. DRY-RUN by default; `--apply`
-mutates and auto-backs-up `library.db` first (`--no-backup` to skip,
-`-y` to skip the prompt, `--no-prune-favs` to keep orphan album favs).
-
-First real run (2026-05-31, 2,044 dead rows): relinked 1,260 (367 strong
-+ 893 song), removed 784 (744 no-match + 40 dup), pruned 95 album favs.
-
-```bash
-python3 tools/relink_playlists_to_localfs.py            # dry-run
-python3 tools/relink_playlists_to_localfs.py --apply    # backup + commit
-python3 -m unittest tools.test_relink_playlists_to_localfs -v
-```
-
-### `tools/relink_overrides_to_localfs.py`
-
-Recovers the ORPHANED `metadata_overrides` found by the 2026-07-12
-completeness audit: 10,859 of 10,890 manual rows keyed on dead URLs
-(10,810 AssetUPnP `:26125` — the improve_song_years / correct_year_drift
-original-year corrections — plus 49 on the pre-cutover `:8201` LocalFs
-port), all inert since the decommission because the COALESCE pass and
-`/api/track_meta` match by exact URL.
-
-Two modes, deliberately different:
-
-- **Port-heal** (`…/localfs/stream/<id>` orphans): the id is the stable
-  LocalFs obj_id → exact same-file match; the WHOLE row is repointed,
-  fields intact.
-- **Year transplant** (all other manual orphans): matched by normalised
-  (artist, title) against current LocalFs tracks; ONLY THE YEAR moves —
-  as a fresh year-only `source='manual'` row on every matching track's
-  URL (multi-match fans out, same per-recording semantic as
-  improve_song_years; capped at 25 to skip junk keys). The orphan's
-  artist/album/title/genre are **deliberately dropped**: they're mostly
-  AcoustID-era values the improve_song_years merge carried along, and
-  relinking them would re-lay stale metadata over beets' file tags on the
-  next rescan (the masking problem post_beets_reindex.py fights). Year is
-  safe — display-only, never COALESCEd into `tracks`. Trade-off: genuine
-  pre-decommission hand edits to artist/title text are not recovered
-  (indistinguishable from the merged AcoustID fields).
-
-Never overwrites: an existing row with a non-NULL year always wins (a
-NULL-year row gets filled, other fields untouched). Consumed orphans are
-deleted; unmatched manual orphans are kept (inert) unless
-`--prune-unmatched`; orphaned `notfound` rows are pruned by default
-(`--no-prune-notfound` to keep). Idempotent — a second run no-ops.
-DRY-RUN by default; `--apply` auto-backs-up `library.db`.
-
-First real run (2026-07-12, 11,509 orphans): 46 port-healed, 8,087
-transplanted onto 8,009 live URLs (7,899 inserts + 110 fills), 650
-notfound pruned, 2,726 unmatched kept. Live manual overrides went
-31 → 7,976; `year_original` display verified working immediately (no
-restart needed — read path). Backup:
-`library.db.bak-ovrelink-20260712-162540`.
-
-```bash
-python3 tools/relink_overrides_to_localfs.py            # dry-run
-python3 tools/relink_overrides_to_localfs.py --apply    # backup + commit
-python3 -m unittest tools.test_relink_overrides_to_localfs -v   # 16 tests
-```
-
-### `tools/audit_override_mismatches.py`
-
-Repairs damage from past d-id-collision-driven mis-relinks (see the
-**d-id is NOT a per-file identifier** note in
-`tools/relink_orphan_overrides.py`). For each `acoustid` override
-row, computes a fuzzy similarity (artist + title) against the joined
-`tracks` row. Rows where **both** scores fall below the floor (0.55)
-are deleted, freeing the URL so the AcoustID worker re-fingerprints
-it on the next pass.
-
-#### Conservative-by-design
-
-- Source `manual` is **never** touched (the user knows best).
-- BOTH artist AND title must score < 0.55 — a same-artist-but-wrong-
-  title mismatch (e.g. 3 Doors Down's Kryptonite override on a
-  Down Poison track) is NOT flagged. That asymmetry is intentional:
-  these cases overlap with AcoustID's natural fingerprint mismatches,
-  and the worker will resolve them on its own next pass.
-- Dry-run by default; `--clean` deletes the suspect rows.
-- The fuzzy floor is shared verbatim with
-  `tools/relink_orphan_overrides.py` so a row that this tool flags
-  as suspect is *also* one that the relink tool would now refuse
-  to create. The two stay in sync.
-
-#### Usage
-
-```bash
-python3 tools/audit_override_mismatches.py             # dry-run, top 30
-python3 tools/audit_override_mismatches.py --top 0     # full list
-python3 tools/audit_override_mismatches.py --clean     # confirm prompt
-python3 tools/audit_override_mismatches.py --clean -y  # non-interactive
-```
-
-#### Tests
-
-`tools/test_audit_override_mismatches.py` — 9 tests covering exact
-match / punctuation difference / collaboration-credit variation /
-bracketed annotations (all NOT suspect), completely-different-song
-suspect, same-album-different-song NOT suspect (conservative),
-manual override never touched, `delete_suspects` removes only
-`source='acoustid'`.
-
-```bash
-python3 -m unittest tools.test_audit_override_mismatches -v
-```
+`tools/relink_orphan_overrides.py`, `tools/audit_override_mismatches.py`,
+`tools/find_duplicate_audio.py`, `tools/relink_playlists_to_localfs.py` and
+`tools/relink_overrides_to_localfs.py` worked on the previous backend's
+URLs during the move to LocalFs. They have done their job; each carries its own
+docstring and tests if ever needed again.
 
 ### `tools/correct_year_drift.py`
 
@@ -4416,8 +3908,7 @@ Runs the **beets tag-in-place enrichment batch** described in
 tags + MBIDs **into the files**, in place; the existing mutagen indexer
 then picks them up on the next re-index. beets is an *upstream batch
 stage*, never a live metadata authority (routing the serve path at a
-beets/Jellyfin DB would re-create the AssetUPnP dual-source-of-truth
-problem). This tool is a thin, safe wrapper around the external `beet`
+beets/Jellyfin DB would create a second source of truth). This tool is a thin, safe wrapper around the external `beet`
 CLI — it does not reimplement beets.
 
 #### The one non-negotiable invariant — tag IN PLACE
@@ -4569,13 +4060,6 @@ year-drift / `improve_song_years` corrections) is NEVER touched — those
 legitimately win over beets. `notfound` / `video_skip` rows carry NULL
 metadata so they mask nothing and are left alone.
 
-**The old ACOUSTID_API_KEY guard is GONE (2.0).** It used to refuse to
-clear while the in-process AcoustID worker was live, because that
-worker's 120 s startup scan would re-fingerprint every now-bare track and
-re-create the overrides, re-masking beets. The worker was removed in 2.0,
-so the clear is now unconditionally safe — the guard and its
-`--ignore-acoustid-key` escape hatch were both deleted with it.
-
 DRY-RUN by default (prints the override breakdown + planned actions);
 `--apply` deletes + reindexes, auto-backing-up `library.db` first.
 
@@ -4594,35 +4078,10 @@ dry-run no-op, default-is-dry-run, backup-on-apply, clean-only under
 `--no-reindex`, `--no-clean`+`--no-reindex` rejected, missing DB fails
 cleanly).
 
-### beets vs the AcoustID worker — Option A (chosen 2026-06-03)
+### Steady-state workflow for new music
 
-beets and the in-process `AcoustIDFetcher` do the **same job** (fingerprint
-→ MusicBrainz → metadata) and **collide**: both are metadata authorities,
-and the AcoustID override outranks beets' file tags via the COALESCE pass.
-beets is the strictly-better tagger (writes real tags + MBIDs into the
-canonical place — the files — with album-level matching and art embedding),
-and AcoustID can't do better on the hard cases (same `fpcalc`+MusicBrainz
-path; also can't fingerprint DSD). So they are **not** complementary —
-pick one.
-
-**Option A is chosen: beets is the sole metadata authority; the AcoustID
-worker stays OFF.** Concretely:
-
-- `ACOUSTID_API_KEY` is left **unset** in launchd, so `AcoustIDFetcher`
-  no-ops (its startup scan is disabled, `run_once` returns immediately).
-- The weekly `com.roha.dlna-acoustid-retry` LaunchAgent is **unloaded**
-  (`launchctl bootout gui/$(id -u)/com.roha.dlna-acoustid-retry`).
-- Steady-state workflow for new music: drop files → `beets_enrich.py
-  --quiet` (incremental — only new folders; already-seen dirs need
-  `--revisit`) → `post_beets_reindex.py --apply`.
-
-**Fully removed in 2.0 (2026-06-11):** the `dlna_acoustid.py` module, the
-`ACOUSTID_FETCHER` singleton + all its wiring, the `/api/acoustid/*` endpoints,
-and the weekly retry agent are gone — beets is now the only metadata path. The
-~52k historical `acoustid` `metadata_overrides` rows remain as data, and
-`post_beets_reindex.py` still clears them after a beets run so the file tags show
-through. (Because the worker no longer exists, that clear is now unconditionally
-safe — the old "refuse while the worker is live" guard was removed too.)
+Drop files → `beets_enrich.py --quiet` (incremental — only new folders;
+already-seen dirs need `--revisit`) → `post_beets_reindex.py --apply`.
 
 ## Audiobooks (P1+P2 shipped 2026-07-13; P3–P5 planned)
 
@@ -4747,25 +4206,24 @@ cleanly — unlike UPnP's SSDP multicast discovery which doesn't.
 
 ### What the iOS client sees
 
-The Subsonic client connects to **the gateway**, not AssetUPnP. The
-flow:
+The Subsonic client connects to **the gateway**. The flow:
 
 ```
 iPhone Subsonic client (CarPlay)
     ↓ HTTPS over Tailscale
 dlna-gateway  /rest/*
     ↓ library.db reads for browse/playlists/favourites/search
-    ↓ proxies audio bytes from AssetUPnP for /rest/stream
-AssetUPnP (invisible to the client; just a byte source)
+    ↓ relays audio bytes from the LocalFs file server for /rest/stream
+RoHaLocalFS :8200 (invisible to the client; just a byte source)
 ```
 
 Every piece of gateway state is exposed:
-- Tracks, artists, albums (as indexed from AssetUPnP into library.db).
+- Tracks, artists, albums (as indexed into library.db).
 - User playlists + the existing `__favourites__` track-level playlist.
 - `album_favourites` is exposed as Subsonic's "starred albums".
 - `play_counts` increments via `/rest/scrobble` so radio bias keeps
   working from cars too.
-- Cover art (gateway's `album_art` cache + AssetUPnP-served art via
+- Cover art (gateway's `album_art` cache + embedded art via
   the existing `/art` proxy).
 
 Lyrics aren't exposed (not in the Subsonic spec); still work in the
