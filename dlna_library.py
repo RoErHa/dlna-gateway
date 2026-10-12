@@ -16,6 +16,7 @@ roles, schema DDL and migrations.
     dlna_library_browse.py        BrowseMixin       artists/albums/genres/search/radio
     dlna_library_videos.py        VideosMixin       GWMovies index + geocode cache
     dlna_library_collections.py   CollectionsMixin  playlists/favs/lyrics/positions
+    dlna_library_languages.py     LanguagesMixin    audiobook language (🌐)
 
 MIXINS, NOT COLLABORATORS — deliberately. The composed class keeps the
 exact same public surface, so every `DB.<method>` call site (~240 of
@@ -60,6 +61,7 @@ from dlna_library_browse import BrowseMixin
 from dlna_library_artists import ArtistsMixin
 from dlna_library_credits import CreditsMixin
 from dlna_library_collections import CollectionsMixin
+from dlna_library_languages import LanguagesMixin
 from dlna_library_migrations import MigrationsMixin
 from dlna_library_schema import SchemaMixin
 from dlna_library_tracks import TracksMixin
@@ -84,7 +86,8 @@ log = logging.getLogger("dlna.library")
 
 class LibraryDB(SchemaMixin, MigrationsMixin, TracksMixin,
                ArtistsMixin, CreditsMixin,
-                BrowseMixin, VideosMixin, CollectionsMixin):
+                BrowseMixin, VideosMixin, CollectionsMixin,
+                LanguagesMixin):
     """
     Thread-safe SQLite wrapper for:
       - Track index (tracks + FTS5)          → TracksMixin / BrowseMixin

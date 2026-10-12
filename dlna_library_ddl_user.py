@@ -113,6 +113,19 @@ SCHEMA_USER = """
                     source     TEXT NOT NULL,
                     fetched_at INTEGER NOT NULL
                 );
+                -- Audiobook language, where something ASSERTED it
+                -- (2026-10-12). source 'tag' = the file's own language
+                -- tag (tools/book_language.py --tags); 'manual' = set by
+                -- hand, and always wins. A DETECTED language is never
+                -- stored: dlna_book_language derives it on read from the
+                -- titles, so it can never go stale. language is ISO
+                -- 639-1 ('en', 'nl', …). Survives clear(udn).
+                CREATE TABLE IF NOT EXISTS book_language (
+                    album_key  TEXT PRIMARY KEY,
+                    language   TEXT NOT NULL,
+                    source     TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
                 -- User-favourited internet-radio stations. Capped at
                 -- RADIO_FAV_MAX (25), enforced server-side in
                 -- radio_fav_add(). Identity = radio-browser stationuuid,

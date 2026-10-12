@@ -327,9 +327,10 @@ input[type=range].vol:hover::-webkit-slider-thumb{background:var(--amber)}
 .player-row .pl-platform{font-size:var(--fs-micro);color:var(--ink-dim);background:var(--raised);border-radius:4px;padding:1px 5px;flex-shrink:0}
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
 .edit-field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.edit-field[hidden]{display:none}   /* display:flex above would beat the attribute */
 .edit-field label{font-size:var(--fs-micro);color:var(--ink-dim);letter-spacing:.06em;text-transform:uppercase}
-.edit-field input{background:var(--raised);border:1px solid var(--border);border-radius:var(--r);color:var(--ink);font-family:var(--fm);font-size:12px;padding:7px 10px;outline:none;width:100%;box-sizing:border-box}
-.edit-field input:focus{border-color:var(--amber)}
+.edit-field input,.edit-field select{background:var(--raised);border:1px solid var(--border);border-radius:var(--r);color:var(--ink);font-family:var(--fm);font-size:12px;padding:7px 10px;outline:none;width:100%;box-sizing:border-box}
+.edit-field input:focus,.edit-field select:focus{border-color:var(--amber)}
 /* ── Browse mode bar ─────────────────────────────────────────── */
 .browse-modes{display:flex;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--raised)}
 .browse-mode{flex:1;padding:11px 6px;font-size:12px;font-weight:600;font-family:var(--fh);text-align:center;cursor:pointer;color:var(--ink-dim);border-bottom:2px solid transparent;letter-spacing:.02em;transition:color .15s,border-color .15s;-webkit-tap-highlight-color:transparent;user-select:none}

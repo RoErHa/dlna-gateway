@@ -94,7 +94,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **104/104 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **107/107 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -378,7 +378,7 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_schema.py` | `SchemaMixin` — the startup sequence (create → alter → migrate → seed) + the Phase-A album-art sibling backfill. Regenerate `schema.sql` after changes. |
 | `dlna_library_ddl.py` | Composition root for the DDL — `SCHEMA_DDL` (concatenated from the three modules below) + `ADD_COLUMN_SQL`. Split 2026-09-20 at 399/400 lines. No logic. |
 | `dlna_library_ddl_index.py` | The DERIVED half: `tracks`, FTS5 + sync triggers, `localfs_files`, `index_meta`. Every row here is regenerable by re-reading the music. Concatenated FIRST — the FTS triggers reference `tracks`. |
-| `dlna_library_ddl_user.py` | The half that SURVIVES a rebuild — the twelve tables `clear(udn)` must never touch. Authored by a person, or earned at real cost (Cover Art Archive, lrclib, ~1.2 s per MusicBrainz id). If a table belongs here, adding it to a clear path is data loss, not tidying. |
+| `dlna_library_ddl_user.py` | The half that SURVIVES a rebuild — the thirteen tables `clear(udn)` must never touch. Authored by a person, or earned at real cost (Cover Art Archive, lrclib, ~1.2 s per MusicBrainz id). If a table belongs here, adding it to a clear path is data loss, not tidying. |
 | `dlna_library_ddl_video.py` | GWMovies, geocode cache, location overrides, Immich people. Separate because a different client browses it, a different worker fills it, and it carries the project's only privacy-relevant outbound call. |
 | `dlna_library_migrations.py` | `MigrationsMixin` — the in-place migrations + `repair_fts`/`run_with_fts_heal` (the FTS5 shadow-table corruption recovery). |
 | `dlna_library_unique.py` | `UniqueMigrationsMixin` — the three migrations that WIDEN the `tracks` UNIQUE by rebuilding the table. Grouped because each DROPs the FTS triggers and must recreate them, and all three must run before `tracks_au` is added on top. |
@@ -396,6 +396,9 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_artists.py` | `ArtistsMixin` — the artist → MBID store, the display facts, and the band line-up. Same `clear(udn)` contract as `album_art`: each row cost a rate-limited round-trip. |
 | `dlna_artist_infer.py` | The pure decision "can we say who performed this, without guessing?" — SHARED by `tools/artist_from_folder.py` (writes the tag) and the worklist sweep (takes what is left), so the two can never disagree. |
 | `dlna_library_worklist.py` | `WorklistMixin` — the "- Unknown Artists -" hand-editing worklist: the one place the gateway admits it cannot do a job in code. Split from `collections` 2026-08-25 when the sweep pushed it past 400 lines. |
+| `dlna_library_languages.py` | `LanguagesMixin` — which language each audiobook is in, for the PWA's 🌐 letter-bar entry. ASSERTED languages (a file tag, or set by hand) live in `book_language`; a DETECTED one is derived on every read and never stored. See **[Audiobooks by language](#audiobooks-by-language--the--entry-2026-10-12)**. |
+| `dlna_book_language.py` | The pure decision "what language is this book written in?" over its path, album tag and chapter titles — and `normalize_language`, which turns a tag value or a typed code into ISO 639-1. Refuses rather than guesses: a book the words do not decide is Unknown. |
+| `dlna_asgi_books.py` | `GET /api/book_languages` + `GET /api/book_language_albums` — the 🌐 view. Its own module because `dlna_asgi_browse.py` sits at its budget. |
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
 | `dlna_library_radio.py` | `RadioFavouritesMixin` — the saved internet-radio stations. Enforces the 25-station cap SERVER-side (`DB.RADIO_FAV_MAX`); same `clear(udn)` survival contract. |
 | `dlna_indexer.py` | `Indexer` — background crawler that walks a MediaServer and populates LibraryDB |
@@ -629,6 +632,12 @@ video_location_overrides(video_id, location_name, country, source, updated_at)
   would wipe them otherwise); RE-APPLIED at the end of every video scan
   (dlna_video_index.apply_location_overrides). 'manual' beats inferred;
   a row NEVER overwrites a real-GPS video; embedded titles never rewritten.
+book_language(album_key, language, source, updated_at)
+  PRIMARY KEY (album_key) — an audiobook's language where something
+  ASSERTED it: source ∈ {'tag', 'manual'}, 'manual' always wins.
+  language is ISO 639-1. A DETECTED language is never stored — it is
+  derived on read (dlna_book_language), so it cannot go stale.
+  Survives clear(udn). See "Audiobooks by language".
 video_people(video_id, person, person_id, updated_at)
   PRIMARY KEY (video_id, person) — Immich person tags, synced by
   tools/immich_people_sync.py (per-person REPLACE semantics). Survives
@@ -3489,6 +3498,27 @@ python3 -m unittest tools.test_openlibrary_books -v    # 36 tests
 sqlite3 library.db "DELETE FROM book_meta WHERE source='notfound' AND album_key='…'"
 ```
 
+### `tools/book_language.py`
+
+Reports the language of every audiobook, and settles the Unknowns (see
+**Audiobooks by language**). Writes only `book_language`; never a file,
+never `tracks`. DRY-RUN by default.
+
+- `--tags` reads each book's first file for a language tag (ID3 `TLAN`,
+  an MP4/Vorbis `language` field) and stores it as `source='tag'`.
+- `--set XX --match TEXT` stores `XX` as `manual` for every book whose
+  folder contains TEXT (case-insensitive). `--set` without `--match` is
+  refused — it would touch every book.
+- `--unknown-only` narrows either to the books currently Unknown.
+- `--clear --match TEXT` hands books back to detection.
+
+```bash
+python3 tools/book_language.py                    # tally + the Unknown list
+python3 tools/book_language.py --tags --apply
+python3 tools/book_language.py --set en --match "Top 100 Sci-Fi" --unknown-only --apply
+python3 -m unittest tools.test_book_language -v   # 6 tests
+```
+
 ### `tools/compilation_playlists.py`
 
 Creates playlists for **scattered compilation albums** — an album TAG
@@ -4225,6 +4255,64 @@ orphan rows are skipped. Cross-path consistency is regression-tested
   Garbled ids → empty container. `tests/test_upnp_audiobooks.py`.
 - **Sleep timer**: `#ab-sleep` select (off/15/30/45/60 min, book mode)
   → pause + position save when it fires.
+
+### Audiobooks by language — the 🌐 entry (2026-10-12)
+
+The audiobooks source's letter bar reads `📖 🌐 ⭐ # 0 A…Z`. 🌐 lists
+the languages, each named in itself via the browser's
+`Intl.DisplayNames` ("Nederlands", "English"), and opens to that
+language's books. PWA only — not on the Naim tree or Subsonic.
+
+**The evidence is thin, and that shaped everything.** Measured over 491
+books: **7 carry a language tag** (all "English"). OpenLibrary is no
+help — a work has editions in many languages, which is how translated
+series names got into `book_meta` before the English/Dutch rule. So the
+language is DETECTED from the words the book already carries (folder,
+album tag, chapter titles) by `dlna_book_language.detect_language`, and
+answers **Unknown when they do not decide it**. Live first pass: 431
+English, **9 Dutch** (exactly the Dutch LibriVox books), 51 Unknown —
+nearly all of them titles that are just a name (*Neuromancer*, *Dune*).
+
+Rules each learned from that pass — all tests in
+`tests/test_book_language.py` (28):
+- **A capitalised name is not evidence.** "Dan" is Dutch for "then",
+  and Dan Simmons' *Hyperion* came out Dutch because his name is in
+  every album tag. The capitalised words of the author/artist names are
+  dropped wherever they appear.
+- **…but a name's lowercase connector IS.** Discarding every name token
+  lost the only Dutch word on *Sara Burgerhart*: "Betje Wolff **en**
+  Aagje Deken".
+- **Each distinct string counts once** — an album tag is repeated on
+  every chapter, and must not outvote fifty distinct chapter titles.
+- **A word both languages use is in neither list** (`in`, `is`, `was`,
+  `over`, `door`, `die`, `man`, `we`) — asserted at import.
+- **Only English and Dutch are detected.** Every extra word list is
+  another source of false positives from names. Other languages arrive
+  via a tag or a manual row; the facet shows whatever codes exist.
+
+**A detected language is never stored.** It is recomputed on every
+read (~0.05 s over 11k chapters), so a retag or rescan shows at once and
+there is nothing to go stale. Only ASSERTIONS are stored, in
+`book_language`: `tag` (from `tools/book_language.py --tags`) and
+`manual` — which always wins, and which a `tag` never replaces.
+"Unknown" is a real bucket, requested as `language=` (empty), and is the
+to-do list for the tool, not a failure to hide.
+
+The books view hides **Play all** (nobody plays a whole language);
+`_drillShowChrome` restores it for every other view.
+
+**Setting one by hand is in the ✏️ edit form** — a *Book language*
+select, shown only when the chapter belongs to a folder book (the server
+decides, from the URL: `GET /api/book_language?url=` answers
+`{book:false}` otherwise). Its first option is **Auto — detected: X**
+(or *from tag*, or *not detected*), which clears the stored row; any
+other choice is stored as `manual`. The POST names the chapter URL,
+never an `album_key`, so a client cannot write a row for a book it did
+not open. A language change alone posts nothing to `/api/edit_track`.
+`.edit-field[hidden]{display:none}` is load-bearing: `.edit-field` is
+`display:flex`, which beats the `hidden` attribute, and every music
+track would otherwise show an empty language select. Guarded by
+`tests/frontend/test_book_language.py` (10).
 
 Open question still standing: whether the Naim accepts m4b/AAC over
 AVTransport — the tree exposes the books either way; test with one

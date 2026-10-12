@@ -90,6 +90,12 @@ class StubGateway:
         self.book_meta: dict[str, dict] = {}
         # audiobook chapter atoms keyed by track url (P5)
         self.chapters: dict[str, list] = {}
+        # 🌐 audiobooks by language: the facet list, and the books of
+        # each language keyed by code ('' = Unknown)
+        self.book_languages: list[dict] = []
+        self.book_language_albums: dict[str, list] = {}
+        # url → GET /api/book_language body; absent = not a book.
+        self.book_language: dict[str, dict] = {}
         # captured requests: list of {method, path, query, body, headers}
         self.requests: list[dict] = []
         self._req_lock = threading.Lock()
@@ -397,6 +403,17 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/book_meta_all":
             self._send_json({"books": gw.book_meta})
             return
+        if path == "/api/book_languages":
+            self._send_json({"languages": gw.book_languages})
+            return
+        if path == "/api/book_language":
+            self._send_json(gw.book_language.get(q.get("url", ""),
+                                                 {"book": False}))
+            return
+        if path == "/api/book_language_albums":
+            self._send_json({"albums": gw.book_language_albums.get(
+                q.get("language", ""), [])})
+            return
         if path == "/api/chapters":
             self._send_json(
                 {"chapters": gw.chapters.get(q.get("url", ""), [])})
@@ -586,6 +603,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/control":
             self._send_json({"ok": True})
+            return
+        if path == "/api/book_language":
+            self._send_json({"ok": True, "book": True,
+                             "language": payload.get("language", "")})
             return
         if path == "/api/edit_track":
             self._send_json({"ok": True})

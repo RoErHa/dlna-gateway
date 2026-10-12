@@ -853,9 +853,10 @@ function setLetter(l){
 function buildLetterBar(){
   const bar = $("letter-bar");
   bar.innerHTML = "";
-  // 📖 continue-listening shelf — audiobooks source only, in front of ⭐.
+  // 📖 continue-listening shelf and 🌐 by-language — audiobooks source
+  // only, in front of ⭐.
   const letters = curServer?.kind==="audiobooks"
-    ? ["📖", ...LETTERS] : LETTERS;
+    ? ["📖", "🌐", ...LETTERS] : LETTERS;
   letters.forEach(l=>{
     const b = document.createElement("button");
     b.className = "letter-btn" + (l===browseLetter?" active":"");
@@ -904,6 +905,14 @@ async function loadBrowsePage(){
     const r = await api("/api/positions");
     if(!r){ $("item-list").innerHTML='<div class="msg">Could not load positions.</div>'; return; }
     renderContinueListening(((await r.json()).positions)||[]);
+    return;
+  }
+
+  // 🌐 — audiobooks by language (detected from titles; tag/manual win).
+  if(browseLetter==="🌐"){
+    const r = await api(`/api/book_languages?udn=${enc(curServer.udn)}`);
+    if(!r){ $("item-list").innerHTML='<div class="msg">Could not load languages.</div>'; return; }
+    renderLanguageList(((await r.json()).languages)||[]);
     return;
   }
 
@@ -963,6 +972,68 @@ function renderContinueListening(positions){
       }
     });
     list.appendChild(div);
+  });
+}
+
+// ── 🌐 Audiobooks by language ─────────────────────────────────────
+// A language's name in ITSELF ("Nederlands", "English"), from the
+// browser's own CLDR data — same source the video country names use, so
+// a new language needs no table here. '' is the books nothing could
+// place: shown as Unknown, never folded into a guess.
+function langName(code){
+  if(!code) return "Unknown";
+  try{
+    const n=new Intl.DisplayNames([code],{type:"language"}).of(code);
+    if(n && n.toLowerCase()!==code) return n.charAt(0).toUpperCase()+n.slice(1);
+  }catch(e){ /* unknown code → fall through to the code itself */ }
+  return code.toUpperCase();
+}
+
+function renderLanguageList(langs){
+  const list = $("item-list");
+  list.classList.remove("grid");
+  list.innerHTML = "";
+  if(!langs.length){
+    list.innerHTML='<div class="msg">No books in this library.</div>';
+    return;
+  }
+  langs.forEach(l=>{
+    const div = document.createElement("div");
+    div.className = "row lang-row";
+    div.dataset.lang = l.language;
+    div.innerHTML = `<div class="row-icon">${l.language?"🌐":"❔"}</div><div class="row-body"><div class="row-title">${esc(langName(l.language))}</div><div class="row-sub">${l.books} book${l.books!==1?"s":""}</div></div>`;
+    div.addEventListener("click", ()=>showLanguageBooks(l));
+    list.appendChild(div);
+  });
+}
+
+function showLanguageBooks(lang){
+  if(!curServer) return;
+  browseNavStack.push({type:"root", label:"Languages"});
+  _showLanguageBooksInner(lang);
+}
+
+async function _showLanguageBooksInner(lang){
+  if(!curServer) return;
+  showSpinner($("item-list"));
+  _drillShowChrome(true);
+  $("browse-pager").classList.add("hidden");
+  $("browse-back-title").textContent = "Languages";
+  $("browse-section-hdr").style.display = "";
+  $("browse-section-title").textContent =
+    `${langName(lang.language)} · ${lang.books} book${lang.books!==1?"s":""}`;
+  // "Play all" across every book in a language is not a thing anyone
+  // wants; _drillShowChrome brings it back for the next view.
+  $("browse-play-all").style.display = "none";
+  const r = await api(`/api/book_language_albums?udn=${enc(curServer.udn)}&language=${enc(lang.language)}`);
+  if(!r){ $("item-list").innerHTML='<div class="msg">Could not load books.</div>'; return; }
+  renderAlbumRows(((await r.json()).albums)||[], {
+    sub: a=>{
+      const ser=_abSeriesOf(a.album_key||"");
+      return `${esc(a.artist)} · ${a.track_count} tracks${ser?` · 📚 ${esc(ser)}`:""}`;
+    },
+    onPlay: a=>playAlbumFromDB(_albumArtistArg(a), a.album, a.album_key||""),
+    onOpen: a=>showAlbumTracks(_albumArtistArg(a), a.album, null, a.album_key||""),
   });
 }
 
@@ -1450,6 +1521,7 @@ async function _wireAlbumFavStar(artist, album, albumKey=""){
 // ── Browse navigation stack helpers ──────────────────────────────
 
 function _drillShowChrome(hasBack){
+  $("browse-play-all").style.display    = "";   // the 🌐 view hides it
   $("browse-back").style.display        = hasBack ? "" : "none";
   $("browse-modes").style.display       = hasBack ? "none" : "";
   $("letter-bar").style.display         = (hasBack || browseMode==="genres") ? "none" : "";
@@ -3146,11 +3218,42 @@ async function openEditModal(track){
       track._editPrefillYear = y;
     }
   }catch(e){ /* best effort prefill */ }
+  await _prefillBookLanguage(track);
   $("edit-modal-sub").textContent =
     "Changes saved to library immediately. File tags written if path is known.";
   $("edit-modal").classList.add("open");
   // Focus title field
   setTimeout(()=>$("edit-title").focus(), 120);
+}
+
+// The book-language field. Shown only for a chapter of a folder book —
+// the server decides that from the URL. "Auto" ('') hands the book back
+// to detection; any other choice is stored as `manual`, which always
+// wins. Guarded: an old cached index.html has no field (see bindClick).
+const BOOK_LANGS = ["en","nl","de","fr","es","it"];
+
+async function _prefillBookLanguage(track){
+  const field = $("edit-lang-field"), sel = $("edit-lang");
+  track._editPrefillLang = undefined;
+  if(!field || !sel) return;
+  field.hidden = true;
+  let d = null;
+  try{
+    const r = await fetch(`/api/book_language?url=${enc(track.url)}`);
+    if(r.ok) d = await r.json();
+  }catch(e){ /* best effort: no field */ }
+  if(!d || !d.book) return;
+  const auto = d.source==="tag" ? `from tag: ${langName(d.language)}`
+             : d.detected ? `detected: ${langName(d.detected)}`
+             : "not detected";
+  const codes = [...BOOK_LANGS];
+  if(d.source==="manual" && !codes.includes(d.language)) codes.push(d.language);
+  sel.innerHTML = `<option value="">Auto — ${esc(auto)}</option>` +
+    codes.map(c=>`<option value="${esc(c)}">${esc(langName(c))}</option>`).join("");
+  const cur = d.source==="manual" ? d.language : "";
+  sel.value = cur;
+  track._editPrefillLang = cur;
+  field.hidden = false;
 }
 
 $("edit-cancel").addEventListener("click", ()=>$("edit-modal").classList.remove("open"));
@@ -3195,7 +3298,22 @@ $("edit-save").addEventListener("click", async ()=>{
   // prefilled one (or cleared a previously-set value).
   const prefilledYear = _editTrack._editPrefillYear ?? null;
   if(body.year !== prefilledYear) changed.year = body.year;
-  if(!Object.keys(changed).length){ $("edit-modal").classList.remove("open"); return; }
+  const langSel = $("edit-lang");
+  const langPrefill = _editTrack._editPrefillLang;
+  const newLang = (langSel && langPrefill !== undefined) ? langSel.value : langPrefill;
+  if(newLang !== langPrefill){
+    const lr = await api("/api/book_language", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({url:_editTrack.url, language:newLang})});
+    const ld = lr ? await lr.json() : {error:"save failed"};
+    if(ld.error){ toast("Language: "+ld.error); return; }
+    _editTrack._editPrefillLang = newLang;
+  }
+  if(!Object.keys(changed).length){
+    $("edit-modal").classList.remove("open");
+    if(newLang !== langPrefill) toast("✓ Language saved", 2400);
+    return;
+  }
   changed.url = _editTrack.url;
   const r = await api("/api/edit_track", {method:"POST",
     headers:{"Content-Type":"application/json"},

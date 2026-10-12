@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v18';  // v18: album rows show the edition year (+ orig.)
+const APP_CACHE = 'dlna-gw-app-v19';  // v19: edit form gains the book-language field
 // v17: ℹ️ Artist panel — index.html gained
 //   #np-btn-artist / #artist-modal. Bumped to evict any client holding the OLD
 //   index.html beside the NEW app.js: that pairing threw on the button's

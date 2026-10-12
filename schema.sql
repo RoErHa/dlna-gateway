@@ -109,6 +109,12 @@ CREATE TABLE book_meta (
                     source     TEXT NOT NULL,
                     fetched_at INTEGER NOT NULL
                 );
+CREATE TABLE book_language (
+                    album_key  TEXT PRIMARY KEY,
+                    language   TEXT NOT NULL,
+                    source     TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
 CREATE TABLE radio_favourites (
                     station_uuid TEXT PRIMARY KEY,
                     name         TEXT NOT NULL,
