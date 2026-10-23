@@ -261,6 +261,24 @@ package. The gate was then shown to FAIL on a hand-drifted pin.
 outbound TLS trusts the roots from OpenSSL and Homebrew's
 `ca-certificates`, not certifi.)
 
+## A bug found by the port, fixed here before it bit
+
+The port to epub-reader found a bug in this tool. **Its first real
+`--apply` was refused, for a reason that was the tool's own:** the README
+version strip was rewritten only *after* the gates, so its pinned-version
+test compared the old strip with the new locks and failed. Every upgrade
+that moved a pin would have been refused. This gateway had the same
+ordering; its two runs since the strip was added moved no pin, so it never
+showed. Inside the snapshot, `--apply` now runs `GUARDED_STEPS = venv,
+hls, versions, gates` in that order (held by a test), and the snapshot
+restores `README.md` too.
+
+The same epub-reader run found a second bug, which this gateway already
+avoided: a rollback must REINSTALL the restored Playwright's browsers,
+because the upgrade's install let Playwright garbage-collect them.
+`restore_previous` has done that since day one. The browser cache
+(`~/Library/Caches/ms-playwright`) is shared by both apps.
+
 ## Open items after the first run (2026-10-23)
 
 - **Python 3.15**: **DONE** (same day, `--apply --python 3.15`). It was

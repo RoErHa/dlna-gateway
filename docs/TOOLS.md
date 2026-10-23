@@ -1080,7 +1080,7 @@ python3 tools/upgrade.py --apply          # do it
 python3 tools/upgrade.py --python 3.15    # DRY RUN of the minor move: which packages lack a wheel
 python3 tools/upgrade.py --apply --python 3.15   # do it
 python3 tools/upgrade.py --rollback       # undo the last --apply
-python3 -m unittest tools.test_upgrade -v # 37 tests
+python3 -m unittest tools.test_upgrade -v # 39 tests
 ```
 
 `--apply` order: `backup-library.sh` → brew → move `.venv` to

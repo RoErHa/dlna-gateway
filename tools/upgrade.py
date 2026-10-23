@@ -80,7 +80,8 @@ LOCK = os.path.join(PROJECT, "requirements.lock")
 DEV_LOCK = os.path.join(PROJECT, "requirements-dev.lock")
 HLS = os.path.join(PROJECT, "static", "vendor", "hls.min.js")
 # Files an --apply rewrites; saved before, restored on failure/--rollback.
-TRACKED = (LOCK, DEV_LOCK, DEV_REQS, HLS)
+README = os.path.join(PROJECT, "README.md")  # the version strip, rewritten pre-gates
+TRACKED = (LOCK, DEV_LOCK, DEV_REQS, HLS, README)
 
 BACKUPS = os.path.expanduser(os.environ.get("BACKUP_DIR", "~/dlna-gateway-backups"))
 PREV = os.path.join(BACKUPS, "upgrade-prev")
@@ -694,6 +695,12 @@ def upgrade_hls(allow_major: bool) -> None:
     say(f"   hls.js {cur} → {target} (sha512 verified)")
 
 
+# Run in this order inside the snapshot; any failure rolls all of it back.
+# `versions` BEFORE `gates`: tests/test_versions.py checks the README strip
+# against the NEW locks (epub-reader's first --apply was refused for this).
+GUARDED_STEPS = ("venv", "hls", "versions", "gates")
+
+
 def apply(args) -> int:
     minor = venv_minor()
     if not minor:
@@ -742,12 +749,19 @@ def apply(args) -> int:
     say(f"\n3. Fresh .venv on Python {target_minor} (previous kept in {PREV})")
     save_previous(minor)
     log_path = os.path.join(PREV, "gates.log")
+    steps = {
+        "venv": lambda: upgrade_venv(python),
+        "hls": lambda: upgrade_hls(args.allow_major),
+        "versions": lambda: run([VENV_PY, os.path.join("tools", "versions.py"), "--write"]),
+        "gates": lambda: gates(log_path, frontend=not args.no_frontend),
+    }
     try:
-        upgrade_venv(python)
-        say("\n4. hls.js")
-        upgrade_hls(args.allow_major)
-        say("\n5. Test gates")
-        ok = gates(log_path, frontend=not args.no_frontend)
+        ok = True
+        for i, step in enumerate(GUARDED_STEPS, start=4):
+            say(f"\n{i}. {step}")
+            if steps[step]() is False:
+                ok = False
+                break
     except (subprocess.CalledProcessError, RuntimeError, OSError) as e:
         say(f"   ✗ {e}")
         ok = False
@@ -759,7 +773,7 @@ def apply(args) -> int:
             restart_gateway()
         return 1
 
-    say("\n6. Restart")
+    say("\n8. Restart")
     if not args.no_restart and not restart_gateway():
         say("\n✗ Gateway unhealthy after restart — rolling back")
         restore_previous()
@@ -767,7 +781,6 @@ def apply(args) -> int:
         return 1
 
     say(f"\nAfter: {runtime_report(VENV_PY)}")
-    run([VENV_PY, os.path.join("tools", "versions.py"), "--write"], check=False)
     vulns = osv_check([("PyPI", n, v) for n, v in sorted(installed_pip(VENV_PY).items())])
     for pkg, ids in vulns.items():
         say(f"  still affected (no fixed release yet?): {pkg}: {', '.join(ids)}")

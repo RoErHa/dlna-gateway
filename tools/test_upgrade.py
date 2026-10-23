@@ -232,6 +232,20 @@ class TestNewAttention(unittest.TestCase):
                          ["DECIDE Python 3.15: READY"])
 
 
+class TestApplyOrder(unittest.TestCase):
+    """epub-reader's first real --apply (2026-10-23) was refused because the
+    README strip was rewritten only AFTER the gates, so the pinned-version
+    gate compared the old strip with the new locks. Same code here."""
+
+    def test_the_strip_is_rewritten_before_the_gates_judge_it(self):
+        steps = U.GUARDED_STEPS
+        self.assertLess(steps.index("venv"), steps.index("versions"))
+        self.assertLess(steps.index("versions"), steps.index("gates"))
+
+    def test_a_rollback_restores_the_readme_it_rewrote(self):
+        self.assertIn(U.README, U.TRACKED)
+
+
 class TestVtuple(unittest.TestCase):
     def test_versions(self):
         self.assertEqual(U.vtuple("3.15"), (3, 15))
