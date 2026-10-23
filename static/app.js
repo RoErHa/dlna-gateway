@@ -2918,9 +2918,14 @@ async function pollState(){
       // The renderer advances on its own; npTrack must follow it, or
       // 📜 Lyrics, ℹ️ Artist, ✏️ Edit and ⭐ keep acting on the track the
       // queue STARTED with (playTracklist sets only the first one).
-      if(ps.uri && (!npTrack || npTrack.url!==ps.uri))
+      // The cover follows on the same change, so a playlist doesn't keep
+      // track 1's art (an album repaints the same cover — harmless).
+      if(ps.uri && (!npTrack || npTrack.url!==ps.uri)){
         setNpTrack({url:ps.uri, title:ps.title||"", artist:ps.artist||"",
                     album:ps.album||"", art:ps.art||"", mime:""});
+        if(ps.art){$("art").innerHTML=`<img src="${artUrl(ps.art,ART_FULL)}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.textContent='💿'">`;}
+        else{$("art").textContent="💿";}
+      }
     }
     if(!seeking&&ps.duration&&ps.position!=null){
       const p=(ps.position/ps.duration)*100;
