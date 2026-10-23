@@ -549,6 +549,14 @@ def report(args) -> int:
     for p in unfixed:
         items.append(("NOTE", f"{p} is vulnerable and has NO fixed release yet — watch it"))
 
+    # The README's version strip: its PLATFORM half (python, sqlite, openssl,
+    # node, ffmpeg) moves with brew and is watched here, not in the suite.
+    r = run([VENV_PY, os.path.join("tools", "versions.py")], check=False,
+            capture=True, quiet=True)
+    if r.returncode:
+        items.append(("DO", "README version strip is stale — "
+                            "`.venv/bin/python tools/versions.py --write`"))
+
     manifest = os.path.join(PREV, "manifest.json")
     if os.path.exists(manifest):
         saved = json.load(open(manifest)).get("saved_at", "?")
@@ -759,6 +767,7 @@ def apply(args) -> int:
         return 1
 
     say(f"\nAfter: {runtime_report(VENV_PY)}")
+    run([VENV_PY, os.path.join("tools", "versions.py"), "--write"], check=False)
     vulns = osv_check([("PyPI", n, v) for n, v in sorted(installed_pip(VENV_PY).items())])
     for pkg, ids in vulns.items():
         say(f"  still affected (no fixed release yet?): {pkg}: {', '.join(ids)}")

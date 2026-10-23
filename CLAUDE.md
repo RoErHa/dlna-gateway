@@ -1175,7 +1175,15 @@ report ends in an Attention list (DO / DECIDE / WAIT / NOTE); it notifies on
 a DO item or a DECIDE/WAIT that is NEW since last week, never on the same
 nag twice. It never applies; that stays a person's call.
 `--python 3.N` without `--apply` dry-runs a minor move (which packages lack
-a wheel). The first run, its two refusals and what they caught:
+a wheel).
+The README's **version strip** (`tools/versions.py`, between
+`<!-- versions -->` markers) is read from the software, never typed. Its
+PINNED half (locks, hls.js) is gated by `tests/test_versions.py`; its
+PLATFORM half (python, sqlite, openssl, node, ffmpeg) moves with brew, so
+`upgrade.py` watches it (stale → a DO item; a passing `--apply` rewrites
+it) rather than the suite, which would go red on any clone with another
+Python. Run it with `.venv/bin/python`, since bare `python3` has no
+playwright. The first run, its two refusals and what they caught:
 **[docs/UPGRADE.md](docs/UPGRADE.md)**. On a FastAPI bump, remember that
 0.161 stopped flattening included routers into `app.routes`, which is why
 `tests/test_asgi.py` reads routes through `_flatten`.
