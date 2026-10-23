@@ -49,7 +49,7 @@ violations** so any hit is a real regression rather than backlog:
 |---|---|---|
 | **T0.LINT** — ruff | `pyproject.toml` | `.venv/bin/ruff check . --fix` |
 | **T0.SIZE** — per-module line ratchet | `tests/module_size_budget.json` | split the code, or `python3 tools/regen_size_budget.py` to lock in a shrink |
-| `tests/test_lock_sync.py` — dependency pins | `requirements.lock` | `python3 tools/regen_lock.py` |
+| `tests/test_lock_sync.py` — dependency pins | `requirements.lock` + `requirements-dev.lock` | `python3 tools/regen_lock.py` |
 | `tests/test_no_silent_swallows.py` — observability | — | log the exception, or narrow the `except` |
 | **T0.BADGES** — the README's numbers (added 2026-08-26) | `tools/badges.py` | `python3 tools/badges.py --write` |
 
@@ -132,8 +132,14 @@ packages). `setup.sh` installs from the **lock by default** —
 `./setup.sh --unpinned` deliberately resolves the ranges when testing
 newer upstreams. fastapi/hypercorn additionally carry `<1.0` caps because
 setup.sh falls back to the spec when no lock is present. Dev tooling
-lives in `requirements-dev.txt` and is never in the lock, so a production
-install doesn't pull a browser engine.
+lives in `requirements-dev.txt` and is never in `requirements.lock`, so a
+production install doesn't pull a browser engine. It has its OWN lock,
+`requirements-dev.lock` (2026-10-23): `-r requirements.lock` plus the
+dev-only closure, so a fresh clone tests with exactly what passed here.
+Before it, only the dev tools' direct deps were pinned; an upgrade moved
+certifi (a selenium/requests dep) and no tracked file changed. The gate
+SKIPS when dev tools aren't installed, and `regen_lock.py` refuses to
+write a truncated dev lock from a runtime-only venv.
 
 **No exception may be caught broadly AND discarded silently.** A handler
 may be broad, or silent, but not both — `except Exception as e:

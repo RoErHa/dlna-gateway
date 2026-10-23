@@ -16,8 +16,16 @@ that is a spec, not a reproducible install. fastapi + hypercorn own the
 whole 2.0 TLS/HTTP-2 edge; without a pinned set there is no known-good
 state to roll back to when an upstream release breaks a fresh setup.
 
-    python3 tools/regen_lock.py            # rewrite requirements.lock
+    python3 tools/regen_lock.py            # rewrite requirements.lock (+ dev lock)
     python3 tools/regen_lock.py --check    # exit 1 if stale (no write)
+
+`requirements-dev.lock` (added 2026-10-23) does the same for the test
+tooling: `-r requirements.lock`, then the DEV-ONLY part of the closure of
+requirements-dev.txt. Without it only the dev tools' DIRECT deps were
+pinned, so a fresh clone got whatever transitive versions were newest that
+day (found when an upgrade moved certifi, a selenium/requests dep that no
+tracked file recorded). It is written only when every dev root is
+installed — a runtime-only venv must not overwrite it with a truncated set.
 """
 from __future__ import annotations
 
@@ -31,17 +39,19 @@ import sys
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK_PATH = os.path.join(PROJECT, "requirements.lock")
 REQS_PATH = os.path.join(PROJECT, "requirements.txt")
+DEV_REQS_PATH = os.path.join(PROJECT, "requirements-dev.txt")
+DEV_LOCK_PATH = os.path.join(PROJECT, "requirements-dev.lock")
 
 
 def _norm(name: str) -> str:
     return name.lower().replace("_", "-")
 
 
-def direct_deps() -> list[str]:
-    """The un-pinned package names from requirements.txt — the roots of the
-    closure. Comment lines (which is most of that file) are skipped."""
+def direct_deps(path: str = REQS_PATH) -> list[str]:
+    """The un-pinned package names from a requirements file — the roots of
+    the closure. Comment lines (which is most of that file) are skipped."""
     out = []
-    with open(REQS_PATH, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         lines = fh.readlines()
     for raw in lines:
         line = raw.strip()
@@ -128,6 +138,67 @@ def generate() -> str:
     return header + "\n" + body + "\n"
 
 
+def dev_roots_installed() -> list[str]:
+    """Dev roots NOT installed here — non-empty means: do not write the dev lock."""
+    missing = []
+    for name in direct_deps(DEV_REQS_PATH):
+        try:
+            md.distribution(name)
+        except md.PackageNotFoundError:
+            missing.append(name)
+    return missing
+
+
+def generate_dev() -> str:
+    """The dev lock: the runtime lock by reference, then every package the
+    dev roots pull in that the runtime closure does not already pin."""
+    runtime = resolve(direct_deps())
+    roots = direct_deps(DEV_REQS_PATH)
+    pins = {k: v for k, v in resolve(roots).items() if k not in runtime}
+    direct = {_norm(r) for r in roots}
+    header = f"""# requirements-dev.lock — EXACT test/lint tooling set.
+#
+# GENERATED ARTIFACT — do not hand-edit. Regenerate after any dependency
+# change:  python3 tools/regen_lock.py
+# Generated {datetime.date.today()} from the working .venv
+# (Python {platform.python_version()}, {platform.system()}/{platform.machine()}).
+#
+# requirements-dev.txt is the SPEC (the tools, pinned); this is the INSTALL:
+# the runtime lock plus the full transitive closure of those tools, so a
+# fresh clone tests with exactly what passed here.
+#
+#     .venv/bin/pip install -r requirements-dev.lock
+#     .venv/bin/playwright install chromium webkit
+"""
+    body = "\n".join(
+        f"{k}=={pins[k]}" + ("        # direct" if k in direct else "")
+        for k in sorted(pins))
+    return header + "\n-r requirements.lock\n" + body + "\n"
+
+
+def pins_of(text: str) -> list[str]:
+    """The pins only — header dates/interpreter legitimately differ run to
+    run, and the dev lock's `-r` include is structure, not a pin."""
+    return sorted(ln.split("#")[0].strip()
+                  for ln in text.splitlines()
+                  if ln.strip() and not ln.lstrip().startswith(("#", "-r")))
+
+
+def _read(path: str) -> str:
+    if not os.path.isfile(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _report_stale(label: str, fresh: str, current: str) -> None:
+    print(f"{label} is STALE — run: python3 tools/regen_lock.py", file=sys.stderr)
+    for p in sorted(set(pins_of(fresh)) - set(pins_of(current))):
+        print(f"  + {p}", file=sys.stderr)
+    for p in sorted(set(pins_of(current)) - set(pins_of(fresh))):
+        print(f"  - {p}", file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -136,37 +207,30 @@ def main() -> int:
                     help="exit 1 if requirements.lock is stale; write nothing")
     args = ap.parse_args()
 
-    fresh = generate()
-    current = ""
-    if os.path.isfile(LOCK_PATH):
-        current = open(LOCK_PATH, encoding="utf-8").read()
-
-    # The header carries a generation date + interpreter, which legitimately
-    # differ run to run. Compare only the pins.
-    def pins_of(text: str) -> list[str]:
-        return sorted(ln.split("#")[0].strip()
-                      for ln in text.splitlines()
-                      if ln.strip() and not ln.lstrip().startswith("#"))
+    targets = [("requirements.lock", LOCK_PATH, generate())]
+    missing = dev_roots_installed()
+    if missing:
+        print(f"dev tools not installed ({', '.join(missing)}) — "
+              "requirements-dev.lock left as it is", file=sys.stderr)
+    else:
+        targets.append(("requirements-dev.lock", DEV_LOCK_PATH, generate_dev()))
 
     if args.check:
-        if pins_of(fresh) == pins_of(current):
-            print("requirements.lock is up to date")
-            return 0
-        print("requirements.lock is STALE — run: python3 tools/regen_lock.py",
-              file=sys.stderr)
-        only_new = set(pins_of(fresh)) - set(pins_of(current))
-        only_old = set(pins_of(current)) - set(pins_of(fresh))
-        for p in sorted(only_new):
-            print(f"  + {p}", file=sys.stderr)
-        for p in sorted(only_old):
-            print(f"  - {p}", file=sys.stderr)
-        return 1
+        stale = 0
+        for label, path, fresh in targets:
+            current = _read(path)
+            if pins_of(fresh) == pins_of(current):
+                print(f"{label} is up to date")
+            else:
+                _report_stale(label, fresh, current)
+                stale += 1
+        return 1 if stale else 0
 
-    with open(LOCK_PATH, "w", encoding="utf-8") as fh:
-        fh.write(fresh)
-    print(f"wrote {LOCK_PATH} ({len(pins_of(fresh))} pinned packages)")
+    for _label, path, fresh in targets:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(fresh)
+        print(f"wrote {path} ({len(pins_of(fresh))} pinned packages)")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

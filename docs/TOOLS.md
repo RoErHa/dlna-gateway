@@ -1060,7 +1060,7 @@ keep landing upstream and a hand-run upgrade spans five package managers.
 |---|---|---|
 | Homebrew | `python@3.x` + whatever `brew deps` says it links (sqlite, openssl@N, …), `ffmpeg`, `chromaprint`, `beets`, `node` | `brew upgrade` of the installed, outdated ones |
 | pip runtime | `requirements.txt` closure | FRESH venv, `--upgrade-strategy eager`, inside the deliberate major caps → `regen_lock.py` |
-| pip dev | `requirements-dev.txt` | latest, re-pinned in place; Playwright browsers reinstalled and the revisions comment regenerated |
+| pip dev | `requirements-dev.txt` + `requirements-dev.lock` | latest, re-pinned in place, full closure re-locked; Playwright browsers reinstalled and the revisions comment regenerated |
 | vendored JS | `static/vendor/hls.min.js` | npm registry tarball, **sha512-verified against the registry `integrity`**, read in memory (never extracted to disk); same major unless `--allow-major` |
 | npm global | `appium` (if installed) | `npm install -g appium@latest` |
 

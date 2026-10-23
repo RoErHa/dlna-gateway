@@ -2,7 +2,9 @@
 """
 tests/test_lock_sync.py — fail the suite if `requirements.lock` has
 drifted from what is actually installed, or if a direct dependency was
-added to `requirements.txt` without being locked.
+added to `requirements.txt` without being locked. The same for
+`requirements-dev.lock` (the test tooling), which SKIPS when the dev tools
+are not installed — a clean clone must never go red for lacking them.
 
 Same contract as `tests/test_schema_sync.py`: the lock is a GENERATED
 artifact that does not auto-update, so it goes stale the moment anyone
@@ -29,6 +31,8 @@ def _pins(text: str) -> dict:
     for ln in text.splitlines():
         ln = ln.split("#")[0].strip()
         if not ln:
+            continue
+        if ln.startswith("-r"):
             continue
         name, _, ver = ln.partition("==")
         out[name.strip().lower()] = ver.strip()
@@ -80,6 +84,44 @@ class TestLockSync(unittest.TestCase):
             self.assertIsNotNone(line, f"{pkg} missing from requirements.txt")
             self.assertIn("<", line,
                           f"{pkg} has no upper bound in requirements.txt: {line!r}")
+
+
+class TestDevLockSync(unittest.TestCase):
+
+    def setUp(self):
+        missing = regen.dev_roots_installed()
+        if missing:
+            self.skipTest(f"dev tools not installed: {missing}")
+        self.assertTrue(os.path.isfile(regen.DEV_LOCK_PATH),
+                        "requirements-dev.lock is missing")
+        with open(regen.DEV_LOCK_PATH, encoding="utf-8") as f:
+            self.text = f.read()
+        self.committed = _pins(self.text)
+
+    def test_dev_lock_matches_installed_closure(self):
+        self.assertEqual(
+            self.committed, _pins(regen.generate_dev()),
+            "requirements-dev.lock is out of date with the installed packages — "
+            "regenerate it: python3 tools/regen_lock.py")
+
+    def test_dev_lock_includes_the_runtime_lock(self):
+        """Tests must run against the runtime set production installs, so
+        the dev lock pulls requirements.lock in rather than re-resolving it."""
+        body = [ln.strip() for ln in self.text.splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")]
+        self.assertEqual(body[0], "-r requirements.lock")
+
+    def test_no_package_is_pinned_in_both_locks(self):
+        """One package, one pin: a shared dep pinned twice can disagree."""
+        with open(regen.LOCK_PATH, encoding="utf-8") as f:
+            runtime = _pins(f.read())
+        self.assertEqual(sorted(set(runtime) & set(self.committed)), [])
+
+    def test_every_dev_root_is_locked(self):
+        missing = [d for d in regen.direct_deps(regen.DEV_REQS_PATH)
+                   if d.lower().replace("_", "-") not in self.committed]
+        self.assertEqual(missing, [],
+                         f"dev tools missing from requirements-dev.lock: {missing}")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,8 @@ What "the toolchain" is — and where each piece actually lives:
   2. pip        runtime deps — a FRESH venv, resolved EAGERLY so transitive
                 packages (h2, idna, certifi…) move too, within the major
                 caps requirements.txt sets on purpose. → requirements.lock
-  3. dev        requirements-dev.txt pins + the Playwright browsers. Note
+  3. dev        requirements-dev.txt pins + requirements-dev.lock (the
+                full closure) + the Playwright browsers. Note
                 Playwright bundles its OWN Node binary: the only way to
                 patch that copy is to upgrade the playwright package.
   4. hls.js     static/vendor/hls.min.js, from the npm registry tarball,
@@ -76,9 +77,10 @@ VENV_PY = os.path.join(VENV, "bin", "python")
 REQS = os.path.join(PROJECT, "requirements.txt")
 DEV_REQS = os.path.join(PROJECT, "requirements-dev.txt")
 LOCK = os.path.join(PROJECT, "requirements.lock")
+DEV_LOCK = os.path.join(PROJECT, "requirements-dev.lock")
 HLS = os.path.join(PROJECT, "static", "vendor", "hls.min.js")
 # Files an --apply rewrites; saved before, restored on failure/--rollback.
-TRACKED = (LOCK, DEV_REQS, HLS)
+TRACKED = (LOCK, DEV_LOCK, DEV_REQS, HLS)
 
 BACKUPS = os.path.expanduser(os.environ.get("BACKUP_DIR", "~/dlna-gateway-backups"))
 PREV = os.path.join(BACKUPS, "upgrade-prev")
@@ -409,6 +411,32 @@ def pypi_latest(names: list[str]) -> dict[str, tuple[str, list[str]]]:
         return {n: v for n, v in pool.map(one, names) if v}
 
 
+def rehearse_builds(minor: str, blockers: list[str]) -> tuple[list[str], list[str]]:
+    """Try each SOURCE-ONLY blocker for real: build it in a throwaway venv
+    on python@<minor>. Returns (still blocked, verified to build here).
+
+    "No wheel" is a risk, not a verdict: watchdog has had no macOS wheel
+    since cp313 and pip has compiled it fine on 3.14 all along (2026-10-23).
+    Needs python@<minor> installed; without it the blockers stand."""
+    py = f"/opt/homebrew/opt/python@{minor}/bin/python{minor}"
+    source_only = [b for b in blockers if "source only" in b]
+    if not source_only or not os.path.exists(py):
+        return blockers, []
+    built = []
+    with tempfile.TemporaryDirectory(prefix="upgrade-rehearse-") as tmp:
+        venv_py = os.path.join(tmp, "bin", "python")
+        run([py, "-m", "venv", tmp], quiet=True)
+        for b in source_only:
+            name, ver = b.split()[:2]
+            say(f"  … building {name} {ver} from source on {minor} (throwaway venv)")
+            r = run([venv_py, "-m", "pip", "install", "--quiet", "--no-deps",
+                     f"{name}=={ver}"], check=False, capture=True, quiet=True)
+            if r.returncode == 0:
+                built.append(f"{name} {ver}")
+    still = [b for b in blockers if " ".join(b.split()[:2]) not in built]
+    return still, built
+
+
 def osv_check(pkgs: list[tuple[str, str, str]]) -> dict:
     body = json.dumps({"queries": [
         {"package": {"name": n, "ecosystem": e}, "version": v} for e, n, v in pkgs]})
@@ -446,6 +474,9 @@ def report(args) -> int:
             f"each installed package, checked for a {target} wheel on PyPI:")
         names = [n for n in have if n not in ("pip", "setuptools")]
         blockers = readiness(pypi_latest(names), vtuple(target)[:2])
+        blockers, built = rehearse_builds(target, blockers)
+        for b in built:
+            say(f"  ✓ {b} — no wheel, but VERIFIED to compile here")
         for b in blockers:
             say(f"  ✗ {b}")
         if blockers:
@@ -453,8 +484,10 @@ def report(args) -> int:
                                   f"{len(blockers)} package(s): "
                                   + ", ".join(b.split()[0] for b in blockers)))
         else:
-            say(f"  every package has a {target} wheel")
-            items.append(("DECIDE", f"Python {target}: READY — move with "
+            say(f"  every package installs on {target}")
+            via = (f" ({', '.join(b.split()[0] for b in built)} compiles from source)"
+                   if built else "")
+            items.append(("DECIDE", f"Python {target}: READY{via} — move with "
                                     f"`--apply --python {target}` (gated, rolls back)"))
 
     say("\nHomebrew:")
@@ -577,7 +610,7 @@ def restore_previous() -> None:
         # The new playwright may have garbage-collected the old browsers.
         run([os.path.join(VENV, "bin", "playwright"), "install", "chromium", "webkit"],
             check=False)
-    say("   restored previous .venv, requirements.lock, requirements-dev.txt, hls.min.js")
+    say("   restored previous .venv, both locks, requirements-dev.txt, hls.min.js")
 
 
 def restart_gateway() -> bool:
