@@ -2915,6 +2915,12 @@ async function pollState(){
       if(ps.album)  $("np-album").textContent=ps.album;
       if(ps.queue_len>1)
         $("np-meta").textContent=`Track ${ps.queue_pos} of ${ps.queue_len}`;
+      // The renderer advances on its own; npTrack must follow it, or
+      // 📜 Lyrics, ℹ️ Artist, ✏️ Edit and ⭐ keep acting on the track the
+      // queue STARTED with (playTracklist sets only the first one).
+      if(ps.uri && (!npTrack || npTrack.url!==ps.uri))
+        setNpTrack({url:ps.uri, title:ps.title||"", artist:ps.artist||"",
+                    album:ps.album||"", art:ps.art||"", mime:""});
     }
     if(!seeking&&ps.duration&&ps.position!=null){
       const p=(ps.position/ps.duration)*100;

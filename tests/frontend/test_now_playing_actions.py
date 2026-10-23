@@ -50,3 +50,31 @@ def test_add_to_playlist_button_with_no_custom_playlists_toasts(app):
         timeout=2000)
     txt = app.locator("#toast").text_content()
     assert "playlist" in txt.lower(), f"unexpected toast: {txt!r}"
+
+
+def test_renderer_advance_moves_np_track_to_the_new_song(app, gateway):
+    """A UPnP renderer advances through the queue by itself. npTrack must
+    follow the renderer snapshot's `uri`, or Lyrics/Artist keep showing
+    the FIRST track of the album/playlist for every later one."""
+    gateway.renderer_state = {**gateway.renderer_state,
+                              "state": "playing", "alive": True,
+                              "duration": 300, "position": 10,
+                              "queue_pos": 1, "queue_len": 2,
+                              "uri": "http://stub/1.flac",
+                              "title": "One", "media_title": "One",
+                              "artist": "Artist A", "album": "LP"}
+    app.evaluate("""
+      setNpTrack({url:'http://stub/1.flac', title:'One', artist:'Artist A',
+                  album:'LP', art:'', mime:''});
+      activeDevice = 'upnp:test-renderer';
+      _upnpAlive = true;
+      bumpPolling();
+    """)
+    gateway.renderer_state = {**gateway.renderer_state,
+                              "queue_pos": 2, "uri": "http://stub/2.flac",
+                              "title": "Two", "media_title": "Two",
+                              "artist": "Artist B"}
+    app.wait_for_function("npTrack && npTrack.url === 'http://stub/2.flac'",
+                          timeout=4000)
+    assert app.evaluate("npTrack.artist") == "Artist B"
+    assert app.evaluate("npTrack.title") == "Two"
