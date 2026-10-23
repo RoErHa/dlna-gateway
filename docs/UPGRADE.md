@@ -263,20 +263,27 @@ outbound TLS trusts the roots from OpenSSL and Homebrew's
 
 ## Open items after the first run (2026-10-23)
 
-- **Python 3.15**: **DECIDE: READY.** It was briefly WAIT, until the
-  watchdog rehearsal above showed that the one "blocker" compiles. It is
-  still a person's call: `python3 tools/upgrade.py --apply --python 3.15`,
-  gated and rolled back on failure like every other `--apply`.
-  `python@3.15` is already on the machine: Homebrew pulled it in during the
-  upgrade, and `python3` now points at it. One side effect showed up at
-  once: tools that import the app's test stack must be run with
-  `.venv/bin/python`, because the bare `python3` (3.15) has no pytest.
+- **Python 3.15**: **DONE** (same day, `--apply --python 3.15`). It was
+  briefly WAIT, until the watchdog rehearsal above showed that the one
+  "blocker" compiles. The move passed every gate first time, and the
+  package set came out **identical** to 3.14's: only the interpreter line
+  in the two lock headers changed. Verified live afterwards:
+  - HTTP/2 + TLS on `:8443`, and outbound TLS (MusicBrainz → 200)
+  - bit-perfect sha256 on two random FLACs
+  - watchdog running the native `FSEventsObserver`, with clean rescans of
+    music (27,045) and audiobooks (11,753)
+  - Pillow 13 scaling `/art` (256 → 256×256; 1024 → the 300×300 original,
+    never upscaled)
+  - zero errors in `gateway.log` since the restart
+
+  `python3` on this machine is now 3.15. Tools that import the app's test
+  stack must be run with `.venv/bin/python`.
 - **`openssl@3` 3.6.5 → 3.5.9** is still held, but no longer the gateway's
   concern. Python now links `openssl@4`, so the report (which follows
   `brew deps python@3.x`) no longer lists it. Only beets, certbot, krb5 and
   samba use `openssl@3`. Whether to take Homebrew's 3.5 LTS for those is a
   machine-wide decision, not this app's.
-- **The rollback point** (the pre-upgrade venv, ~276 MB) is kept in
+- **The rollback point** (now the 3.14 venv, ~276 MB) is kept in
   `~/dlna-gateway-backups/upgrade-prev/` until the next `--apply` replaces it.
 
 ## Bringing this to another app

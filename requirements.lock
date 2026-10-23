@@ -3,7 +3,7 @@
 # GENERATED ARTIFACT — do not hand-edit. Regenerate after any dependency
 # change:  python3 tools/regen_lock.py
 # Generated 2026-10-23 from the working .venv
-# (Python 3.14.9, Darwin/arm64) by resolving the
+# (Python 3.15.0, Darwin/arm64) by resolving the
 # transitive closure of the direct deps in requirements.txt.
 #
 # WHY THIS FILE EXISTS. requirements.txt intentionally uses loose `>=`
