@@ -85,6 +85,11 @@ if [ "${force}" -eq 0 ]; then
     fi
 fi
 
+# The expiry BEFORE, so a renewal is judged by whether it MOVED. On
+# 2026-07-20 tailscale answered "Public cert unchanged" and this script still
+# logged "renewal complete" and restarted the gateway for nothing.
+old_end=$("${OPENSSL}" x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2)
+
 log "INFO renewing cert via tailscale cert ${CERT_HOST}"
 if "${TAILSCALE}" cert "${CERT_HOST}" >> "${LOG}" 2>&1; then
     log "OK tailscale cert succeeded"
@@ -96,21 +101,42 @@ fi
 
 # Gateway restart — macOS launchd only. If you ported to systemd,
 # replace this block with: systemctl --user restart dlna-gateway.service
-if command -v launchctl >/dev/null 2>&1; then
-    uid=$(id -u)
-    label="${GATEWAY_LAUNCHD_LABEL:-com.roha.dlna-gateway}"
-    log "INFO kickstarting ${label} to load new cert"
-    if launchctl kickstart -k "gui/${uid}/${label}" >> "${LOG}" 2>&1; then
-        log "OK gateway kickstarted"
-    else
-        rc=$?
-        log "ERROR launchctl kickstart exited ${rc} — new cert on disk but gateway may still be using old one; restart manually"
-        exit "${rc}"
-    fi
-else
-    log "WARN launchctl not found; restart the gateway manually to load the new cert"
+new_end=$("${OPENSSL}" x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2)
+if [ -n "${old_end}" ] && [ "${new_end}" = "${old_end}" ]; then
+    log "WARN tailscale returned the same certificate (expiry still ${new_end}) — nothing restarted; next week's run retries"
+    exit 0
 fi
 
-new_end=$("${OPENSSL}" x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2)
+# Every service that LOADS this certificate must be restarted, not just the
+# gateway: epub-reader reads the same files, and after the 2026-09-21 renewal
+# it served the old certificate until a restart happened to come along.
+# CERT_RELOAD_LABELS (comma-separated, .env) lists them; without it, the
+# gateway alone, as before.
+# Read from the file, not from the sourced environment: sourcing .env as
+# shell turns an unquoted "a, b" into an assignment of "a," plus a COMMAND
+# named "b", so a natural comma-and-space list was silently dropped.
+reload_raw=$(grep -E '^[[:space:]]*CERT_RELOAD_LABELS=' "${REPO_DIR}/.env" 2>/dev/null \
+    | tail -1 | cut -d= -f2- | tr -d "\"'")
+labels="${reload_raw:-${GATEWAY_LAUNCHD_LABEL:-com.roha.dlna-gateway}}"
+failed=0
+if command -v launchctl >/dev/null 2>&1; then
+    uid=$(id -u)
+    old_ifs="${IFS}"; IFS=','
+    for label in ${labels}; do
+        label=$(echo "${label}" | tr -d '[:space:]')
+        [ -z "${label}" ] && continue
+        log "INFO kickstarting ${label} to load new cert"
+        if launchctl kickstart -k "gui/${uid}/${label}" >> "${LOG}" 2>&1; then
+            log "OK ${label} kickstarted"
+        else
+            log "ERROR launchctl kickstart ${label} exited $? — it may still serve the OLD cert; restart it by hand"
+            failed=1
+        fi
+    done
+    IFS="${old_ifs}"
+else
+    log "WARN launchctl not found; restart ${labels} by hand to load the new cert"
+fi
+
 log "OK renewal complete; new expiry ${new_end}"
-exit 0
+exit "${failed}"
