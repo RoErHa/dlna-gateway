@@ -320,7 +320,7 @@ it), unauthenticated SSDP that could point the gateway at a third party or
 cost it unbounded threads, unbounded reads and connection counts, unverified
 outbound TLS, and escaping that missed quoted attributes. Each fix ships with
 a regression test verified to fail on the unfixed code; the reasoning is in
-`CLAUDE.md` → "Security posture" so it does not get quietly undone.
+[docs/SECURITY_POSTURE.md](docs/SECURITY_POSTURE.md) so it does not get quietly undone.
 
 **Can a media file make the gateway phone home? No.** The tag reader takes a
 fixed allowlist of scalar fields and never reads ID3 URL frames, and embedded
@@ -402,6 +402,53 @@ performer — rather than fragmenting into one album per artist.
 - **`.mp4` is intentionally excluded** from the audio scan (music-video
   case). Supported: FLAC, MP3, AAC/M4A/ALAC, OGG/Opus, WAV, AIFF,
   DSF/DFF, APE, WMA.
+
+## Bit-perfect listening (macOS / iOS)
+
+**Best chain.** Play to the Naim via UPnP. Gateway is not in the
+audio path; macOS / CoreAudio is not in the audio path; RoHaLocalFS
+serves directly to the renderer. This is the recommended setup when
+bit-perfect matters.
+
+**For browser playback on macOS,** the chain is:
+RoHaLocalFS → gateway `/stream` proxy → browser HTML5 `<audio>` →
+CoreAudio → output device. macOS still applies sample-rate conversion
+if the output device's rate doesn't match the source.
+
+### Audio MIDI Setup
+
+`/System/Applications/Utilities/Audio MIDI Setup.app`:
+- Select the output device.
+- Set **Format** sample rate to match the source material:
+  - CD rips: 44100 Hz / 16-bit
+  - Hi-res FLAC: 96000 Hz / 24-bit
+  - DXD: 192000 Hz / 24-bit
+- Mismatched rates cause CoreAudio SRC. With a mixed-rate library
+  the only "right" choice is to either pick the rate of your majority
+  format, or switch to UPnP/Naim for hi-res sources.
+
+### System Settings → Sound → Output
+
+- Turn off any **Spatial Audio** / **Audio Enhancements** on the
+  selected output device.
+- Bluetooth / AirPods are **always lossy** on macOS (codec
+  re-compression); use wired output for bit-perfect listening.
+
+### Limits of browser bit-perfect on macOS
+
+Browsers always go through CoreAudio's shared mixer; you can minimise
+but not fully eliminate it. For true hog-mode / exclusive-mode
+bit-perfect listening from a Mac, use Audirvana or Roon — outside the
+gateway's scope.
+
+### iOS / iPadOS PWA
+
+Ensure these are **off**:
+- Settings → Accessibility → Audio/Visual → **Headphone
+  Accommodations**.
+- Settings → Music → EQ (set to **Off**, not "Flat").
+- Settings → Sounds & Haptics → Headphone Audio → Volume Limit.
+- Spatial Audio toggles on connected headphones.
 
 ## Cross-platform notes
 
@@ -486,7 +533,7 @@ The suite runs in layers of increasing fidelity:
 
 Real-device iOS behaviour (standalone home-screen PWA, autoplay, lock-screen
 audio) isn't automatable and is covered by the manual checklist in
-[CLAUDE.md](CLAUDE.md) — which also has the full setup + commands for the opt-in
+[docs/TESTING.md](docs/TESTING.md) — which also has the full setup + commands for the opt-in
 smoke layers.
 
 ### Code quality gates
@@ -582,7 +629,7 @@ which is not a gateway dependency).
 
 For the deep dive on threading, the ASGI app + bridge, the per-renderer
 playback model, the `LibraryProvider` seam, external services, and module
-layout, read [CLAUDE.md](CLAUDE.md). It's written for a future engineer
+layout, read [CLAUDE.md](CLAUDE.md) and the `docs/*.md` write-ups it points to. It's written for a future engineer
 (or AI assistant) picking up the code cold.
 
 ## Acknowledgments

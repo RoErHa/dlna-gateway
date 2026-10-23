@@ -53,21 +53,11 @@ violations** so any hit is a real regression rather than backlog:
 | `tests/test_no_silent_swallows.py` — observability | — | log the exception, or narrow the `except` |
 | **T0.BADGES** — the README's numbers (added 2026-08-26) | `tools/badges.py` | `python3 tools/badges.py --write` |
 
-**T0.BADGES** exists because the badge strip was typed by hand, and a
-number nobody verifies is worse than no number: a reader believes it.
-`tools/badges.py` renders the strip from the suites. The **unit** and
-**browser** counts are collected without running anything, so
-`tests/test_badges.py` checks them for the price of a discovery pass.
-The **checks** count cannot be done that way — the only way to know how
-many checks `run_all.py` performs is to perform them, and a unit test
-that ran the runner would recurse into itself — so it is verified by
-`run_all.py` at the end of an `--offline` run, against the total it has
-just counted. **The gate is last on purpose: it counts itself**, as
-`passed + failed + 1`. Only an offline run can speak for that number,
-because live mode performs extra checks that `--offline` skips.
-
-Both halves were verified by breaking them: a wrong checks number reddens
-the gate, a wrong unit count fails the unit test.
+**T0.BADGES** — why it exists and how the checks/unit/browser halves are
+verified is in README.md → "Code quality gates". The one thing to know
+when touching it: the gate is **last on purpose, it counts itself**
+(`passed + failed + 1`), and only an `--offline` run can speak for that
+number, because live mode performs extra checks.
 
 **ruff** (`pyproject.toml`): rules chosen because each catches a defect
 class, not a style preference — `F, E9, W, B, RET, UP, C4, PIE, ASYNC`.
@@ -115,7 +105,8 @@ violations), shows the drift, and rewrites the badges on `--apply`;
 staleness gate, unlike `test_schema_sync.py`: that gate would have to run
 the suite to learn the suite's own numbers, and a suite that fails because
 it cannot count itself is a worse failure mode than a stale badge. Run it
-when the counts move. `python3 -m unittest tools.test_regen_badges -v` —
+when the counts move (it re-execs itself under `.venv`, because counting a
+test module means importing the app). `.venv/bin/python -m unittest tools.test_regen_badges -v` —
 24 tests, over the shields.io encoding (an unescaped `-` or `,` silently
 renders as a broken label) and over the prose checker below.
 
@@ -229,114 +220,22 @@ of the form *"clicking X must POST {body} to /api/Y"* are one-liners:
 Call `gateway.clear_requests()` before the user action so stale init
 calls don't false-match.
 
-### Real-Safari smoke layer (`tests/frontend/safari_smoke.py`)
+### Opt-in real-browser smoke layers
 
-The Playwright suite runs **Chromium** by default (and optionally its bundled
-**WebKit** via `--browser webkit` — which is desktop WebCore/JSC, *not* real
-Safari and *not* iOS: it caught the video `native` vs `native-hls` codec
-divergence, but not the SW/PWA/autoplay class). `safari_smoke.py` fills the next
-rung: an **opt-in Selenium/safaridriver script that drives the actual Safari on
-this Mac**, whose real WebKit Service-Worker lifecycle is closer to iOS than
-Chromium's. It boots the same `StubServer` and runs three checks — app boots +
-renders, SW reaches `activated`, and **poison-recovery** (poison the app-shell
-cache → reload → the app must still render, i.e. network-first on real WebKit —
-the exact 2026-06-27 outage condition; see the SW cache-tiers note above).
+`tests/frontend/safari_smoke.py` (real desktop Safari via safaridriver) and
+`tests/frontend/ios_sim_smoke.py` (real Mobile Safari in an iOS Simulator via
+Appium/XCUITest) run the same three checks: app boots + renders, the Service
+Worker reaches `activated`, and **poison-recovery** (poison the app-shell
+cache → reload → the app must still render — the 2026-06-27 outage). Both are
+opt-in and NOT in `run_all.py` (a real Safari window / a booted Simulator +
+Appium server). Playwright `--browser webkit` is desktop WebCore, *not*
+Safari and *not* iOS. **Honest scope:** none of these can script standalone
+home-screen PWA mode, autoplay/audio-session policy or WKWebView networking —
+the real-device checklist stays the final iOS gate.
 
-Deliberately **NOT** in `run_all.py`: safaridriver has no headless mode (a real
-Safari window opens), allows only one session, and needs one-time enablement.
-Setup: `.venv/bin/pip install selenium` (optional dev dep, not in
-`requirements.txt` — same as pytest/playwright) · `safaridriver --enable` ·
-Safari → Settings → Advanced → "Show features for web developers" → Develop →
-"Allow Remote Automation". Run: `.venv/bin/python tests/frontend/safari_smoke.py`
-(exit 0 = pass). **Honest scope:** desktop Safari ≠ iOS Safari — no
-standalone-PWA mode, autoplay/audio-session policy, or WKWebView networking, so
-the "Mobile / PWA testing checklist" (real device) stays the iOS gate; this
-covers the Safari engine + SW class only.
-
-### iOS-Simulator smoke layer (`tests/frontend/ios_sim_smoke.py`)
-
-The highest-fidelity **automated** iOS rung: drives real **Mobile Safari in an
-iOS Simulator** via Appium/XCUITest, so it exercises the genuine iOS
-Service-Worker lifecycle (the class behind the 2026-06-27 outage) that even
-desktop Safari only approximates. Same three checks as `safari_smoke.py` (boot +
-render, SW `activated`, and **poison-recovery** — poison the app-shell cache →
-reload → app must still render, network-first on Mobile Safari). Verified
-passing on iOS 26.5 / iPhone 15. Also opt-in, NOT in `run_all.py` (needs a
-booted Simulator + a running Appium server; slow first-run WebDriverAgent
-build). Default device `iPhone 15`; override with `IOS_DEVICE` / `IOS_VERSION` /
-`APPIUM_URL`. **Same honest scope caveat as above** — even the Simulator can't
-script standalone home-screen PWA mode, autoplay/audio-session, or WKWebView
-networking; the real-device checklist stays the final iOS gate.
-
-One-time setup:
-```bash
-xcodebuild -downloadPlatform iOS                 # iOS Simulator runtime (~8.5 GB)
-npm install -g appium && appium driver install xcuitest
-.venv/bin/pip install Appium-Python-Client        # optional dev dep, not in requirements.txt
-```
-
-Appium server (start / stop):
-```bash
-appium >/tmp/appium.log 2>&1 &                    # start (listens on :4723)
-curl -s http://127.0.0.1:4723/status              # health check ({"ready":true})
-pkill -f "node.*appium"                           # stop
-```
-
-Simulator devices (create-once already done for 15/16/17; boot / shutdown):
-```bash
-# create (only if a device is missing):
-xcrun simctl create "iPhone 16" \
-  com.apple.CoreSimulator.SimDeviceType.iPhone-16 \
-  com.apple.CoreSimulator.SimRuntime.iOS-26-5
-xcrun simctl boot "iPhone 15"                     # boot (also "iPhone 16" / "iPhone 17")
-xcrun simctl boot "iPhone 16"
-xcrun simctl boot "iPhone 17"
-xcrun simctl list devices | grep Booted           # what's running
-xcrun simctl shutdown "iPhone 15"                 # stop one (or: shutdown all)
-xcrun simctl shutdown all
-open -a Simulator                                 # optional: show the sim window
-```
-
-`chaos.py` hard-fails if it sees any 5xx, a **crash signature** is appended
-to `/tmp/dlna-gateway.err` (= silent thread death), or a snapshot takes >5s.
-Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string
-`ValueError` that was killing the renderer-queue daemon thread invisibly.
-
-**The stderr criterion reads CONTENT, not byte count (2026-08-26).** It used
-to fail on any growth at all, which asks the wrong question: that path is the
-launchd **stderr sink**, so hypercorn's `[INFO] Running on …` banner lands
-there on every boot — and `launchctl kickstart -k` SIGKILLs the old process,
-which flushes `resource_tracker: leaked semaphore objects` on the way out
-*every single time* (18 of them had accumulated in the live file, one per
-restart). A restart overlapping a run therefore failed it while nothing had
-crashed. `classify_stderr` (pure, tested) now looks for `Traceback`,
-`Exception in thread`, `Fatal Python error` and `Segmentation fault`; benign
-growth is reported with a line count and passes. The marker list is
-deliberately short — this canary only earns its keep if a hit is worth waking
-up for, so an `[ERROR]` line or a 500 the run provoked on purpose must not
-trip it. A file truncated mid-run is detected (size < offset) and re-read
-from the start rather than compared against a stale position.
-`tests/test_chaos_stderr.py` (10) covers both directions, including a real
-crash buried inside restart noise.
-
-> ⚠️ **Cold-start caveat, unrelated and NOT a wedge:** the first
-> `snapshot (no udn)` after a restart pays one full SOAP timeout for any
-> switched-off renderer (measured 6.1 s with the LG TV off), because the
-> `_UNREACHABLE_BACKOFF_SEC` backoff and the per-queue snapshot cache are
-> both empty. It trips the >5 s hard-fail on a first run and passes on the
-> next (6.2 s total, PASS). Give a freshly-restarted gateway one warm-up run
-> before believing a slow-snapshot failure.
-
-Each core module also has a standalone self-test:
-
-```bash
-python dlna_config.py              # config/logging
-python dlna_discovery.py           # SSDP discovery (20s live scan)
-python dlna_content.py <control-url>  # UPnP SOAP
-python dlna_library.py             # DB operations (composition + pool smoke test)
-python db_pool.py                  # concurrent DB stress test
-python dlna_player.py              # QueueRegistry + duration-parser self-test
-```
+One-time setup (safaridriver, Appium, simulator runtimes), the Appium /
+`xcrun simctl` start-stop commands, and the **Mobile / PWA real-device
+checklist**: **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Architecture
 
@@ -389,14 +288,14 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_library_credits.py` | `CreditsMixin` — the `track_credits` store (MusicBrainz composer/lyricist for the tracks whose files carry none). Same survives-`clear(udn)` family as `album_art` and `lyrics`: every row cost a rate-limited round-trip. |
 | `dlna_library_facets.py` | `FacetsMixin` — the tag-sliced facets (genres, decades), their flat track listings, and the play-count-biased radio picker. Owns `_EFFECTIVE_YEAR`. |
 | `dlna_library_videos.py` | `VideosMixin` — the GWMovies index, the date/location/person browse queries, location overrides, Immich person tags, Nominatim geocode cache. |
-| `dlna_credits.py` | Is this songwriting credit a NAME or machine junk? Display-only, shared by every surface that shows composer/lyricist. Exists because 8% of this library's credits are scene adverts (`www.t.me/…`). See **[Songwriting credits](#songwriting-credits-composer--lyricist)**. |
+| `dlna_credits.py` | Is this songwriting credit a NAME or machine junk? Display-only, shared by every surface that shows composer/lyricist. Exists because 8% of this library's credits are scene adverts (`www.t.me/…`). See **[Songwriting credits](docs/LIBRARY_RULES.md#songwriting-credits-composer--lyricist-2026-09-20)**. |
 | `dlna_mbid.py` | "Is this MusicBrainz artist OUR artist?", decided purely. The keystone: one wrong id is wrong in four sources at once, so it REFUSES rather than guesses. Owns the `&`-is-never-split and every-dash-folds-to-a-space rules. |
 | `dlna_lineup.py` | "Who was in the band when this song was recorded?" — pure date-intersection over band membership. Needed because per-recording credits cover only ~17% of tracks while membership is near-universal. |
 | `dlna_artist_fetch.py` | The four artist-metadata sources (MusicBrainz, Wikipedia, Last.fm) with PARSING split from HTTP — the parsers are pure and carry the judgement, so that is where the tests are. Owns the `member of band` DIRECTION rule. |
 | `dlna_library_artists.py` | `ArtistsMixin` — the artist → MBID store, the display facts, and the band line-up. Same `clear(udn)` contract as `album_art`: each row cost a rate-limited round-trip. |
 | `dlna_artist_infer.py` | The pure decision "can we say who performed this, without guessing?" — SHARED by `tools/artist_from_folder.py` (writes the tag) and the worklist sweep (takes what is left), so the two can never disagree. |
 | `dlna_library_worklist.py` | `WorklistMixin` — the "- Unknown Artists -" hand-editing worklist: the one place the gateway admits it cannot do a job in code. Split from `collections` 2026-08-25 when the sweep pushed it past 400 lines. |
-| `dlna_library_languages.py` | `LanguagesMixin` — which language each audiobook is in, for the PWA's 🌐 letter-bar entry. ASSERTED languages (a file tag, or set by hand) live in `book_language`; a DETECTED one is derived on every read and never stored. See **[Audiobooks by language](#audiobooks-by-language--the--entry-2026-10-12)**. |
+| `dlna_library_languages.py` | `LanguagesMixin` — which language each audiobook is in, for the PWA's 🌐 letter-bar entry. ASSERTED languages (a file tag, or set by hand) live in `book_language`; a DETECTED one is derived on every read and never stored. See **[Audiobooks by language](docs/AUDIOBOOKS.md#audiobooks-by-language--the--entry-2026-10-12)**. |
 | `dlna_book_language.py` | The pure decision "what language is this book written in?" over its path, album tag and chapter titles — and `normalize_language`, which turns a tag value or a typed code into ISO 639-1. Refuses rather than guesses: a book the words do not decide is Unknown. |
 | `dlna_asgi_books.py` | `GET /api/book_languages` + `GET /api/book_language_albums` — the 🌐 view. Its own module because `dlna_asgi_browse.py` sits at its budget. |
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
@@ -410,9 +309,9 @@ python dlna_player.py              # QueueRegistry + duration-parser self-test
 | `dlna_providers/` | `LibraryProvider` seam (P0). Protocol + dataclasses + registry; `mock.py` for tests; `upnp.py` (P1) wraps the existing UPnP SOAP path; `localfs.py` (P2) is the in-process backend (mutagen + watchdog + a content-hashed track id), split into `localfs_tags.py` (what a file SAYS about itself — the album-key folder identity and the namespace-salted track id), `localfs_art.py` (what the album LOOKS like — embedded pictures, and the folder-image fallback that is the only half reading sibling files), `localfs_read.py` (`ReadMixin`, the Protocol read surface) and `localfs.py` itself (the scan/upsert half — which STAYS there because the tests patch `dlna_providers.localfs._read_tags` and friends). `plex.py` / `jellyfin.py` land in P3+ if/when the LocalFs path proves the seam works. |
 | `dlna_localfs_http.py` | The PURE helpers behind the file server: building the DLNA response-header pair for a MIME type, parsing a `Range:` header (a malformed range must yield **416**, never a silent full-body 200), and `resolve_within` — the containment test every byte route asks before opening a file (path COMPONENTS, not string prefixes; returns the RESOLVED path so the caller cannot re-open the original through a TOCTOU gap). |
 | `dlna_localfs_server.py` | LocalFs HTTP file server (P3). `ThreadingHTTPServer` on its own port (default 8200, bound `0.0.0.0`). `GET /localfs/stream/<id>` resolves via `library.db` and streams the original bytes in 64 KB chunks. Range-aware (`Accept-Ranges: bytes`, `Content-Range`, 206 / 416), DLNA-headered (`DLNA.ORG_PN`, `transferMode`), bit-perfect. Path-traversal defence via `allowed_roots`. Also serves `GET /localfs/art/<id>` — the file's first embedded cover picture on demand via `_extract_art_bytes` (FLAC/ID3/MP4, MIME sniffed from magic bytes), 12 MB cap, 404 on no-art. |
-| `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. REGISTERS THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — with `dlna_localfs_watch.WATCH`, and owns what BRINGING ONE UP means: ensure the one file server (started by the first root to arrive, widened by each later one), construct a `LocalFsProvider` with the LAN-IP `base_url`, bind it via `dlna_providers.bind_provider`, add a synthetic `MediaServer` to `SERVERS`, and scan it in the background. See **[One unmounted volume must not take the others down](#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
-| `dlna_walk.py` | Can this directory walk be trusted to say a file is GONE? The pure rule (`trusted_removals`) the music rescan asks before deleting `tracks` rows: `os.walk` swallows directory errors, so an unreadable folder reads as deleted; a walk that saw no audio at all is a drive gone wrong, not a library emptied. Holds back only the removals UNDER an errored folder, so one permanently unreadable folder never freezes removal everywhere. See **[A rescan may only call a file gone when the walk looked](#a-rescan-may-only-call-a-file-gone-when-the-walk-looked-2026-10-10)**. |
-| `dlna_localfs_watch.py` | WHEN each root gets wired — the half `maybe_start_localfs` used to answer once, at boot, and get wrong on a reboot that outran the drive. Holds each configured root's state (`waiting` / `active`), activates it exactly once when its volume is present, re-checks the rest every `$LOCALFS_ROOT_RECHECK_SEC` (30 s) on a thread that retires when nothing is waiting, and — the part the log alone never achieved — backs `GET /api/libraries` + a `libraries` SSE event so the PWA can name the drive to mount. Deliberately generic: it knows "a labelled path that may appear", never music/video/books. See **[A root is asked for ONCE](#a-root-is-asked-for-once-and-boot-is-the-wrong-moment-2026-09-12)**. |
+| `dlna_localfs_wiring.py` | Boot-time wiring of the LocalFs provider (P4). `maybe_start_localfs(get_lan_ip)` is called from `dlna_gateway.main()`. REGISTERS THREE **independent** roots — music (`$LOCALFS_MUSIC_ROOT` / `localfs.root`), video, audiobooks — with `dlna_localfs_watch.WATCH`, and owns what BRINGING ONE UP means: ensure the one file server (started by the first root to arrive, widened by each later one), construct a `LocalFsProvider` with the LAN-IP `base_url`, bind it via `dlna_providers.bind_provider`, add a synthetic `MediaServer` to `SERVERS`, and scan it in the background. See **[One unmounted volume must not take the others down](docs/LIBRARY_RULES.md#one-unmounted-volume-must-not-take-the-others-down-2026-09-10)**. Kept in its own module so the run_all.py "Gateway is slim (<350 lines)" lint stays green. |
+| `dlna_walk.py` | Can this directory walk be trusted to say a file is GONE? The pure rule (`trusted_removals`) the music rescan asks before deleting `tracks` rows: `os.walk` swallows directory errors, so an unreadable folder reads as deleted; a walk that saw no audio at all is a drive gone wrong, not a library emptied. Holds back only the removals UNDER an errored folder, so one permanently unreadable folder never freezes removal everywhere. See **[A rescan may only call a file gone when the walk looked](docs/LIBRARY_RULES.md#a-rescan-may-only-call-a-file-gone-when-the-walk-looked-2026-10-10)**. |
+| `dlna_localfs_watch.py` | WHEN each root gets wired — the half `maybe_start_localfs` used to answer once, at boot, and get wrong on a reboot that outran the drive. Holds each configured root's state (`waiting` / `active`), activates it exactly once when its volume is present, re-checks the rest every `$LOCALFS_ROOT_RECHECK_SEC` (30 s) on a thread that retires when nothing is waiting, and — the part the log alone never achieved — backs `GET /api/libraries` + a `libraries` SSE event so the PWA can name the drive to mount. Deliberately generic: it knows "a labelled path that may appear", never music/video/books. See **[A root is asked for ONCE](docs/LIBRARY_RULES.md#a-root-is-asked-for-once-and-boot-is-the-wrong-moment-2026-09-12)**. |
 | `dlna_content.py` | UPnP ContentDirectory SOAP client (`cd_browse`, `cd_search`). After Phase 1, reached ONLY via `dlna_providers/upnp.py`. |
 | `dlna_avtransport.py` | UPnP AVTransport SOAP client (send/stop/pause/state/position/seek) |
 | `dlna_rendering_control.py` | UPnP **RenderingControl** SOAP client (`SetVolume`/`GetVolume`) — a genuinely separate service with its own control URL, so the split follows the protocol boundary. Re-exported from `dlna_avtransport`. |
@@ -644,756 +543,177 @@ video_people(video_id, person, person_id, updated_at)
   clear_videos. Feeds the "👤 By person" DLNA container + PWA grouping.
 ```
 
-### One unmounted volume must not take the others down (2026-09-10)
-
-The three LocalFs roots — music, video, audiobooks — live on different
-disks and are configured independently, but `maybe_start_localfs` used
-to `return` when the **music** root was absent, before the file server
-was started. So an unmounted music drive also took down the audiobooks
-sitting on a healthy one.
-
-**It did not present as "music is missing."** With no file server there
-was no `MediaServer` in `SERVERS`, and `dlna_ssrf.guard` only lets a
-private destination through when its host is a known device — so every
-`/stream` and `/art` against `:8200` was refused, the relay correctly
-declined to hand a non-200 to `<audio>` (§Two things the relay must
-keep doing), and the PWA skipped **every track in the queue at about
-one per second**. From the sofa that is "nothing plays, every song
-skips"; in `gateway.log` it is one WARNING at boot and then thousands
-of `SSRF guard: refused stream of …` lines. The trigger here was a
-locked APFS volume, which macOS declines to mount at all.
-
-`_resolve_root` now answers "configured, and actually there?" for each
-root on its own, and the server starts on whatever resolved:
-
-- **A missing root disables only itself**, whichever one it is. The
-  music root has no special status any more.
-- **The server starts if at least ONE root resolves** — video has no
-  `LibraryProvider` but its bytes come from the same `:8200`, so a
-  video-only setup still needs it.
-- **No root resolving starts NOTHING.** An empty `allowed_roots` is a
-  server that refuses every path while looking alive. The server is
-  started by the FIRST root to arrive instead — which, since the
-  boot-race fix below, may be minutes after boot.
-- **Each initial scan is guarded on its own**, so one unreadable tree
-  never costs the other library its index.
-
-Guarded by `tests/test_localfs_wiring.py` (18). Four of them genuinely
-fail against the old code — verified by reverting it and re-running,
-including the audiobooks-survive-a-missing-music-root case.
-
-**The Naim's music tree had the same bug from the other side.** The PWA
-and Subsonic both degraded cleanly — they read the server registry, so
-music simply stopped being offered — but `api_upnp` backed its
-Artists/Albums/Genres tree with `DB.primary_udn()`, which is pure SQL
-over `tracks`: *the udn with the most rows*. **`tracks` outlives its
-files.** With the volume unmounted the music rows are still the majority
-of the index, so the Naim was handed a full 26k-track tree in which
-nothing could play — browsing worked, pressing play 404'd.
-
-`api_upnp_ids.music_udn()` now answers *which music library is actually
-serving*, and the root offers Artists/Albums/Genres only while one is:
-
-- **A registered `MediaServer` is the evidence.** The wiring above adds
-  one per root it actually brought up; books and videos are excluded
-  because they own their own containers.
-- **`primary_udn(among=…)`** narrows the same ranking to those udns, so
-  "the biggest library" still decides — among the ones that can serve.
-  An empty `among` means nothing is serving and returns `''`; that is
-  the OPPOSITE of `None`, which means don't restrict.
-- **An EMPTY registry is deliberately not read as "nothing is live".**
-  The SSDP announcer starts BEFORE `maybe_start_localfs`, so a control
-  point browsing in that window would be told the library is empty — and
-  a client that caches an empty tree is a worse failure than the stale
-  one this fixes. Only registered-but-no-music returns `''`.
-- **A stale bookmark still opens an empty container, never a fault.**
-
-Guarded by `tests/test_upnp_music_liveness.py` (16); three genuinely
-fail against the old code. ⭐ Favourite Albums and Playlists are NOT
-gated — they are user-curated and can hold books or radio, so a row
-that no longer resolves stays visible for `tools/audit_playlist_orphans.py`
-rather than vanishing.
-
-### A root is asked for ONCE, and boot is the wrong moment (2026-09-12)
-
-The fix above resolves each root at boot. That is the wrong **number
-of times** to ask, and the next reboot proved it: launchd started the
-gateway at **20:06:36**, and at **20:06:50** macOS had not finished
-mounting the external music drive.
-
-Everything then worked as designed — music and video disabled
-themselves, audiobooks came up — and the drive mounted a few seconds
-later with **nothing re-asking**. The gateway ran **seventeen hours**
-with a file server whose `allowed_roots` held only the books, while
-`tracks` still listed all 26k music rows. So every album browsed
-perfectly and every play 403'd:
-
-```
-path-traversal blocked: /Volumes/SAMDATA/Music/…/Burning Down The House (Live).flac
-                        not under ('/Volumes/SAMDATA-1TB/Audio_Books',)
-stream ✗ upstream 403 … — refusing to relay a non-media body
-client_log[audio_error] code=4 codeName=unsupported
-```
-
-Note the tell is DIFFERENT from the outage above: the containment
-check (§Security posture 8) catches it before the SSRF guard does, so
-it is a `path-traversal blocked` line naming a music path and the
-audiobooks root, not a `refused stream of …`.
-
-**A missing root is now a WAITING root** (`dlna_localfs_watch.py`).
-`maybe_start_localfs` REGISTERS all three with `WATCH` instead of
-resolving them itself; whichever are present activate at once, and the
-rest are re-checked every `LOCALFS_ROOT_RECHECK_SEC` (default 30 s) by
-one daemon thread that **retires when nothing is left waiting**, so a
-fully-mounted machine carries no idle thread. Four things there are
-load-bearing:
-
-- **The file server starts on the FIRST root to arrive**, whenever
-  that is, and every later one WIDENS it via
-  `dlna_localfs_server.add_allowed_root` — which rebinds the tuple
-  rather than mutating it, because the serving threads read
-  `allowed_roots` off the handler class and must see the old tuple or
-  the new one, never a half-built one. Canonicalisation lives there
-  beside `make_handler_class`: `resolve_within` compares RESOLVED
-  paths, so a raw root would silently never match.
-- **Activation happens exactly once.** The state flips to ACTIVE
-  BEFORE the callback runs — it starts a server, binds a provider and
-  registers a device, and a re-check firing meanwhile would publish
-  the library twice.
-- **A failed activation is NOT retried.** The root IS there; what
-  failed is our handling of it (a port in use, say). Retrying every
-  30 s would repeat the failure forever and re-run whichever half
-  succeeded — so it is logged once and recorded on the row.
-- **An unconfigured root is not tracked at all.** Off is not waiting.
-  Telling someone their Video library is unavailable when they never
-  configured one is exactly the noise that buried the last outage.
-
-**And the person is told.** The whole outage hid behind ONE boot-time
-WARNING in `gateway.log`, which is not a place anyone looks from the
-sofa. `WATCH.snapshot()` backs **`GET /api/libraries`** (one row per
-configured root, and a waiting one carries a `message` naming the
-volume to mount), and every state change publishes a `libraries` SSE
-event. The PWA renders `#library-bar` — the same shape as the index
-bar above it — from `refreshLibraries()`, called at **boot** (before
-the first poll tick: a missing drive is the first thing to say, not
-the last), on the `libraries` event, and on the `servers` poll as the
-dropped-event fallback. A failed fetch leaves the bar **as it was** —
-a dropped tailnet must not read as "the drive came back".
-
-Activation also publishes `devices`, because the source picker has
-just gained an entry — `SERVERS.add` does not fire `_on_server_found`,
-which is the discovery hook, so nothing else would say so.
-
-Guarded by `tests/test_localfs_watch.py` (25),
-`tests/test_localfs_wiring.py` (18) and
-`tests/frontend/test_library_bar.py` (8). Verified by breaking BOTH
-halves: neutering the re-check reddens 7 of 8 late-mount tests, and
-neutering `add_allowed_root` reddens the three that assert what the
-one file server ends up allowed to serve.
-
-### A rescan may only call a file gone when the walk looked (2026-10-10)
-
-A LocalFs rescan decides "removed" by ABSENCE: a cached path the walk
-did not visit is treated as deleted, and its `tracks` row goes with it.
-The video scanner proved how badly that reads a failing drive — on
-2026-10-03 a walk that saw 0 files pruned all 4,104 videos. The music
-scanner had the same shape with three holes, all now closed through
-`dlna_walk.trusted_removals`:
-
-- **A folder that fails to list.** `os.walk` swallows directory errors
-  by default, so an I/O error or a drive dropping mid-scan made
-  everything under that folder read as deleted. The walk now records
-  them (`onerror`), and removals UNDER an errored folder are held back.
-  Only under it — a single permanently unreadable folder must not freeze
-  removal across the whole library. Matched on path COMPONENTS, so an
-  error on `Lost` never shields `Lost Tapes` (§Security posture 8's trap).
-- **A walk that found no audio.** `probe()` refuses an EMPTY root, but a
-  stale mount point holding a few leftover folders passes it. Zero audio
-  seen against a non-empty index now removes nothing.
-- **A file whose `stat` fails** was left out of `seen_paths`, so one
-  unreadable file was deleted from the index. Unreadable is not gone.
-
-Each case WARNs naming what it held back. Consequence worth knowing:
-deleting the LAST audio file under a root no longer de-indexes it —
-that is indistinguishable from the drive going wrong. Guarded by
-`tests/test_walk_trust.py` (9); the three rescan cases fail against the
-old code, and a control proves a real deletion is still removed.
-
-### Folder-album identity — and the one folder it gets wrong (2026-08-25)
-
-A LocalFs album is its FOLDER (`album_key`), which is what reunites a
-Various-Artists compilation whose every track carries a different
-performer. That inference holds only while the folder is *claimed* by
-something: a real compilation names itself in the album tag.
-
-**A folder where every album tag is blank has claimed nothing**, and
-treating it as one album turns a junk drawer into a single enormous
-record. Measured live: `<music-root>/Unknown Artist/Unknown Album/` held **247
-tracks by 43 unrelated artists**, so playing one Marsh & Quinn song queued
-Rio Verde Social Club behind it, and none of those files has art. It
-read exactly like a corrupted database — it wasn't; playlists were 100%
-intact and every id resolved to the right file.
-
-`_localfs_album_group` (in `dlna_library_sql.py`, used by **all six**
-localfs GROUP BY sites) therefore groups blank-album rows **per artist**
-and tagged rows by folder as before. Three things there are load-bearing:
-
-- **The artist branch is PREFIXED (`'a:'||artist`).** Unprefixed it keys
-  on `''` — the same key the album branch uses — so untagged strays merge
-  into whatever real album shares their folder. That rendered as one
-  190-track "Various Artists" record.
-- **`album_tracks` narrows on the ROW, not the folder.** A first attempt
-  asked "does anything in this folder name an album?"; the real drawer
-  held four stray tagged files, so the answer was yes and the bug
-  survived. Tagged rows keep folder identity, which is what leaves
-  genuine compilations and every normal album untouched.
-- **Narrowing may never EMPTY an album.** A stale artist — a favourite
-  saved before a retag, an id a Subsonic client cached — falls back to
-  the whole folder. An album that resolves to nothing reads as data loss,
-  which is worse than the over-broad queue this prevents.
-
-`_localfs_album_name` also falls through to the folder leaf when the tag
-is blank; it used to satisfy `COUNT(DISTINCT album)=1` and win, so such a
-folder displayed as an album with no name at all.
-
-The remaining lump is honest: ~186 files with no artist tag either, so
-there is nothing to split them by. That is a **media** problem, and no
-rebuild fixes any of this — re-reading the same files with the same blank
-tags reproduces it exactly. Guarded by
-`tests/test_album_grouping.py::TestUntaggedFolderIsNotOneAlbum` and
-`::TestNarrowingLeavesRealAlbumsAlone`.
-
-### Missing artist tags — infer, or hand it over (2026-08-25)
-
-Some tracks carry no artist tag. Two questions follow, and they must be
-answered by the SAME code or they contradict each other: *can this be
-worked out?*, and *if not, who does it?*
-
-**`dlna_artist_infer.infer_artist(album_key, sibling_artists)`** owns the
-first. Pure, dependency-free, and shared by
-`tools/artist_from_folder.py` (which WRITES the inferred tag into the
-file) and `LibraryDB.sync_unknown_artist_playlist` (which sweeps up what
-is left). If the sweep were more generous than the tool, fixable tracks
-would sit in the worklist forever; stricter, and unfixable ones would
-vanish from it. Evidence order, strongest first:
-
-1. **Sibling unanimity** — every tagged track in the folder names the
-   same performer. A folder is an album.
-2. **An uncontradicted folder name** — nothing in the folder is tagged,
-   so there is nothing to weigh against the name on the tin
-   (`Mira Calvo (1996) Caminhos [FLAC]` → `Mira Calvo`).
-3. **A folder name a sibling confirms** — several spellings, one of which
-   IS the folder name (`Jean Vallier` beside `jean vallier`).
-
-Everything else returns `""`. The asymmetry driving all of it: **a blank
-artist asks a person; a wrong one files the track under a stranger and is
-never questioned again.** Hence the refusals, each a test:
-- a **compilation named after itself** — `Nights On Neptune` holds 20 artists
-  and is not a band; `Unknown Artist/Unknown Album` holds 126;
-- an **explicit `VA - …` folder outranks sibling unanimity**, because such
-  a folder can easily have exactly ONE tagged track (this really did
-  stamp a whole comp `Atlas & The Aviators`);
-- a **dated spaceless slug** is a bootleg directory, not a name
-  (`SVance2008-07-05-sbd`);
-- junk names match on the WHOLE string, never as a substring, or
-  "Various Comforts" and "The Unknown" get eaten.
-- The artist portion of a folder ends at the EARLIEST of `" - "`, `(`,
-  `[`, `{`. Stripping brackets in place instead yielded
-  `Mira Calvo Caminhos ` — the album glued onto the artist.
-
-**Everything unattributable carries ONE name: `Anon`** (`ANON_ARTIST`).
-Never a per-track guess. A made-up name that LOOKS like a performer is
-worse than an obvious placeholder — it can collide with a real act, and
-it never invites correction. `is_unattributed()` treats blank and `Anon`
-as the same state, so **every caller must ask that rather than testing
-for an empty string**; `Anon` is how these tracks BROWSE, not a claim
-about who played them, and they stay in the worklist either way.
-
-`is_a_performer_name()` is the guard that keeps shelves out of the artist
-field. Filename parsing lifts whatever sits left of the dash, which is
-often a soundtrack, a genre shelf or a track number; the FOLDER rule had
-the identical hole (a folder named `Guitar Lounge` was being recovered as
-an artist), so both now face the same test. Three refusals inside it are
-load-bearing, each learned the hard way on the real library:
-
-- **The known-album check is filename-only.** "This name is also an album
-  title" sounds right (an album name lifted into the artist field) and is
-  catastrophic as a bulk audit: **self-titled albums are everywhere**, so
-  it reclassified thousands of real artists as non-performers.
-- **`allow_numeric` exists because 112, 911, 999 and 98° are bands.**
-  Rejecting letter-less names catches `07` (a track number) when judging
-  one parsed filename, and erases four real artists when auditing tags
-  that already exist.
-- **`Various Artists` is protected**, checked BEFORE the junk set that
-  contains it. It is not a performer, but it is the sentinel
-  `_localfs_album_artist` emits for a multi-performer folder — rewriting
-  it would break album grouping, not just a tag.
-
-**`- Unknown Artists -`** takes the remainder: swept automatically at the
-end of each LocalFs scan, to be tagged by hand.
-
-- **It syncs both ways.** Newly-untagged tracks are added; a row whose
-  track has since gained an artist is pruned, because that work is done.
-  Consequence: **removing a row by hand does not make it stay gone** —
-  the next scan still sees a track with no artist. Give the file any
-  artist tag to settle it.
-- **It prunes a row when the work is done OR the file is gone.** In a
-  playlist a PERSON curated, a row pointing at nothing is a repair for
-  `tools/audit_playlist_orphans.py` and must never be deleted quietly —
-  but this list is GENERATED, so the opposite holds: a dead row is not
-  outstanding work, it is litter. Leaving them made the live worklist
-  read **44 items when 15 were real**, right while it was being worked
-  through. Another source's rows are still never touched, and a row
-  pointing at a real track always survives.
-- **Audiobooks opt out** (`collect_unknown_artists=False` in
-  `dlna_localfs_wiring`) — a chapter with no artist tag is ordinary
-  there, and ~550 would bury the music that needs the work.
-- Created only when there is something to put in it; the leading `- `
-  sorts it to the top. A sweep failure never fails a scan — the index is
-  the product.
-
-Live: of 141 artist-less tracks, **65 were recoverable from their folder**
-and 76 are genuine hand-work (the junk drawer, a Sam Vance bootleg slug,
-a handful of self-named compilations). Guarded by
-`tests/test_artist_infer.py` (26) and
-`tests/test_unknown_artists_playlist.py` (20).
-
-### `metadata_overrides`: NULL and `''` are opposites (2026-08-25)
-
-The table's contract is **NULL = no override for this field**, read back
-as `COALESCE(override.col, tracks.col)`. An empty string is NOT NULL, so
-it WINS that COALESCE and permanently blanks a field the file tags fill
-correctly — on every re-index, forever.
-
-That happened. `update_track_meta` seeded a new override row from the
-track's CURRENT values ("fill blanks from current track record"), so
-editing ONE field froze whatever the other three happened to be at that
-moment, blanks included. **74 rows ended up masking real tags**, and 11
-perfectly-tagged FLACs (MusicBrainz IDs, the lot) browsed with no artist and no album.
-
-**Why it hid for so long:** those tracks were invisible to the
-`- Unknown Artists -` sweep too, because their FOLDER can name them, so
-they counted as tool-work rather than hand-work and appeared in neither
-place. The tell was capitalisation — the DB's title was Title-Cased, the file's was sentence-cased, so the value had
-never come from the file.
-
-Fixed in three places, deliberately overlapping:
-- **The writer** (`_blank_to_null` in `dlna_library_overrides.py`) stores
-  `None` for any field that is blank, so an untouched field is *absent*
-  rather than *empty*. Only `''` is treated as absent — a typed space is
-  a choice, and guessing otherwise would be a different bug.
-- **The reader** (`dlna_library_tracks.py`) wraps each subselect in
-  `NULLIF(..., '')` before the COALESCE, so a stray `''` from ANY source
-  — an old row, a tool, a hand-written UPDATE — can never mask a tag.
-- **The data**: all `''` → NULL across the 11,620 rows (backup taken
-  first; `integrity_check` ok).
-
-Guarded by `tests/test_override_blank_masking.py` (10 tests). Three of
-them genuinely fail against the old code — verified by reverting both
-fixes and re-running, because a regression test that passes either way
-is worse than none.
-
-### "Show me this artist" means the same thing on every surface (2026-08-25)
-
-A LocalFs album is its FOLDER, so an artist's album list is every folder
-holding a track by them — compilations included. Opening one used to give
-the WHOLE folder: browsing to a performer and tapping a comp returned
-**356 tracks by other people** to reach the one you asked for. Search
-never had the problem, because it matches tracks and filters by artist.
-
-The fix is one line of intent in **`artist_albums`**: each row reports
-**the queried artist and the count of THEIR tracks**, not the folder's
-`Various Artists` aggregate. That is load-bearing far beyond the PWA —
-the PWA's `onOpen`, the Naim's `galbum:` container id and CarPlay's `al:`
-album id are ALL built from that row's `artist` field, so returning the
-real performer makes `album_tracks` narrow on all three surfaces without
-any of them knowing the rule exists. `HAVING track_count > 0` keeps a
-folder out of an artist's list when none of the tracks are theirs.
-
-**The artist page opens on THEIR records (2026-08-25).** `artist_albums`
-also returns `own` per row — `is_own_album(mine, folder_tracks,
-folder_artists)`: theirs when they hold at least half the folder, OR the
-folder has at most two performers, the clause that protects a duo record
-and a split album. Measured over all 6,390 artist/folder pairs in this
-library, **97.3% are not close** (2,074 at 50%+, 4,142 under 10%); the
-174 in between are mostly 3-to-9-performer folders.
-
-The PWA renders the `own` rows, then folds the rest behind an
-`Appears on N compilations` disclosure — **always folded, never
-remembered**, so every artist opens the same way and the page never
-depends on a state set days ago. An appearance's subtitle reads
-`1 track of 67`, which says "compilation" before the title is read.
-A source that sends no `own` field (anything non-localfs) treats every
-row as theirs, so nothing can silently vanish into a fold.
-
-**All three surfaces**, each given the honest equivalent of the same
-idea rather than a copy of the PWA's:
-- **The Naim** gets ONE `gappears:<b64(artist)>` container titled
-  `Appears on (N)` under the artist. UPnP has containers but no
-  dividers, so a sub-container is the fold. `gappears:` cannot be
-  swallowed by `gartist:` (they differ at the 8th character) — pinned by
-  a test, since the dispatch tables are disjoint by construction.
-- **CarPlay** gets order plus a name: Subsonic's `getArtist` has neither
-  dividers nor sub-containers, so their records come first and each
-  appearance reads `Big Comp · 1 of 67`. The marker goes in the DISPLAY
-  name only — changing the id would invalidate every album a client has
-  cached.
-
-**An artist with no records of their own shows their appearances
-directly** on all three. Folding is what stops compilations burying real
-albums; with none to bury it would leave a page holding a single
-collapsed row, one tap from that artist's only music.
-
-Guarded by `tests/frontend/test_appears_on.py` (11),
-`tests/test_appears_on_devices.py` (10) and the classification tests in
-`tests/test_album_grouping.py`.
-
-`album_tracks` then narrows whenever it is given a **named** performer.
-Two things keep that safe:
-- **`Various Artists` is the sentinel for "the folder itself"** and never
-  narrows, so the Albums view, favourites, genre and decade drill-downs
-  are byte-identical to before. For an ordinary single-artist album the
-  narrowing is a no-op, because `_localfs_album_artist` only yields a
-  real name when `COUNT(DISTINCT artist)=1`.
-- **Narrowing may never EMPTY an album.** A stale artist — a favourite
-  saved before a retag, an id a client cached — falls back to the whole
-  folder, because an album resolving to nothing reads as data loss.
-
-Guarded by `tests/test_album_grouping.py` (44), including a
-cross-surface class that round-trips the real UPnP container id and the
-real Subsonic album id — the rule is easy to undo by "fixing"
-`artist_albums` to report the aggregate again.
-
-#### An album's date, on every surface (2026-09-21)
-
-Reported as "I see the date of the tracks on an album but not the album
-date". Neither missing metadata nor anything the credits sweep would fix
-— **2,153 of 2,238 albums (96%) already had a year**; three queries
-simply never selected one. `all_albums`, `browse_letter`'s album branch
-and `album_tracks` now all carry it, alongside `artist_albums`.
-
-> ⚠ **Join a NARROWED view of `metadata_overrides`, never the table.**
-> It also has `artist` and `album` columns, so joining the whole thing
-> made every bare `album`/`artist` in an `ORDER BY` ambiguous, and the
-> UPnP branches that never got the join failed on `m.year` outright.
-> `LEFT JOIN (SELECT url, year FROM metadata_overrides) m ON m.url = t.url`
-> carries only what the expression needs and cannot collide with
-> anything. The same trap bites a second time inside the query:
-> **`year` is also a column of `tracks`**, so a bare `year` in `ORDER BY`
-> resolves against the source row, not the aggregate alias — order by
-> the expression. `tests/test_artist_chronology.py` (12).
-
-#### An album has TWO dates, and reporting one was wrong (2026-09-21)
-
-The first cut dated an album `MIN(_EFFECTIVE_YEAR)` — its oldest
-recording, each track having already been pulled back to its
-MusicBrainz original. The reasoning ("a 2011 remaster of a 1975 album
-belongs at 1975") is sound for a *career view* and was wrong as an
-album's label. Reported from the sofa, confirmed in the data:
-
-```
-Piper … 40th [Disc 1] 2007   tag 2007  no override   -> showed 2007
-Piper … 40th [Disc 2] 2007   tag 2007  override 1967 -> showed 1967
-Piper … 40th [Disc 3] 2007   tag 2007  override 1967 -> showed 1967
-Piper at the Gates of Dawn   tag 1967  no override   -> showed 1967
-```
-
-Two defects, compounding:
-- **The anniversary discs were indistinguishable from the original.**
-- **And only sometimes** — the pull-back needs a `metadata_overrides`
-  row, so whether a folder showed 2007 or 1967 depended on how far
-  `improve_song_years` had got. Same record, same tags, three answers.
-- **`MIN` is nonsense for a compilation**, which is most of the damage:
-  `VA - 100 Greatest Jazz Icons (2020)` showed **1946**, `Now #1s - 70
-  Years … (2022)` showed **1952**, `Kind Of Blue (2022 Remaster)` 1956.
-
-Measured: **842 of 2,249 albums displayed a year that was not their own;
-671 were out by 3+ years.**
-
-An album now reports both facts and asserts neither
-(`_ALBUM_EDITION_YEAR` / `_ALBUM_ORIGINAL_YEAR` in
-`dlna_library_sql.py`):
-
-| field | is | from |
-|---|---|---|
-| `year` | the EDITION — what this pressing says it is | `MAX` of the tracks' tag years |
-| `year_original` | the oldest recording on it | `MIN(_EFFECTIVE_YEAR)`, as before |
-
-- **`MAX` decides the edition, not `MIN`.** Every mixed-tag-year folder
-  in this library (71 of 2,112) is a compilation whose tracks carry
-  their own original years and whose compilation year is the newest of
-  them — and matches the year in the folder name. For an ordinary album
-  every track shares one year, so the choice never shows.
-- **`album_tracks` carries `year_edition` per row** so the album header
-  can still derive its date from the tracks it just fetched, which is
-  what makes it work from favourites, a genre, a decade or a search
-  result — none of which hand the view an album row.
-- **The client owns the display rule**, in ONE place:
-  `albumYearLabel(year, original)` renders `2007 · orig. 1967` at a gap
-  of `REMASTER_GAP_YEARS` (3) or more, else just the year. It is shared
-  by the album rows, the artist page and the album header — the artist
-  page had its own copy of the subtitle and that is exactly how the
-  three drifted apart. Same threshold the now-playing panel uses for
-  "(remastered)".
-- **The chronology sorts by what it displays.** A list whose order
-  disagrees with its own labels reads as a bug.
-
-> **The DECADE facet deliberately still uses `_EFFECTIVE_YEAR`.** "Which
-> decade is this music from" is a different question from "which pressing
-> is this": a 2007 reissue of a 1967 record belongs in the sixties.
-> `tests/test_album_year.py` (12) pins that, and
-> `tests/frontend/test_album_year.py` (7) pins the label.
-
-### Songwriting credits: composer + lyricist (2026-09-20)
-
-`tracks.composer` / `tracks.lyricist`, read straight from the tags
-already on disk. Measured over 1,500 files with EXACT per-format keys:
-**composer 32.3%, lyricist 18.4%**. (A first measurement said 46% — it
-matched `composer` as a SUBSTRING and counted empty `composersort`
-fields. Measure on whole keys.)
-
-Three things are load-bearing:
-
-- **mutagen's `easy=True` is NOT uniform.** FLAC and MP3 expose both
-  fields natively; **EasyMP4 registers neither**, so an `.m4a` holding a
-  real `©wrt` credit reads back blank — indistinguishable from an
-  untagged file. `dlna_providers/localfs_tags.py` registers the key at
-  import (guarded, so the module still imports without mutagen). One
-  line, no second file open on a 26k-file scan.
-- **A new column must join the change-guard, not just the SET.** Step 2a
-  of `upsert_tracks` only fires when its WHERE clause sees a difference.
-  A `beet parentwork` run writes ONLY the composer, so a guard that
-  doesn't mention it leaves the row stale forever and reports 0
-  refreshed. `tests/test_credits.py` (15) has that trap as a test; it
-  genuinely reddens with the clause removed.
-- **The three UNIQUE migrations rebuild `tracks` from their own
-  hardcoded DDL** — a third copy of the schema. New columns must be
-  added to `_TRACK_COLS` too, and backfill as `''` not NULL: they are
-  `TEXT DEFAULT ''` and the refresh guard compares with `!= ''`, which
-  a NULL never satisfies.
-
-Blank-safe on refresh like genre/art: a file that lost its tag never
-erases a stored credit.
-
-**Display is filtered** (`dlna_credits.clean_credit`). Scene releases
-advertise in the tag fields — 691 of 8,570 credited tracks (8%) carry
-`www.t.me/pmedia_music` or `www.thenzbplace.com`, so the panel read
-"Words www.t.me/pmedia_music". Both rules were measured against ALL
-2,447 distinct credit values: each matches exactly 2, zero false
-positives. Only a REPEATED punctuation run condemns a value, so
-`J.S. Bach` survives.
-
-> ⚠ **The rule that was tried and REJECTED**: "a credit with no A-Za-z
-> letter is junk". It matched 55 rows, every one a real composer —
-> Стравинский, Прокофьев, Чайковский, Рахманинов, Ջիվան Գասպարյան.
-> Hiding the Russian composers from a classical library is the opposite
-> of the feature. Same lesson as `is_a_performer_name`'s
-> `allow_numeric` (112, 911, 98° are bands): a shape test that encodes
-> "looks English" erases real data. **Never require a particular
-> script.** `tests/test_credit_cleaning.py` (12) names that class after
-> it.
-
-Shown in the now-playing panel under the year, off the SAME
-`/api/track_meta` request (`tests/frontend/test_credits.py` pins it at
-one). `composer == lyricist` is common — MusicBrainz returns Freddie
-Mercury as both for *Bohemian Rhapsody* — and renders once, as
-"Written by"; a genuine split reads "Music X · Words Y".
-
-#### Step 4 — the two thirds with no tag, via MusicBrainz works (2026-09-21)
-
-Tags answered 32%. The other ~18,000 tracks were filled from MusicBrainz
-into `track_credits`, taking live coverage to **73.9% (26,750 music
-tracks; 11,025 matched, 6,067 sticky `notfound`, 0 errors, ~2 h)**.
-
-**The ROUTE is the whole design.** The obvious one —
-search-recording → recording → work — is three rate-limited requests per
-song: 15,805 distinct songs, about **16 hours**, which does not fit a
-night. Browsing each **artist's works** returns up to 100 at a time, each
-already carrying its composer/lyricist relations: ~3,700 requests, about
-**1.2 hours**. That is the direct payoff from having resolved artists to
-MBIDs first — 2,307 artists with an mbid cover 95% of the composer-less
-tracks. It is what the keystone was for.
-
-- **Results go to `track_credits`, never `tracks.composer`.** A rescan is
-  blank-safe, but `clear(udn)` DELETEs `tracks` and a rebuild-index would
-  throw away the whole night.
-- **The file tag wins on read** —
-  `COALESCE(NULLIF(t.composer,''), c.composer)` in `track_meta_by_url`.
-  MusicBrainz is filling gaps, not correcting the owner.
-- **The work browse is deliberately BROAD** — it returns works the artist
-  is related to in any way, so Brian May's "Driven by You" comes back
-  under Pink Floyd. Harmless, because the caller only looks up titles of
-  tracks it already holds BY THAT ARTIST, so a stray work never matches.
-- **`writer` stands in for an absent composer.** MusicBrainz uses it when
-  the music/words split was never recorded; dropping it loses a real
-  credit. "reconstructed by" and friends are not authorship.
-- **Unmatched tracks get a sticky `notfound`** — without it a second pass
-  re-asks all 6,067 and costs another night.
-
-`tests/test_track_credits.py` (10). Run it with
-`python3 tools/track_credits.py --apply`; retry one by deleting its row.
-
-### Artist metadata — the MBID keystone, and who was in the band
-
-`artist_meta` + `artist_members`, filled by two sweeps. **Coverage on
-this library: 2,889 of 3,289 artists resolved (87.8%)**, of which 443
-cost no network at all.
-
-**Everything keys off a MusicBrainz artist id**, which is why resolving
-it is its own step: MusicBrainz, Wikidata, Wikipedia and ListenBrainz
-all take the same key, so one wrong id is wrong in four places at once
-— and a wrong id is worse than none, because a blank invites a fix while
-a plausible biography for the *other* band called Nirvana never gets
-questioned. `dlna_mbid.accept_match` therefore **refuses rather than
-guesses**, exactly like `dlna_artist_infer`.
-
-Rules that took evidence rather than reasoning (all in
-`tests/test_mbid_match.py` (27)):
-
-- **`&` is NEVER split, only fallen back to.** `Nick Cave & The Bad
-  Seeds`, `Billy Larkin & The Delegates` and `Jr Walker & The All Stars`
-  are single acts that match whole; eager splitting breaks all three.
-  Trying the split form only AFTER the full name fails still rescues
-  `Hans Zimmer & Benjamin Wallfisch` at no risk. **Commas are never
-  split at all** — `Anderson, Bruford, Wakeman, Howe` is the band.
-- **Every dash folds to a SPACE.** MusicBrainz spells names with
-  TYPOGRAPHIC dashes while tags use ASCII hyphen-minus, or nothing:
-  `Bachman-Turner Overdrive` (U+002D) vs MB's U+2013, `Jean Michel
-  Jarre` (space) vs MB's U+2010. Both were refused **at score 100**.
-  Folding to a space (not deleting) is what makes the second pair work.
-- **Aliases are consulted only when nothing matched by name** —
-  `Gonzales` → *Chilly Gonzales*, `AC-DC` → *AC/DC*. They ride on the
-  same response, so it costs no request.
-- **Two MB artists sharing a name are refused outright.** Widening the
-  match without widening the ambiguity guard silently reintroduces the
-  namesake problem it exists to prevent.
-
-MB's `score` is TEXT relevance, not correctness — `Elbo` scores 100 for
-`Elbow` — so the name comparison does the real work.
-
-**The 400 that remain refused are media problems, not matcher
-problems**: misspellings in the tags (`Harry Nilson`, `Edvart Greig`,
-`Credence Clearwater Revival`), song titles sitting in the artist field,
-comma-joined multi-artist credits, surname-only entries. A fuzzy rule
-loose enough to catch `Edvart Greig` would start attaching the wrong
-artist to things. They stay sticky; clear them selectively after a
-retag.
-
-#### The line-up, and why it is inferred
-
-Measured against the live API: **per-RECORDING performer credits exist
-for only ~17% of this library's tracks** (release-level ~22%) — Pink
-Floyd's *Shine On You Crazy Diamond* has none. A credits-only feature
-would be blank four times in five. Band MEMBERSHIP is near-universal for
-groups AND carries instruments plus date ranges, so
-`dlna_lineup.lineup_at` intersects those ranges with the recording's
-year. `tests/test_lineup.py` (13):
-
-- **Members rejoin.** Richard Wright is TWO rows on Pink Floyd
-  (1965–1981, 1987–2008), which is why `begin_date` is in
-  `artist_members`' PRIMARY KEY. A first-match lookup reports him absent
-  from *The Division Bell*, which he played on.
-- **No year means no answer.** The claim is "who was in the band THEN";
-  with no year there is no claim, and returning the full roster would
-  assert something different and wrong.
-- **A member with no dates is always included** — MB often has the
-  membership without the range, and dropping them makes a band look
-  emptier than it was.
-
-> ⚠ **`member of band` runs in BOTH directions.** On a Group,
-> `direction='backward'` names the members; on a Person,
-> `direction='forward'` names the bands that person joined. Read without
-> checking, David Bowie's panel lists Tin Machine and The Konrads as his
-> LINE-UP — which is what happened the first time real data was pulled.
-> Filtering turns the bug into a second feature: **"Also played in"**.
-
-**It is inference and the UI says so.** `/api/artist_info` returns
-`lineup_tier` — `inferred` for a line-up derived from membership dates,
-`credits` when MB names the players on that recording — and the PWA
-renders amber vs green. The tier comes from the server and is never
-derived client-side, so presenting a guess as a fact cannot be a
-one-line mistake.
-
-#### Sources, and what each is for
-
-| Source | Gives | Key |
-|---|---|---|
-| MusicBrainz | identity, life-span, birthplace, genres, **members with instruments + dates** | none (UA + 1 req/s) |
-| Wikipedia | the biography paragraph | none |
-| Last.fm | "best known for", by actual listening | `LASTFM_API_KEY` |
-
-**Last.fm needs a registered APPLICATION key**, not an account password
-— the same trap AcoustID's two key types set. Register at
-`https://www.last.fm/api/account/create`; absent, the block is omitted
-and nothing else changes. Live coverage: **best-known 100%, birth/formed
-92%, biography 74%, photo 67%**, 1,175 bands with line-ups over 12,101
-member rows.
-
-**A bio is DROPPED when its url is missing.** The text is CC BY-SA and
-the link IS the attribution, so they travel together or not at all. A
-disambiguation stub is refused too — a wrong answer dressed as a right
-one. Photos route through the existing `/art?url=` proxy, so
-`art_cache/` already handles fetch-once storage and is already
-gitignored.
-
-**ListenBrainz was evaluated and dropped**: it served top-recordings
-without a key, then began answering `401 UNAUTHORIZED` mid-session. Its
-data is thinner than Last.fm's anyway.
-
-### Frontend
-
-`static/index.html` + `static/app.js` (PWA, ~3,000 lines). Communicates with backend via `/api/*` JSON endpoints. Features: letter bar, browse modes, playlist management, MediaSession API, Service Worker offline support. Dark theme with amber accents (`static/app.css`).
-
-**A missing control must not kill `app.js` (2026-09-21).** `app.js` is
-ONE long script, so a top-level `$("id").addEventListener(...)` on an
-element that isn't there throws and **kills every line below it** — the
-app paints its full chrome and never loads content, in every library,
-with nothing in the log. That is not hypothetical: a half-updated
-Service Worker cache pairs an OLD `index.html` with a NEW `app.js`, and
-adding the ℹ️ button did exactly this to a live client. The tell was
-"works on iOS but not on Mac" — iOS had a matching pair of files.
-**New controls bind through `bindClick(id, handler)`**, which warns and
-skips when the element is absent: a missing button is cosmetic, a dead
-`app.js` is the whole application. Bump `APP_CACHE` when `index.html`
-gains an element `app.js` reaches for — the guard makes the mismatch
-survivable, the bump is what ends it. Guarded by
-`tests/frontend/test_artist_panel.py::test_a_missing_control_cannot_kill_app_js`.
-
-**Service Worker cache tiers (`static/sw.js`).** Three caches: `APP_CACHE`
-(app shell — **network-first** as of 2026-06-27, was stale-while-revalidate),
-`ART_CACHE` (`/art`, cache-first), and
-`API_CACHE` (2026-06-02) — a **stale-while-revalidate** cache for the
-`CACHEABLE_API` allowlist of STABLE browse GETs (`/api/browse_letter`,
-`album_tracks`, `artist_albums`/`artist_tracks`, `albums`, `search`,
-`genres`/`genre_*`, `decades`/`decade_*`). Repeat navigation is instant
-over a slow tailnet; the background fetch still refreshes the entry (and
-still hits the gateway, so request-assertion tests pass). Everything NOT
-on the allowlist — `/api/state`, `/servers`, `/renderers`, `/index/status`,
-`/album_favourites` (user-mutated), `/track_meta`,
-`/radio/*`, `/stream`, POSTs — stays **network-only** so live/mutable data
-is never stale. Bump `API_CACHE`'s version to force-evict if its shape
-changes. Measured server cost that this hides: the folder-grouped
-`/api/browse_letter` albums query is ~150 ms; cached → ~0.
-
-**Why the app shell is network-first (2026-06-27).** It was
-stale-while-revalidate, which served the cached `/` document AND
-`/static/app.js` cached-first. A once-broken/truncated cached `app.js`
-then pinned the app blank on every load ("full UI, no content",
-unrecoverable by refresh). The shell (document + assets) is now
-**network-first**: an online load always gets the fresh HTML/JS/CSS;
-the cache is the **offline fallback only**. `install` also calls
-`self.skipWaiting()` **unconditionally** (was gated behind
-`cache.addAll(SHELL)` — a single failing shell entry left the new worker
-stuck in `waiting` forever, so updates never activated) and `activate`
-calls `clients.claim()`, so a new worker takes over on refresh going
-forward. Caveat: a client already wedged on the *pre-fix* worker does
-**not** self-heal — it needs a one-time "clear site data" (iOS PWA:
-delete + re-add the home-screen icon). Guarded by
-`tests/frontend/test_pwa.py::test_poisoned_shell_cache_still_renders`
-(poison the live cache → reload → app must still render) and
-`test_sw_navigation_is_network_first`.
-
-**Source picker (`#source-sel`).** When more than one MediaServer is in `SERVERS` (e.g. music + audiobooks, or a UPnP server alongside LocalFs), the header carries a `SRC` dropdown next to the `OUT` (renderer) picker. `selectSource(udn)` swaps the active `curServer`, resets browse navigation, and reloads the library (or re-runs the active search). `refreshServers()` populates it via `rebuildSourceSel()` (💾 icon for `uuid:localfs-*`, 🗄 otherwise) and `updateDiscStatus()` keeps the header disc-dot tracking the active source. Regression-guarded by `tests/frontend/test_source_picker.py`.
+### Library data rules — what took evidence to learn
+
+Each rule below has a full write-up (the incident, the measurements, the
+rejected alternatives, the log lines that identify it) in
+**[docs/LIBRARY_RULES.md](docs/LIBRARY_RULES.md)**. Read the relevant section
+there before changing the code it names — most of these were "fixed" once in
+the obvious way and broke something else.
+
+- **One unmounted volume must not take the others down** (2026-09-10).
+  Each LocalFs root (music / video / audiobooks) resolves on its own; the
+  `:8200` server starts if at least one resolves and **never with an empty
+  `allowed_roots`**; each initial scan is guarded separately. Regression
+  symptom: every track skips ~1/s with `SSRF guard: refused stream of …`.
+  The Naim side: `api_upnp_ids.music_udn()` offers Artists/Albums/Genres
+  only while a music `MediaServer` is *registered* (`tracks` outlives its
+  files); `primary_udn(among=[])` → `''`, the opposite of `None`; an EMPTY
+  registry is deliberately NOT read as "nothing is live" (boot window).
+  Favourites/Playlists are not gated. `tests/test_localfs_wiring.py` (18),
+  `tests/test_upnp_music_liveness.py` (16).
+- **A missing root is a WAITING root** (2026-09-12, `dlna_localfs_watch.py`).
+  Roots register with `WATCH`; absent ones are re-checked every
+  `LOCALFS_ROOT_RECHECK_SEC` (30 s) on a thread that retires when nothing
+  waits. The file server starts on the FIRST root to arrive; later ones
+  widen it via `add_allowed_root` (rebinds the tuple, canonicalised).
+  State flips to ACTIVE *before* the callback; a failed activation is NOT
+  retried; an unconfigured root is not tracked. `GET /api/libraries` + the
+  `libraries` SSE event drive the PWA's `#library-bar`; a failed fetch
+  leaves the bar as it was. Tell: `path-traversal blocked: <music path> not
+  under (<books root>,)`. `tests/test_localfs_watch.py` (25),
+  `tests/frontend/test_library_bar.py` (8).
+- **A rescan may only call a file gone when the walk looked**
+  (2026-10-10, `dlna_walk.trusted_removals`). Removals under a folder whose
+  listing errored are held back (component match — `Lost` ≠ `Lost Tapes`);
+  a walk that saw zero audio against a non-empty index removes nothing; a
+  file whose `stat` fails is unreadable, not gone. Deleting the LAST audio
+  file under a root therefore no longer de-indexes it.
+  `tests/test_walk_trust.py` (9).
+- **Folder-album identity** (2026-08-25, `_localfs_album_group` in
+  `dlna_library_sql.py`, used by all six localfs GROUP BY sites). A folder
+  whose album tags are all blank has claimed nothing: blank-album rows group
+  **per artist**, the artist branch PREFIXED `'a:'||artist`; `album_tracks`
+  narrows on the ROW not the folder; narrowing may never EMPTY an album
+  (fall back to the whole folder). `_localfs_album_name` falls through to
+  the folder leaf. No rebuild fixes untagged media.
+- **Missing artist tags — infer, or hand it over** (2026-08-25).
+  `dlna_artist_infer.infer_artist` is the ONE decision shared by
+  `tools/artist_from_folder.py` and the `- Unknown Artists -` sweep.
+  Evidence order: sibling unanimity → uncontradicted folder name → a folder
+  name a sibling confirms; everything else `""`. A blank asks a person, a
+  wrong name is never questioned. Refusals: self-named compilations, `VA -`
+  folders outrank unanimity, dated slugs, whole-string junk matching, artist
+  ends at the earliest of `" - "`, `(`, `[`, `{`. Unattributable = **`Anon`**
+  (`ANON_ARTIST`); always test with `is_unattributed()`, never `== ""`.
+  `is_a_performer_name()`: known-album check is filename-only (self-titled
+  albums), `allow_numeric` (112, 911, 98° are bands), `Various Artists`
+  protected before the junk set. The worklist syncs both ways, prunes rows
+  whose file is gone (it is generated, unlike a curated playlist), and
+  audiobooks opt out. `tests/test_artist_infer.py` (26),
+  `tests/test_unknown_artists_playlist.py` (20).
+- **`metadata_overrides`: NULL means no override, `''` is an override**
+  (2026-08-25). Writer stores `None` for blank fields (`_blank_to_null`);
+  reader wraps each subselect in `NULLIF(…,'')` before the COALESCE.
+  `tests/test_override_blank_masking.py` (10).
+- **"Show me this artist" is the same on every surface** (2026-08-25).
+  `artist_albums` reports the QUERIED artist and THEIR track count per
+  folder (that `artist` field builds the PWA `onOpen`, the Naim `galbum:`
+  and CarPlay `al:` ids, so `album_tracks` narrows everywhere), plus `own`
+  (`is_own_album`: ≥ half the folder, or ≤ 2 performers). Non-own rows fold
+  behind "Appears on N compilations" (always folded, never remembered);
+  Naim gets one `gappears:` container, CarPlay gets order + a display-name
+  marker (never change the id). An artist with no own records shows
+  appearances directly. `Various Artists` never narrows.
+  `tests/test_album_grouping.py` (44), `tests/frontend/test_appears_on.py` (11),
+  `tests/test_appears_on_devices.py` (10).
+- **An album has TWO dates** (2026-09-21). `year` = EDITION (`MAX` of tag
+  years, `_ALBUM_EDITION_YEAR`), `year_original` = oldest recording
+  (`MIN(_EFFECTIVE_YEAR)`); `album_tracks` carries `year_edition` per row.
+  The client's `albumYearLabel(year, original)` is the ONE display rule
+  (`2007 · orig. 1967` at ≥ `REMASTER_GAP_YEARS` 3). Join a NARROWED
+  `(SELECT url, year FROM metadata_overrides)`, never the table, and order
+  by the expression, not bare `year`. The DECADE facet deliberately keeps
+  `_EFFECTIVE_YEAR`. `tests/test_artist_chronology.py` (12),
+  `tests/test_album_year.py` (12), `tests/frontend/test_album_year.py` (7).
+- **Songwriting credits** (2026-09-20/21). `tracks.composer`/`lyricist`
+  from tags (EasyMP4 needs the keys registered in `localfs_tags.py`); new
+  columns must join `upsert_tracks`' change-guard AND `_TRACK_COLS` (the
+  UNIQUE migrations rebuild `tracks` from their own DDL), backfilled as
+  `''`. MusicBrainz fills gaps into `track_credits` (never `tracks`), via an
+  artist's WORKS browse; the file tag wins on read. Display filter
+  `dlna_credits.clean_credit` — **never require a particular script**
+  (a "has A-Z" rule hid every Russian composer). `tests/test_credits.py` (15),
+  `tests/test_credit_cleaning.py` (12), `tests/test_track_credits.py` (10).
+- **Artist metadata — the MBID keystone** (`dlna_mbid.accept_match`
+  refuses rather than guesses): `&` never split, only fallen back to;
+  commas never split; every dash folds to a SPACE; aliases only when no name
+  matched; two MB artists sharing a name → refused; MB `score` is text
+  relevance, not correctness. Line-ups are INFERRED from membership dates
+  (`dlna_lineup.lineup_at`; members rejoin — `begin_date` is in the key; no
+  year → no answer; undated members always included) and labelled via
+  server-side `lineup_tier`. **`member of band` runs in both directions** —
+  check `direction`. Wikipedia bio dropped without its url (CC BY-SA);
+  Last.fm needs an APPLICATION key; ListenBrainz was dropped.
+  `tests/test_mbid_match.py` (27), `tests/test_lineup.py` (13).
+
+### Frontend (PWA)
+
+`static/index.html` + `static/app.js` (~3,000 lines, one script) +
+`static/app.css` + `static/sw.js`; talks to `/api/*` JSON. Full write-ups —
+measurements, incidents, the things that bit — are in
+**[docs/FRONTEND.md](docs/FRONTEND.md)**. Load-bearing rules:
+
+- **New controls bind through `bindClick(id, handler)`.** A top-level
+  `$("id").addEventListener` on a missing element kills every line of
+  `app.js` below it (a half-updated SW cache pairs an old `index.html` with
+  a new `app.js`; tell: "works on iOS, not on Mac"). Bump `APP_CACHE` when
+  `index.html` gains an element `app.js` reaches for.
+- **SW cache tiers** (`sw.js`): `APP_CACHE` shell is **network-first** (the
+  cache is the offline fallback only — stale-while-revalidate once pinned a
+  broken `app.js` forever); `install` calls `skipWaiting()`
+  unconditionally, `activate` calls `clients.claim()`. `ART_CACHE`
+  cache-first. `API_CACHE` stale-while-revalidate ONLY for the
+  `CACHEABLE_API` allowlist of stable browse GETs; state / servers /
+  renderers / index status / favourites / track_meta / radio / stream /
+  POSTs stay network-only. Bump a cache's version to force-evict.
+  `tests/frontend/test_pwa.py::test_poisoned_shell_cache_still_renders`.
+- **Source picker** `#source-sel` appears with more than one MediaServer:
+  `selectSource(udn)`, `rebuildSourceSel()` (💾 localfs / 🗄 other).
+  `tests/frontend/test_source_picker.py`.
+- **`/art?url=&size=N`** — same-origin artwork proxy (iOS refuses
+  cross-origin lock-screen art). `size` snaps to 96/256/512/1024 via
+  `art_fetch_scaled` (shared with Subsonic `getCoverArt`); `artUrl(raw,
+  size)` uses `ART_THUMB` 256, `ART_COVER` 512, `ART_FULL` 1024 (now-playing
+  AND MediaSession — one URL, one cache entry). Sizes are fixed, never
+  dpr-derived. 12 MB cap, `image/*` only, 10 s timeout; Pillow optional
+  (absent → original). `tests/test_asgi.py::TestArtProxy`.
+- **Layout** — four zones: ≤767 phone, 768–1023 tablet (two columns),
+  ≥1024 desktop, and `max-height:500px and min-width:768px` phone-sideways,
+  which **must stay LAST** in the CSS. `#bottom-nav` stays
+  `position:fixed`; `.tab.tablet-only{display:none}` is declared BEFORE the
+  tablet query; no inline styles on `#source-sel`/`#output-sel`; manifest
+  `"orientation": "any"`. One `renderAlbumRows()` for every album list;
+  the grid needs `grid-auto-rows:max-content` and `display:block` cards.
+  Navy palette: `--ink-dim` `#B4C9E6` (10.8:1) carries secondary text; no
+  DM Mono weight 300. `tests/frontend/test_layout.py` (26 tests).
+- **An idle open PWA must be quiet** (battery). Polls are two-tier
+  (`_LOOPS` / `_armLoop` / `_runLoop` / `kickPoll`): the fast tier is the
+  original interval while active; slow 20–60 s tiers are only a safety net
+  because SSE pushes call `kickPoll`. `bumpPolling()` from every
+  play/stop path; a throwing poll re-arms itself. The vinyl `playing` class
+  follows `<audio>` play/pause; every loader uses `showSpinner(el)` (15 s
+  watchdog); `<select>` rebuilds skip identical lists. SSE heartbeat 45 s.
+  `<audio preload="auto">` deliberately unchanged.
+  `tests/frontend/test_battery.py` (10).
+- **MediaSession `playbackState`** is driven off `<audio>` play/pause events
+  (single source of truth → dependable one-tap resume on CarPlay / lock
+  screen). Hands-free resume after a call is impossible for a web page.
+  `tests/frontend/test_mediasession.py`.
+- **MediaError**: code 1 ignored, 2/3 retry the track once then skip, 4 skip
+  at once; every event POSTs to `/api/client_log`.
+- **Stall watchdog** (`_stallCheck`, 2 s poll): no `currentTime` progress
+  for 12 s → one re-seek nudge → then `audio_stall` report + advance.
+  Progress resets everything; a user pause is not a stall; never runs for
+  UPnP output; the error path and `_browserPlayIdx` stop it (no double
+  skip). `tests/frontend/test_stall_watchdog.py`.
+- **Every `play()` goes through `_playBrowserAudio()`** — on
+  `NotAllowedError`/`AbortError` it resets the button, toasts, and POSTs
+  `play_rejected`.
+- **`/api/client_log`** logs browser reports under `dlna.client`
+  (`grep "client_log\[audio_error" gateway.log`); fields are clamped.
+  Diagnostic order: `dlna.client` lines → `/tmp/dlna-gateway.err` → Safari
+  Web Inspector.
 
 ### Concurrency Notes
 
@@ -1477,305 +797,6 @@ three-slow-client test moved RSS 114 MB → 133 MB (**10× less**).
 > corrupt audio stream that the browser reports as an unplayable file rather
 > than as a bad byte count. Guarded by `TestStreamSliceCap`.
 
-### `/art` — lock-screen artwork proxy
-
-iOS MediaSession refuses to load cross-origin artwork on the lock screen. The PWA rewrites every track art URL to `/art?url=<external>` so the lock-screen fetch is same-origin. Service Worker cache-firsts these (art rarely changes).
-
-- **Size-bucketed downscaling (2026-08-07).** `/art?url=…&size=N` now honours
-  `size` via `api_playback.art_fetch_scaled` — the same 96/256/512/1024 bucket
-  ladder and per-bucket disk cache the Subsonic `getCoverArt` route uses. The
-  PWA previously asked for the **full-resolution original everywhere**: a 36px
-  list thumbnail and a 130px grid card both pulled the multi-MB embedded
-  cover, and the album grid put a dozen on screen at once. Measured on the
-  real library, a **772 KB cover is 12 KB at `size=256` (1.6%) and 42 KB at
-  `size=512` (5.5%)**. `artUrl(raw, size)` in `app.js` names one bucket per
-  surface — `ART_THUMB` 256 (36px rows, mini-player, station logos),
-  `ART_COVER` 512 (grid cards), `ART_FULL` 1024 (now-playing panel **and** the
-  MediaSession lock-screen artwork, deliberately the same url so it's one
-  fetch and one cache entry per track; iOS never shows lock-screen art above
-  ~600px). Sizes are **fixed, not devicePixelRatio-derived** — every device
-  then asks for the same few URLs and shares one on-disk scaled copy per
-  bucket, where a dpr-derived size would fragment the cache per device for no
-  visible gain. `size` absent/0 is byte-for-byte the old behaviour, and Pillow
-  stays optional (absent → original served, so it degrades to the old
-  bandwidth, never to a broken image). Browse/grid `<img>`s also carry
-  `loading="lazy"`. `ART_CACHE` bumped to v3 to evict the originals cached
-  under the old size-less URLs. Guarded by
-  `tests/test_asgi.py::TestArtProxy` (size forwarded, absent-size unchanged,
-  junk size degrades) and the `/art` bucket tests in
-  `tests/frontend/test_layout.py`.
-- Hard-caps at 12 MB per image to prevent memory abuse (raised from 5 MB
-  2026-07-03 — real embedded covers exceed 5 MB and the cap made
-  getCoverArt 404 deterministically for every candidate of such an
-  album; 12 MB matches `dlna_localfs_server`'s embedded-art cap).
-- Validates Content-Type starts with `image/` — an upstream HTML 404 page won't poison the SW cache.
-- 10-second timeout; slow upstream fails fast.
-- The handler is in `api_playback.art()` routed at `/art` in `dlna_asgi.py`.
-- **Subsonic `getCoverArt?size=N` downscaling (2026-08-04).** The native
-  `getCoverArt` route in `dlna_asgi.py` honours the client's `size` box via
-  `api_playback.art_fetch_scaled(url, size)` — Amperfy asks for ~100–600 px
-  thumbnails per list row, so serving the full multi-MB embedded original was
-  the main "cover art slow on Amperfy" cause. Sizes snap to a 96/256/512/1024
-  bucket ladder; each scaled JPEG (Pillow, quality 85) is cached per bucket in
-  `dlna_art_cache` under a `s<box>` variant, so a bucket is scaled at most once
-  and the original is fetched at most once regardless of how many sizes are
-  requested. `size=0`/absent, a size above the top bucket, an already-small
-  image, or Pillow-missing all serve the unmodified original. **The PWA `/art`
-  route now uses the same ladder** (2026-08-07 — see the `/art` section above;
-  it used to serve full-res everywhere). Guarded by
-  `tests/test_art_cache.py` (`TestSizeBucket`, `TestArtFetchScaled`,
-  `TestCacheVariants`).
-
-### UI — navy palette, per-device layouts, album grid (2026-08-07)
-
-Guarded by `tests/frontend/test_layout.py` (26 tests). Design proposal that
-was approved: the artifact linked from that session; the numbers below are
-measured, not estimated.
-
-**Palette.** The warm near-black set is replaced by a deep navy one. The
-change that matters is **`--ink-dim`**: it carries every artist line,
-duration, count and label, and at the old `#9a907f` it sat at **6.2:1**
-against the ground — that, not the background, is what washed out in
-sunlight. It is now `#B4C9E6` at **10.8:1**. Body `#F4F8FF` 17.2:1, amber
-`#FFC24A` 11.4:1, green `#4FD98C` 10.1:1 — all AAA. The amber accent is
-kept deliberately (it's the app's identity and reads better on navy than on
-the warm black). `--ink-dim-soft` is the one sub-AAA ink, for decorative
-labels that never carry information alone. Also repainted: the PWA
-`theme-color`, the manifest `background_color`/`theme_color`, and the
-generated app icon (`_make_icon_png` in `dlna_asgi.py`).
-
-**Type.** `DM Mono` is no longer requested at weight **300** — thin small
-type is what actually disappears outdoors, roughly as much as low contrast.
-Secondary text went 11px → 12px via `--fs-sub`; uppercase micro-labels
-10px → 11px via `--fs-micro`.
-
-**Breakpoints.** There was ONE (768px). There are now four zones:
-
-| Zone | Query | Layout |
-|---|---|---|
-| Phone upright | `≤767px` | one column + bottom nav |
-| Tablet upright | `768–1023px` | **two** columns; playlists via a tab |
-| Desktop / tablet sideways | `≥1024px` | three columns, fluid `clamp()` |
-| Phone sideways | `max-height:500px and min-width:768px` | list beside player + side rail |
-
-Two situations were on the wrong side of the old single breakpoint:
-- **iPad upright** (Air/Pro 11 = 820–834px) took the desktop layout, where
-  `#browser` 360px + `#pl-panel` 260px = 620px of fixed chrome left the
-  player **~200px** — too narrow for the six transport buttons. Now two
-  columns: measured **426px** player on an 820px iPad.
-- **Every iPhone on its side is 852px wide** (932 Pro Max), so it also took
-  the desktop layout — three columns and a status bar inside 393px of
-  height. The rule that catches it is keyed on **height**, so it works on
-  any model and never catches an iPad sideways (1024×768). **This block must
-  stay LAST in the file** — a landscape phone also matches the tablet query
-  and has to override it.
-
-**Non-obvious things that bit during this work — do not re-introduce:**
-- `#bottom-nav` is a **sibling of `.workspace`**, at the end of `<body>`.
-  Making it `position:static` to build the landscape side rail dropped it
-  into the body's column flow *below* the panes and squeezed them to
-  nothing. It stays `position:fixed`, with `.workspace{margin-left:54px}`.
-- `.tab.tablet-only{display:none}` **must be declared before** the tablet
-  media query. A media query adds no specificity, so the same selector
-  written afterwards simply wins and hides the tabs at every width.
-- The inline `style="…"` attributes on `#source-sel`/`#output-sel` were
-  moved into CSS. An inline style beats any selector short of `!important`,
-  so the responsive rules could not reach them.
-- The manifest said `"orientation": "portrait"`, which an **installed PWA
-  obeys** — it would have locked the home-screen app upright and made the
-  landscape layout unreachable from the one place it matters. Now `"any"`.
-
-**Album cover grid.** Albums, the artist/genre/decade drill-downs and the ⭐
-favourites list render through **one** `renderAlbumRows()` (they were five
-near-identical copies that had already drifted). Putting `grid` on
-`#item-list` turns the *same* markup into a cover card — the markup is
-deliberately unchanged (`.row` / `.row-art` / `.row-body` / `.row-actions >
-.icon-btn`), so every existing handler, selector and test still applies and
-list-vs-grid stays a pure presentation choice. `showSpinner()` clears the
-class, which is why every view load resets to a list. Artists and tracks
-stay lists — text-first content, a cover adds nothing.
-
-> **`grid-auto-rows:max-content` is NOT optional**, and the card is
-> `display:block`, not a flex column. A cover sized `width:100%` +
-> `aspect-ratio:1` contributes **no intrinsic height**: as a flex item the
-> ratio is circular (the line's height is wanted before the width it depends
-> on is known), and inside `#item-list`'s bounded scroll container the auto
-> rows were squeezed to share the visible height — 114px rows around 129px
-> covers, every title spilling onto the card below. **It only broke once the
-> cards needed more than one row**, so a single-row test passes vacuously;
-> `test_grid_cards_never_overflow` seeds eight albums and asserts a second
-> row exists.
-
-**Also:** the header is one row on the phone (search collapses to a 🔍
-button, wordmark hidden — the pickers need that ~90px to show a readable
-source name), and the app now boots into `mobileTab("browse")`. Without a
-body `m-*` class the phone stylesheet hides nothing, so a fresh load used to
-stack the entire playlist panel under the browse list, below the fold.
-
-### iOS battery — what an OPEN but IDLE PWA costs (2026-08-07)
-
-The 2026-07 work fixed the **screen-locked** case (Page Visibility stops the
-polls, closes SSE, stops the ICY poll). The follow-up report was that the app
-still drains while **open and NOT playing**. Two independent causes, both now
-fixed; regression-guarded by `tests/frontend/test_battery.py` (10 tests).
-
-**1. The polls ran at a fixed cadence regardless of activity.**
-`startPolling()` set flat intervals — state 1 s, index 2 s, servers 8 s,
-renderers 10 s — so an idle-but-open PWA fired **~2,600 requests/hour**, and
-**~6,200/hr with a UPnP output selected**, where every `/api/renderer_state`
-also costs the gateway **two SOAP round-trips to the renderer**
-(`RendererQueue.snapshot()`; `_tracks` is never cleared on stop, so a
-finished session keeps answering with live SOAP forever). At better than one
-request per second the iPhone radio never reaches low-power idle. None of
-that traffic was useful — the library, the device list and the transport
-state are all static while idle, and SSE already pushes every change.
-
-Polling is now **two-tier**, one self-scheduling loop per poll
-(`_LOOPS` / `_armLoop` / `_runLoop` / `kickPoll` in `app.js`). The **fast tier
-is the original interval**, so anything "active" behaves exactly as before:
-
-| loop | fast (when) | slow |
-|---|---|---|
-| `state` | 1 s — audio genuinely playing (`_playbackActive()`) | 20 s |
-| `index` | 2 s — a rebuild is running, or no source adopted yet | 60 s |
-| `servers` | 8 s — until SSE connects | 60 s |
-| `renderers` | 10 s — until SSE connects | 60 s |
-
-The slow tiers are a **safety net for a dropped event, not the update path**:
-an SSE push calls `kickPoll(...)`, which polls *then* re-arms, so a change is
-still reflected instantly. `bumpPolling()` does the same from every path that
-starts/stops playback (`sendRenderQueue`, `control`, the `<audio>`
-play/pause events) — arming without polling first would size the delay off
-stale flags. **If SSE never connects, every loop stays in its fast tier and
-behaviour is identical to before.** A throwing poll re-arms its own loop
-(guarded) — otherwise one blip would freeze the UI until the next visibility
-change.
-
-Backend counterpart: `_SSE_HEARTBEAT_SEC` 15 s → **45 s** (`dlna_asgi.py`).
-With the polls throttled, the keepalive was the most frequent thing left on
-the wire — 240 inbound frames/hour to say "still here". Kept under 60 s so a
-future reverse proxy's idle timeout can't close the stream.
-
-**2. The vinyl rotation never stopped.** `#player.playing.is-audio .art` is an
-**8 s infinite rotation**, and nothing removed `playing` on the browser-output
-path (`pollState` only clears it on the UPnP branch). Pausing therefore left a
-full-size album cover spinning at display refresh rate **forever** — a
-compositor/GPU wake every frame for as long as the app stayed open, and the
-biggest **non-network** idle drain. The class is now driven off the `<audio>`
-element's own `play`/`pause` events, the same single-source-of-truth as
-`MediaSession.playbackState` below.
-
-**3. Orphaned spinners.** Every loader is "show spinner → fetch →
-`if(!r) return;`", so any failed fetch left `.spinner`'s infinite CSS rotation
-running with no user feedback. All eight sites now go through
-`showSpinner(el)`, which arms a `_SPINNER_TIMEOUT_MS` (15 s) watchdog that
-swaps the spinner for a static "⚠ Couldn't load" line. The replacement keeps
-the `spinner-wrap` class so the existing "clear the spinner before appending"
-checks still remove it.
-
-**Also fixed:** `rebuildSourceSel` / `rebuildOutputSel` reassigned `<select>`
-`innerHTML` on every refresh even when the list was identical, destroying and
-rebuilding the `<option>` nodes (a style/layout pass, and on iOS it closes an
-open native picker). Both now skip the write when nothing changed.
-
-**Known, NOT changed** (deliberate — each is a real trade-off):
-- `<audio preload="auto">`: after a pause Safari finishes buffering the
-  current track. Bounded by one track (not continuous), and changing
-  `preload` risks the "stops after one track" class of regression.
-- The PWA `/art` route still serves full-res originals (lock-screen art).
-  `art_fetch_scaled` already exists for Subsonic — routing PWA list-row art
-  through a small `size=` bucket is the highest-value remaining win (network
-  + decode + the memory held by a rotating layer), but it changes the
-  documented `/art` contract, so it's a separate decision.
-
-### MediaSession playback state (CarPlay / lock-screen resume)
-
-`_updateMediaSession` (`static/app.js`) wires the lock-screen / CarPlay
-metadata + transport handlers (play/pause/prev/next + position scrubber). On
-top of that, **`navigator.mediaSession.playbackState` is driven off the
-`<audio>` element's own `play`/`pause` events** (2026-08-04) — the single
-source of truth, so it's correct no matter what caused the change (a tap,
-autoplay, a queue advance, or a phone-call/Siri interruption). A correct
-`playbackState` is what makes CarPlay / the lock screen show the right control
-and reliably deliver the PLAY command back to us, i.e. a dependable **one-tap
-resume after a call**. **Hard platform limit:** iOS forbids a backgrounded web
-page from resuming audio without a user gesture, so fully-automatic hands-free
-resume is *not* achievable in the PWA — only a native app (Amperfy, via
-`AVAudioSession` `.shouldResume`) can do that. Keeping `playbackState` correct
-is the realistic best the web path can offer. Guarded by
-`tests/frontend/test_mediasession.py` (play→playing, pause→paused, and the
-playing→paused→playing call-interruption round-trip).
-
-### Browser audio error handling (MediaError discrimination)
-
-`static/app.js` listens for `error` events on the `<audio>` element and branches on `MediaError.code`:
-
-| code | name              | behavior                                                      |
-|------|-------------------|--------------------------------------------------------------- |
-| 1    | ABORTED           | ignored (we or the UA told it to stop)                        |
-| 2    | NETWORK           | retry the same track ONCE (transient network), then skip      |
-| 3    | DECODE            | retry the same track ONCE (could be a bad Range chunk), skip  |
-| 4    | SRC_NOT_SUPPORTED | skip immediately — the format genuinely isn't playable        |
-
-Prior to 2026-04-23 every `error` event was treated as code 4 and auto-skipped, producing false-positive "unsupported format" skips whenever the network hiccupped. Every event (including ignored-code-1) is now POSTed to `/api/client_log` so real-world incidents land in `gateway.log` for diagnosis.
-
-### The stall watchdog — "it just stopped mid-playlist" (2026-08-25)
-
-**The browser queue only ever advanced on `ended` or `error`.** An `<audio>`
-element has a third resting state that fires **neither**: buffer starved, no
-more bytes arriving, and — from the element's own point of view — no error.
-Nothing in `app.js` was listening for `stalled`/`waiting`/`suspend`, so when
-that happened the queue simply sat there showing "⏸ Pause" with silence, and
-the only way out was restarting a track by hand.
-
-It happened in the wild: the last byte of a track was delivered at 10:22:32,
-then **no further request, no `client_log` entry, and nothing at all until
-10:28:38** when the next track was started manually. What starved the buffer
-was the relay bug above (eleven concurrent Range requests against a relay
-that had already dumped the whole file into memory) — that is fixed, **but
-the player must not depend on the network being well-behaved.** Any stall
-that nothing reports still has to un-wedge the queue.
-
-`_stallCheck` polls `currentTime` every `_STALL_POLL_MS` (2 s) while the
-element believes it is playing. No progress for `_STALL_GRACE_MS` (12 s,
-comfortably longer than a tailnet rebuffer) → **one recovery nudge** (re-seek
-to where it died, which re-issues the Range request; a dropped fetch usually
-resumes and the listener never notices) → still nothing → report
-`kind:"audio_stall"` to `/api/client_log` and **advance the queue**.
-
-Non-obvious things it must keep getting right, each one a test:
-- **Progress resets everything.** A watchdog that fires on a slow-but-healthy
-  stream is worse than no watchdog.
-- **A user pause is not a stall** — `paused` stops `currentTime` too.
-- **It never runs for UPnP output.** With a renderer selected the gateway
-  owns advancing the queue and the browser element is idle.
-- **The `error` path and `_browserPlayIdx` both stop it**, so an error-driven
-  skip and a watchdog-driven skip can't both fire and jump two tracks.
-
-Guarded by `tests/frontend/test_stall_watchdog.py` (7 tests; the give-up case
-genuinely fails with the branch disabled — checked).
-
-### `_playBrowserAudio()` — autoplay-rejection-aware play()
-
-Every call to `browserAudio.play()` now routes through this helper instead of `audio.play().catch(()=>{})`. When the browser rejects with `NotAllowedError` (autoplay blocked, first-play without gesture, iOS standalone resume) or `AbortError`, the helper:
-1. Resets the play button UI so the user can manually re-trigger.
-2. Toasts "⚠ Browser blocked playback — tap ▶ Play to start".
-3. POSTs a `play_rejected` event to `/api/client_log` with the error name + UA.
-
-Before this, blocked autoplay was invisible: the UI showed "⏸ Pause", no audio, no error surfaced.
-
-### `/api/client_log` — browser-side observability
-
-POST-only endpoint that logs free-form JSON reports from the PWA into `gateway.log` under the `dlna.client` logger:
-
-```
-grep "dlna.client" gateway.log         # all browser-reported events
-grep "client_log\[audio_error" gw.log  # just MediaError events
-grep "client_log\[play_rejected" gw.log # just autoplay blocks
-```
-
-Payload fields are clamped defensively (40 chars for `kind`, 120 for fields, 200 for `message`, 80 for `ua`) so a broken or malicious client can't flood the log. Handler in `api_playback.client_log()`.
-
 ### HTTPS / Tailscale cert
 
 The gateway auto-detects `*.crt` + `*.key` in the working directory on startup. Currently uses a Tailscale-issued Let's Encrypt cert: `ronsmacmini.tail5be6ad.ts.net.{crt,key}`. Mobile devices on the tailnet get a trusted cert with no install or exception needed.
@@ -1804,20 +825,6 @@ the LocalFs file server (`:8200`) stay plain HTTP for the renderers. HTTP/3
 would be a `--quic-bind` add. **`tailscale serve` was tried and dropped**
 (broken on this mini's Tailscale `:443`) — the app owning TLS is the chosen
 end-state.
-
-### Mobile / PWA testing checklist
-
-Because there's no automated test coverage for on-device behavior (iOS Safari, Android Chrome, PWA standalone mode), before believing a browser-mode change is shipped, manually verify on an actual mobile device over Tailscale:
-
-1. **Fresh PWA install**: Safari → Share → Add to Home Screen. Icon + title use manifest values.
-2. **First-play autoplay**: Tap a track. Audio starts. (If it doesn't, and a toast says "Browser blocked playback", that's the correct new behavior — the `catch` surfaces it.)
-3. **Lock screen artwork**: Lock the phone during playback. Album art shown on lock screen. Previous/Next/Play/Pause work.
-4. **Tab backgrounded**: Switch to another app. Audio continues. (If it pauses, that's iOS's audio-session policy, not a bug.)
-5. **Laptop/phone suspend during stream**: Close lid (or long-press sleep). Wait 5+ min. Check `gateway.log` shows `proxy_stream ■ END ... reason=client_idle_timeout` within 6 minutes.
-6. **Error reporting**: After playback fails (e.g., play an unsupported-format track), `grep dlna.client gateway.log` should show the event with `codeName=unsupported` etc.
-7. **Rebuild / force-refresh**: Pull-to-refresh in PWA. Service Worker updates (check DevTools Application tab → SW version).
-
-When something goes wrong, the diagnostic order is (1) `gateway.log` `dlna.client` entries for browser-side events, (2) `/tmp/dlna-gateway.err` for server-thread crashes, (3) Safari DevTools Web Inspector for pre-report JS errors.
 
 ## Library backend — LocalFs
 
@@ -2038,246 +1045,44 @@ installs. Rules that keep it sane:
   bootout is async: retry the bootstrap if it fails with I/O error).
   Editing `.env` only needs the normal `./setup.sh --restart`.
 
-## Album art persistence (Phase A + Phase B)
+## Album art persistence
 
-Album covers are cached in a dedicated `album_art` table, keyed by `(artist, album)`, independent of `tracks`. This means a rebuild-index is non-destructive to art:
+`album_art(artist, album, art_url, source)` — keyed independently of
+`tracks`, so a rebuild-index never loses covers; `source ∈ {sibling,
+musicbrainz, notfound, manual}`. Full design, measurements and the sources
+that were evaluated and declined: **[docs/ALBUM_ART.md](docs/ALBUM_ART.md)**.
 
-```
-album_art(artist, album, art_url, source, updated_at)
-  PRIMARY KEY (artist, album)
-  source ∈ {'sibling', 'musicbrainz', 'notfound', 'manual'}
-```
-
-### How it fills up
-
-- **Phase A — sibling harvest** (`dlna_library.LibraryDB._backfill_album_art`): instantaneous SQL pass. Runs at end of every `upsert_tracks(udn, rows)` call (i.e. after each indexer run) and once at startup as a migration. Harvests per-album art from tracks that brought their own art (source = `'sibling'`) and applies it onto sibling tracks of the same `(artist, album)` that were missing one.
-- **Phase B — external lookup** (`dlna_library.AlbumArtFetcher`, singleton `ART_FETCHER`): event-driven background worker. Fires on two hooks only — (1) a one-shot startup scan 120s after boot (`ART_FETCHER.start_initial_scan()` in `dlna_gateway.main`) to catch albums left bare by a previous interrupted run, and (2) `ART_FETCHER.trigger()` at the tail of every successful `Indexer._run()` so new bare albums from a fresh crawl get looked up immediately. No periodic poll. Walks `bare_albums(*, skip_udns, min_tracks, with_performers)` (tracks with no art AND no `album_art` row of any source — see §"Four things the fetcher was asking" for what those three opt-in filters exclude and why), asks each query `dlna_art_query.art_queries()` hands it, and for each resolves MusicBrainz **release-group first, then release** → HEADs `coverartarchive.org/{entity}/{mbid}/front-500`, writing hits as `source='musicbrainz'` and misses as `source='notfound'`. Rate-limited to ~1 req/sec (`_MB_RATE_LIMIT_SEC = 1.1`) per MusicBrainz ToS. If a trigger arrives while a scan is in flight, it's a no-op — the ongoing `run_once()` re-queries `bare_albums()` between batches and absorbs the new work into the current pass.
-
-### What survives a rebuild-index
-
-The `album_art` cache persists across rebuild-index operations — only the `tracks` table gets wiped and repopulated. After an `upsert_tracks()` call:
-
-1. The fresh `tracks` rows may bring new per-album art from the server → harvested into `album_art` (source=`'sibling'`).
-2. `_backfill_album_art(conn, udn=udn)` applies existing `album_art` URLs onto the new tracks that lack one.
-3. Brand-new albums not yet in the cache become bare. At the end of `Indexer._run()` (success path), `ART_FETCHER.trigger()` fires and the MB/CAA lookup runs in a background thread. Hits are written into `album_art` AND straight onto `tracks.art` via an UPDATE within `run_once()`, so the now-playing window and any future playlist queries pick them up without another indexer pass. After a gateway restart, the 120s-post-startup scan picks up anything that an earlier run couldn't finish.
-
-### Sticky "notfound" cache
-
-The negative cache is sticky by design — once MusicBrainz failed to match an album, `AlbumArtFetcher` skips it forever so re-indexing doesn't re-hammer MB for the same misses. If you've since fixed artist/album metadata in the source server and want to retry, delete the notfound row(s):
-
-```sql
--- Retry a single album
-DELETE FROM album_art WHERE source='notfound' AND artist='…' AND album='…';
-
--- Retry everything MB missed previously
-DELETE FROM album_art WHERE source='notfound';
-```
-
-Those albums become bare again and get looked up on the next `ART_FETCHER.trigger()` — which means either a rebuild-index of any server, or a gateway restart (the 120s startup scan).
-
-### Phase A2 — the cover that sits BESIDE the music (2026-09-21)
-
-The indexer only ever read **embedded** pictures, so an album whose cover
-is a separate file in its folder showed none at all. Measured live: of
-506 art-less album-folders, 99 had an image sitting right there that was
-never looked at. `dlna_providers/localfs_art.py` finds a usable cover in
-**95 of the 506 (19%)**.
-
-**Choosing WHICH image is the whole problem.** From those same folders:
-
-```
-front.jpg          2927px  2032 KB
-folder.jpg         1123px   425 KB
-cover.jpg           300px    36 KB
-albumartsmall.jpg    75px     3 KB   <- Windows Media Player
-back.jpg           2900px  3015 KB   <- the BACK of the sleeve
-label.jpg          2840px  1801 KB   <- the disc label
-```
-
-"First image wins" picks the 75px thumbnail. **"Biggest wins" picks the
-BACK COVER** — it is the largest file in that list. Only the NAME says
-which one is the front, so selection is **name-first**, with a size floor
-only as a last resort.
-
-- **Rejections match whole WORDS, never substrings.** Rejecting anything
-  containing `cd` throws away `ACDC - cover.jpg`. Same trap
-  `_is_junk_name` documents, one domain over.
-- **A `CD1`/`Disc 2` subfolder also looks in its PARENT** — a box set's
-  single cover sits beside the disc folders, not inside each. An ordinary
-  folder never climbs, or every album under a genre folder would inherit
-  a stray image from it.
-- **WMP's `_large` variant is recognised BY NAME**, not left to the byte
-  floor: measured at 6–14 KB (~200px), most sat just under it. A floor is
-  the wrong instrument for a file that declares its own variant; `_small`
-  is still rejected. Worth 23 of the 95.
-- **12 MB cap, MIME sniffed from magic bytes** — same rules as embedded
-  art (§"Can a media file phone home?"). An embedded picture is bounded
-  by its audio file; a folder of 3 MB sleeve scans is not.
-
-The fallback lives inside **`_extract_art_bytes`**, the ONE function both
-the scanner and `/localfs/art/<id>` call — so one change indexes the
-cover AND serves it, with no new route, no schema change, no URL change.
-Its two early returns (mutagen cannot open the file / does not recognise
-it) now fall THROUGH to the fallback: a file with no readable tags is
-exactly when the folder cover is the only one there.
-`tests/test_folder_art.py` (23).
-
-### A marker is not a URL — `localfs-art:` in `album_art` (2026-09-22)
-
-A LocalFs scan writes **`localfs-art:<sha1>`** into `tracks.art` as a
-placeholder: the embedded picture's bytes are not read until serve time,
-so at scan time all there is is a hash. `LocalFsProvider._rescan` heals
-those into real `<base_url>/localfs/art/<obj_id>` URLs once the base URL
-is known.
-
-**That heal only ever covered `tracks`.** The Phase-A sibling harvest
-(`_backfill_album_art`) copies `MIN(art)` straight out of `tracks`, so a
-harvest running before the heal stored the marker in `album_art` — and
-`INSERT OR IGNORE` guaranteed it was never replaced. **3,982 rows** on
-this library held an unfetchable string.
-
-It hid because `tracks` was clean (0 markers), so the PWA reads fine; the
-exposure is everything that reads `album_art` DIRECTLY — Subsonic /
-CarPlay cover art and the favourites list. It surfaced as five Queen
-albums whose covers 404'd (`/art refused or failed (404) … Upstream 404`
-in `gateway.log`), and those five were FLACs with **no embedded picture
-at all** — `tracks.art` pointed at art that had never existed.
-
-Both halves of the harvest are now marker-aware:
-- **It heals first**, keyed on the marker, so a MusicBrainz or hand-set
-  cover is never touched.
-- **Then it refuses to harvest another**, so the row cannot come back.
-- **A marker whose album has no healed track is LEFT, not deleted.**
-  Deleting makes the album bare, which sends it to MusicBrainz — an hour
-  of rate-limited lookups to repair a cache. The next scan gets it.
-- **The harvest's second half** pushes `album_art.art_url` back onto
-  art-less tracks, so a stored marker could travel INTO `tracks`; that
-  direction is guarded too.
-
-Live repair: **3,982 → 120**. All 120
-remaining are ORPHANS — their album no longer exists in `tracks` — so
-they are inert. `tests/test_album_art_sentinel.py` (9).
-
-> **Correction (2026-10-04): the "1,099 art-less tracks filled" reported
-> with this repair was never real.** Those tracks belong to `notfound`
-> albums, whose `art_url` is `''`; the harvest's second half copied that
-> empty string onto them, counted the no-op as a fill, and logged
-> `filled=1099` on EVERY boot. The fill now requires a non-empty
-> `art_url`. A boot line that reports the same non-zero number every
-> time is a no-op being counted, not a repair that keeps undoing itself.
-
-### Ask a question the cover sources can ANSWER (2026-09-21)
-
-3,998 albums sat in `album_art` as a sticky `notfound`. Sampling showed
-the **sources were never the bottleneck — the QUESTION was**:
-
-```
-Pink Floyd | Ummagumma                 -> musicbrainz   FOUND
-Pink Floyd | Ummagumma - Studio Album  -> notfound      never will be
-```
-
-One album, two rows, opposite fates, decided by a suffix the ripper
-added. And for compilations the question is unanswerable in principle:
-*"does Harry Nilsson have an album called Voices of the 70s?"* No — it
-isn't his; he is one contributing performer.
-
-**`dlna_art_query.art_queries()` returns ORDERED attempts.** The exact
-`(artist, album)` is **always first**, so nothing that resolves today can
-regress; looser forms follow in increasing order of risk — a tidied title
-is still that album, while title-only could in principle return a
-different record of the same name, so it is offered **only for
-multi-artist folders**, where including the artist is guaranteed to fail.
-
-- **`tidy_album` is for LOOKUP ONLY** — never identity, never display. A
-  too-loose query costs one wasted request; a too-loose identity merges
-  two albums.
-- Edition words are stripped only **after a dash at the END**: "Sign o'
-  the Times - Live in Paris" is a title, "Ummagumma - Studio Album" is a
-  marker. A name made entirely of cruft is handed back **unchanged**
-  rather than emptied — an empty query searches for everything and caches
-  the miss.
-- **No new external source was added.** Dropping the artist and searching
-  Cover Art Archive by title alone found covers for 3 of 4 such albums
-  using the service we already have; iTunes and Deezer both scored 1/4 on
-  the same failures, and iTunes' single "hit" was the wrong release.
-
-`tests/test_art_query.py` (14).
-
-### Four things the fetcher was asking that could not have an answer (2026-09-21)
-
-A live pass over 1,497 "bare" albums returned **32 covers**. The low
-yield was not bad luck — a rate-limited budget was being spent on
-impossible questions. All four filters are **opt-in**, so no existing
-caller silently narrows.
-
-- **169 were AUDIOBOOKS.** `bare_albums()` had no udn filter, so the
-  second LocalFs root was swept along with the music. The very first
-  query of the run asked MusicBrainz for
-  `artist='Patrick Rothfuss' album='The Kingkiller Chronicle Book 2'` —
-  of a *music* database — and then cached the miss as a `notfound`
-  against a book. `skip_udns` / `_audiobooks_udn()`.
-- **90 were one- or two-track STRAYS** — a loose file in its own folder.
-  It has no cover because it is not an album; every one is a guaranteed
-  miss. `min_tracks`.
-- **`multi_artist` never reached `art_queries`**, so the title-only query
-  — the only form that can find a compilation, and the one
-  `tests/test_art_query.py` already covered — never ran in production.
-  `bare_albums` now reports the folder's distinct-performer count, which
-  is what makes the decision possible at all.
-- **The ENDPOINT was wrong for compilations.** Cover art attaches to a
-  **release** — a specific pressing — while a *release-group* reports art
-  only when one of its releases is flagged as the group cover:
-
-  ```
-  Harry Nilsson / Voices of the 70s
-    release-group : 0 groups   -> no art
-    release       : 1 release  -> art FOUND   (verified live)
-  ```
-
-  Measured 10% vs 4% over ten current failures. **Release-group stays
-  FIRST** — it is the better answer when it works, one abstract album
-  rather than forty pressings — and release is the fallback that rescues
-  compilations.
-
-After the fix the same fetcher ran at a **78% hit rate** (849 found / 239
-notfound) against ~2% before.
-
-### Where album art actually stands — and why the ceiling is low
-
-Measured on the live library after all of the above:
-
-```
-album_art     sibling 11,424 · musicbrainz 2,217 · notfound 239
-albums w/art  1,933 / 2,264 (85.4%)     was 77%
-folders       fully covered 1,875 · PARTLY 58 · NONE 331
-tracks w/art  25,245 / 26,905 (93.8%)
-```
-
-(Re-measured 2026-09-22, after the `localfs-art:` marker repair below.
-The figures move with the library; treat
-them as a scale, not a contract.)
-
-> **849 covers found yielded only +67 folder-albums**, and the mismatch
-> is structural, not a bug: `album_art` is keyed `(artist, album)` while
-> a LocalFs album is a **FOLDER**. The same shape shows up every time
-> these two identities meet; expect it when reading any art statistic.
-
-**The remaining 335 are a media problem.** Of 402 art-less albums at the
-time of the audit, **~60% are compilation-shaped names no database holds**
-(`Billboard Top 100 of 1970`, `Greatest Hits Collection 60s`) and ~22%
-are the one-or-two-track strays. Only ~17% look like real releases. Two
-options were evaluated and **both declined**:
-
-- **`beet fetchart`** — beets knows 709 of 2,248 albums and just **THREE**
-  of the 402 without art. The albums beets could not import are the same
-  albums Cover Art Archive cannot find, for the same reason.
-- **Discogs** — has a free API and would have served the compilation
-  category, but the release-vs-release-group fix above already recovers
-  it from a source we are already using and already rate-limit correctly.
-  Not worth a fifth external dependency for what is left.
-
-Stop here unless the tags change. The lever that remains is retagging,
-not another lookup service.
+- **Where covers come from, in order:** the embedded picture → an image
+  BESIDE the music (`dlna_providers/localfs_art.py`, inside
+  `_extract_art_bytes` so scan and serve share it; chosen by NAME — "biggest
+  wins" picks the back cover; rejections match whole words; a `CD1`/`Disc 2`
+  folder also looks in its parent; WMP `_large` accepted, `_small` rejected;
+  12 MB cap; magic-byte MIME) → **Phase A** sibling harvest
+  (`_backfill_album_art`, after every `upsert_tracks` + at startup) →
+  **Phase B** `ART_FETCHER` (MusicBrainz + Cover Art Archive; a startup scan
+  at +120 s and `trigger()` after each indexer run, no periodic poll;
+  `_MB_RATE_LIMIT_SEC = 1.1`). `tests/test_folder_art.py` (23).
+- **`notfound` is sticky by design.** Retry:
+  `DELETE FROM album_art WHERE source='notfound' [AND artist='…' AND album='…']`,
+  then restart (120 s scan) or rebuild.
+- **`localfs-art:<sha1>` is a scan-time MARKER, not a URL.** The harvest
+  heals markers first, refuses to harvest new ones, LEAVES orphan markers
+  (deleting sends the album to MusicBrainz), and only pushes a NON-EMPTY
+  `art_url` onto tracks — a boot line reporting the same non-zero `filled=`
+  every time is a no-op being counted. `tests/test_album_art_sentinel.py` (9).
+- **Queries are ordered attempts** (`dlna_art_query.art_queries`): the exact
+  `(artist, album)` ALWAYS first, then a tidied title, then title-only —
+  only for multi-artist folders. `tidy_album` is LOOKUP-only, never identity
+  or display; an all-cruft name comes back unchanged.
+  `tests/test_art_query.py` (14).
+- **`bare_albums(skip_udns, min_tracks, with_performers)`** filters are
+  opt-in: skip audiobooks, skip 1–2-track strays, report multi-artist so
+  title-only can run. Look up **release-group first, then release** (art
+  attaches to a release — this is what rescues compilations).
+- **Ceiling** ≈ 85% of albums; the rest are compilation-shaped names no
+  database holds. `album_art` is keyed `(artist, album)` while a LocalFs
+  album is a FOLDER, so art statistics never line up one-to-one. Retagging
+  is the remaining lever, not another lookup service.
 
 ## FIXES.md — the rolling why-log
 
@@ -2437,484 +1242,98 @@ The fix has two parts:
 
 Track durations in `playlist_tracks` are stored as TEXT in UPnP `H:MM:SS(.fff)` format, NOT as seconds. `_dur_to_sec()` in `dlna_player.py` tolerates every format the DB stores (int, float, empty/None, `H:MM:SS.fff`, `MM:SS`, malformed strings → 0). Prior to 2026-04-23 this was `int(dur)` and blew up silently inside the daemon thread, killing playback before SetURI was ever sent. Regression-guarded by `tests/test_player.py::TestDurToSec` and `TestRendererQueueDurationSafety`.
 
-## Radio play-count biasing
+## Smaller library features — play counts, lyrics, album favourites
 
-`GET /api/radio?udn=X&limit=N` (handler: `api_browse.radio` → `LibraryDB.radio_tracks`) picks N tracks biased toward **lowest play count** with random tiebreak, then atomically bumps the count on all selected URLs. The same 100 never keep surfacing: over time the whole library cycles through.
+Full specs (tables, endpoints, UI): **[docs/FEATURES.md](docs/FEATURES.md)**.
+All three tables survive `clear(udn)` / rebuild-index, like `album_art`.
 
-```
-SELECT ... FROM tracks t
-  LEFT JOIN play_counts p ON p.url = t.url
- WHERE t.udn = ?
- ORDER BY COALESCE(p.count, 0) ASC, RANDOM()
- LIMIT ?
-```
+- **Radio play-count bias** — `GET /api/radio` → `LibraryDB.radio_tracks`
+  orders by `COALESCE(play_counts.count,0) ASC, RANDOM()` and bumps the
+  picked URLs. Only `/api/radio` (and Subsonic scrobble) increment.
+  Reset: `DELETE FROM play_counts`. `tests/test_library.py::TestRadioPlayCountBias`.
+- **Lyrics (lrclib)** — `GET /api/lyrics?url=` contacts lrclib at most once
+  per URL: positive AND `notfound` results are cached forever; a 502 (provider
+  unreachable) is NOT cached. Retry one:
+  `DELETE FROM lyrics WHERE source='notfound' AND url='…'`. `tests/test_lyrics.py`.
+- **Album favourites** — `album_favourites(artist, album, album_key)`. A
+  LocalFs favourite is its FOLDER (`album_key` in the PK), so a VA comp is
+  one favourite; others keep `album_key=''`. The album-header ⭐ shows only
+  for albums with more than one track; browsed via the ⭐ letter-bar entry;
+  exposed to the Naim (`favalbum:` ids) and Subsonic (starred albums).
 
-The `play_counts` table is intentionally decoupled from `tracks`:
+### UPnP exposure (Naim / LG TV)
 
-- **Not touched by `clear(udn)`** — rebuild-index doesn't reset play history, same invariant as `album_art`.
-- **Keyed by URL** — if the upstream media server ever re-hashes URLs, orphaned rows are harmless and those tracks restart at count=0. Soft preference, not a correctness invariant.
-- **Radio-only tracking** — listening via browse / playlists / favourites does NOT increment; only `/api/radio` does. Keeps the feature self-contained and matches the "radio freshness" use case.
+`api_upnp*` makes the gateway a complete DLNA Media Server. Root: Artists,
+Albums (a `#-0-A..Z` letter index), Genres, ⭐ Favourite Albums, Playlists —
+plus 📖 Audiobooks and 📹 Videos when populated. Strict clients (the Naim's
+dLeyna/GUPnP, LG WebOS) browse ONLY when all of this holds (full tree and
+codec details in docs/FEATURES.md):
 
-To force a full reset (hear early picks again):
+- `device.xml`: `MediaServer:1`, `<dlna:X_DLNADOC>DMS-1.50`, an `<iconList>`,
+  and BOTH ContentDirectory AND **ConnectionManager** (mandatory).
+- SCPDs use `<name>` tags (a stray `<n>` broke parsing); the pre-browse
+  handshake actions all return empty-but-valid 200s.
+- GENA `SUBSCRIBE` returns `SID` + `TIMEOUT`, and the initial NOTIFY fires on
+  a **daemon `threading.Thread`, never `asyncio.create_task`** (an
+  unreferenced task is GC'd → endless re-SUBSCRIBE, never a browse).
+- SSDP NOTIFY announcer **and** M-SEARCH responder.
+- Junk names hidden from display only (`_is_junk_name`); every list
+  paginates (`RequestedCount=0` = unlimited); ids are base64 codecs
+  (`gartist:`, 3-field `galbum:`/`favalbum:` carrying `album_key`); a garbled
+  id → an empty container, never a 500.
 
-```sql
-DELETE FROM play_counts;
-```
-
-Tests: `tests/test_library.py::TestRadioPlayCountBias` covers the invariants — disjoint-from-prior-call, full-library cycling, persistence across `clear()`.
-
-## On-demand lyrics (lrclib)
-
-📜 button in the now-playing panel fetches lyrics via lrclib.net on
-first tap and caches the result in the `lyrics` table forever (sticky
-positive AND negative). Re-taps are pure DB reads — lrclib is contacted
-**at most once per track URL**.
-
-### `lyrics` table — survives `clear(udn)`
-
-```sql
-CREATE TABLE IF NOT EXISTS lyrics (
-    url        TEXT PRIMARY KEY,
-    plain      TEXT,                  -- NULL only when source='notfound'
-    synced     TEXT,                  -- LRC with [mm:ss.xx] timestamps if available
-    source     TEXT NOT NULL,         -- 'lrclib' | 'notfound' | 'manual'
-    fetched_at INTEGER NOT NULL
-);
-```
-
-Same persistence pattern as `album_art` / `play_counts`.
-Rebuild-index does NOT wipe lyrics.
-
-### Endpoint
-
-```
-GET /api/lyrics?url=<track-url>
-→ { plain, synced, source, cached }
-  source ∈ {'lrclib', 'notfound', 'manual'}
-  cached = true → row was already in DB; no network hit
-```
-
-Errors: `400 missing url`, `404 track not in library`,
-`502 lyrics provider unreachable` (transient; **not cached**, so the
-next tap retries).
-
-### Sticky negative cache
-
-A 404 from lrclib (or a 200 with both `plainLyrics` and `syncedLyrics`
-null) gets cached as `source='notfound'` so we don't re-hammer lrclib
-each time the user taps. To force a retry on a single track:
-
-```sql
-DELETE FROM lyrics WHERE source='notfound' AND url='…';
-```
-
-### Display
-
-Frontend modal (`#lyrics-modal` in `index.html`, handler in `app.js`)
-shows the plain text. If only synced (LRC) is available, the
-`[mm:ss.xx]` timestamps are stripped client-side for readable display.
-Karaoke-style sync is deferred.
-
-Tests: `tests/test_lyrics.py` — 15 unit tests covering DB round-trip,
-`clear(udn)` survival, cache-hit short-circuit, sticky-notfound, and
-network-error pass-through.
-
-## Album favourites (whole-album bookmarks)
-
-Distinct from the track-level "⭐ Favourites" playlist (id
-`__favourites__`). Album favourites bookmark whole albums by
-`(artist, album)`, independent of `tracks` so they survive
-`clear(udn)` / re-indexing — same contract as `album_art`,
-`play_counts`, `lyrics`.
-
-### `album_favourites` table
-
-```sql
-CREATE TABLE IF NOT EXISTS album_favourites (
-  artist     TEXT NOT NULL,
-  album      TEXT NOT NULL,
-  album_key  TEXT NOT NULL DEFAULT '',   -- LocalFs folder identity
-  added_at   INTEGER NOT NULL,
-  PRIMARY KEY (artist, album, album_key)
-);
-```
-
-`album_key` (2026-05-31, A2): a LocalFs favourite is identified by its
-**folder** (`album_key`), so a Various-Artists compilation favourites as
-one album even though every track has a different performer — and two
-distinct comps that share `artist='Various Artists'` + a repeatable
-display name don't collide (hence `album_key` in the PK). Non-LocalFs
-favourites keep `album_key=''` and the legacy `(artist, album)` identity.
-`album_fav_add/remove/is` take an optional `album_key`; `album_fav_list`
-returns it and matches `track_count`/art by folder when set. Migrated in
-`_migrate_album_fav_key` (rebuilds the table, carrying old rows forward
-with `album_key=''`). **UPnP fav exposure (A3a) and Subsonic fav/album
-ids (A3b) are both album_key-aware — favouriting/browsing a compilation
-by folder works across the PWA, the Naim, and CarPlay.**
-
-### LibraryDB methods
-
-- `album_fav_add(artist, album) → bool` — INSERT OR IGNORE; returns
-  True if a new row was created. Empty album rejected.
-- `album_fav_remove(artist, album) → bool`
-- `album_fav_is(artist, album) → bool`
-- `album_fav_list() → [{artist, album, added_at, art, track_count, udn}]`
-  — joins `album_art` for cover and `tracks` for count + udn; orphan
-  favourites (no matching tracks anywhere) still appear with
-  `track_count=0, udn=""` so the user can prune them.
-
-### HTTP endpoints
-
-```
-GET /api/album_favourites
-    → [{artist, album, art, track_count, udn, added_at}, …]
-GET /api/album_favourites/check?artist=X&album=Y
-    → {is_favourite: bool}
-GET /api/album_favourites/add?artist=X&album=Y
-    → {ok: true, created: bool}
-GET /api/album_favourites/remove?artist=X&album=Y
-    → {ok: bool}   (false if it wasn't there)
-```
-
-### UI
-
-- **Album header** (`#browse-fav-album`): a star button next to "▶ Play
-  all" in `browse-section-hdr`. **Visible only when the album has more
-  than one track** — single-track "albums" are typically metadata-less
-  orphans and shouldn't be favouritable. `data-fav="0"` shows ☆,
-  `data-fav="1"` shows ★. Click toggles via /add or /remove with
-  optimistic UI flip.
-- **Add:** the album-header ⭐ star (folder-keyed via `album_key`).
-- **Browse:** a **⭐ entry at the front of the browse letter bar**
-  (`LETTERS[0]` in app.js, before `#`). Selecting it loads
-  `/api/album_favourites` and renders the favourites as album rows
-  (`renderFavouriteAlbums`); clicking one opens it via `album_key`
-  (`showAlbumTracks(..., album_key)`). This replaced the old right-column
-  "⭐ Favourite Albums" list view, which was **removed 2026-06-01** — its
-  `(artist, album)` entries didn't survive the folder-album migration
-  (stale rows, slow joins, spinner-on-open), and the `album_favourites`
-  table was cleared for a clean slate. Favourites are also exposed via
-  UPnP (Naim) and Subsonic (CarPlay).
-
-### UPnP exposure (Naim)
-
-`api_upnp._gw_browse` exposes the gateway as a MediaServer the Naim browses
-directly (no PWA). **Root container "0" lists five children:** `Artists`,
-`Albums`, `Genres` (the **full library**),
-then `⭐ Favourite Albums` and `Playlists` — plus a sixth, `📹 Videos`, only
-when GWMovies is enabled + populated.
-
-**Videos sub-tree** (for the LG TV; guarded by
-`tests/test_upnp_videos_browse.py`): `videos` → `📅 By date` (year → month),
-`📍 By location` (COUNTRY blocks → locations; **titles show FULL country
-names** via `dlna_countries.py` while ids/sorting/filenames keep the ISO
-code — 2026-07-08), `👤 By person` (Immich person tags via `video_people`;
-container only present when persons exist — 2026-07-07), and `🎞 All videos`.
-Country drill-downs carry a **"(no city)" bucket** for country-only inferred
-locations; the top-level "(no location)" bucket holds videos with NEITHER.
-Garbled ids → empty container, never 500.
-
-**DLNA Media Server surface — what makes strict clients browse it (hard-won
-2026-06-13).** Browsing only works if the gateway is a *complete, spec-correct*
-DLNA DMS. The Naim (control point UA `dLeyna/0.6.0 GUPnP/1.0.2`) and the LG WebOS
-TV both refused to browse until every one of these was right — diagnose via the
-`GW /gw/…` lines in `gateway.log` (at `debug`; run with `GATEWAY_DEBUG=1`), which
-show exactly what a client requests, in order:
-- **`device.xml`** (`_gw_device_xml`): `MediaServer:1` device + `friendlyName`
-  + `UDN` + **`<dlna:X_DLNADOC>DMS-1.50`** + an **`<iconList>`** (192/512 PNG,
-  served by the ASGI app — TVs won't list an icon-less server) + a `serviceList`
-  with **BOTH** `ContentDirectory:1` **and** `ConnectionManager:1`
-  (ConnectionManager is MANDATORY — its absence was why both clients quit).
-- **ContentDirectory SCPD** (`/gw/cd/desc.xml`, `_gw_cd_desc_xml`): MUST use
-  `<name>` tags (a stray `<n>` made clients fail to parse the service). Advertises
-  `Browse` + the pre-browse handshake actions. `cd_control_soap` dispatches:
-  `Browse` + `GetSearchCapabilities` / `GetSortCapabilities` /
-  `GetSortExtensionCapabilities` / `GetSystemUpdateID` / `GetFeatureList` /
-  `Search` — all returning empty-but-valid 200 (a client runs the handshake
-  BEFORE it will browse; 400s there made it give up).
-- **ConnectionManager** (`/gw/cm/desc.xml` + `/gw/cm/control`, `cm_control_soap`):
-  `GetProtocolInfo` (Source = the audio `protocolInfo` we serve, `_GW_SOURCE_
-  PROTOCOLS`), `GetCurrentConnectionIDs` (`0`), `GetCurrentConnectionInfo`.
-- **GENA eventing** (`/gw/cd/events` + `/gw/cm/events`): a `SUBSCRIBE` MUST return
-  a valid `SID` + `TIMEOUT` **and** then push the initial NOTIFY to the client's
-  CALLBACK (`gw_event_subscribe` / `gw_event_initial_notify`). The NOTIFY is fired
-  on a **daemon `threading.Thread`, NOT `asyncio.create_task`** — an un-referenced
-  task is GC'd before it runs, the NOTIFY never sends, and GUPnP/dLeyna then
-  re-SUBSCRIBEs forever and never browses (the final bug; commit `90afef7`).
-- **Discovery** (`dlna_gateway.start_background_services`): `gw_ssdp_announcer`
-  (NOTIFY alive every 60 s) **plus** `gw_ssdp_responder` — answers SSDP
-  `M-SEARCH` so a control point's *active* search finds the server, not only a
-  passively-caught NOTIFY.
-
-All four `/gw/*` route groups are native in `dlna_asgi.py` on the
-plain `:8765` bind. Regression-guarded by `tests/test_upnp_album_favourites.py`
-(`TestContentDirectorySCPD`, `TestContentDirectoryActions`, `TestConnectionManager`,
-`TestGenaEvents`, `TestMSearchResponder`).
-
-**Full-library tree** — backed by `LibraryDB` on `DB.primary_udn()` (the udn
-owning the most tracks = the LocalFs backend):
-- `artists` → `gartist:<b64(artist)>` → that artist's albums.
-- `albums` → a **#-0-A..Z letter index** (`albumltr:<L>`, only non-empty buckets,
-  matching `LibraryDB.browse_letter` / the PWA letter bar) → that letter's albums
-  → tracks. (Not one flat ~2,000-entry list — unbrowsable on a Naim remote.)
-- `galbum:<b64(artist\x00album\x00album_key)>` → the album's tracks as
-  `musicTrack` items whose `<res>` is the `/localfs/stream` URL the Naim plays.
-- `genres` → `ggenre:<b64(genre)>` → that genre's albums.
-- **Untagged junk is hidden** (`_is_junk_name`, DISPLAY-only): blank names, a
-  `NN.`/`NN)`/`NN -` track-number prefix, or a bare 1–2-digit number ("07") are
-  dropped from Artists/Albums/Genres + the album sub-lists, and a junk artist is
-  suppressed from the `album — artist` title. The raw DB is untouched (the PWA
-  still shows it; beets enrichment fixes tags over time).
-- Every list **paginates** via `StartingIndex`/`RequestedCount` (the slice is
-  applied to the junk-filtered `LibraryDB` result — fine at this library size; a
-  future optimisation would push `LIMIT/OFFSET` into the queries). Album ids
-  carry the LocalFs `album_key` so folder-albums (incl. Various-Artists comps)
-  resolve. Codecs: `_b64e`/`_b64d` (single value) + `_encode/_decode_lib_album_id`
-  (`galbum:*`, distinct from the favourites `favalbum:*` codec); garbled ids →
-  empty container, never 500.
-
-**Favourites tree** — `⭐ Favourite Albums`: one container per favourited album
-titled `"<album> — <artist>"`. One level deeper: the album's tracks, resolved
-against `album_fav_list()[i]['udn']` via `DB.album_tracks`.
-
-ObjectID encoding for individual albums:
-`favalbum:{base64-urlsafe(artist + "\x00" + album + "\x00" + album_key)}`
-— round-trips arbitrary unicode (non-ASCII names, ampersands, slashes,
-NUL bytes fine) through SOAP/XML. `album_key` (A3a) is the LocalFs folder
-identity so a Various-Artists compilation resolves as one album; it's
-empty for (artist, album)-keyed favourites, and legacy 2-field ids decode
-with `album_key=''`. The favalbum container resolves tracks via
-`DB.album_tracks(udn, artist, album, album_key=…)`. See `_encode_album_id`
-/ `_decode_album_id` in `api_upnp.py` (both now 3-field). Garbled /
-non-base64 IDs decode to `("", "", "")` and return an empty container
-rather than 500.
-
-### Tests
-
-| File | What it covers |
-|---|---|
-| `tests/test_album_favourites.py` | DB round-trip + idempotent add, dedupe, ordering newest-first, orphan-album survival, `clear(udn)` invariant, handler 400/200 paths. 14 tests. |
-| `tests/test_upnp_album_favourites.py` | Album-id codec round-trip (incl. unicode/specials), root browse lists fav-albums first, "favalbums" lists each favourite, "favalbum:{...}" lists tracks, unknown album → empty container. 9 tests. |
-| `tests/frontend/test_album_favourites.py` | Album-header star only (the right-column browse view was removed 2026-06-01): star gated by `track_count>1`, initial state from `/check`, click → /add or /remove with optimistic flip, album_key-aware check/add. 8 Playwright tests. |
+Diagnose with `GATEWAY_DEBUG=1` and the `GW /gw/…` lines in `gateway.log`.
+Guarded by `tests/test_upnp_album_favourites.py`,
+`tests/test_upnp_videos_browse.py`, `tests/test_upnp_audiobooks.py`.
 
 ## Security posture (audit 2026-08-20)
 
-The gateway is unauthenticated except for `/rest/*` (Subsonic) — CLAUDE.md's
-long-standing position is that **Tailscale is the primary access control**.
-That is still true, but it means every control here is what stands between a
-LAN peer and the gateway. Four things were fixed after an audit; the notes
-below exist so none is quietly undone.
+Unauthenticated except `/rest/*`; Tailscale / the LAN is the access control,
+so these controls are all that stand between a LAN peer and the gateway.
+Every fix has a regression test verified to fail on the old code. Full
+reasoning, measurements and limits: **[docs/SECURITY_POSTURE.md](docs/SECURITY_POSTURE.md)**
+(public policy: `SECURITY.md`). **Do not undo any of these:**
 
-**1. SSRF on the three `?url=` endpoints (`dlna_ssrf.py`).** `/art`,
-`/stream` and `/radio_stream` take a caller-supplied URL. They used to fetch
-ANY http/https address, which made the gateway an unauthenticated SSRF proxy:
-`/art`'s error text was a clean open/closed/filtered **port oracle**, and
-`/stream` — which relays bytes with no content-type gating — returned the
-body of **any internal HTTP service** verbatim
-(`?url=http://127.0.0.1:8765/api/servers` dumped the JSON).
-`dlna_ssrf.guard(url)` now fronts all four fetch entry points **and every
-redirect hop**: a destination resolving to a private/loopback/link-local/
-reserved address is refused unless its host is a **device already in
-`SERVERS`/`RENDERERS`** (which is how the LocalFs file server on `:8200`
-stays reachable — it registers itself at boot). Public destinations stay
-allowed because cover art, station logos and radio streams are public by
-nature. Non-http(s) schemes (`file:`, `gopher:`, …) are refused outright.
-Read `dlna_ssrf.py`'s docstring for the two limits it does NOT claim to fix
-(host- not port-granularity; a DNS-rebinding window).
+1. **SSRF** — `dlna_ssrf.guard(url)` fronts `/art`, `/stream`,
+   `/radio_stream` and EVERY redirect hop: private/loopback/link-local
+   refused unless the host is a device in `SERVERS`/`RENDERERS`; non-http(s)
+   refused.
+2. **No oracle** — every failure returns the same opaque 502
+   (`art unavailable` / `stream unavailable`); detail goes to the log only.
+   Never "improve" this by forwarding the upstream status.
+3. **TLS verification is ON** for outbound calls; a radio cert error is a
+   real signal, not something to switch off.
+4. **Escaping** — `esc()` escapes both quote characters;
+   `dlna_discovery._clean_udn`/`_clean_name` sanitise device text.
+   `tests/frontend/test_xss.py`.
+5. **XML** — every untrusted parse goes through `dlna_xml.safe_fromstring`
+   (DTDs refused, 4 MB cap). `tests/test_xml_safety.py`.
+6. **Subsonic auth** compares with `hmac.compare_digest`.
+7. **Explicit binds** from `.env` via `hypercorn_conf.py`, never `0.0.0.0`;
+   loopback must stay bound; a missing address fails startup on purpose.
+   `:8443` on the LAN IP serves a cert that doesn't match (→ no SW, blank
+   app); a LAN PWA should use `http://<lan-ip>:8765`.
+8. **Containment by path COMPONENTS** — `dlna_localfs_http.resolve_within`,
+   and open the path it RETURNS (TOCTOU). `tests/test_localfs_traversal.py`.
+9. **SSDP** (`parse_location` + `_spawn_registration`): ≤ 8 registrations in
+   flight (excess dropped), http(s) only, description body ≤ 512 KB, and the
+   LOCATION host must BE the datagram source (`urlsplit().hostname`). A
+   too-strict rule shows up as "the Naim stopped browsing", not a red test.
+   `tests/test_ssdp_parsing.py`.
+10. **Nothing unbounded** — `dlna_xml.read_capped` for every device read
+    (`tests/test_resource_limits.py` asserts no bare read is left);
+    `AUDIO_RELAYS` and `SSE_STREAMS` are 64-slot caps → 503 + `Retry-After`.
+    Slowloris and threadpool exhaustion were measured and are NOT problems.
+11. **A dead renderer is cheap** — `snapshot_all` fans out in parallel and
+    `_UNREACHABLE_BACKOFF_SEC` (30 s) stops re-dialling a renderer that
+    answered `UNREACHABLE`.
 
-**2. The error text WAS the oracle.** `/art` forwarded the upstream status
-and raw exception string. Every failure now returns an identical
-`502 {"error":"art unavailable"}` (`"stream unavailable"` for the relays) and
-the detail goes to the log only. `dlna_ssrf.guard` returns a bare bool for
-the same reason. **Do not "improve" these by forwarding the upstream status** —
-that is precisely the bug. Guarded by
-`tests/test_asgi.py::TestArtProxy::test_every_failure_looks_identical_to_the_caller`.
-
-**3. TLS verification is ON.** Five runtime call sites used
-`ssl._create_unverified_context()`, so cover art and HTTPS radio were
-MITM-able. Removed. Verified the real path still works end-to-end
-(coverartarchive → 307 → archive.org, verified cert). If a radio station ever
-fails to play with a certificate error, that is a real signal, not something
-to switch back off.
-
-**4. Untrusted device text is escaped and sanitised.** `esc()` in `app.js`
-escaped only `& < >` — fine for a text node, unsafe in the quoted attribute
-it actually lands in (`<option value="${esc(s.udn)}">`), and a UDN comes
-straight from a discovered device's XML. `esc()` now escapes both quote
-characters, and `dlna_discovery._clean_udn` / `_clean_name` strip
-markup-significant and control characters server-side as a second layer.
-Guarded by `tests/frontend/test_xss.py` (the UDN case genuinely fails on the
-old `esc()`).
-
-**5. Untrusted XML cannot amplify (`dlna_xml.py`).** `ET.fromstring` was
-called on nine network-sourced documents, two of them the unauthenticated
-`/gw/*` SOAP endpoints. ElementTree expands internal entities: a
-billion-laughs body was measured expanding **10× per nesting level**, so a
-few small requests could exhaust memory. External entities were already
-refused (no file disclosure), making this DoS — but on a machine whose job is
-to keep playing music. `safe_fromstring` now refuses **any DTD** (SOAP, DIDL
-and device descriptors have no legitimate use for one) plus a 4 MB cap, and
-every parse site routes through it. Guarded by `tests/test_xml_safety.py`,
-which also asserts real SOAP still parses — a hardening that broke the Naim
-would be worse than the bug.
-
-**6. Auth comparison is constant-time.** Subsonic's MD5 token is mandated by
-the protocol and can't be revisited, but the comparison is ours:
-`hmac.compare_digest` replaces `==` on both the token and the plaintext path.
-
-**7. The gateway no longer binds `0.0.0.0` (2026-08-20).** An unauthenticated
-control API on *every* interface was the biggest thing left open. Listeners
-are now named explicitly in `.env` and read by `hypercorn_conf.py`:
-
-| Port | Addresses | Why |
-|---|---|---|
-| `8443` TLS | tailnet + LAN + loopback | Cert is for the tailnet hostname, so **only the tailnet URL validates** — see the caveat below. Loopback for the live suite |
-| `8765` plain | LAN + tailnet + loopback | The Naim and LG TV can't do HTTPS, so the UPnP tier lives here |
-| `8200` file server | LAN only | Renderers fetch bytes directly; a single socket, so one address |
-
-⚠️ **The LAN address on `:8443` serves a certificate that does not match it.**
-`192.168.1.125:8443` was added 2026-08-20 so the PWA is reachable over
-HTTPS on the LAN, but the `tailscale cert` is issued for
-`ronsmacmini.tail5be6ad.ts.net` — a browser warns on every visit
-(`curl` without `-k` fails outright; with `-k` it is a normal 200/HTTP-2).
-Consequence worth knowing before debugging a blank app: a cert-warning
-origin is **not a trusted secure context**, so an installed PWA there can
-fail to register its Service Worker and show the "full UI, no content"
-symptom — the same appearance as the 2026-06-27 SW outage, different cause.
-For a LAN-installable PWA use `http://192.168.1.125:8765` instead: plain
-HTTP on a private address *is* treated as a secure context. The clean HTTPS
-route is the tailnet hostname, which validates properly.
-
-This closed two real exposures: a **second LAN interface** (`192.168.1.238`)
-that nobody intended to serve, and TLS on the LAN address where the cert
-never matched anyway. The LAN address is **DHCP-reserved** on the router
-(Netgear @ `192.168.1.1`, against the Ethernet MAC `d0:11:e5:ed:76:35`,
-2026-08-20) — which is what makes naming a literal IP in `.env` reasonable
-rather than fragile. Note the Wi-Fi interface carries a macOS *randomized*
-MAC, so it could never have been reserved reliably; it is no longer served. **Loopback must stay bound** — `tests/run_all.py` and
-the beets tools reach the gateway at `127.0.0.1`. If a configured address
-stops existing the gateway FAILS TO START; that is deliberate, because the
-alternative is silently falling back to `0.0.0.0`. Changing an address is an
-`.env` edit + `./setup.sh --restart` — no plist bootout, which is the whole
-reason the binds live in `.env` rather than the LaunchAgent's argv.
-
-**8. Containment is about path COMPONENTS, not string prefixes (2026-08-21).**
-The LocalFs file server checked `str(resolved).startswith(root)`, so any
-sibling directory whose name merely began with a root's name was inside it —
-`/Volumes/SAMDATA/Music` admitted `/Volumes/SAMDATA/Music Videos`, and
-`Audio_Books` admitted `Audio_Books_private`. Every byte of them, to any
-unauthenticated peer on the LAN, because renderers fetch from this server
-directly. All three byte routes were affected; the check had been
-copy-pasted. It is now **one** helper, `dlna_localfs_http.resolve_within`,
-and the caller opens the path it RETURNS — resolving follows symlinks, so
-re-opening the original path would hand back a time-of-check/time-of-use
-gap. `/localfs/poster/<id>` is the only route where a URL segment becomes a
-filesystem path; it keeps `basename()` **and** gets containment. Guarded by
-`tests/test_localfs_traversal.py`, which asks the adversarial questions the
-older `TestPathTraversalDefence` did not.
-
-**9. An SSDP packet may not cost unbounded work — or name someone else
-(2026-08-21).** SSDP is the one place a stranger hands the gateway bytes with
-no authentication and no proven return address. Three things followed from
-that and are now enforced in `dlna_discovery_ssdp.parse_location` (pure, so
-the hostile cases are directly testable) plus `_spawn_registration`:
-*(a)* every LOCATION-bearing packet used to spawn a thread that slept 1.5 s
-then made an HTTP request, so a flood exhausted threads and FDs — appearing
-as SQLite's `unable to open database file`, which looks nothing like an
-attack. Capped at **8 registrations in flight**, excess **dropped** (safe:
-devices re-announce on a timer). *(b)* the URL was fetched unvalidated and
-read **uncapped** — `file://` worked, and an endless stream was buffered
-until death, since `safe_fromstring`'s 4 MB cap only sees bytes already in
-memory. Now http/https only, body capped at `_MAX_DESC_BYTES` (512 KB;
-real descriptions are ~4 KB). *(c)* nothing required the URL to name the
-sender, so any peer could aim the gateway's HTTP client at a third party —
-now the URL's host must BE the datagram source, compared via
-`urlsplit().hostname` so `http://192.168.1.5@elsewhere/` reads as
-*elsewhere* and is refused. `_seen_locations` is bounded for the same
-reason.
-> ⚠️ **A too-strict SSDP rule shows up as "the Naim stopped browsing", not
-> as a red test.** Verified against 25 s of real LAN traffic before shipping
-> — router, gateway, a Google device and both Naim descriptors all accepted,
-> zero false drops — and again after restart. `tests/test_ssdp_parsing.py`
-> puts the *legitimate* packet shapes first for this reason; they caught a
-> first draft that anchored the regex on `$` and rejected every real device
-> (SSDP lines end `\r\n`). If a device ever vanishes, run with
-> `GATEWAY_DEBUG=1` and `grep "announced a URL for" gateway.log`.
-
-**10. Nothing a peer can hold is unbounded (2026-08-21).** Three resources
-had no ceiling, all measured on the running gateway before being fixed.
-*(a)* **Reads from devices** — anything that answers an SSDP packet becomes a
-renderer/server the gateway talks SOAP to, and every response was a bare
-`resp.read()`. `dlna_xml.read_capped` bounds the read itself; it lives beside
-`safe_fromstring` because that cap could only ever judge bytes **already in
-memory**. Every device-facing site now uses it, plus the four outbound
-service calls, and `tests/test_resource_limits.py` asserts no bare read is
-left — so the next one added is caught rather than discovered. *(b)*
-**Audio relays** — 40 stalled `/stream` requests cost **120 file
-descriptors** (client socket + upstream socket + the LocalFs server's own
-accepted socket), and 80 survived the client disconnecting, draining over
-about a minute. `/stream`, `/radio_stream` and Subsonic `/rest/stream` share
-a **64-slot cap** (`dlna_asgi_state.AUDIO_RELAYS`) and answer 503 +
-`Retry-After` beyond it. *(c)* **SSE subscribers** — same shape, capped at 64
-(`SSE_STREAMS`). Verified live: 80 simultaneous requests to each → exactly 64
-× 200 and 16 × 503, with full recovery and no slot leak afterwards.
-> **What is NOT a problem — do not "fix" these again.** Half-open requests
-> (classic slowloris) are reaped by hypercorn's `keep_alive_timeout` in ~5 s
-> (60 of them never moved the FD count). The shared 256-token threadpool
-> absorbed **150 concurrent full `/stream` pulls with zero failures**. And
-> `/art` already capped its read at 12 MB *during* the read — that is the
-> pattern everything else now copies.
-
-**11. A switched-off renderer used to cost six seconds per poll
-(2026-08-21).** `tests/chaos.py` failed on `snapshot (no udn) > 5s`, and the
-cause was real: `/api/renderer_state` with no udn took **6.011 s** while the
-same call for the reachable Naim took **2 ms**. Two compounding bugs.
-`QueueRegistry.snapshot_all` walked every queue **sequentially** — and queues
-are *never evicted*, so it visited the LG TV, switched off, and paid its full
-SOAP timeout; `RendererQueue.snapshot` already fires its own two SOAP calls
-in parallel precisely so a dead renderer costs ~6 s not 12 s, and doing the
-queues sequentially threw that away one level up, making the total the **SUM**
-over dead renderers. It now fans out in parallel (4 unresponsive renderers:
-1.62 s → 0.41 s in a direct A/B), and a queue that misses the deadline is
-served from its own cached snapshot. On top of that, `snapshot()` now leaves
-a renderer that answered `UNREACHABLE` alone for `_UNREACHABLE_BACKOFF_SEC`
-(30 s) instead of re-dialling it every time the 500 ms cache expires —
-**the PWA polls this endpoint every second while audio plays**. Recovery is
-unaffected: the monitor thread probes independently while a queue is actually
-playing. After both fixes chaos passes and runs 400 actions in 9.5 s instead
-of 25.1 s.
-
-### Can a media file phone home? No — and here is what keeps it that way
-
-The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with
-mutagen `easy=True` and reads a **fixed allowlist of scalar fields**. It
-never touches the ID3 URL frames (`WOAR`/`WXXX`/`WCOM`), so nothing from a
-tag can become a URL the gateway fetches. Album art is a `localfs-art:<hash>`
-sentinel derived from the **hash of the embedded bytes**, never a tag string.
-
-The subtle part is `_sniff_image_mime`, which **ignores the declared MIME and
-sniffs magic bytes**. That is load-bearing, not cosmetic:
-
-  * ID3 `APIC` with MIME `-->` means the payload is a **URL**, not image
-    bytes — a documented phone-home form. Because we sniff, that payload is
-    served as opaque bytes and **never dereferenced**.
-  * An SVG "cover" is script-capable markup. Falling back to `image/jpeg`
-    means the browser refuses to parse it as SVG, so a cover cannot become an
-    XSS or a beacon.
-
-The allowlist is raster-only for exactly that reason. **Do not add
-`image/svg+xml` and do not trust the container's declared MIME** — either
-change reopens both vectors in one commit. Guarded by
-`tests/test_art_safety.py`.
-
-**What legitimately leaves the machine because of your files** (all
-documented in the External services table below): artist+album tags →
-MusicBrainz/Cover Art Archive during indexing; title/artist/album/duration →
-lrclib on the 📜 button; and — the privacy-relevant one — **video GPS
-coordinates → Nominatim automatically on every video scan**, at ~1 m
-precision with the contact email in the User-Agent. That is inherent to
-reverse-geocoding (cached per coordinate, ~1 req/s); the opt-out is leaving
-`LOCALFS_VIDEO_ROOT` unset.
+**A media file cannot phone home.** The tag reader reads a fixed allowlist of
+scalar fields (never the ID3 URL frames); art MIME is **sniffed from magic
+bytes, never the declared MIME** (an `APIC` with MIME `-->` stays opaque
+bytes), and the allowlist is raster-only — never add `image/svg+xml`.
+`tests/test_art_safety.py`. What legitimately leaves the machine is under
+"External services"; the privacy-relevant one is video GPS → Nominatim.
 
 ## External services (outbound HTTP)
 
@@ -3056,1688 +1475,117 @@ output is unaffected — the same slider then routes through
 `/api/control` and the gateway calls `SetVolume` on the renderer
 hardware.
 
-## Bit-perfect on macOS
+## Bit-perfect on macOS / iOS
 
-**Best chain.** Play to the Naim via UPnP. Gateway is not in the
-audio path; macOS / CoreAudio is not in the audio path; RoHaLocalFS
-serves directly to the renderer. This is the recommended setup when
-bit-perfect matters.
-
-**For browser playback on macOS,** the chain is:
-RoHaLocalFS → gateway `/stream` proxy → browser HTML5 `<audio>` →
-CoreAudio → output device. macOS still applies sample-rate conversion
-if the output device's rate doesn't match the source.
-
-### Audio MIDI Setup
-
-`/System/Applications/Utilities/Audio MIDI Setup.app`:
-- Select the output device.
-- Set **Format** sample rate to match the source material:
-  - CD rips: 44100 Hz / 16-bit
-  - Hi-res FLAC: 96000 Hz / 24-bit
-  - DXD: 192000 Hz / 24-bit
-- Mismatched rates cause CoreAudio SRC. With a mixed-rate library
-  the only "right" choice is to either pick the rate of your majority
-  format, or switch to UPnP/Naim for hi-res sources.
-
-### System Settings → Sound → Output
-
-- Turn off any **Spatial Audio** / **Audio Enhancements** on the
-  selected output device.
-- Bluetooth / AirPods are **always lossy** on macOS (codec
-  re-compression); use wired output for bit-perfect listening.
-
-### Limits of browser bit-perfect on macOS
-
-Browsers always go through CoreAudio's shared mixer; you can minimise
-but not fully eliminate it. For true hog-mode / exclusive-mode
-bit-perfect listening from a Mac, use Audirvana or Roon — outside the
-gateway's scope.
-
-### iOS / iPadOS PWA
-
-Ensure these are **off**:
-- Settings → Accessibility → Audio/Visual → **Headphone
-  Accommodations**.
-- Settings → Music → EQ (set to **Off**, not "Flat").
-- Settings → Sounds & Haptics → Headphone Audio → Volume Limit.
-- Spatial Audio toggles on connected headphones.
+The listener-side settings (Audio MIDI Setup sample rate, Sound output
+enhancements, the iOS EQ/accommodation switches, and why browser playback can
+never be fully exclusive-mode) are user documentation and live in
+**README.md → "Bit-perfect listening"**. Best chain: play to the Naim via
+UPnP — neither the gateway nor CoreAudio is in the audio path.
 
 ## Library housekeeping tools
 
-### `tools/prune_empty_music_dirs.py`
-
-Walks the music root and **moves to Trash** any directory whose entire
-subtree contains zero music files. The user's library lives at
-`/Volumes/SAMDATA/Music` (external drive — see project memory).
-
-Music extensions (default): `.mp3 .flac .ogg .opus .m4a .aac .wav .wma
-.ape .aiff .aif .dff .dsf .alac`. **`.mp4` is deliberately excluded**
-so a music-video MP4 in a folder doesn't mark that folder as "kept".
-
-#### Protection rule (Rule B — subtree-protect)
-
-As soon as the walker descends into a directory whose **subtree** (any
-depth) contains a music file, that directory is "an album root" and
-*all* of its descendants — including non-music siblings of music — are
-preserved. This protects:
-- `Album/scans/`, `Album/coverart/`, `Album/booklet/` next to music.
-- Multi-disc albums: `Album/CD1/track.flac` AND `Album/scans/cover.jpg`
-  both survive even though the cover-art subdir is a sibling of (not
-  under) the music subdir.
-
-The root music folder itself is **never** treated as an album root —
-loose music files at root don't grant blanket protection to root's
-other subdirs.
-
-**Documented trade-off:** the rule cannot tell apart a multi-disc
-album's `scans/` (you want kept) from a junk subdir next to a music
-subdir (you might want deleted). If you have a folder that mixes
-music subfolders and pure-junk subfolders at the same level, the
-junk is **preserved**. The rule errs on the side of preservation;
-clean such mixed dirs manually.
-
-#### Defaults & safety
-
-- **Trash, not delete.** Default behaviour moves directories to the
-  macOS Trash via `osascript` — recoverable from Finder for ~30 days.
-- **Confirmation prompt** — shows the first 20 dirs that would be
-  deleted + total count, then `Y/n`. Pass `-y` to skip.
-- **Limit acts as a safety belt** — if `--limit N` halts the walk
-  early, the script does NOT execute deletions for that run (you're
-  not seeing the full picture, so we never act on a partial list).
-
-#### Usage
-
-```bash
-# Required first step — preview without acting:
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run
-
-# Verbose preview (logs every kept directory too):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run -v
-
-# Stop after 200 dirs (safety/sanity check; no deletions when limit hit):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run -v --limit 200
-
-# Real run — Trash, with confirmation prompt:
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music
-
-# Real run — non-interactive (e.g. cron / a script):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music -y
-
-# Override extension list:
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --exts mp3,flac,ogg
-
-# Permanent rm -rf (NOT recoverable — use only if you're sure):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --hard-delete -y
-```
-
-#### Flags
-
-| Flag | Effect |
-|---|---|
-| `--dry-run` | Print decisions without acting |
-| `-v` / `--verbose` | Log every kept directory too (default: only deletions print) |
-| `--limit N` | Stop after evaluating N directories (no deletions executed when limit is hit) |
-| `--exts a,b,c` | Override the music extension list (commas, with or without leading dot) |
-| `--hard-delete` | Permanent `rm -rf` instead of Trash. NOT recoverable. |
-| `-y` / `--yes` | Skip the confirmation prompt |
-
-#### Why this is safe for the gateway
-
-The gateway frontend never references files in the music root
-directly — every `tracks.art` and `album_art.art_url` value in
-`library.db` is `http://` or `https://` (the LocalFs file server or
-Cover Art Archive). Album art is fetched through `/art` proxying an
-HTTP URL, never a filesystem path. Music-less directories hold no
-audio, so the indexer has no entry for them at all. Pruning
-them is invisible to the gateway.
-
-#### Tests
-
-`tools/test_prune_empty_music_dirs.py` — 14 unit tests over
-throw-away tempdirs. Cover: album-with-music kept, multi-disc
-support dirs (`scans/`, `booklet/`) kept, root-level music doesn't
-protect siblings, branch with deep-only music kept, split-branch
-trade-off (junk-next-to-music preserved), symlinks not followed,
-case-insensitive extension match, `mp4` treated as non-music,
-`--limit` halts cleanly. Run standalone:
-
-```bash
-python3 -m unittest tools.test_prune_empty_music_dirs -v
-```
-
-### `tools/artist_from_folder.py`
-
-Restores a missing artist tag from what the FOLDER already knows —
-sibling tags, or the name on the tin. Stronger evidence than a filename,
-so run it BEFORE `tag_from_filename.py`. The decision is
-`dlna_artist_infer.infer_artist` (see "Missing artist tags" above);
-this module is just the walk plus the write.
-
-Same contract as its sibling tool: never moves/renames/deletes, never
-overwrites an existing artist, and **re-reads each file before writing**
-so a stale index cannot cause a bad write (that check earned its keep —
-11 files the DB called blank already had tags). DRY-RUN by default.
-
-> ⚠️ **There is deliberately NO fallback when a container refuses a tag,
-> and it must stay that way.** WAV rejects a bare string through mutagen's
-> easy interface ("not a Frame instance"). The first version caught that
-> and fell back to `ID3(path).save(path)` — which, for a RIFF container,
-> **PREPENDS a standalone ID3v2 tag**, so the file starts with `ID3`
-> instead of `RIFF` and stops being a WAV. It destroyed 15 files of a
-> Mira Calvo album; the next scan reported them as `malformed`, which is
-> the only reason it was caught. They were recoverable *only* because
-> prepending leaves the original bytes untouched further in: strip exactly
-> the ID3 length and `RIFF` is sitting there. Repaired and verified —
-> declared RIFF size == filesize-8 on all 15, zero decode errors.
-> **A tag is a convenience; the audio is the product.** A container that
-> will not take a tag gets reported as `unsupported` and left alone.
-> Guarded by `tools/test_artist_from_folder.py`, whose WAV test genuinely
-> fails against the old code (checked — `RIFF` becomes `ID3\x04`).
-
-```bash
-python3 tools/artist_from_folder.py            # preview
-python3 tools/artist_from_folder.py --apply    # then rescan
-python3 tools/artist_from_folder.py -v         # also list the hand-work
-```
-
-Live run: **39 files tagged** across 8 folders (Ray & Nadia Orbit, Mira Calvo,
-Jean Vallier, RVM, Stormwind, Vex …); the rest went to the worklist.
-
-### `tools/tag_from_filename.py`
-
-Gives untagged strays an **artist tag recovered from their own filename**
-— the companion to the folder-album fix above. The browse layer now groups
-blank-album rows per artist, which rescues every file that HAS an artist;
-this rescues the ones that have nothing. Written for
-`<music-root>/Unknown Artist/Unknown Album/` (251 loose 2009 MP3s), where it
-tagged **149**, left **64** already-tagged files untouched, and left **38**
-alone because their names carry no artist to read.
-
-`parse_name` is pure and is the whole risk in the tool — a bad split writes
-someone else's name into a real file — so the hostile shapes are tests, not
-discoveries made mid-batch: `NN - Title` yields NO artist (it is a track
-number and a title), `NN - Artist - Title` yields one, a bare `-` is never
-a separator (it would halve "Jean-Marc Aubert"), and a literal
-`Unknown`/`Various` in the artist slot is refused.
-
-Three things it will not do: never move, rename or delete; **never
-overwrite an artist that already exists** (a real tag is evidence, a
-filename is a guess, and a guess must not beat evidence); and never write
-what it had to invent — no separator means the file is reported and left
-exactly as it was. Because it only writes fields that are EMPTY, there is
-nothing to overwrite and nothing to lose, which is what makes it safe to
-run on the real library. Titles arrive clipped (these filenames are
-truncated at ~36 chars) and that is accepted: the artist decides which
-album a file lands in, and the artist is at the front, which is the half
-that survived. DRY-RUN by default.
-
-```bash
-python3 tools/tag_from_filename.py "<music-root>/Unknown Artist/Unknown Album"
-python3 tools/tag_from_filename.py "<folder>" --apply    # then rescan
-python3 -m unittest tools.test_tag_from_filename -v      # 19 tests
-```
-
-### `tools/find_corrupt_audio.py`
-
-Walks the music root and flags audio files whose first 16 bytes are
-wrong for their extension — catches the failure mode the AcoustID
-worker surfaced on 2026-05-25 (13 MB FLAC files starting with `\x00`
-instead of `fLaC` magic). Per-format magic-byte validators cover the
-full default extension set: `.flac .mp3 .ogg .opus .m4a .alac .aac
-.wav .aiff .aif .wma .ape .dsf .dff`.
-
-#### Three reasons a file gets flagged
-
-| reason | What it means |
-|---|---|
-| `zero-size` | File is 0 bytes on disk |
-| `zero-header` | First 16 bytes are all `\x00` — the actual failure mode found in the user's library |
-| `magic-mismatch:.<ext>` | Header isn't valid for the file's extension (e.g. a `.flac` not starting with `fLaC` or `ID3`) |
-
-#### Defaults & safety
-
-- **Scan-only by default.** No file is touched unless `--trash` or
-  `--hard-delete` is explicitly passed. Default run only PRINTS the
-  findings and WRITES them to `./corrupt-audio.txt` (one
-  `<reason>\t<path>` per line) — usable as input to any downstream
-  cleanup script the user wants to write.
-- **`--trash` and `--hard-delete` are mutually exclusive** and both
-  prompt for confirmation unless `-y` is passed.
-- **`--limit N` is a safety belt**: when the limit is hit, the run
-  is reported as PARTIAL and any delete flags are ignored — you only
-  act on a complete picture.
-- **Symlinks are not followed** (`os.walk(followlinks=False)`) —
-  avoids loops and accidental scans of foreign volumes.
-- **Unreadable files** (permission errors) go into a separate
-  `read_errors` bucket, never `files_corrupt` — we don't delete what
-  we couldn't even open.
-
-#### Usage
-
-```bash
-# Default — scan only, write list to ./corrupt-audio.txt:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music
-
-# Verbose preview (logs every OK file too):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music -v
-
-# Stop after scanning 1000 files (no deletions even if --trash passed):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --limit 1000
-
-# Move flagged files to Trash, with confirmation prompt:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --trash
-
-# Non-interactive permanent delete (NOT recoverable):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --hard-delete -y
-
-# Restrict to one or two formats:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --exts flac,mp3
-
-# Different output path for the list:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --out /tmp/broken.txt
-
-# Suppress the list file (just print):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --out /dev/null
-```
-
-#### Flags
-
-| Flag | Effect |
-|---|---|
-| `-v` / `--verbose` | Also log every OK file (default: only corrupt) |
-| `--limit N` | Stop after scanning N files (0 = no limit); halts the delete step |
-| `--exts a,b,c` | Override the audio extension list (commas, with or without leading dot) |
-| `--out path` | Write the corrupt-paths list here (default: `./corrupt-audio.txt`; pass `/dev/null` to suppress) |
-| `--trash` | Move flagged files to macOS Trash via `osascript` |
-| `--hard-delete` | Permanent `unlink()` instead of Trash. NOT recoverable. Mutually exclusive with `--trash` |
-| `-y` / `--yes` | Skip the confirmation prompt before deleting |
-
-#### Tests
-
-`tools/test_find_corrupt_audio.py` — 23 unit tests over throw-away
-tempdirs. Cover: every format's valid-magic happy path, raw-MP3-sync
-without ID3 prefix, AIFC variant of AIFF, zero-size flagged,
-zero-header flagged across multiple extensions, per-format magic-
-mismatch, non-audio extensions skipped by the walker, case-insensitive
-extension match, `--limit` halts cleanly, symlinks not followed,
-unreadable files recorded separately (not auto-deleted). Run standalone:
-
-```bash
-python3 -m unittest tools.test_find_corrupt_audio -v
-```
-
-### `tools/immich_import.py`
-
-Copies **new videos from Immich's originals** (`library/` + `upload/` on
-the Immich data volume; `encoded-video/` transcodes never touched) into
-the gateway video root (`/Volumes/SAMDATA/GWMovies`). The gateway does
-the rest automatically: the 5-minute periodic scan picks new files up,
-reverse-geocodes their GPS and titles them `<location>_<YYYYMMDD>_<HHMM>`
-(see `docs/VIDEO_SUPPORT.md`) — filenames are preserved because titles
-come from metadata, not names.
-
-Dedup is by **content hash** (BLAKE2b), remembered in
-`<dest>/.immich-import.db`: files already in GWMovies (any name, any
-origin) are registered on first run and never re-copied; processed
-sources are skipped by (path, size, mtime) without re-reading. Re-running
-after new phone uploads only copies what's new — safe as a habit. A name
-collision with different content gets a ` (2)` suffix. DRY-RUN by
-default (`--apply` copies; the hash cache is warmed even in dry-run so
-the apply is fast). `--min-seconds 10` skips Live-Photo motion clips;
-`--limit N` stops early.
-
-**The dedup cache is deliberately STICKY** — `dest_files` keeps every
-content hash EVER seen in dest, so a clip you deleted from GWMovies never
-comes back on a re-run. That stickiness once silently withheld 1,783
-PHOTOS-ALL videos whose content had been in GWMovies before (2026-07-07);
-**`--reimport-deleted`** narrows the dedup set to files PRESENT now (and
-re-evaluates stale 'duplicate' source verdicts) when you DO want deleted
-content back. **`--subdirs ""`** walks the source root as a plain folder
-tree (e.g. Immich's external library, PHOTOS-ALL) instead of the default
-`library,upload` Immich storage layout.
-
-```bash
-python3 tools/immich_import.py               # preview
-python3 tools/immich_import.py --apply       # copy new videos
-python3 tools/immich_import.py --source /Volumes/SAMDATA-1TB/PHOTOS-ALL \
-    --subdirs "" --reimport-deleted --apply  # external library, full
-python3 -m unittest tools.test_immich_import -v   # 18 tests
-```
-
-### `tools/infer_video_locations.py`
-
-Infers locations for **GPS-less videos from their temporal neighbors**
-(2026-07-07): a clip shot the same day (or within ±`--window` days,
-default 3) as real-GPS-located clips gets their location. Tiers, strongest
-first: `same_day` unanimous → `±1d` → `±window` → **country-only** (cities
-differ but country agrees — browsable via the "(no city)" bucket).
-Evidence = real-GPS rows ONLY (no chaining off previous inferences).
-Results go to `video_location_overrides` (source=`inferred_*`), which the
-end-of-scan hook re-applies after every rescan; `manual` rows always win.
-`--retry-geocode` also re-asks Nominatim for GPS-but-cached-empty rows
-(evicts the sticky '' cache entry). DRY-RUN by default.
-
-**Device check caveat:** `--no-device-check` was needed on the real
-library — the check (quicktime make/model of video + neighbors must
-match) blocked 92/113 targets because GPS-less videos are almost all
-re-encoded (WhatsApp/exports) with NO device tags at all. First real run
-(user-approved, check off): 64 inferred + 8 geocode retries → located
-videos 1,050 → 1,111. Undo one:
-`DELETE FROM video_location_overrides WHERE video_id='…'`.
-
-```bash
-python3 tools/infer_video_locations.py                     # preview
-python3 tools/infer_video_locations.py --no-device-check --retry-geocode --apply
-python3 -m unittest tools.test_infer_video_locations -v    # 16 tests
-```
-
-### `tools/immich_people_sync.py`
-
-Syncs **Immich's person recognition** onto gateway videos (2026-07-07):
-Immich keeps face/person data in ITS Postgres (never in the files), so
-this pulls named persons over the REST API (`GET /api/people`, then
-`POST /api/search/metadata {personIds, type: VIDEO}`; auth header
-`x-api-key`; `IMMICH_URL` + `IMMICH_API_KEY` from `.env`) into the
-`video_people` table → the "👤 By person" DLNA container + PWA grouping.
-
-Matching, in order: (1) **content checksum** — Immich returns base64
-SHA1; GWMovies files are SHA1'd once (cached in `.immich-import.db`
-table `video_sha1`); (2) **(normalized filename, exact byte size)**
-fallback via a per-asset GET — needed because **Immich's stored checksums
-go stale** when files are metadata-edited in place after indexing (same
-size, different bytes; proven live — checksum-only matched 8/349, the
-fallback took it to 337/349, 20 persons). The importer's ` (N)` collision
-suffix is normalized; ambiguous (name, size) keys are dropped, never
-guessed. Per-person writes are a SYNC (replace, not merge) — re-run after
-new Immich face-tagging, safe as a habit. DRY-RUN by default.
-
-```bash
-.venv/bin/python tools/immich_people_sync.py            # preview
-.venv/bin/python tools/immich_people_sync.py --apply    # sync
-python3 -m unittest tools.test_immich_people_sync -v    # 14 tests
-```
-
-### `tools/openlibrary_books.py`
-
-Enriches **audiobook metadata from the OpenLibrary API** (2026-07-13):
-canonical author/title + **series name & number-in-series** per book
-(a book = its folder = `album_key` under the audiobooks UDN) into the
-`book_meta` display overlay. Never touches files or `tracks`.
-
-Per book: (author, title) guessed from majority tags, falling back to
-folder-name parsing ("57 - The Reality Dysfunction - Peter F Hamilton -
-1996"); `search.json` behind a fuzzy title floor (0.60) + author-token
-overlap guard; series majority-voted from the work's editions'
-`series` strings ("Discworld (13)", "Name #3", "Name, Book 3", "Book 3
-of Name"; number is REAL so novellas are #1.5). Hard-won guards from
-the first live batches: **catalog numbers > 100 reject the whole entry**
-(a "Frye annotated #1249" publisher series is bookkeeping, not a story
-series); **short titles (<3 words) never retry title-only** (the
-narrator-in-artist fallback matched "Alpha" to Lisi Harrison's
-"Alphas"); **publisher/imprint series rejected** (curated blocklist +
-the "Series (Publisher)" wordy-paren form — "SF Masterworks",
-"Historia (DeBolsillo)"); **multi-series edition strings split** into
-separate candidates; and **≥2 non-ASCII chars hard-reject a series
-name** — the USER RULE that books are English/Dutch ONLY means a
-translated edition's series ("Madaʻ bidyoni", Armenian Narnia, pinyin)
-is never valid data. Transport failures are transient (NOT cached — retried next
-run); a confident miss is a sticky `notfound`; `manual` rows are never
-overwritten. ~1 req/s, identifying UA (contact email from `.env`).
-Root-level single-file books (album_key='') are skipped — give them a
-folder. Deliberately does NOT import dlna_library (module import runs
-migrations on the live DB); creates `book_meta` itself if missing.
-
-```bash
-python3 tools/openlibrary_books.py                # dry-run preview
-python3 tools/openlibrary_books.py --apply -v     # fetch + write
-python3 tools/openlibrary_books.py --refetch --apply   # redo non-manual
-python3 -m unittest tools.test_openlibrary_books -v    # 36 tests
-# retry one book:
-sqlite3 library.db "DELETE FROM book_meta WHERE source='notfound' AND album_key='…'"
-```
-
-### `tools/book_language.py`
-
-Reports the language of every audiobook, and settles the Unknowns (see
-**Audiobooks by language**). Writes only `book_language`; never a file,
-never `tracks`. DRY-RUN by default.
-
-- `--tags` reads each book's first file for a language tag (ID3 `TLAN`,
-  an MP4/Vorbis `language` field) and stores it as `source='tag'`.
-- `--set XX --match TEXT` stores `XX` as `manual` for every book whose
-  folder contains TEXT (case-insensitive). `--set` without `--match` is
-  refused — it would touch every book.
-- `--unknown-only` narrows either to the books currently Unknown.
-- `--clear --match TEXT` hands books back to detection.
-
-```bash
-python3 tools/book_language.py                    # tally + the Unknown list
-python3 tools/book_language.py --tags --apply
-python3 tools/book_language.py --set en --match "Top 100 Sci-Fi" --unknown-only --apply
-python3 -m unittest tools.test_book_language -v   # 6 tests
-```
-
-### `tools/compilation_playlists.py`
-
-Creates playlists for **scattered compilation albums** — an album TAG
-("2 meter sessies Volume 1", "Billboard Top 100 of 1970") shared by
-tracks that live in many different folders (one per contributing
-artist). Folder-based album grouping can't reunite them, so they're
-invisible as albums; this exposes each as a playlist named after the
-tag, tracks ordered artist → title.
-
-Selection (defaults tuned on the real library, 2026-07-03): ≥`--min-tracks`
-(5) tracks share the exact album tag, by ≥`--min-artists` (3) distinct
-artists, and **no single folder holds ≥`--max-per-folder` (5) of them**.
-The artist floor excludes single-artist albums (Supertramp "Paris"); the
-per-folder ceiling excludes generic-title collisions ("Greatest Hits" =
-20 different artists' separate albums). Existing playlists are skipped by
-case-insensitive name, so re-running after new rips only adds what's new
-— safe as a post-rip habit. DRY-RUN by default; `--apply` mutates.
-
-```bash
-python3 tools/compilation_playlists.py               # preview
-python3 tools/compilation_playlists.py --apply       # create
-python3 tools/compilation_playlists.py --min-tracks 8
-python3 -m unittest tools.test_compilation_playlists -v   # 10 tests
-```
-
-First real run (2026-07-03) created 13 playlists (the 2 meter sessies
-family, Essential Classical Chillout, Toen Was Het Stil Op Straat,
-Cohen Covered, …); the 3 Billboard candidates already existed. Side
-fix: `pl_get` now orders by `added_at, id` — `added_at` alone has
-second resolution, so bulk adds tied and returned in arbitrary order.
-
-### `tools/folder_compilation_playlists.py`
-
-The other half of the compilation problem. `compilation_playlists.py`
-(above) reunites an album TAG *scattered* across many folders; this one
-takes the opposite shape — **one folder that IS a compilation**, holding
-a track each by dozens of performers:
-
-    Various Artists - 70s HITS 100 Greatest Songs of the 1970s (2023) …
-    VA - 100 Greatest Jazz Icons (2020) …
-    Blue Note Trip - Somethin' Old
-
-These already browse correctly — folder-album grouping renders them as
-one Various-Artists album, and they resolve fine through `album_tracks`
-(checked: the `0` letter bucket is the digits catch-all and holds all
-204 of them). What they lack is a NAME anywhere the eye lands: they sort
-under a leading digit among 200-odd other digit-albums, and they appear
-on **no** performer's artist page, because every track carries its own
-artist and nothing files the folder under "Various Artists" (that artist
-page holds 7 albums, not 137). A playlist puts each one in the list
-that every surface shows first — the PWA panel, the Naim's `Playlists`
-container, Amperfy/CarPlay.
-
-**The risk runs one way**, which is what shapes the rule: a missed
-compilation stays exactly as browsable as it is today, while a false
-positive drops litter into a list the owner curates by hand. So "lots of
-artists" is never sufficient on its own — measured live, `Unknown
-Artist/Unknown Album` holds **126 performers** and is a junk drawer,
-while `Santana - Supernatural` holds 9 because the record is full of
-guests. A folder qualifies when it makes an album claim and then either
-
-* **says so** — a `Various Artists` / `VA` / `V.A.` head or a collection
-  phrase ("greatest", "the best", "hits", "top 40", "collection",
-  "anthology", "essentials", Dutch "beste"/"voltreffers"), with
-  ≥`--min-artists` (4) performers at ≥45% performers-per-track; or
-* **is shaped like one** — no such phrase anywhere, but ≥8 performers at
-  ≥65%, or a near-perfect ≥95% spread across ≥5. This narrower tier is
-  what catches `Blue Note Trip - Sunset`, `Life On Mars` and
-  `De Pre Historie 1964`, which announce nothing.
-
-Four things are load-bearing, each learned from the data rather than
-guessed:
-
-- **The album TAG is searched, not just the folder name.** Three folders
-  here are called `Wembley`, `Grrl` and `Speed Ticket` and carry the tag
-  `Best Of JMFH's Choice 2004-2007 - <name>`. The tin is blank; the
-  tracks are not. (The reverse also bites: the folder named `Captain
-  Beefheart … Trout Mask Replica` actually contains `28 Vlaamse
-  voltreffers` — misfiled, and only the tag says so.)
-- **A folder whose tracks declare NO album never qualifies**, whatever
-  its performer count. Same junk-drawer rule `_localfs_album_group`
-  already enforces for browsing, and the one check that keeps the
-  126-artist drawer out. A real compilation names itself.
-- **Only the ABBREVIATED VA markers are read as a bare leading token**
-  (`VA The Very Best Of Smooth Jazz`, no separator). "Various" is an
-  ordinary English word and would claim a band called `Various
-  Comforts` — the whole-head match that `dlna_artist_infer` uses is
-  what normally prevents that.
-- **Names are tidied and de-collided.** A 40-CD box here nests every
-  disc in a directory literally called `CD` and tags all forty with the
-  same string, so tag-first naming would yield forty identical
-  playlists and leaf-first naming forty called "CD"; the distinguishing
-  segment wins instead (`Greatest Hits Collection - 50's Cd1…Cd40`).
-  `tidy_name` then strips release-group cruft so a name fits a Naim
-  remote — `VA - Hi-Res Masters 50 Britpop Tracks … [24Bit-FLAC]
-  [PMEDIA] ⭐️` → `Hi-Res Masters 50 Britpop Tracks To Test Your
-  Speakers` — while **keeping the year and the disc number**: `(2023)`
-  says which edition, and `(Disc 1)` is the only thing separating two
-  discs.
-
-Tracks are added in **`file_path` order** — the running order the
-compiler chose, which also keeps `CD 1/` ahead of `CD 2/`. Artist→title
-would destroy the sequencing that is the whole point of a compilation.
-
-Nothing here writes to `tracks`, touches a file, or edits an existing
-playlist; a candidate whose name already matches one is skipped, so
-re-running after new rips only adds what is new. DRY-RUN by default.
-
-```bash
-python3 tools/folder_compilation_playlists.py            # preview
-python3 tools/folder_compilation_playlists.py -v         # + why rejects were rejected
-python3 tools/folder_compilation_playlists.py --named-only
-python3 tools/folder_compilation_playlists.py --apply
-python3 -m unittest tools.test_folder_compilation_playlists -v   # 36 tests
-```
-
-First real run (2026-09-09): **137 playlists created** from 2,223
-folders — 113 named, 24 structural, 5,528 track rows; playlists went
-39 → 176. Rejected as intended: the 126-artist junk drawer, the
-guest-heavy Eminem/Santana/Rod Stewart records, and a 53-track
-Tchaikovsky box at 11% performers-per-track.
-
-### `tools/artist_mbid.py`
-
-Resolves every artist to a MusicBrainz id — the keystone the rest of the
-artist metadata hangs off. Two phases, cheapest first: read the
-`musicbrainz_artistid` the file already carries (free, exact, immune to
-the namesake problem), then search by name with
-`dlna_mbid.accept_match` deciding what to believe.
-
-Live result: **2,889 artists, 2,841→2,889 resolved (443 from tags, 2,446
-by search), 400 refused, 85.9% search acceptance.** Resumable — a row of
-ANY source including the sticky `notfound` means "already asked", so a
-second run costs minutes rather than hours.
-
-Skips names that aren't artists before spending a request, via the UPnP
-tree's own `_is_junk_name`: the first live pass sent 12 of 23 searches to
-things like `13. My Girl - The Temptations` and `07`. Note
-`is_a_performer_name` is NOT the right guard here — it needs
-`allow_numeric=True` (112 and 10CC are real bands) and with that flag it
-accepts everything, junk included.
-
-```bash
-python3 tools/artist_mbid.py                     # preview
-python3 tools/artist_mbid.py --tags-only --apply # the free phase only
-python3 tools/artist_mbid.py --apply             # the full sweep (~2h)
-python3 -m unittest tests.test_mbid_match -v     # 27 tests
-```
-
-To retry refusals after retagging files:
-`sqlite3 library.db "DELETE FROM artist_meta WHERE source='notfound'"`.
-
-### `tools/artist_meta.py`
-
-Turns each MBID into the facts the ℹ️ panel shows: identity, life-span,
-birthplace, genres, biography, best-known tracks, and — for a band — the
-members with their instruments and date ranges. Runs after
-`artist_mbid.py`.
-
-Live: **2,889 artists in 3h37m, zero errors** — best-known 100%,
-birth/formed 92%, biography 74%, photo 67%, 1,175 line-ups over 12,101
-member rows. Resumable via `meta_fetched_at`.
-
-> ⚠ **Set `LASTFM_API_KEY` BEFORE the first run.** `meta_fetched_at`
-> marks an artist done, so a pass without the key leaves every artist
-> with an empty "best known for" and skips them on any re-run.
-
-KNOWN LIMIT: Wikipedia is looked up by ARTIST NAME. MusicBrainz no
-longer carries direct wikipedia links (it points at Wikidata), and
-resolving through Wikidata would add two requests per artist to an
-already hour-long pass. A wrong title usually lands on a disambiguation
-stub, which `parse_wikipedia` refuses — so the shortcut costs a missing
-biography, never a wrong one.
-
-Known inefficiency: it fetched 2,889 and wrote 2,858 rows — spelling
-variants that normalise to one key were each fetched. 31 duplicate
-requests, harmless.
-
-```bash
-python3 tools/artist_meta.py                  # preview
-python3 tools/artist_meta.py --apply --limit 50
-python3 tools/artist_meta.py --apply          # the full pass (~1h)
-python3 -m unittest tests.test_artist_fetch -v   # 32 tests
-```
-
-### `tools/track_credits.py`
-
-Step 4 of the enrichment chain: composer/lyricist from MusicBrainz for
-the tracks whose files carry none. Runs after `artist_mbid.py`, because
-it browses each **artist's works** (up to 100 per request, each already
-carrying its writer relations) rather than resolving track → recording →
-work — the difference between ~1.2 h and ~16 h. See
-§"Step 4 — the two thirds with no tag" for the rules.
-
-Live: **11,025 matched, 6,067 sticky `notfound`, 0 errors, ~2 h** —
-composer coverage 32% → **73.9%**. Resumable: a row of any source,
-including the negative, means "already asked". DRY-RUN by default.
-
-```bash
-python3 tools/track_credits.py                     # preview
-python3 tools/track_credits.py --apply --limit 20  # a bounded pass
-python3 tools/track_credits.py --apply             # the full sweep
-python3 -m unittest tests.test_track_credits -v    # 10 tests
-# retry one track:
-sqlite3 library.db "DELETE FROM track_credits WHERE source='notfound' AND url='…'"
-```
-
-### `tools/audit_playlist_orphans.py`
-
-Finds — and relinks — **playlist rows pointing at a track the index no longer
-has.** `playlist_tracks` is deliberately independent of `tracks` (that is what
-lets a playlist survive `clear(udn)` and a rebuild); the cost is that nothing
-notices when a row goes stale. A LocalFs track id is `sha1(rel_path)`, so
-**renaming a folder** — or splitting a whole-album file into per-track files,
-or changing the file-server port — silently orphans every playlist row that
-referenced it. The files are still on disk under new ids; the playlist still
-holds the old ones.
-
-From the sofa that is "the app skips songs at random": the dead id resolves
-to a 404 and the browser reports an unplayable file. (The relay no longer
-hands that 404 to `<audio>` as audio — see **Two things the relay must keep
-doing** — but the row stays dead until it is repaired, which is what this is
-for.)
-
-Matching ladder, both sides normalised
-(diacritics, smart quotes, case, whitespace) so a retag doesn't break it:
-**(artist, album, title)** strong → **(artist, title)** song-level (the album
-name legitimately differs between a compilation and the original release).
-
-**A row that matches nothing is KEPT by default** (`--remove-unmatched` to
-delete). It is usually music still on disk under a name the tool cannot
-guess, and a playlist entry the owner can see and fix beats one that
-vanished. Relinking onto a track already in that playlist would violate
-`UNIQUE(pl_id, url)`, so the stale row is dropped as a duplicate instead. A
-blank artist/title is never a match *target* — it would collide every orphan
-onto one row. Existing `art` is never overwritten; a blank one is filled.
-Idempotent; DRY-RUN by default; `--apply` backs up `library.db` first.
-
-```bash
-python3 tools/audit_playlist_orphans.py                    # report
-python3 tools/audit_playlist_orphans.py --apply            # relink
-python3 tools/audit_playlist_orphans.py --apply --remove-unmatched
-python3 -m unittest tools.test_audit_playlist_orphans -v   # 15 tests
-```
-
-First real run (2026-08-25, 14 orphans of 1091): **12 relinked** — the whole
-"latin Jazz" playlist, still on the pre-cutover `:8201` port (the 2026-05-31
-port change healed `metadata_overrides` but nobody healed playlists) — and
-**2 kept**: two whole-album Harmonium files since split into per-track files,
-which have no single successor row and are the owner's call to re-add.
-
-### One-shot migration tools (historical)
-
-`tools/relink_orphan_overrides.py`, `tools/audit_override_mismatches.py`,
-`tools/find_duplicate_audio.py`, `tools/relink_playlists_to_localfs.py` and
-`tools/relink_overrides_to_localfs.py` worked on the previous backend's
-URLs during the move to LocalFs. They have done their job; each carries its own
-docstring and tests if ever needed again.
-
-### `tools/correct_year_drift.py`
-
-Fixes the case where AcoustID resolves a fingerprint to a later
-re-release recording on MusicBrainz (e.g. a 2001 compilation's
-recording entry instead of the 1979 studio original), and BOTH
-`tracks.year` and `metadata_overrides.year` agree on the reissue date
-so the in-display MIN logic can't recover. The tool walks
-`(artist, title)` groups and rewrites `metadata_overrides.year` on
-the later instances to the earliest plausible year evidenced by
-another instance of the same song in the user's library.
-
-#### Identification (v3)
-
-- **Effective year** per row: `MIN(file_year, mb_year)` when both
-  present, else whichever is set.
-- **earliest_plausible** per `(lower(artist), lower(title))` group:
-  `MIN(eff)` among non-live rows with `eff >= 1950`. The floor
-  excludes file-tag errors like the Bowie `1905` / Trammps `1927`
-  cases observed 2026-05-28.
-- **Live filter**: row excluded from being a candidate (and from
-  being someone else's earliest_plausible) if its album OR title
-  matches any `LIVE_MARKERS` substring: `live`, `in concert`,
-  `on tour`, `at the …`, `pulse`, `earls court`, `wembley`,
-  `madison square`, `fillmore`, `royal albert`, `wall live`,
-  `unplugged`, `(live …)`, `[live …)`, `- live`, `session`,
-  `bootleg`. Conservative on the "live" side — a studio album
-  named "Live At Carnegie Hall" by mistake would be excluded;
-  worth tuning per-corpus if it bites.
-- **Candidate** when `eff - earliest_plausible >= 3` AND the row
-  is non-live.
-
-#### Persistence
-
-Writes `metadata_overrides.year = earliest_plausible,
-source='manual'`. Same column the PWA's edit modal writes to.
-Survives re-index and AcoustID re-runs (`manual` beats `acoustid`
-in `metadata_override_set`). Idempotent — a second run finds zero
-candidates because the freshly-applied year now IS the earliest.
-
-#### Library-only correction limit
-
-The tool can only correct to the earliest year *available in the
-library*. If a song only exists in your library on a 1997
-compilation (no 1972 original copy), the tool will surface a
-candidate but its target year is 1997 — better than 2001, but not
-the MB-true 1972. There's no MusicBrainz fallback in this tool by
-design; it's the AcoustID worker's job to ask MB.
-
-#### Usage
-
-```bash
-# Dry-run preview (default top=30):
-python3 tools/correct_year_drift.py
-
-# Full preview, all candidates:
-python3 tools/correct_year_drift.py --top 0
-
-# Apply with confirmation prompt:
-python3 tools/correct_year_drift.py --apply
-
-# Non-interactive (cron / scripts):
-python3 tools/correct_year_drift.py --apply -y
-
-# Custom DB:
-python3 tools/correct_year_drift.py --db /path/to/library.db
-```
-
-#### Tests
-
-`tools/test_correct_year_drift.py` — 13 tests over a throw-away
-SQLite. Covers: studio-vs-live exclusion (Pulse, MTV Unplugged),
-drift threshold boundary, pre-1950 floor excludes bogus tags,
-case-insensitive `(artist, title)` grouping, MIN logic on file +
-mb_year, no candidate when only one album, apply creates a new
-override / merges with an existing one and forces source='manual',
-apply is idempotent.
-
-```bash
-python3 -m unittest tools.test_correct_year_drift -v
-```
-
-### `tools/improve_song_years.py`
-
-External-lookup counterpart to `correct_year_drift.py`. Where the
-drift tool can only correct songs the user owns multiple copies of
-(~2.4k songs in this library), this tool queries MusicBrainz for
-the **earliest known recording year** of every song in the library
-(~25k unique `(artist, title)` groups). Targets the case where the
-user only owns one copy of a song and that copy is a later
-compilation/remaster — e.g. "Louis Armstrong / What a Wonderful
-World" on a 2017 compilation, true original 1967.
-
-#### Algorithm
-
-Per `(artist, title)` group:
-
-1. MB `recording?query=artist:"X" AND recording:"Y"&fmt=json&limit=100`
-2. Paginate up to 5 pages (max 500 recordings) at 1.1s/req rate limit
-3. Collect every recording's `first-release-date` year
-4. Cache `MIN(years)` in `song_year_cache` with `source='mb_recording'`
-5. If no usable date → cache as `source='notfound'` (sticky)
-
-The pagination matters: the top-15 result set often surfaces
-later-edition recordings before the 1967 original. Full pagination
-on "What a Wonderful World" → 234 matches across 3 pages → MIN
-year = 1967.
-
-#### Cache table
-
-```sql
-CREATE TABLE song_year_cache (
-  artist_key TEXT,           -- _norm_title(artist)
-  title_key  TEXT,           -- _norm_title(title)
-  year       INTEGER,        -- MIN MB year, NULL on no-match
-  source     TEXT,           -- 'mb_recording' | 'notfound'
-  n_matches  INTEGER,
-  fetched_at INTEGER,
-  PRIMARY KEY (artist_key, title_key)
-)
-```
-
-Same persistence invariant as `album_art` / `play_counts` /
-`lyrics` / `metadata_overrides`: survives
-`clear(udn)` and rebuild-index. Sticky-negative cache prevents
-re-hammering MB for songs with no MB entry.
-
-#### Apply step
-
-After lookups complete, walks cached hits. For each track of the
-matching `(artist, title)` whose current effective year is later
-than the cached year, writes `metadata_overrides.year = cached_year`
-with `source='manual'`. The display rules and AcoustID worker
-already treat `manual` as the highest-trust source, so subsequent
-worker passes won't overwrite. User-edited manual rows are NEVER
-touched.
-
-#### Phantom-row skip
-
-(Unknown Artist) and track-number-prefixed titles ("01 - …") are
-skipped before MB queries — they're filename-derived metadata that
-will never match. Saves ~700 queries on this library.
-
-#### Cost
-
-~25k uncached groups × ~1.5s avg (rate limit + most songs need
-only 1 page) ≈ **10 hours** for a full library sweep. Most songs
-need 1 page; long-tail ("Yesterday", "Stairway to Heaven") may
-hit the 5-page cap. Subsequent incremental runs only hit newly-
-indexed songs.
-
-#### Usage
-
-```bash
-# Dry-run preview, no MB calls, no DB writes
-python3 tools/improve_song_years.py
-
-# Query MB for uncached groups (cap at N for testing)
-python3 tools/improve_song_years.py --lookup --limit 100 -v
-
-# Apply cached hits to tracks
-python3 tools/improve_song_years.py --apply
-
-# Combined: lookup then apply in one invocation
-python3 tools/improve_song_years.py --lookup --apply
-
-# Force re-query a single song:
-sqlite3 library.db "DELETE FROM song_year_cache WHERE artist_key='louis armstrong' AND title_key='what a wonderful world'"
-```
-
-Validated 2026-05-28 — first 10 live queries hit 9/10, recovered
-correct original years for 10cc "Donna" (1972, was 1997 in library),
-"Art for Art's Sake" (1975), "Dreadlock Holiday" (1978).
-
-#### Tests
-
-`tools/test_improve_song_years.py` — 26 tests covering: normalisation
-(curly apostrophe, diacritics, case, whitespace, empty); schema
-creation (idempotent); candidate selection (distinct groups, dedup
-via norm, cache exclusion, empty fields, **(Unknown Artist) phantom
-exclusion, track-number-prefix exclusion**); lookup (cache hit /
-notfound / transient error leaves uncached / `--limit` honored);
-apply (write when later, skip when at/before cached, skip manual
-overrides, overwrite acoustid override, skip notfound entries,
-apostrophe normalisation); MB query string escape.
-
-```bash
-python3 -m unittest tools.test_improve_song_years -v
-```
-
-### `tools/beets_enrich.py`
-
-Runs the **beets tag-in-place enrichment batch** described in
-`docs/enrichment.md`. beets reads MusicBrainz + AcoustID and writes clean
-tags + MBIDs **into the files**, in place; the existing mutagen indexer
-then picks them up on the next re-index. beets is an *upstream batch
-stage*, never a live metadata authority (routing the serve path at a
-beets/Jellyfin DB would create a second source of truth). This tool is a thin, safe wrapper around the external `beet`
-CLI — it does not reimplement beets.
-
-#### The one non-negotiable invariant — tag IN PLACE
-
-```
-import.write = yes    import.copy = no    import.move = no
-```
-
-`verify_inplace()` is a hard gate: any write run **aborts** unless the
-config is verified in-place safe. A *missing* key counts as unsafe (beets'
-`import.copy` default is `yes`, which would duplicate files), so the user
-is pushed to `--write-config` rather than relying on beets defaults. beets'
-own `library.db` (`~/.config/beets/library.db`) is kept deliberately
-separate from the gateway's `library.db`. The `scrub` plugin is
-intentionally NOT enabled (it strips existing tags — `docs/enrichment.md`
-§3).
-
-The generated config sets `timid: no` (not §3's `yes`): beets refuses to
-run `-q`/`--quiet` while timid is on (*"can't be both quiet and timid"*),
-so timidity is a **CLI choice** here — `--quiet` for the auto-accept bulk
-pass, `--timid` for a cautious per-match review pass. If a hand-edited
-config still has `timid: yes`, `--quiet` aborts early with a clear message
-pointing at `--write-config`.
-
-**beets 2.x pluginized MusicBrainz.** MB is no longer built into the
-autotagger — it is the `musicbrainz` metadata-source plugin, which the
-generated `plugins:` line now enables and which needs the `musicbrainzngs`
-package. Without **both**, beets has no metadata source and silently
-matches nothing ("No matching release found" for every album → 0 imports,
-exit 0 — the failure mode that wasted two multi-hour runs on 2026-06-03).
-The tool guards this: it aborts before running if the config's `plugins:`
-line lacks `musicbrainz`, or if `musicbrainzngs` isn't importable in
-beets' own environment (probed via the `beet` console-script shebang),
-each with the exact fix. One-time deps (2026-07-02 — **install beets via
-Homebrew, NOT pip**; a `pip3 install beets` gets wiped by every Homebrew
-python upgrade, which is how the 2026-06 install died):
-
-```bash
-brew install chromaprint beets
-# the formula ships WITHOUT these two plugin deps; put them in the keg
-# venv — and RE-RUN this after any `brew upgrade beets`:
-BEETS_KEG=$(brew --prefix beets)/libexec
-$BEETS_KEG/bin/python -m pip install --prefix $BEETS_KEG musicbrainzngs pyacoustid
-```
-
-(Same block lives in `requirements.txt` → "beets enrichment toolchain".
-The tool's start-up guards print these exact fixes when either is missing.)
-
-**Quiet mode says just "Skipping." on an untagged album?** Two known
-causes, diagnosable with `beet -v import -q <dir>`: (1) `chroma: acoustid
-album candidates: 0` — beets' fingerprint lookups use a SHARED bundled
-AcoustID key that gets rate-limited (error 14), every lookup fails
-silently, and text-matching bare tags yields garbage; (2) the release
-isn't on MusicBrainz at all. Proven fix for bare files (Nena, 2026-07-02):
-pre-tag minimal TEXT tags with mutagen (artist, exact MB album title,
-title = filename stem), then re-run `--quiet --revisit` — the MB text
-search matches without fingerprints and beets writes full canonical tags.
-
-#### Flags
-
-| Flag | Effect |
-|---|---|
-| `--write-config` | Write the prog-tuned, tag-in-place `~/.config/beets/config.yaml` (backs up any existing) and exit |
-| `--music-root PATH` | Library root (default `/Volumes/SAMDATA/Music`) |
-| `--album PATH` | Import a single album dir instead of the whole root |
-| `--quiet` | Auto-accept strong matches, no prompts — the bulk pass (`beet import -q`) |
-| `--timid` | Prompt per match (more granular than the default per-album prompt) |
-| `--revisit` | Re-import a dir already recorded done (`-I` / noincremental) |
-| `--reindex` | After import, discover the LocalFs server UDN via `/api/servers` and POST `/api/index/rebuild` |
-| `--gateway URL` | Gateway base for `--reindex` (default `http://127.0.0.1:8765`) |
-| `--udn UDN` | Server to reindex (default: auto-pick the `uuid:localfs-*` server) |
-| `-n` / `--dry-run` | Print the resolved command + safety report; do not invoke beets |
-| `-y` / `--yes` | Skip the §7 backup-warning confirmation before in-place writes |
-
-#### Safety
-
-- Hard-fails fast if `beet` isn't installed (`brew install chromaprint
-  beets` + the keg plugin deps — see the one-time-deps block above) or the
-  config is missing/not in-place.
-- Refuses to run if the music drive isn't mounted (external SAMDATA).
-- Confirms before any in-place write (with the backup warning) unless `-y`.
-- Warns when DSD (`.dsf`/`.dff`) files are under the target or when fpcalc
-  is absent — Chromaprint can't decode DSD (`docs/enrichment.md` §6); those
-  tag by existing metadata or fall to Picard.
-
-#### Usage
-
-```bash
-# one-time deps (brew, NOT pip — see the block above for the keg plugin deps)
-brew install chromaprint beets
-# write the tag-in-place config, then interactive review, then bulk
-python3 tools/beets_enrich.py --write-config
-python3 tools/beets_enrich.py                 # interactive (prompts per album)
-python3 tools/beets_enrich.py --quiet         # auto-accept strong matches
-python3 tools/beets_enrich.py --quiet --reindex   # then re-index LocalFs
-python3 tools/beets_enrich.py --dry-run       # show command + safety report
-```
-
-#### Tests
-
-`tools/test_beets_enrich.py` — 23 unit tests over the pure helpers (never
-invokes `beet` or the network): config carries the in-place invariant +
-separate beets library + no scrub + original-year bias and passes its own
-gate; `verify_inplace` flags copy/move/write violations and missing keys;
-`build_import_cmd` argv for interactive/quiet/timid/revisit; LocalFs UDN
-selection (override / prefer-localfs / sole / ambiguous / none);
-`find_binary` fallback.
-
-```bash
-python3 -m unittest tools.test_beets_enrich -v
-```
-
-### `tools/post_beets_reindex.py`
-
-The "make beets' work visible" step that runs AFTER `beets_enrich.py` has
-tagged files in place. Two things must happen for the gateway to show the
-new tags, and this tool does both in the right order:
-
-1. **Clear the AcoustID `metadata_overrides`.** LocalFs track URLs are
-   PATH-based (`sha1(rel_path)`, see `_track_id_for` in
-   `dlna_providers/localfs_tags.py`), so a
-   beets-tagged file keeps the SAME url. The COALESCE pass in
-   `LibraryDB.upsert_tracks` (`dlna_library_tracks.py`) therefore re-lays
-   the old `source='acoustid'` override straight back on top of beets'
-   fresh tags and masks them. Deleting the acoustid rows lets the file
-   tags show through.
-2. **Reindex LocalFs** (`POST /api/index/rebuild?udn=…` → for LocalFs this
-   dispatches to `provider.rescan(force=True)`, which re-reads every file's
-   tags but does **NOT clear** the tracks table first).
-
-   > **✅ FIXED 2026-07-12 (was the 2026-07-03 caveat): a rescan now
-   > updates the metadata of EXISTING-URL rows in place.** `upsert_tracks`
-   > gained a URL-keyed metadata-refresh pass (title/artist/album/year/
-   > duration/etc.; change-guarded so untouched rows are no-ops;
-   > incoming-empty genre/art never blank an existing value; UNIQUE
-   > collisions skipped via `OR IGNORE`) plus the previously-missing
-   > `tracks_au` AFTER-UPDATE FTS trigger — the old schema only synced FTS
-   > on INSERT/DELETE, so ANY in-place metadata UPDATE (including the
-   > overrides COALESCE pass) desynced search until the next full rebuild;
-   > the trigger's migration does a one-time FTS rebuild on existing DBs.
-   > In-place retagging (beets) is therefore visible to a plain rescan —
-   > the old `DELETE FROM tracks` + rebuild workaround is obsolete.
-   > Regression-guarded by `tests/test_library.py::TestUpsertMetadataRefresh`
-   > and the retag/force tests in `tests/test_provider_localfs.py`.
-
-**Manual-override safety (the core invariant, regression-guarded):** ONLY
-`source='acoustid'` rows are deleted. `source='manual'` (user edits + the
-year-drift / `improve_song_years` corrections) is NEVER touched — those
-legitimately win over beets. `notfound` / `video_skip` rows carry NULL
-metadata so they mask nothing and are left alone.
-
-DRY-RUN by default (prints the override breakdown + planned actions);
-`--apply` deletes + reindexes, auto-backing-up `library.db` first.
-
-```bash
-python3 tools/post_beets_reindex.py            # preview
-python3 tools/post_beets_reindex.py --apply    # backup + clean + reindex
-python3 tools/post_beets_reindex.py --apply --no-reindex   # clean only
-python3 tools/post_beets_reindex.py --apply --no-clean     # reindex only
-python3 -m unittest tools.test_post_beets_reindex -v
-```
-
-Flags: `--apply` / `-n`/`--dry-run` · `--no-clean` · `--no-reindex` ·
-`--no-backup` · `--udn` · `--gateway` · `--db` · `-y`/`--yes`.
-Tests: `tools/test_post_beets_reindex.py` — 9 tests (delete-only-acoustid,
-dry-run no-op, default-is-dry-run, backup-on-apply, clean-only under
-`--no-reindex`, `--no-clean`+`--no-reindex` rejected, missing DB fails
-cleanly).
-
-### Steady-state workflow for new music
-
-Drop files → `beets_enrich.py --quiet` (incremental — only new folders;
-already-seen dirs need `--revisit`) → `post_beets_reindex.py --apply`.
-
-## Audiobooks (P1+P2 shipped 2026-07-13; P3–P5 planned)
-
-Full plan/design lived in the local-only `REPORTS.html` Part II (not in the
-repo — see above). What's live:
-
-- **Second LocalFs library** — `AUDIOBOOKS_ROOT` in `.env`
-  (`/Volumes/SAMDATA-1TB/Audio_Books`; or `localfs.audiobooks_root` in
-  config.json). `maybe_start_localfs` starts a second `LocalFsProvider`
-  (name "RoHaAudioBooks", own UDN, `dlna_localfs_wiring.AUDIOBOOKS_UDN`),
-  served by the same `:8200` file server (root joins `allowed_roots`).
-  Per-UDN isolation keeps books out of music browse/radio/search for
-  free. First scan: 11,548 chapters / 509 books (163 malformed files
-  skipped — worth a `find_corrupt_audio.py` pass someday). `.m4b` added
-  to `AUDIO_EXTENSIONS` (MIME `audio/mp4`).
-- **Two multi-root safety fixes that matter for ANY future third root**:
-  `_load_cache` is scoped to the provider's own root (the shared
-  `localfs_files` cache + removed-detection would otherwise purge the
-  OTHER provider's rows every rescan), and secondary-root track ids are
-  salted (`_track_id_for(rel, namespace)` — the file server resolves
-  obj_id across ALL localfs UDNs, so identical rel_paths under two roots
-  would collide; music keeps namespace='' so its ids/URLs are unchanged).
-- **`kind` field** on `/api/servers` entries (`audiobooks` | `music`) —
-  the PWA gates all resume behaviour on it, never on track shape, so a
-  music playlist can't trigger position writes.
-- **Resume positions** — `playback_positions` (see schema), LibraryDB
-  `position_set/get/clear/positions_list`, native `POST /api/position` +
-  `GET /api/position?album_key=` + `GET /api/positions` (NOT on the SW
-  CACHEABLE_API allowlist — live state, network-only by default; POST
-  parses raw body so sendBeacon works).
-- **PWA** (`static/app.js`): a book queue (`opts.book` through
-  `playTracklist` → `browserQueueIsBook`) never shuffles; positions save
-  every ~20s + on pause/chapter-end + `sendBeacon` on visibilitychange;
-  playback-rate select `#ab-rate` (0.8–2×, browser output only,
-  localStorage-persisted, re-asserted per chapter). Root-level
-  single-file books (album_key='') key their position by file URL.
-  **CONTINUE IS THE DEFAULT (2026-07-14, after the first real Naim/iPad
-  test):** the bookmark is SERVER-side per book, so EVERY play entry
-  point resumes on every device — `playAlbumFromDB` auto-resumes for
-  the audiobooks source (covers the header button AND the ▶ on book
-  rows), the header PRIMARY button relabels to "▶ Resume · Ch N —
-  H:MM:SS" with `#browse-resume` as the explicit "↻ Start over", and
-  tapping a chapter row routes through `_playBookFromChapter` (a real
-  book queue from that chapter — the old single-track path silently
-  never saved positions). A finished book behaves like an unread one.
-  Caveat: playback started from the Naim's OWN controller (browsing the
-  📖 UPnP tree) can't resume — the renderer fetches files directly and
-  the gateway isn't in that loop; resume applies to playback initiated
-  from the PWA/CarPlay.
-- **Tests**: `tests/test_positions.py` (20 — DB contract incl.
-  clear(udn) survival, payload validation, wiring config),
-  multi-root provider tests in `test_provider_localfs.py`,
-  `tests/frontend/test_audiobooks.py` (9 Playwright — button states,
-  source gating, unshuffled resume queue, pause-POST assertions,
-  URL-fallback, rate control).
-
-**OpenLibrary metadata overlay (P6, shipped 2026-07-13).** Canonical
-author/title + **series name & number-in-series** per book, fetched by
-`tools/openlibrary_books.py` (see its section under Library housekeeping
-tools) into the `book_meta` table — a DISPLAY-layer overlay: files and
-`tracks` are never written; sticky `notfound`; `manual` wins
-(`LibraryDB.book_meta_set/get/all`). The PWA fetches
-`GET /api/book_meta_all` once per switch onto the audiobooks source
-(`abMeta` map in app.js) and renders 📚 series chips on album rows
-(`renderBrowseItems`) plus a `#browse-series` header line
-("📚 Night's Dawn #1 · ✒️ Peter F. Hamilton"). `series_seq` is REAL —
-novellas are #1.5.
-
-**P3 — Naim resume (shipped 2026-07-14).** `avtransport_seek()`
-(AVTransport#Seek, `Unit=REL_TIME`) + `RendererQueue.start(...,
-start_at_sec=, is_book=)`: the resume offset rides the
-`/api/render_queue` POST (`book` + `start_at_sec` keys, sent by
-`_resumeBook`), and the Seek fires async ~1.5s after Play with one
-retry (a Seek during TRANSITIONING faults on the Naim; failure =
-non-fatal, chapter plays from 0:00). While an `is_book` queue is
-PLAYING, the existing 2s monitor persists the position every ~15s
-(`playback_positions`, lazy `dlna_library.DB` import) — stop on the
-Naim, resume in the PWA/CarPlay. `tests/test_renderer_resume.py`.
-
-**P4 — CarPlay bookmarks (shipped 2026-07-14).** Subsonic
-`getBookmarks` / `createBookmark` / `deleteBookmark` in `api_subsonic`
-map onto the SAME `playback_positions` table (track id → its
-`album_key` = the book; root-level single files key by URL;
-`createBookmark` position is ms). `getBookmarks` lists unfinished books
-whose chapter still resolves (`LibraryDB.track_by_url`); finished +
-orphan rows are skipped. Cross-path consistency is regression-tested
-(a CarPlay bookmark resumes in the PWA). `TestBookmarks` in
-`tests/test_subsonic.py`.
-
-**P5 — polish (shipped 2026-07-14).**
-- **m4b chapter atoms**: `dlna_ffmpeg.probe_chapters/parse_chapters`
-  (ffprobe `-show_chapters`; [] when no ffprobe/no chapters) behind
-  `GET /api/chapters?url=` (in-memory cache keyed (url, mtime)). PWA:
-  `#ab-chapters` picker in book mode (browser output) — choosing a
-  chapter seeks.
-- **Continue-listening shelf**: `GET /api/positions` rows are enriched
-  with the chapter's track fields (book/author/art/chapter_title;
-  orphans still listed bare). PWA: a **📖 letter-bar entry** (front,
-  audiobooks source only) rendering in-progress books with a chapter
-  progress bar; click opens the book.
-- **Naim tree**: root gains "📖 Audiobooks" (only when the source has
-  authors) → `abauthor:*` → `abbook:*` (3-field codec like `galbum:*`,
-  resolved against `dlna_localfs_wiring.AUDIOBOOKS_UDN`) → chapter
-  items. Book titles carry the OpenLibrary series ("… 📚 Culture #2").
-  Garbled ids → empty container. `tests/test_upnp_audiobooks.py`.
-- **Sleep timer**: `#ab-sleep` select (off/15/30/45/60 min, book mode)
-  → pause + position save when it fires.
-
-### Audiobooks by language — the 🌐 entry (2026-10-12)
-
-The audiobooks source's letter bar reads `📖 🌐 ⭐ # 0 A…Z`. 🌐 lists
-the languages, each named in itself via the browser's
-`Intl.DisplayNames` ("Nederlands", "English"), and opens to that
-language's books. PWA only — not on the Naim tree or Subsonic.
-
-**The evidence is thin, and that shaped everything.** Measured over 491
-books: **7 carry a language tag** (all "English"). OpenLibrary is no
-help — a work has editions in many languages, which is how translated
-series names got into `book_meta` before the English/Dutch rule. So the
-language is DETECTED from the words the book already carries (folder,
-album tag, chapter titles) by `dlna_book_language.detect_language`, and
-answers **Unknown when they do not decide it**. Live first pass: 431
-English, **9 Dutch** (exactly the Dutch LibriVox books), 51 Unknown —
-nearly all of them titles that are just a name (*Neuromancer*, *Dune*).
-
-Rules each learned from that pass — all tests in
-`tests/test_book_language.py` (28):
-- **A capitalised name is not evidence.** "Dan" is Dutch for "then",
-  and Dan Simmons' *Hyperion* came out Dutch because his name is in
-  every album tag. The capitalised words of the author/artist names are
-  dropped wherever they appear.
-- **…but a name's lowercase connector IS.** Discarding every name token
-  lost the only Dutch word on *Sara Burgerhart*: "Betje Wolff **en**
-  Aagje Deken".
-- **Each distinct string counts once** — an album tag is repeated on
-  every chapter, and must not outvote fifty distinct chapter titles.
-- **A word both languages use is in neither list** (`in`, `is`, `was`,
-  `over`, `door`, `die`, `man`, `we`) — asserted at import.
-- **Only English and Dutch are detected.** Every extra word list is
-  another source of false positives from names. Other languages arrive
-  via a tag or a manual row; the facet shows whatever codes exist.
-
-**A detected language is never stored.** It is recomputed on every
-read (~0.05 s over 11k chapters), so a retag or rescan shows at once and
-there is nothing to go stale. Only ASSERTIONS are stored, in
-`book_language`: `tag` (from `tools/book_language.py --tags`) and
-`manual` — which always wins, and which a `tag` never replaces.
-"Unknown" is a real bucket, requested as `language=` (empty), and is the
-to-do list for the tool, not a failure to hide.
-
-The books view hides **Play all** (nobody plays a whole language);
-`_drillShowChrome` restores it for every other view.
-
-**Setting one by hand is in the ✏️ edit form** — a *Book language*
-select, shown only when the chapter belongs to a folder book (the server
-decides, from the URL: `GET /api/book_language?url=` answers
-`{book:false}` otherwise). Its first option is **Auto — detected: X**
-(or *from tag*, or *not detected*), which clears the stored row; any
-other choice is stored as `manual`. The POST names the chapter URL,
-never an `album_key`, so a client cannot write a row for a book it did
-not open. A language change alone posts nothing to `/api/edit_track`.
-`.edit-field[hidden]{display:none}` is load-bearing: `.edit-field` is
-`display:flex`, which beats the `hidden` attribute, and every music
-track would otherwise show an empty language select. Guarded by
-`tests/frontend/test_book_language.py` (10).
-
-Open question still standing: whether the Naim accepts m4b/AAC over
-AVTransport — the tree exposes the books either way; test with one
-file on the real device.
-
-## Subsonic API (shipped — browse/playlists/starring/stream/radio all live)
-
-A read-only-ish Subsonic-compatible HTTP API that lets any third-party
-Subsonic iOS client (Amperfy, substreamer, play:Sub, …) browse the
-gateway's library and stream from it. **The primary motivator is
-CarPlay**: those clients have polished CarPlay implementations, the
-gateway PWA fundamentally can't (CarPlay is a closed iOS-native
-framework). Subsonic API is also pure HTTP, so it traverses Tailscale
-cleanly — unlike UPnP's SSDP multicast discovery which doesn't.
-
-### What the iOS client sees
-
-The Subsonic client connects to **the gateway**. The flow:
-
-```
-iPhone Subsonic client (CarPlay)
-    ↓ HTTPS over Tailscale
-dlna-gateway  /rest/*
-    ↓ library.db reads for browse/playlists/favourites/search
-    ↓ relays audio bytes from the LocalFs file server for /rest/stream
-RoHaLocalFS :8200 (invisible to the client; just a byte source)
-```
-
-Every piece of gateway state is exposed:
-- Tracks, artists, albums (as indexed into library.db).
-- User playlists + the existing `__favourites__` track-level playlist.
-- `album_favourites` is exposed as Subsonic's "starred albums".
-- `play_counts` increments via `/rest/scrobble` so radio bias keeps
-  working from cars too.
-- Cover art (gateway's `album_art` cache + embedded art via
-  the existing `/art` proxy).
-
-Lyrics aren't exposed (not in the Subsonic spec); still work in the
-PWA.
-
-### Endpoints
-
-Mounted under `/rest/*`. Both response formats are supported: XML is
-the spec default (and what Amperfy and other clients send when no `f=`
-is given), `?f=json` selects JSON. The format is resolved once in
-`handle()` and stashed on the handler as `_subsonic_format`. JSON
-wrapper:
-
-```json
-{"subsonic-response":
-  {"status":"ok", "version":"1.16.1",
-   "type":"dlna-gateway", "serverVersion":"1.0", ...payload}}
-```
-
-Errors: `"status":"failed"` with `{"error": {"code": N, "message": "…"}}`.
-
-| Endpoint | Maps to | Purpose |
+Full documentation for every tool — flags, safety rules, live-run results and
+the incidents behind them — is in **[docs/TOOLS.md](docs/TOOLS.md)**. Common
+contract: **DRY-RUN by default, `--apply` writes**; nothing moves, renames or
+deletes media unless a flag says so; each tool has `tools/test_<name>.py`
+(the risky logic is pure and tested directly). Run order for enrichment:
+beets → `artist_mbid` → `artist_meta` → `track_credits`.
+
+| Tool | Does | Must-know |
 |---|---|---|
-| `/rest/ping` | — | Connectivity test |
-| `/rest/getLicense` | — | Hard-coded `{valid:true}` |
-| `/rest/getMusicFolders` | — | Single folder, id=1, name="Music" |
-| `/rest/getIndexes` | `DB.all_artists` aggregated A-Z | Legacy artist index |
-| `/rest/getArtists` | `DB.all_artists` | Modern artist list |
-| `/rest/getArtist?id=` | `DB.artist_albums(udn, artist)` | Albums under an artist |
-| `/rest/getAlbum?id=` | `DB.album_tracks(udn, artist, album)` | Tracks in an album |
-| `/rest/getAlbumList2?type=&size=&offset=` | `DB.all_albums(order=,limit=,offset=)` | type ∈ newest/alphabeticalByName/recent/random/frequent/starred. The alphabetical types page in **SQL** (`LIMIT/OFFSET`) so Amperfy's full-library sync doesn't reload every album per page; `alphabeticalByArtist` orders by artist. `random` is **day-seeded** so paging is coherent (no dup/missing albums across pages). `size`/`offset` parse tolerantly (a bad value degrades to the default, no 500). |
-| `/rest/search3?query=` | `DB.search` | Existing FTS5 search |
-| `/rest/getPlaylists` | `DB.pl_list()` | All playlists |
-| `/rest/getPlaylist?id=` | `DB.pl_get(pl_id)` | One playlist's tracks |
-| `/rest/createPlaylist` `/updatePlaylist` `/deletePlaylist` | `DB.pl_create / pl_add_track / pl_remove_track / pl_delete` | Bidirectional sync |
-| `/rest/star` `/unstar` | `DB.album_fav_add / album_fav_remove` | Album-level starring → reuses Album Favourites |
-| `/rest/getStarred2` | `DB.album_fav_list()` | Starred albums |
-| `/rest/stream?id=` | track ID → URL → `dlna_player.proxy_stream` | Audio (Range supported via existing proxy) |
-| `/rest/getCoverArt?id=&size=` | album/track ID → art URL → `api_playback.art_fetch_scaled` | Cover image, downscaled to the `size` box (bucketed 96/256/512/1024, Pillow) so thumbnails aren't full-res originals |
-| `/rest/scrobble?id=&submission=true` | `play_counts.count += 1` | Bumps radio bias from cars |
-
-### ID encoding
-
-Subsonic clients treat IDs as opaque strings. The gateway uses
-base64-urlsafe-encoded payloads (same pattern as
-`api_upnp._encode_album_id`):
-
-- Track:    `tr:<base64(track.url)>`
-- Album:    `al:<base64(artist + \x00 + album [+ \x00 + album_key])>`
-- Artist:   `ar:<base64(artist)>`
-- Playlist: `pl:<plid>` (already opaque in the DB)
-
-Round-trips arbitrary unicode through XML/JSON/URL transports.
-
-**`album_key` in album ids (A3b):** for a LocalFs source the album id
-carries the FOLDER (`album_key`) as a third NUL-delimited field, so a
-Various-Artists compilation round-trips as one album (getAlbum / star /
-getStarred2 / coverArt resolve by folder). The third field is appended
-**only when `album_key` is set**, so non-LocalFs album ids stay
-byte-identical to the pre-A3b 2-field form (no client/cache churn);
-`_album_id_decode` returns `(artist, album, album_key)` and tolerates
-legacy 2-field ids with `album_key=''`. `_so_song` carries the track's
-`album_key` (added to `album_tracks` / `search` output) so track→album
-navigation lands on the folder album. **search3's album entries carry
-`album_key` too** (fixed 2026-07-03 — `_search3` used to rebuild the album
-dicts without it, so tapping a search result resolved `getAlbum` by
-`(artist, album)` only: wrong/partial track list for folder-grouped
-compilations; found live by `tests/subsonic_verify.py`). Search results
-show the RAW tag album name while browse shows the folder-derived display
-name — match by id/`album_key`, not by name.
-
-### Authentication
-
-Single-user, single shared-secret. Read at startup from environment:
-
-```
-SUBSONIC_USER=user        # default "user" if unset
-SUBSONIC_PASSWORD=<set>   # REQUIRED; no default
-can be set using
-launchctl unsetenv SUBSONIC_PASSWORD (delete old password)
-launchctl setenv SUBSONIC_PASSWORD=password (set new password)
-launchctl getenv SUBSONIC_PASSWORD (show new password)
-```
-
-The gateway accepts either the modern token+salt flow:
-
-```
-?u=<user>&t=MD5(password+salt)&s=<salt>&v=1.16.1&c=<clientname>
-```
-
-…or the legacy plaintext flow (clients can negotiate either):
-
-```
-?u=<user>&p=<password>            # plain
-?u=<user>&p=enc:<hex(password)>   # hex-encoded
-```
-
-If `SUBSONIC_PASSWORD` is unset the API returns 503 on every call —
-deliberate, prevents accidental auth-disabled exposure. Auth is a
-defence-in-depth layer; the primary access control is Tailscale (the
-gateway is not exposed to the public internet).
-
-### Observability (2026-07-02)
-
-Every `/rest/*` request logs **one INFO line** in `gateway.log` (added
-after an undiagnosable "Amperfy flaky in the car" afternoon — Subsonic
-traffic was previously visible only at `debug`):
-
-```
-Subsonic getAlbum client='amperfy' ip=100.x.y.z → 200 in 12ms   # bridged JSON/XML methods
-Subsonic stream id=tr:… client='amperfy' ip=100.x.y.z           # byte methods
-Subsonic ping client='…' ip=… → refused                         # auth-gate refusals
-```
-
-The shared audio-relay `stream ▶ START` / `■ END` lines also carry
-`client=<peer-ip>`. **A `100.x` ip = tailnet (CarPlay/Amperfy or remote
-PWA); `192.168.x` = LAN.** Diagnosis shortcut: `grep Subsonic gateway.log`
-— if it's EMPTY during a flaky window, the requests never reached the
-gateway (phone-side Tailscale/cellular), not a gateway problem. Heads-up:
-`getCoverArt` logs per cover, so a client's first art sync is chatty.
-
-### What's intentionally NOT implemented
-
-Subsonic's full spec has 60+ endpoints; about 45 are out of scope for
-this user / this gateway. Notable omissions:
-
-- Multiple users / roles / per-user playlists.
-- Podcasts, bookmarks, chat, shares, jukebox mode, video,
-  transcoding, server-side resampling (`maxBitRate` ignored —
-  always serve the original). *(Internet radio IS implemented — see
-  the "Internet radio" section.)*
-- `getNowPlaying` (gateway isn't a player from Subsonic's POV — the
-  iPhone is the player).
-- Track-level starring (only album-level via `getStarred2`). Could
-  extend with a `track_favourites` table later if needed; for now,
-  starring a track no-ops gracefully.
-
-### Connecting an iOS client
-
-Recommended: **Amperfy** (free, open source, well-rated, CarPlay).
-
-1. Set `SUBSONIC_PASSWORD` in the gateway's environment (LaunchAgent
-   plist or `.env`) and restart.
-2. Install Amperfy on the iPhone.
-3. Add server:
-   - URL: `https://ronsmacmini.tail5be6ad.ts.net:8443/rest`
-   - Username: `user` (or whatever `SUBSONIC_USER` is set to)
-   - Password: the value of `SUBSONIC_PASSWORD`
-4. Tap a playlist or starred album. Plug into CarPlay. Drive.
-
-Phone-call interruption recovery works because Amperfy is a native
-iOS app — it uses `AVAudioSession` properly, which the PWA can't.
-
-### Tests
-
-| File | What it covers |
-|---|---|
-| `tests/test_subsonic.py` | 38 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status |
-
-## Internet radio (complete — all 3 phases done)
-
-> Status: **fully implemented, all phases.** `radio_favourites` table,
-> `LibraryDB.radio_fav_*` (incl. `radio_fav_update`), all
-> `/api/radio/*` endpoints, radio-browser search,
-> `proxy_radio_stream()` ICY de-interleaving, `/radio_stream`,
-> `/api/radio/nowplaying`, the `is_stream` monitor guard, the
-> "📡 Radio Stations" frontend (search + genre chips + favourites +
-> now-playing radio variant), **and** the Subsonic radio methods
-> (`getInternetRadioStations` / `create` / `update` /
-> `deleteInternetRadioStation`) — radio works in CarPlay via Amperfy.
->
-> Naming note: the pre-existing "📻 Radio" button is a *different*
-> feature (a play-count-biased shuffle of the local library); internet
-> radio is deliberately branded "📡 Stations" to keep them distinct.
-> A genre-chip row (Prog / Prog-rock / Jazz / Pop / Rock / Classical,
-> → `/api/radio/search?tag=`) was added on top of the original spec at
-> the user's request; station rows show their genre tags.
-
-Internet radio (Icecast/Shoutcast streams) is in scope; **commercial
-streaming services (Spotify, Tidal, Apple Music, Qobuz) are not** —
-DRM-encrypted audio, proprietary closed protocols, and licensing make
-them a non-starter. The Naim already speaks Tidal/Qobuz/Spotify
-Connect natively; that belongs on the renderer, not the gateway.
-
-An internet-radio station is just an HTTP URL serving an endless
-MP3/AAC byte stream — which the existing playback paths already
-handle: `avtransport_send()` (`SetURI`+`Play`) for the Naim, and the
-`/stream` proxy for browser audio. So this is mostly a data-model +
-UI feature, not a protocol feature.
-
-The catalogue comes from **radio-browser.info** (a free community
-directory of ~50k stations). The gateway does **not** persist the
-catalogue — only the user's favourites. Search results are transient
-(proxied + briefly cached in memory).
-
-### `radio_favourites` table — capped at 25, survives `clear(udn)`
-
-```sql
-CREATE TABLE IF NOT EXISTS radio_favourites (
-  station_uuid TEXT PRIMARY KEY,   -- radio-browser stationuuid (stable)
-  name         TEXT NOT NULL,
-  stream_url   TEXT NOT NULL,      -- radio-browser url_resolved
-  homepage     TEXT,
-  favicon      TEXT,               -- station logo URL
-  codec        TEXT,               -- 'MP3' | 'AAC' | 'OGG' | ...
-  bitrate      INTEGER,            -- kbps, informational
-  country      TEXT,
-  tags         TEXT,               -- comma-separated genre tags
-  added_at     INTEGER NOT NULL,
-  sort_order   INTEGER NOT NULL DEFAULT 0
-);
-```
-
-Same persistence contract as `album_favourites` / `play_counts` /
-`lyrics` — independent of `tracks`, so a rebuild-index / `clear(udn)`
-leaves it untouched. Radio has no `udn`. Stations carry their own art
-via `favicon`, so `album_art` is not involved.
-
-**The 25-cap is enforced server-side** in `LibraryDB.radio_fav_add()`,
-never trusted to the client:
-
-```
-RADIO_FAV_MAX = 25
-if not radio_fav_is(uuid) and radio_fav_count() >= RADIO_FAV_MAX:
-    return 'full'      # caller turns this into HTTP 409
-INSERT OR IGNORE …  →  'ok' / 'exists'
-```
-
-Re-adding a station already favourited is idempotent and never counts
-against the cap. When full, the user must remove a favourite before
-adding another — there is no auto-eviction.
-
-### `LibraryDB` methods
-
-```
-radio_fav_add(station: dict) -> str    # 'ok' | 'exists' | 'full'
-radio_fav_remove(station_uuid) -> bool
-radio_fav_is(station_uuid)     -> bool
-radio_fav_list()               -> [ {…all columns…}, … ]   # ordered
-radio_fav_reorder(uuid_list)   -> bool
-radio_fav_count()              -> int
-```
-
-### Native endpoints (`/api/*`)
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/radio/search?q=&country=&tag=&limit=` | Proxy radio-browser `/json/stations/search`; **filters out `hls=1`**; returns normalized station objects |
-| `GET /api/radio/favourites` | The ≤25 saved stations, ordered |
-| `POST /api/radio/favourites/add` | Body = the full station object as returned by `/api/radio/search`. Inserts; **409 `{error:"favourites_full", limit:25}`** when at the cap. Missing `station_uuid`/`name`/`stream_url` → 400 |
-| `POST /api/radio/favourites/remove` `{station_uuid}` | Delete; `{ok:false}` if absent |
-| `POST /api/radio/favourites/reorder` `{order:[uuid,…]}` | Preset ordering for now-playing prev/next |
-| `GET /api/radio/nowplaying?udn=` *(or* `?stream=`*)* | Current ICY metadata for the live screen |
-
-Station logos route through the **existing `/art?url=` proxy** — same
-same-origin requirement for iOS lock-screen artwork, already solved.
-
-### Playback — reuse `/api/render_queue`, no new path
-
-A station is modelled as a single "track" with `is_stream: true` and
-no duration:
-
-```json
-{ "url": "<stream_url>", "title": "<station name>", "artist": "Radio",
-  "art": "<favicon>", "duration": "", "is_stream": true }
-```
-
-- **Naim/UPnP:** `POST /api/render_queue {udn, tracks:[<station>]}` →
-  existing `SetURI`+`Play`. The watchdog (`_monitor_decision`) is
-  already safe — it needs `dur > 0` to fire, and a stream has
-  `dur = 0`. The unknown-abort guard still protects against a renderer
-  genuinely dropping.
-- **Browser:** `<audio src="/stream?url=…">` routed to a new
-  `proxy_radio_stream()` (see below).
-
-`RendererQueue` change required: when `is_stream` is set, don't treat
-an empty-after-current queue as "finished" (a 1-station queue stays
-live) and don't surface a progress bar.
-
-### ICY metadata + the radio now-playing screen
-
-Radio "now playing track" = **ICY metadata** interleaved in the
-Icecast byte stream (`StreamTitle='Artist - Title';` every
-`icy-metaint` bytes).
-
-**Browser path — `proxy_radio_stream()`** (new function in
-`dlna_stream_proxy.py`, kept separate from the byte-perfect
-`proxy_stream()` Range relay):
-1. Request upstream with header `Icy-MetaData: 1`.
-2. Read the `icy-metaint: N` response header.
-3. Body is then `[N audio bytes][1 length byte][metadata block]`
-   repeating. Relay **only** the audio bytes to the browser (`<audio>`
-   cannot handle interleaved metadata); parse `StreamTitle` out of
-   each metadata block.
-4. Stash the current title in a module-level `{stream_url → title}`
-   dict that `/api/radio/nowplaying` reads.
-
-**Naim/UPnP path:** the gateway is not in the audio path — but the
-Naim parses ICY itself and exposes the current title in
-`CurrentTrackMetaData`, which `avtransport_get_position()` **already
-returns** as `title`. So `/api/radio/nowplaying?udn=` just reads the
-existing snapshot; no new SOAP.
-
-*Caveat:* ICY title works for MP3/AAC. OGG/FLAC streams carry metadata
-as in-band Vorbis comments — no ICY title there; the screen falls back
-to the station name only.
-
-**The screen** — the now-playing panel detects `is_stream` and
-switches layout:
-
-| Standard now-playing | Radio variant |
-|---|---|
-| album art | station logo (`favicon` via `/art`) |
-| progress bar + seek | "📻 LIVE" badge, no seek |
-| title / artist / album | scrolling ICY `StreamTitle` + station name + `codec/bitrate` line |
-| prev / next = queue tracks | prev / next = **cycle the 25 favourites like radio presets** |
-| MediaSession art = album | MediaSession art = station logo, title = ICY title (lock screen) |
-
-Using prev/next to step through the favourites is what makes the
-25-cap behave like physical preset buttons.
-
-### Subsonic exposure (`/rest/*`)
-
-Subsonic has native radio methods; they map straight onto
-`radio_favourites`:
-
-| Subsonic method | Maps to |
-|---|---|
-| `getInternetRadioStations` | `radio_fav_list()` |
-| `createInternetRadioStation` `?streamUrl=&name=&homepageUrl=` | `radio_fav_add` (honours the 25-cap) |
-| `updateInternetRadioStation` `?id=&streamUrl=&name=` | update row |
-| `deleteInternetRadioStation` `?id=` | `radio_fav_remove` |
-
-Subsonic clients (Amperfy/CarPlay) play a station by streaming its
-`streamUrl` **directly** — they do not go through the gateway proxy,
-and Amperfy parses ICY metadata itself. So radio "just works" in
-CarPlay once these four methods exist.
-
-**ID encoding:** `rs:<station_uuid>` — radio-browser UUIDs are already
-URL/XML-safe, so no base64 wrapping (unlike `tr:` / `al:`).
-
-### radio-browser.info integration
-
-A **4th outbound host** (also listed in the "External services" table above):
-
-| Host | Purpose | Method + path |
-|---|---|---|
-| `*.api.radio-browser.info` | Station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&limit=&hidebroken=true&order=clickcount&reverse=true` |
-
-- **Mirror selection** — the API is DNS round-robin; resolve
-  `all.api.radio-browser.info` and pick a server, or hard-code
-  `de1`/`nl1` with failover. Do not pin a single host.
-- **User-Agent required** — same contract as MusicBrainz; reuse the
-  `DLNAGateway/1.0 ( <GATEWAY_CONTACT_EMAIL> )` pattern (email from `.env`).
-- **`hidebroken=true`** drops dead streams; `order=clickcount` surfaces
-  popular stations first.
-- **HLS filter** — exclude records where `hls == 1`; UPnP renderers
-  can't play HLS and browser `<audio>` only does on Safari.
-- Optional courtesy: `GET /json/url/{stationuuid}` on play
-  (radio-browser's click counter) — nice-to-have, skippable.
-
-### Implementation phases
-
-1. **Phase 1** ✅ *done* — `radio_favourites` table + `LibraryDB`
-   methods + native endpoints + `/api/radio/search`. Playback is the
-   caller's job via the existing `/api/render_queue` (a station is a
-   single `is_stream` "track"); no `RendererQueue` change was needed
-   since an extra dict key is harmless and a 0-duration single-track
-   queue already behaves. No ICY yet (title = station name).
-2. **Phase 2** ✅ *done* — backend: `proxy_radio_stream()` ICY
-   de-interleaving, the `/radio_stream` route, `/api/radio/nowplaying`
-   (browser `?stream=` ICY path + UPnP `?udn=` snapshot path), and the
-   `is_stream` guard in `_monitor_decision` (radio never auto-advances
-   — a momentary `STOPPED` is a rebuffer). Frontend: the "📡 Radio
-   Stations" synthetic row in `#pl-list`, the search/genre-chips/
-   favourites view, `playStation()` (browser → `/radio_stream`, UPnP →
-   `is_stream` render-queue track), and the now-playing radio variant
-   (LIVE badge, no seek bar, `⏮/⏭` cycle favourites as presets).
-3. **Phase 3** ✅ *done* — the four Subsonic radio methods
-   (`getInternetRadioStations` / `create` / `update` /
-   `deleteInternetRadioStation`) in `api_subsonic.py`, mapped onto
-   `radio_favourites` via the `rs:<station_uuid>` id codec. A
-   Subsonic-created station gets a synthesised `uuid4`; `create`
-   honours the 25-cap. Radio now works in CarPlay via Amperfy.
-
-### Tests
-
-| File | What it covers |
-|---|---|
-| `tests/test_radio.py` | DB round-trip; **25-cap enforced / `'full'` returned / re-add idempotent and doesn't count**; `radio_fav_update`; `clear(udn)` survival; reorder; handler 400/409/200; HLS filtered from search; ICY parse / `_read_exact` / de-interleave round-trip |
-| `tests/test_subsonic.py` | `TestInternetRadio` — `rs:` id round-trip, `getInternetRadioStations` lists favourites, `create` (+ missing-param fail, 25-cap fail), `update` changes fields, `delete` removes (+ bad-id fail) |
-| `tests/frontend/test_radio.py` | 16 Playwright tests — synthetic `#radio-pl-item` placement, opening the view, debounced name search, genre-chip tag search, clearing→favourites, optimistic ☆→★ add, cap-full 409 toast, favourite list + ✕ remove, genre shown on rows, browser vs UPnP playback, radio now-playing layout (LIVE badge, no seek bar), ICY poll into `#np-artist`, `⏮/⏭` cycle favourites |
-| ICY parser unit test | Feed a synthetic `icy-metaint` byte stream through the `proxy_radio_stream` parser; assert `StreamTitle` extraction + clean audio passthrough |
+| `prune_empty_music_dirs.py` | Trashes dirs whose subtree has no music | Rule B: anything inside an album root is kept; `.mp4` is not music; hitting `--limit` executes no deletions |
+| `find_corrupt_audio.py` | Flags files whose magic bytes don't match the extension | Scan-only by default; writes `corrupt-audio.txt`; unreadable ≠ corrupt |
+| `artist_from_folder.py` | Writes a missing artist tag from folder evidence (`dlna_artist_infer`) | Re-reads each file before writing; **NO fallback when a container refuses a tag** — the ID3-prepend fallback destroyed 15 WAVs |
+| `tag_from_filename.py` | Artist tag from the filename for untagged strays | `NN - Title` yields NO artist; never overwrites an existing artist |
+| `audit_playlist_orphans.py` | Relinks playlist rows whose track id went stale (renamed folder) | Unmatched rows are KEPT unless `--remove-unmatched`; backs up first |
+| `compilation_playlists.py` | Playlists for album TAGS scattered across folders | ≥5 tracks, ≥3 artists, no folder with ≥5 of them |
+| `folder_compilation_playlists.py` | Playlists for one-folder compilations | A folder whose tracks declare no album never qualifies; tracks in `file_path` order |
+| `artist_mbid.py` | Artist → MusicBrainz id (the keystone) | `dlna_mbid.accept_match` refuses rather than guesses; `notfound` sticky |
+| `artist_meta.py` | MBID → facts, bio, best-known, line-up | **Set `LASTFM_API_KEY` before the first run** — `meta_fetched_at` marks done |
+| `track_credits.py` | Composer/lyricist via an artist's MB works | Writes `track_credits`, never `tracks`; ~2 h |
+| `correct_year_drift.py` | Year from the earliest copy in the library | Live-recording filter; ≥1950 floor; writes `source='manual'` |
+| `improve_song_years.py` | Earliest MB recording year per song | `song_year_cache`; ~10 h full sweep; never touches user `manual` rows |
+| `beets_enrich.py` | beets tag-in-place batch | Hard gate `write=yes copy=no move=no`; beets via **brew, not pip**; needs the `musicbrainz` plugin + `musicbrainzngs` |
+| `post_beets_reindex.py` | Makes beets' tags visible | Deletes ONLY `source='acoustid'` overrides, then rescans |
+| `openlibrary_books.py` | Audiobook series/author → `book_meta` | English/Dutch only — non-ASCII series names hard-rejected |
+| `book_language.py` | Asserted audiobook languages | `--set` refused without `--match` |
+| `immich_import.py` | Copies new Immich videos into GWMovies | Content-hash dedup is sticky; `--reimport-deleted` to undo that |
+| `infer_video_locations.py` | Location for GPS-less clips from neighbours | Real-GPS evidence only; needed `--no-device-check` |
+| `immich_people_sync.py` | Immich persons → `video_people` | Checksum match, then (name, size) — Immich checksums go stale |
+
+**Steady-state workflow for new music:** drop files →
+`beets_enrich.py --quiet` → `post_beets_reindex.py --apply`.
+
+## Audiobooks
+
+A second LocalFs root (`AUDIOBOOKS_ROOT`, own UDN
+`dlna_localfs_wiring.AUDIOBOOKS_UDN`, same `:8200` server), so books stay out
+of music browse/search/radio by construction. Full design, phases P1–P6 and
+the 🌐 language rules: **[docs/AUDIOBOOKS.md](docs/AUDIOBOOKS.md)**.
+
+- **Multi-root safety for ANY additional root:** `_load_cache` is scoped to
+  the provider's own root, and secondary-root track ids are salted
+  (`_track_id_for(rel, namespace)`; music keeps `namespace=''`).
+- **`kind`** (`audiobooks` | `music`) on `/api/servers` gates ALL resume
+  behaviour in the PWA — never the track shape.
+- **Resume** = `playback_positions`, ONE row per book (`album_key`; root-level
+  single files key by URL), shared by the PWA, the Naim
+  (`start_at_sec` → async Seek ~1.5 s after Play; the monitor saves every
+  ~15 s) and CarPlay (Subsonic bookmarks). Continue is the default on every
+  entry point; a finished book behaves like an unread one. Playback started
+  from the Naim's own controller can't resume. `tests/test_positions.py`,
+  `tests/test_renderer_resume.py`, `tests/frontend/test_audiobooks.py`.
+- **`book_meta`** (OpenLibrary series, `series_seq` REAL) is a display
+  overlay; `manual` wins.
+- **🌐 Language** is DETECTED on read by `dlna_book_language` (English and
+  Dutch only; Unknown when the words don't decide; capitalised names dropped
+  but their lowercase connectors kept; each distinct string counts once;
+  shared words in neither list). Only ASSERTED languages (`tag` / `manual`)
+  are stored in `book_language`. Set by hand in the ✏️ form, which posts the
+  chapter URL, never an `album_key`; `.edit-field[hidden]{display:none}` is
+  load-bearing. `tests/test_book_language.py` (28),
+  `tests/frontend/test_book_language.py` (10).
+- Open question: does the Naim accept m4b/AAC over AVTransport?
+
+## Subsonic API (`/rest/*` — Amperfy / CarPlay)
+
+Shipped; the reason it exists is CarPlay. Endpoint table, auth flows, id
+encoding and connection steps: **[docs/SUBSONIC.md](docs/SUBSONIC.md)**.
+
+- XML by default (the spec), `f=json` for JSON. Single user from
+  `SUBSONIC_USER` / `SUBSONIC_PASSWORD` in `.env`; **no password → 503 on
+  every call** (deliberate). Token+salt and plaintext / `enc:` both accepted.
+- Ids: `tr:<b64 url>`, `al:<b64 artist\0album[\0album_key]>` (third field
+  ONLY when `album_key` is set — keeps non-LocalFs ids byte-identical),
+  `ar:<b64>`, `pl:<id>`, `rs:<station_uuid>`. search3 album entries must
+  carry `album_key`; match by id, not by name.
+- `getAlbumList2` pages alphabetical types in SQL; `random` is day-seeded;
+  a bad `size`/`offset` degrades to the default.
+- Starring = `album_favourites`; scrobble bumps `play_counts`;
+  `getCoverArt?size=` → `art_fetch_scaled`; bookmarks = `playback_positions`;
+  radio methods = `radio_favourites`. Never transcodes (`maxBitRate` ignored).
+- One INFO line per request — `grep Subsonic gateway.log`; empty during a
+  flaky window means the request never reached the gateway. A `100.x` ip is
+  the tailnet. Verify live with `tests/subsonic_verify.py`.
+  `tests/test_subsonic.py`.
+
+## Internet radio ("📡 Stations")
+
+Complete, all phases. Spec: **[docs/INTERNET_RADIO.md](docs/INTERNET_RADIO.md)**.
+Not the "📻 Radio" button (the play-count shuffle). Commercial streaming
+services are out of scope (DRM; the Naim does those natively).
+
+- `radio_favourites` is capped at 25 **server-side** (`radio_fav_add` →
+  `'full'` → HTTP 409); re-adding is idempotent; survives `clear(udn)`.
+- Catalogue = radio-browser.info, proxied and never persisted; `hls=1`
+  filtered out; identifying User-Agent.
+- A station is a single `is_stream` "track" through `/api/render_queue`;
+  `_monitor_decision` never auto-advances a stream.
+- Browser path `/radio_stream` → `dlna_radio_proxy` de-interleaves ICY
+  metadata (deliberately separate from the byte-perfect `/stream`);
+  `/api/radio/nowplaying` reads it (`?stream=`) or the renderer snapshot
+  (`?udn=`).
+- ⏮/⏭ cycle the favourites like presets. Subsonic's `*InternetRadioStation`
+  methods map onto the same table. `tests/test_radio.py`,
+  `tests/frontend/test_radio.py`.

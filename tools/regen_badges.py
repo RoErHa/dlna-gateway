@@ -33,6 +33,7 @@ DRY-RUN BY DEFAULT — prints old vs new. `--apply` rewrites README.md.
 
 Usage:
     python3 tools/regen_badges.py                # show the drift
+                                                 # (re-runs itself under .venv)
     python3 tools/regen_badges.py --apply        # rewrite the badges
     python3 tools/regen_badges.py --check        # exit 1 if stale
 """
@@ -58,7 +59,12 @@ _TESTS_RE = re.compile(
 _LINT_RE = re.compile(
     r"(\[!\[Lint: ruff\]\(https://img\.shields\.io/badge/lint-)([^)]*?)(\))")
 
-_DOCS = ("CLAUDE.md", "README.md")
+_DOCS = ("CLAUDE.md", "README.md",
+         # detail moved out of CLAUDE.md 2026-10-23 — its counts stay checked
+         "docs/LIBRARY_RULES.md", "docs/FRONTEND.md", "docs/ALBUM_ART.md",
+         "docs/FEATURES.md", "docs/SECURITY_POSTURE.md", "docs/TOOLS.md",
+         "docs/AUDIOBOOKS.md", "docs/SUBSONIC.md", "docs/INTERNET_RADIO.md",
+         "docs/TESTING.md")
 
 # "python3 -m unittest tools.test_x -v   # 16 tests"
 _CLAIM_CMD = re.compile(
@@ -327,5 +333,26 @@ def main(argv=None) -> int:
     return 0
 
 
+def _venv_python() -> str | None:
+    """The project venv's interpreter, when this process is NOT it.
+
+    Counting a test module means importing it, and most import the app
+    (starlette, fastapi, mutagen) — which only the venv has. Run under the
+    system python3, every such module reads as "cannot load" and the prose
+    check reports failures that are not there. The app always runs from
+    the venv, so the tool follows it rather than asking every caller to
+    remember."""
+    venv = os.path.join(PROJECT, ".venv")
+    exe = os.path.join(venv, "bin", "python")
+    if not os.path.exists(exe):
+        return None
+    if os.path.realpath(sys.prefix) == os.path.realpath(venv):
+        return None
+    return exe
+
+
 if __name__ == "__main__":
+    _exe = _venv_python()
+    if _exe:
+        os.execv(_exe, [_exe, os.path.abspath(__file__), *sys.argv[1:]])
     raise SystemExit(main())
