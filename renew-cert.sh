@@ -20,25 +20,34 @@ set -u
 # of where you cloned the repo, no hardcoded paths.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load .env (gitignored) so TAILSCALE_CERT_HOST and friends are
-# available even when run from launchd / cron with a sparse env.
-if [ -f "${REPO_DIR}/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "${REPO_DIR}/.env"
-    set +a
-fi
+# .env (gitignored) holds TAILSCALE_CERT_HOST and friends, so they are there
+# even under launchd / cron's sparse environment. It is READ, never sourced
+# (2026-10-23): sourcing executes it as shell. `GW_NAME=DLNA Gateway (IINA)`
+# — valid for the app's own loader — is a syntax error that made `.` abandon
+# every key after it, and a line such as `KEY=x word` would RUN `word`. A
+# config file must not be able to run anything. The real process
+# environment still wins, as in dlna_config.
+env_get() {
+    local key="$1" val
+    val="${!key:-}"   # the real environment first (bash 3.2 has ${!name})
+    if [ -z "${val}" ] && [ -f "${REPO_DIR}/.env" ]; then
+        val=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "${REPO_DIR}/.env" \
+            | tail -1 | cut -d= -f2- \
+            | sed -E "s/^[[:space:]]+|[[:space:]]+\$//g; s/^[\"'](.*)[\"']\$/\1/")
+    fi
+    printf '%s' "${val}"
+}
 
-CERT_HOST="${TAILSCALE_CERT_HOST:-}"
+CERT_HOST="$(env_get TAILSCALE_CERT_HOST)"
 if [ -z "${CERT_HOST}" ]; then
     echo "[$(date '+%F %T')] FATAL TAILSCALE_CERT_HOST not set (put it in .env)" >&2
     exit 1
 fi
 
-RENEW_DAYS="${RENEW_DAYS:-30}"
+RENEW_DAYS="$(env_get RENEW_DAYS)"; RENEW_DAYS="${RENEW_DAYS:-30}"
 LOG="${REPO_DIR}/cert-renewal.log"
-TAILSCALE="${TAILSCALE_BIN:-$(command -v tailscale)}"
-OPENSSL="${OPENSSL_BIN:-$(command -v openssl)}"
+TAILSCALE="$(env_get TAILSCALE_BIN)"; TAILSCALE="${TAILSCALE:-$(command -v tailscale)}"
+OPENSSL="$(env_get OPENSSL_BIN)"; OPENSSL="${OPENSSL:-$(command -v openssl)}"
 
 if [ -z "${TAILSCALE}" ] || [ -z "${OPENSSL}" ]; then
     echo "[$(date '+%F %T')] FATAL tailscale or openssl not in PATH" >> "${LOG}"
@@ -112,12 +121,9 @@ fi
 # it served the old certificate until a restart happened to come along.
 # CERT_RELOAD_LABELS (comma-separated, .env) lists them; without it, the
 # gateway alone, as before.
-# Read from the file, not from the sourced environment: sourcing .env as
-# shell turns an unquoted "a, b" into an assignment of "a," plus a COMMAND
-# named "b", so a natural comma-and-space list was silently dropped.
-reload_raw=$(grep -E '^[[:space:]]*CERT_RELOAD_LABELS=' "${REPO_DIR}/.env" 2>/dev/null \
-    | tail -1 | cut -d= -f2- | tr -d "\"'")
-labels="${reload_raw:-${GATEWAY_LAUNCHD_LABEL:-com.roha.dlna-gateway}}"
+gateway_label="$(env_get GATEWAY_LAUNCHD_LABEL)"
+labels="$(env_get CERT_RELOAD_LABELS)"
+labels="${labels:-${gateway_label:-com.roha.dlna-gateway}}"
 failed=0
 if command -v launchctl >/dev/null 2>&1; then
     uid=$(id -u)

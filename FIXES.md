@@ -63,6 +63,19 @@ Three of its five tests fail on the old script.
 into `CERT_RELOAD_LABELS`. "The command exited 0" is not evidence of a
 renewal; the expiry date is.
 
+**Follow-up, the same day: `.env` must never be sourced.** The first live
+`./renew-cert.sh --force` confirmed the WARN path (*same certificate*,
+nothing restarted) and printed `.env: line 48: syntax error near unexpected
+token '('`. `GW_NAME=DLNA Gateway (IINA)` is valid for the app's loader and
+invalid shell, and `.` abandons the rest of the file on a syntax error: every
+key after line 48 had been silently missing for this script, on every
+scheduled Monday run, into a `/tmp` stderr nobody reads. It still worked only
+because `TAILSCALE_CERT_HOST` sits on line 28. Worse than fragile: sourcing
+*executes* the file, so `KEY=x word` runs `word`. The script now reads each
+key with `env_get` (environment first, then the last matching `.env` line,
+quotes stripped). A test asserts that a `KEY=x touch <file>` line creates no
+file; it failed on the sourcing version.
+
 ---
 
 ## 568404d — 20260921 — 849 covers found, 67 albums gained one

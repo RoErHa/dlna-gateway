@@ -112,6 +112,36 @@ class TestRenewCert(unittest.TestCase):
         self.assertIn("/com.x.reader", calls)
         self.assertIn("ERROR", log)
 
+    def test_a_line_that_is_not_valid_shell_does_not_hide_later_keys(self):
+        # The real .env, 2026-10-23: `GW_NAME=DLNA Gateway (IINA)` is fine for
+        # the app's loader and a SYNTAX ERROR to `.`, which abandoned every
+        # key after line 48 — CERT_RELOAD_LABELS among them.
+        self._tailscale(renews=True)
+        rc, _, calls = self._run(["GW_NAME=DLNA Gateway (IINA)",
+                                  "CERT_RELOAD_LABELS=com.x.gateway,com.x.reader"])
+        self.assertEqual(rc, 0)
+        self.assertIn("/com.x.reader", calls)
+
+    def test_a_value_in_env_is_never_executed(self):
+        # Sourcing runs `KEY=value word` as the command `word`. A config file
+        # must never be able to run anything.
+        marker = os.path.join(self.dir, "pwned")
+        self._tailscale(renews=False)
+        self._run([f"OWNED=x touch {marker}"])
+        self.assertFalse(os.path.exists(marker), ".env content was executed")
+
+    def test_the_real_environment_still_wins_over_env(self):
+        self._tailscale(renews=True)
+        with open(os.path.join(self.dir, ".env"), "w") as fh:
+            fh.write(f"TAILSCALE_CERT_HOST={HOST}\nCERT_RELOAD_LABELS=com.x.fromfile\n")
+        env = {"PATH": f"{self.bin}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+               "HOME": self.dir, "CERT_RELOAD_LABELS": "com.x.fromenv"}
+        subprocess.run(["bash", os.path.join(self.dir, "renew-cert.sh")],
+                       env=env, capture_output=True, text=True, cwd=self.dir)
+        calls = open(self.calls).read()
+        self.assertIn("/com.x.fromenv", calls)
+        self.assertNotIn("/com.x.fromfile", calls)
+
     def test_a_cert_with_time_left_is_left_alone(self):
         _cert(self.crt, self.key, days=90)
         self._tailscale(renews=True)
