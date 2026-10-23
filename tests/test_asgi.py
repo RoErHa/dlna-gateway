@@ -32,12 +32,32 @@ from dlna_asgi_bridge import run_legacy_sync
 from dlna_config import VERSION
 
 
+def _flatten(routes):
+    """Leaf routes, whatever FastAPI does with `include_router`.
+
+    Up to 0.136 it COPIED an included router's routes into `app.routes`;
+    from 0.161 it appends one opaque `_IncludedRouter` per router instead
+    (found by tools/upgrade.py, 2026-10-23). Duck-typed on
+    `original_router` so both versions are answered. The routers here carry
+    no prefix, so a leaf's `path` is its served path."""
+    for r in routes:
+        inner = getattr(r, "original_router", None)
+        if inner is not None:
+            yield from _flatten(inner.routes)
+        else:
+            yield r
+
+
+def _all_routes():
+    return list(_flatten(dlna_asgi.app.routes))
+
+
 class TestAsgiSkeleton(unittest.TestCase):
     def test_app_exists(self):
         self.assertIsNotNone(dlna_asgi.app)
 
     def test_version_route_registered(self):
-        paths = {getattr(r, "path", None) for r in dlna_asgi.app.routes}
+        paths = {getattr(r, "path", None) for r in _all_routes()}
         self.assertIn("/api/version", paths)
 
     def test_version_handler_returns_version(self):
@@ -82,11 +102,11 @@ class TestLegacyBridge(unittest.TestCase):
 
 class TestBridgeWiring(unittest.TestCase):
     def _route_count(self, path):
-        return sum(1 for r in dlna_asgi.app.routes
+        return sum(1 for r in _all_routes()
                    if getattr(r, "path", None) == path)
 
     def _paths(self):
-        return {getattr(r, "path", None) for r in dlna_asgi.app.routes}
+        return {getattr(r, "path", None) for r in _all_routes()}
 
     def test_still_bridged_routes_present(self):
         p = self._paths()
@@ -132,7 +152,7 @@ class TestBrowseNativePorts(unittest.TestCase):
 
     def test_registered_exactly_once(self):
         for path in self._BROWSE:
-            n = sum(1 for r in dlna_asgi.app.routes
+            n = sum(1 for r in _all_routes()
                     if getattr(r, "path", None) == path)
             self.assertEqual(n, 1, path)
 
@@ -173,7 +193,7 @@ class TestDecadeSearchNativePorts(unittest.TestCase):
 
     def test_registered_exactly_once(self):
         for path in self._PATHS:
-            n = sum(1 for r in dlna_asgi.app.routes
+            n = sum(1 for r in _all_routes()
                     if getattr(r, "path", None) == path)
             self.assertEqual(n, 1, path)
 
@@ -243,7 +263,7 @@ class TestStatusPlaylistFavNativePorts(unittest.TestCase):
 
     def test_registered_exactly_once(self):
         for path in self._PATHS:
-            n = sum(1 for r in dlna_asgi.app.routes
+            n = sum(1 for r in _all_routes()
                     if getattr(r, "path", None) == path)
             self.assertEqual(n, 1, path)
 
@@ -301,7 +321,7 @@ class TestPostBridge(unittest.TestCase):
 
     def _post_paths(self):
         out = set()
-        for r in dlna_asgi.app.routes:
+        for r in _all_routes():
             if "POST" in (getattr(r, "methods", None) or set()):
                 out.add(getattr(r, "path", None))
         return out
@@ -318,7 +338,7 @@ class TestPostBridge(unittest.TestCase):
     def test_gw_control_native_post(self):
         # /gw/cd/control is a NATIVE POST route now (Cleanup C), registered once.
         self.assertIn("/gw/cd/control", self._post_paths())
-        n = sum(1 for r in dlna_asgi.app.routes
+        n = sum(1 for r in _all_routes()
                 if getattr(r, "path", None) == "/gw/cd/control")
         self.assertEqual(n, 1)
 
@@ -338,7 +358,7 @@ class TestArtProxy(unittest.TestCase):
     """The /art image proxy ported native (shares api_playback.art_fetch)."""
 
     def test_registered_once_native(self):
-        n = sum(1 for r in dlna_asgi.app.routes
+        n = sum(1 for r in _all_routes()
                 if getattr(r, "path", None) == "/art")
         self.assertEqual(n, 1)
 
@@ -467,7 +487,7 @@ class TestStreamProxy(unittest.TestCase):
     """The /stream Range relay ported native as a StreamingResponse."""
 
     def test_registered_once(self):
-        n = sum(1 for r in dlna_asgi.app.routes
+        n = sum(1 for r in _all_routes()
                 if getattr(r, "path", None) == "/stream")
         self.assertEqual(n, 1)
 
@@ -711,7 +731,7 @@ class TestRadioStreamProxy(unittest.TestCase):
     """The /radio_stream ICY relay ported native as a StreamingResponse."""
 
     def test_registered_once(self):
-        n = sum(1 for r in dlna_asgi.app.routes
+        n = sum(1 for r in _all_routes()
                 if getattr(r, "path", None) == "/radio_stream")
         self.assertEqual(n, 1)
 
@@ -818,7 +838,7 @@ class TestSubsonicAsgi(unittest.TestCase):
                                               rest_path=rest_path))
 
     def test_route_registered_once(self):
-        n = sum(1 for r in dlna_asgi.app.routes
+        n = sum(1 for r in _all_routes()
                 if getattr(r, "path", None) == "/rest/{rest_path:path}")
         self.assertEqual(n, 1)
 
@@ -1024,7 +1044,7 @@ class TestSSE(unittest.TestCase):
 
     # ── the /api/events endpoint ─────────────────────────────────────
     def test_route_registered_once(self):
-        n = sum(1 for r in dlna_asgi.app.routes
+        n = sum(1 for r in _all_routes()
                 if getattr(r, "path", None) == "/api/events")
         self.assertEqual(n, 1)
 
@@ -1098,7 +1118,7 @@ class TestLastNativePorts(unittest.TestCase):
               "/api/radio/nowplaying", "/api/lyrics")
 
     def test_registered_once_native_not_bridged(self):
-        paths = [getattr(r, "path", None) for r in dlna_asgi.app.routes]
+        paths = [getattr(r, "path", None) for r in _all_routes()]
         for p in self._PATHS:
             self.assertEqual(paths.count(p), 1, p)
             self.assertIn(p, dlna_asgi._NATIVE, p)
@@ -1256,7 +1276,7 @@ class TestStaticServing(unittest.TestCase):
     app shell): /, /sw.js, /manifest.json, the generated icons, /static/*."""
 
     def _paths(self):
-        return {getattr(r, "path", None) for r in dlna_asgi.app.routes}
+        return {getattr(r, "path", None) for r in _all_routes()}
 
     def test_routes_registered(self):
         p = self._paths()
@@ -1266,7 +1286,7 @@ class TestStaticServing(unittest.TestCase):
 
     def test_static_mount_present(self):
         self.assertTrue(any(getattr(r, "name", None) == "static"
-                            for r in dlna_asgi.app.routes))
+                            for r in _all_routes()))
 
     def test_manifest_shape(self):
         r = asyncio.run(dlna_asgi._manifest())
@@ -1305,7 +1325,7 @@ class TestGwDeviceAsgi(unittest.TestCase):
     api_upnp's _gw_* helpers → byte-identical to the old device server."""
 
     def test_gw_routes_registered(self):
-        paths = {getattr(r, "path", None) for r in dlna_asgi.app.routes}
+        paths = {getattr(r, "path", None) for r in _all_routes()}
         for p in ("/gw/device.xml", "/gw/cd/desc.xml", "/gw/cd/events",
                   "/gw/cd/control"):
             self.assertIn(p, paths, p)
@@ -1524,7 +1544,7 @@ class TestRouterComposition(unittest.TestCase):
             return _re.compile("^" + out + "$")
 
         routes = [(getattr(r, "path", ""), tuple(sorted(getattr(r, "methods", []) or [])))
-                  for r in dlna_asgi.app.routes]
+                  for r in _all_routes()]
         clashes = set()
         for i, (p1, m1) in enumerate(routes):
             for p2, m2 in routes[i + 1:]:

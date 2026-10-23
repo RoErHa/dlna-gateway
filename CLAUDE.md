@@ -1158,6 +1158,22 @@ that is what launchd runs it under. `mapfile` was used in the first draft and
 failed at exactly that point — retention silently never pruned while the
 snapshot itself succeeded, which is the worst shape of bug for a backup job.
 
+## Keeping the toolchain current (weekly check)
+
+`tools/upgrade.py` reports outdated pieces plus KNOWN vulnerabilities
+(osv.dev) across brew / pip / dev pins / vendored hls.js, and `--apply`
+upgrades them into a fresh venv that the test gates must pass, with an
+automatic rollback and a `--rollback` afterwards. `upgrade-check.sh` +
+`com.roha.dlna-upgrade-check` (Saturdays 05:00) runs `--check` weekly. The
+report ends in an Attention list (DO / DECIDE / WAIT / NOTE); it notifies on
+a DO item or a DECIDE/WAIT that is NEW since last week, never on the same
+nag twice. It never applies; that stays a person's call.
+`--python 3.N` without `--apply` dry-runs a minor move (which packages lack
+a wheel). The first run, its two refusals and what they caught:
+**[docs/UPGRADE.md](docs/UPGRADE.md)**. On a FastAPI bump, remember that
+0.161 stopped flattening included routers into `app.routes`, which is why
+`tests/test_asgi.py` reads routes through `_flatten`.
+
 ## Restarting the gateway
 
 The gateway runs under launchd (LaunchAgent `com.roha.dlna-gateway`). To restart:
@@ -1513,6 +1529,7 @@ beets → `artist_mbid` → `artist_meta` → `track_credits`.
 | `immich_import.py` | Copies new Immich videos into GWMovies | Content-hash dedup is sticky; `--reimport-deleted` to undo that |
 | `infer_video_locations.py` | Location for GPS-less clips from neighbours | Real-GPS evidence only; needed `--no-device-check` |
 | `immich_people_sync.py` | Immich persons → `video_people` | Checksum match, then (name, size) — Immich checksums go stale |
+| `upgrade.py` | Whole toolchain to newest: brew (python, sqlite, openssl, ffmpeg, node…), pip, dev pins + Playwright, vendored hls.js; reports osv.dev vulns | Fresh venv, old one MOVED aside; gates decide; failure → auto-rollback, `--rollback` undoes a passed run. Brew downgrades are HELD (pinned). Brew itself is not rolled back |
 
 **Steady-state workflow for new music:** drop files →
 `beets_enrich.py --quiet` → `post_beets_reindex.py --apply`.

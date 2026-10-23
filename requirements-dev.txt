@@ -34,17 +34,17 @@
 # selector/timing behaviour and turn the UI suite red for reasons that
 # have nothing to do with the gateway.
 
-ruff==0.16.3
+ruff==0.17.2
 
-pytest==9.0.3
-pytest-playwright==0.9.0
+pytest==9.1.1
+pytest-playwright==0.10.0
 pytest-base-url==2.1.0
-playwright==1.62.0        # browsers: chromium r1234 (151), webkit r2336 (26.5)
+playwright==1.64.1        # browsers: chromium r1248 (156), webkit r2370 (27.2)
 
 # Opt-in smoke layers (safe to omit — the scripts exit with a clear
 # "not installed" message rather than failing the suite).
-selenium==4.45.0
-Appium-Python-Client==5.3.1
+selenium==4.51.0
+Appium-Python-Client==6.0.8
 
 # Doc generation (tools/gen_architecture_pdf.py → docs/ARCHITECTURE.PDF).
-reportlab==4.5.1
+reportlab==5.1.0

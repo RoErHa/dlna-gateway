@@ -1050,3 +1050,67 @@ cleanly).
 
 Drop files → `beets_enrich.py --quiet` (incremental — only new folders;
 already-seen dirs need `--revisit`) → `post_beets_reindex.py --apply`.
+
+### `tools/upgrade.py` — keep the toolchain current (2026-10-23)
+
+One command for every layer the app is built from, because security fixes
+keep landing upstream and a hand-run upgrade spans five package managers.
+
+| Layer | What | How |
+|---|---|---|
+| Homebrew | `python@3.x` + whatever `brew deps` says it links (sqlite, openssl@N, …), `ffmpeg`, `chromaprint`, `beets`, `node` | `brew upgrade` of the installed, outdated ones |
+| pip runtime | `requirements.txt` closure | FRESH venv, `--upgrade-strategy eager`, inside the deliberate major caps → `regen_lock.py` |
+| pip dev | `requirements-dev.txt` | latest, re-pinned in place; Playwright browsers reinstalled and the revisions comment regenerated |
+| vendored JS | `static/vendor/hls.min.js` | npm registry tarball, **sha512-verified against the registry `integrity`**, read in memory (never extracted to disk); same major unless `--allow-major` |
+| npm global | `appium` (if installed) | `npm install -g appium@latest` |
+
+**Where SQLite and Node actually are.** Python's `_sqlite3.so` links
+`/opt/homebrew/opt/sqlite` dynamically, so `brew upgrade sqlite` plus a
+restart patches the gateway's SQLite with no venv rebuild; the same holds
+for OpenSSL. The gateway and the PWA never run Node. The two Node copies on
+this machine are dev tooling: Homebrew `node` (which hosts Appium), and the
+private Node that Playwright **bundles inside its pip package**. That second
+copy only moves when the `playwright` package does.
+
+```bash
+python3 tools/upgrade.py                  # report: outdated + known vulns (osv.dev)
+python3 tools/upgrade.py --check          # exit 1 on a DO item, or a DECIDE/WAIT new since last time
+./upgrade-check.sh                        # what the weekly LaunchAgent runs
+python3 tools/upgrade.py --apply          # do it
+python3 tools/upgrade.py --python 3.15    # DRY RUN of the minor move: which packages lack a wheel
+python3 tools/upgrade.py --apply --python 3.15   # do it
+python3 tools/upgrade.py --rollback       # undo the last --apply
+python3 -m unittest tools.test_upgrade -v # 37 tests
+```
+
+`--apply` order: `backup-library.sh` → brew → move `.venv` to
+`~/dlna-gateway-backups/upgrade-prev/` → fresh venv → lock + dev pins →
+hls.js → `run_all.py --offline` → `--frontend-only` → kickstart → poll
+`/api/version`. A failure at any step from the venv onwards restores the
+previous venv and files and restarts on them; the gate log is kept at
+`upgrade-prev/gates.log`. Passing leaves a diff to review and commit.
+
+Rules that took evidence:
+
+- **A brew "upgrade" can be a DOWNGRADE.** On 2026-10-23 Homebrew had
+  repointed `openssl@3` to the 3.5 LTS line (alias `openssl@3.5`): stable
+  3.5.9 against an installed 3.6.5. `brew_moves` reports that as HELD and
+  `--apply` `brew pin`s it for the duration, since `brew upgrade
+  python@3.14` would otherwise drag the downgrade in as a dependency.
+- **Python's libraries are ASKED, not listed.** The same run, `python@3.14`
+  3.14.9 re-linked `_ssl` from `openssl@3` to `openssl@4`. A hardcoded
+  list would have guarded the wrong formula. `python_formulae()` reads
+  `brew deps`.
+- **`brew upgrade` also upgrades unrelated dependents** (curl, nmap, tor,
+  poppler came along on the first run). That is Homebrew keeping them
+  working, and it is expected, not a bug.
+- **`HOMEBREW_NO_INSTALL_CLEANUP=1`.** Cleanup deletes the old Python
+  Cellar while the running gateway still lazily imports stdlib modules
+  from it.
+- **The Python MINOR is opt-in** (`--python 3.15`). A new minor's compiled
+  wheels (pydantic-core, Pillow, watchdog) can lag behind its release. The
+  report tells you when one exists.
+- **Brew is not rolled back** — it has no downgrade. Everything above it is.
+- osv.dev covers PyPI and npm, not Homebrew formulae; for those, being on
+  the newest stable *is* the check.
+

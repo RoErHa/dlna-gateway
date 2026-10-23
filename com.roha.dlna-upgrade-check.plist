@@ -1,0 +1,65 @@
+<!--
+  com.roha.dlna-upgrade-check.plist  —  TEMPLATE (macOS LaunchAgent)
+  ───────────────────────────────────────────────────────────────────
+  Weekly toolchain report: is anything outdated, or KNOWN-vulnerable
+  (osv.dev)? Runs upgrade-check.sh → `tools/upgrade.py --check`. It only
+  REPORTS — applying an upgrade restarts the gateway and moves Homebrew,
+  so that stays a person's decision. Findings raise a macOS notification.
+  See docs/UPGRADE.md.
+
+  Saturday 05:00 — clear of com.roha.dlna-library-backup (Sun 03:30) and
+  com.roha.dlna-cert-renew (Mon 04:30).
+
+  Output goes to upgrade-check.log (script-managed).
+
+  BEFORE YOU INSTALL: replace `/path/to/dlna-gateway` with your clone's
+  absolute path.
+
+  INSTALL:
+    cp com.roha.dlna-upgrade-check.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.roha.dlna-upgrade-check.plist
+
+  MANAGE:
+    launchctl kickstart gui/$(id -u)/com.roha.dlna-upgrade-check   # run now
+    tail -40 /path/to/dlna-gateway/upgrade-check.log                # results
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roha.dlna-upgrade-check</string>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/dlna-gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/dlna-gateway/upgrade-check.sh</string>
+    </array>
+
+    <!-- Weekly: Saturday 05:00 (Weekday 6 = Sat on macOS launchd) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>6</integer>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dlna-upgrade-check.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dlna-upgrade-check.err</string>
+
+    <!-- PATH only (config lives in .env). brew, npm and python3 are found here. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
