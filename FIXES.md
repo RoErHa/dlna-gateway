@@ -17,6 +17,53 @@ the symptom looked like something it wasn't.
 
 ---
 
+## 8d74d5e — 20261103 — a renderer switched off mid-send killed its queue's monitor thread
+
+**Symptom.** Found by the new `chaos.py --fake-renderer`, not by a user: the
+first run passed, yet `gateway.log` held three `RendererQueue.start crashed
+for Chaos test (fake)` tracebacks ending in `ConnectionResetError: [Errno 54]`,
+logged just after the fake renderer was shut down.
+
+**What was actually wrong.** `/api/render_queue` answers 200 and starts the
+queue on a background thread, so a few starts were still sending when the run
+ended and the fake went away. A vanished renderer should have been a
+`✗ SEND FAILED`. It wasn't, because `avtransport_send` carried its OWN copy of
+the SOAP request — connect, read, status check — with no `except`. Every
+other AVTransport call goes through `_av_soap`, which catches; this one was
+written separately and never got that. One line proved it:
+`avtransport_send('http://127.0.0.1:1/av', …)` → `RAISED ConnectionRefusedError`.
+
+**Why it matters beyond the test.** The 2026-05-20 design for a renderer that
+goes off mid-track (CLAUDE.md, "Why the monitor watchdog matters") is: the
+watchdog advances, the send fails, five failures abort the queue cleanly.
+In reality the first send to the dead renderer RAISED inside the monitor
+thread, which has no catch-all — the thread died, its traceback went only to
+`/tmp/dlna-gateway.err`, and the queue was never marked stopped.
+
+**Why nothing caught it.** `TestRendererQueueSendFailure` patched
+`avtransport_send` to `return_value=False`. The mock asserted the behaviour
+the function was SUPPOSED to have, so the test could never see that it
+didn't. The two new tests use the real function against a closed port, and
+both fail on the old code.
+
+**Fix.** `avtransport_send` now goes through `_av_soap` (never raises). To
+keep the one thing the copy did better — logging a renderer's SOAP fault when
+it refuses a track — `_av_soap` returns the fault body alongside
+`HTTP <status>`; `avtransport_get_position` now checks `err` so a fault body
+is never parsed as a position. Deleting the copy also took
+`dlna_avtransport.py` from 410 back to 391 lines.
+
+**Don't.**
+- Don't hand-roll another SOAP request in `dlna_avtransport.py`; add a
+  caller of `_av_soap`. A second copy is how this one lost its `except`.
+- Don't test "a failing renderer" by mocking the transport function to
+  return False — mock below it, or point the real function at a closed port.
+- Don't forget the fake renderer before the last queue starts have settled
+  (`chaos._cleanup_fake` waits for quiet first); forgetting mid-burst is what
+  exposed this, and would otherwise leave orphan queues polling a dead port.
+
+---
+
 ## 4846067 — 20261103 — music dead, radio fine: brew deleted the Python we were running
 
 **Symptom.** From the evening of 2026-10-31 the PWA skipped every track
@@ -112,88 +159,3 @@ quotes stripped). A test asserts that a `KEY=x touch <file>` line creates no
 file; it failed on the sourcing version.
 
 ---
-
-## 568404d — 20260921 — 849 covers found, 67 albums gained one
-
-**Symptom.** "Why do so many Pink Floyd albums have no covers?" 23% of
-albums were bare, and a full fetcher pass over 1,497 of them returned
-**32**. A 2% hit rate against a service that demonstrably has the art.
-
-**What it wasn't.** Not MusicBrainz being thin, and not rate-limiting.
-Sampling the 3,998 sticky `notfound` rows showed the sources answering
-perfectly well — to a *different* question:
-
-```
-Pink Floyd | Ummagumma                 -> musicbrainz   FOUND
-Pink Floyd | Ummagumma - Studio Album  -> notfound      never will be
-```
-
-One album, two rows, opposite fates, decided by a suffix the ripper
-added. That reframed the whole thing: **the query was the defect, not
-the lookup.**
-
-**Four separate causes, all of them "a question with no possible
-answer".** Each was found by reading what the fetcher actually sent, not
-by reasoning about what it should send:
-
-1. **169 of the 1,497 were AUDIOBOOKS.** `bare_albums()` had no udn
-   filter, so the second LocalFs root was swept along with the music.
-   The literal first query of the run asked a *music* database for
-   `artist='Patrick Rothfuss' album='The Kingkiller Chronicle Book 2'`,
-   then cached the miss as a `notfound` against a book.
-2. **90 were one- or two-track strays** — a loose file in its own
-   folder. It has no cover because it is not an album.
-3. **`multi_artist` never reached `art_queries`.** The title-only query
-   — the only form that can find a compilation, and one
-   `tests/test_art_query.py` already covered — had never run in
-   production. The tests passed; the wiring did not exist.
-4. **The ENDPOINT was wrong for compilations.** Cover art attaches to a
-   **release**; a *release-group* reports art only when one of its
-   releases is flagged as the group cover:
-
-   ```
-   Harry Nilsson / Voices of the 70s
-     release-group : 0 groups   -> no art
-     release       : 1 release  -> art FOUND   (verified live)
-   ```
-
-**Proof.** After the four fixes the same fetcher ran at **78%** (849
-found / 239 notfound). Separately, reading the cover file sitting
-*beside* the music — which the indexer had never looked at, only
-embedded pictures — found art in 95 of 506 bare folders (19%).
-
-**The trap inside the fix.** Picking which image in a folder is the
-front cover is the whole problem, and both obvious rules are wrong:
-
-```
-front.jpg          2927px  2032 KB
-albumartsmall.jpg    75px     3 KB   <- "first wins" picks this
-back.jpg           2900px  3015 KB   <- "biggest wins" picks this
-```
-
-Only the NAME says which one is the front. Selection is name-first with
-a size floor as a last resort, and rejections match **whole words** —
-rejecting anything containing `cd` throws away `ACDC - cover.jpg`. Same
-substring trap `_is_junk_name` already documents, one domain over.
-
-**What the numbers did NOT do.** 849 covers found produced **+67
-folder-albums**. That is structural, not a regression: `album_art` is
-keyed `(artist, album)` while a LocalFs album is a **folder**. Expect
-the mismatch whenever those two identities meet — it is worth stating
-out loud before quoting any art statistic.
-
-**The honest stopping point.** Coverage went 77% → **85.1%** (1,913 of
-2,248). Of the 402 art-less albums at audit time, ~60% are
-compilation-shaped names no database holds (`Billboard Top 100 of
-1970`), ~22% are the strays, and only ~17% look like real releases.
-`beet fetchart` was evaluated and declined — beets knows 709 of 2,248
-albums and just **three** of the 402 without art, because the albums
-beets could not import are the same albums Cover Art Archive cannot
-find, for the same reason. A Discogs integration was scoped and also
-declined: the release-vs-release-group fix already recovers the one
-category Discogs would have served.
-
-**A measurement that was reported wrong, and corrected.** The dry run
-was quoted as "17% of notfound rows get a better query". That was 664
-rows whose query *shape* changed — not hits. Actual conversion was ~2%
-on that biased sample. Query shapes are not outcomes.
