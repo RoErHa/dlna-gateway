@@ -223,7 +223,14 @@ DB" from real fetch failures). Credentials from `.env`. Run it whenever a
 Subsonic client "feels flaky" — its first run pinned four real defects
 (no type-ahead prefix search, punctuation terms AND-blanking queries, the
 5 MB art cap, search3 ids missing `album_key`). Live + opt-in like
-`chaos.py` (NOT in `run_all.py`). Exit 0 = clean.
+`chaos.py` (NOT in `run_all.py`). Exit 0 = clean. Two search outcomes are
+KNOWN LIMITATIONS, reported but never failures (2026-11-03): an album
+findable only by its raw tag (folder display name not in FTS), and an album
+with no album tag on any track (shown as "Unknown Album" / its folder, in no
+index — `has_searchable_name`, `tests/test_subsonic_verify.py`). A
+`DUPLICATE ALBUM ID` names two albums sharing one id — so far always one
+folder mixing tagged and blank-album tracks, which the folder-album rule
+groups apart but renders identically; a client keyed by id shows one.
 
 ### Frontend test architecture (`tests/frontend/`)
 

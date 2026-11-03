@@ -95,6 +95,15 @@ def album_id(artist, album, album_key=""):
     return "al:" + base64.urlsafe_b64encode(payload.encode()).decode()
 
 
+def has_searchable_name(tracks):
+    """Can ANY search find this album? Only if some track carries an album
+    tag: FTS indexes raw tags, and an album whose tags are all blank is
+    displayed under a fallback ('Unknown Album', or its folder name) that
+    is in no index. Such an album is a known limitation, not a SEARCH MISS
+    (2026-11-03: two of these failed a run whose search was fine)."""
+    return any((t.get("album") or "").strip() for t in tracks)
+
+
 def pctl(xs, p):
     if not xs:
         return 0.0
@@ -171,16 +180,25 @@ def main():
         problems.append(
             f"ALBUM COUNT: paginated getAlbumList2={len(got_albums)} vs "
             f"DB={len(truth_albums)}")
-    ids_seen = [a.get("id") for a in got_albums]
-    if len(set(ids_seen)) != len(ids_seen):
-        problems.append(
-            f"ALBUM PAGINATION: {len(ids_seen) - len(set(ids_seen))} "
-            f"duplicate ids across pages (unstable sort?)")
+    # A repeated id is NOT necessarily paging: on 2026-11-03 all three were
+    # two different albums in ONE folder rendering to the same id (tagged
+    # tracks + a few with a blank album tag whose fallback name equals the
+    # tagged one). Name them, so the report points at the folder.
+    by_id = {}
+    for a in got_albums:
+        by_id.setdefault(a.get("id"), []).append(a)
+    for same in by_id.values():
+        if len(same) > 1:
+            counts = " + ".join(str(x.get("songCount", "?")) for x in same)
+            problems.append(
+                f"DUPLICATE ALBUM ID: {same[0].get('artist','?')!r} / "
+                f"{same[0].get('name','?')!r} — {len(same)} albums share one "
+                f"id ({counts} songs); a client keyed by id shows only one")
 
     # ── completeness: per-album song counts + search ──────────────────
     sample = rng.sample(truth_albums, min(args.album_sample,
                                           len(truth_albums)))
-    bad_counts = search_misses = display_only = 0
+    bad_counts = search_misses = display_only = untagged = 0
     el_album, el_search = [], []
     for a in sample:
         aid = album_id(a.get("artist", ""), a.get("album", ""),
@@ -203,8 +221,15 @@ def main():
         truth_tracks = db.album_tracks(
             music_udn, a.get("artist", ""), a.get("album", ""),
             album_key=a.get("album_key", "") or "")
-        raw_name = (truth_tracks[0].get("album") if truth_tracks else "") or ""
+        # The first track that HAS an album tag — not simply the first
+        # track, which in a mixed folder ('Unknown Artist/Unknown Album')
+        # can be untagged and would leave nothing to retry with.
+        raw_name = next((t.get("album") for t in truth_tracks
+                         if (t.get("album") or "").strip()), "")
         q = (a.get("album") or "")[:25].strip()
+        if truth_tracks and not has_searchable_name(truth_tracks):
+            untagged += 1
+            continue
         if len(q) >= 4:
             el, data = cli.js("search3", query=q)
             el_search.append(el)
@@ -240,8 +265,9 @@ def main():
     timings["getAlbum"] = el_album
     timings["search3"] = el_search
     print(f"album sample ({len(sample)}): {bad_counts} bad track counts, "
-          f"{search_misses} search misses, {display_only} findable only by "
-          f"raw tag (folder display name not in FTS — known limitation)")
+          f"{search_misses} search misses · known limitations, not failures: "
+          f"{display_only} findable only by raw tag (folder display name not "
+          f"in FTS), {untagged} with no album tag at all (unsearchable)")
 
     # ── cover art health ───────────────────────────────────────────────
     with_art = [a for a in truth_albums if a.get("art")]
