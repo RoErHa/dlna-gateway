@@ -25,6 +25,7 @@ import dlna_discovery as _disc
 from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
 from dlna_fdmon import start_fd_monitor
+from dlna_runtime_watch import start_runtime_watch
 from dlna_library import DB, INDEXER, DEVICE_ROLES, ART_FETCHER, get_db
 from api_upnp import (GW_UDN, gw_ssdp_announcer, gw_ssdp_byebye,  # noqa: F401
                       gw_ssdp_responder)
@@ -89,6 +90,11 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
     # rising trajectory (and an lsof breakdown in the danger zone) BEFORE it
     # exhausts the limit and crashes the gateway. See dlna_fdmon.
     start_fd_monitor()
+
+    # Runtime watch — a brew upgrade that deletes the Python we were started
+    # from leaves us half-alive (radio works, music doesn't); restart instead.
+    # See dlna_runtime_watch.
+    start_runtime_watch()
 
     # Open the library DB here, explicitly. The handle is lazy (see
     # dlna_library.get_db) so that importing the module can't migrate a live
