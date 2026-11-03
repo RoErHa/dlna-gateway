@@ -188,7 +188,17 @@ find_python
 info "Python: $PYTHON  ($("$PYTHON" --version))"
 
 check_files
+# Hold the maintenance marker while the venv may be torn down and rebuilt:
+# the running gateway's runtime watch would otherwise see its site-packages
+# vanish and restart onto a half-built venv (dlna_runtime_watch.py). The
+# file holds our PID, so a crashed run leaves a marker the watch ignores.
+# Removed BEFORE --run's exec, or the gateway would hold it itself.
+MAINT_FILE="$SCRIPT_DIR/.maintenance.pid"
+echo $$ > "$MAINT_FILE"
+trap 'rm -f "$MAINT_FILE"' EXIT
 setup_venv
+rm -f "$MAINT_FILE"
+trap - EXIT
 
 if $RESTART; then
     echo

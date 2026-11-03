@@ -48,6 +48,9 @@ Non-zero shuts the master down and launchd `KeepAlive` starts the new keg.
 
 **Don't.** Don't make it exit 0, and don't drop the `replacement_ready`
 check — exiting with nothing to restart into is a launchd respawn loop.
+And don't drop the `.maintenance.pid` deferral: `upgrade.py --apply`
+renames `.venv` aside and gates a new one for minutes — the watch would
+otherwise restart the gateway onto it before the gates have spoken.
 
 ## 15f0922 — 20261023 — a TLS failure that wasn't renewal, and two renewal bugs that were
 

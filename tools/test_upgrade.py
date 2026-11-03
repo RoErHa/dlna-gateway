@@ -253,5 +253,40 @@ class TestVtuple(unittest.TestCase):
         self.assertGreater(U.vtuple("3.15"), U.vtuple("3.9"))
 
 
+
+class TestHoldsMaintenanceMarker(unittest.TestCase):
+    """--apply and --rollback swap .venv under the running gateway; while
+    they do, the gateway's runtime watch must stand by (dlna_runtime_watch)."""
+
+    def _run_main(self, flag):
+        from unittest import mock
+        import tempfile
+        seen = {}
+        with tempfile.TemporaryDirectory() as d:
+            marker = os.path.join(d, ".maintenance.pid")
+
+            def body(*_a, **_k):
+                from dlna_runtime_watch import maintenance_holder
+                seen["holder"] = maintenance_holder(marker)
+                return 0
+
+            real = U.maintenance
+            with mock.patch.object(U, "maintenance", lambda: real(marker)), \
+                 mock.patch.object(U, "apply", body), \
+                 mock.patch.object(U, "restore_previous", body), \
+                 mock.patch.object(U, "restart_gateway", lambda: True), \
+                 mock.patch.object(sys, "argv", ["upgrade.py", flag]), \
+                 mock.patch.object(U.os, "chdir", lambda _p: None):
+                U.main()
+            self.assertFalse(os.path.exists(marker))
+        return seen.get("holder")
+
+    def test_apply_holds_marker(self):
+        self.assertEqual(self._run_main("--apply"), os.getpid())
+
+    def test_rollback_holds_marker(self):
+        self.assertEqual(self._run_main("--rollback"), os.getpid())
+
+
 if __name__ == "__main__":
     unittest.main()

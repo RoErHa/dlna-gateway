@@ -1080,7 +1080,7 @@ python3 tools/upgrade.py --apply          # do it
 python3 tools/upgrade.py --python 3.15    # DRY RUN of the minor move: which packages lack a wheel
 python3 tools/upgrade.py --apply --python 3.15   # do it
 python3 tools/upgrade.py --rollback       # undo the last --apply
-python3 -m unittest tools.test_upgrade -v # 39 tests
+python3 -m unittest tools.test_upgrade -v # 41 tests
 ```
 
 `--apply` order: `backup-library.sh` → brew → move `.venv` to
@@ -1106,7 +1106,16 @@ Rules that took evidence:
   working, and it is expected, not a bug.
 - **`HOMEBREW_NO_INSTALL_CLEANUP=1`.** Cleanup deletes the old Python
   Cellar while the running gateway still lazily imports stdlib modules
-  from it.
+  from it. A `brew upgrade` run OUTSIDE this tool has no such guard — on
+  2026-10-31 one deleted the running keg and left music dead (radio fine)
+  for 2.5 days. `dlna_runtime_watch` now restarts the gateway when that
+  happens.
+- **`--apply` / `--rollback` hold `.maintenance.pid`** for their whole run,
+  so that watch does not restart the gateway onto the half-built venv this
+  tool is still gating. `setup.sh` holds it while it (re)builds the venv
+  and releases it BEFORE `--run` execs the gateway (which would otherwise
+  hold its own marker and defer itself forever). Dead-PID markers are
+  ignored. `tools/test_upgrade.py::TestHoldsMaintenanceMarker`.
 - **The Python MINOR is opt-in** (`--python 3.15`). A new minor's compiled
   wheels (pydantic-core, Pillow, watchdog) can lag behind its release. The
   report tells you when one exists.

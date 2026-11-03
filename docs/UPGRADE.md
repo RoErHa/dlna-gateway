@@ -60,6 +60,12 @@ Two facts that are not obvious and change what "upgrade X" means:
   The previous set stays in `~/dlna-gateway-backups/upgrade-prev/` until the
   next `--apply`.
 - **Downgrades are never silent.** See the OpenSSL finding below.
+- **The gateway's runtime watch stands by while it works.** `--apply` and
+  `--rollback` hold `.maintenance.pid` (their own PID) from start to finish.
+  Without it, the watch in the running gateway would see site-packages
+  vanish when `.venv` is moved aside and restart the gateway onto the
+  half-built, not-yet-gated venv. A marker whose PID is dead (a crashed
+  run) is ignored. See `dlna_runtime_watch.py`.
 - **The Python minor is opt-in** (`--python 3.15`). The compiled packages
   for a new Python release can lag behind it.
 - **Homebrew is not rolled back.** It has no downgrade command, so it is the

@@ -72,6 +72,8 @@ import time
 import urllib.request
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT)
+from dlna_runtime_watch import maintenance  # noqa: E402  stdlib-only, safe with no .venv
 VENV = os.path.join(PROJECT, ".venv")
 VENV_PY = os.path.join(VENV, "bin", "python")
 REQS = os.path.join(PROJECT, "requirements.txt")
@@ -812,11 +814,16 @@ def main() -> int:
     args = ap.parse_args()
     os.chdir(PROJECT)
 
-    if args.rollback:
-        restore_previous()
-        return 0 if args.no_restart or restart_gateway() else 1
-    if args.apply:
-        return apply(args)
+    if args.rollback or args.apply:
+        # Both swap .venv under the running gateway and restart it at the
+        # end themselves. Hold the maintenance marker meanwhile, or the
+        # gateway's runtime watch sees site-packages vanish and restarts it
+        # onto a half-built, ungated venv (dlna_runtime_watch).
+        with maintenance():
+            if args.rollback:
+                restore_previous()
+                return 0 if args.no_restart or restart_gateway() else 1
+            return apply(args)
     return report(args)
 
 

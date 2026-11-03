@@ -25,11 +25,19 @@ path, which is the deleted one. A non-zero exit instead makes the master shut
 down and exit, and launchd's `KeepAlive` starts a fresh job from the plist,
 whose venv python resolves through `/opt/homebrew/opt/` to the NEW keg.
 
-Two refusals:
+Three refusals:
   * Never restart while there is nothing to restart INTO (`replacement_ready`):
     mid-upgrade, or python uninstalled, an exit would only become a launchd
     respawn loop. Wait, warn, and re-check.
   * Never act on one sample: brew moves files around while it works.
+  * Never restart while a MAINTENANCE run holds `.maintenance.pid`.
+    `tools/upgrade.py --apply` renames `.venv` aside and spends minutes
+    building and GATING a new one before it restarts the gateway itself;
+    without this, the watch would see site-packages vanish and restart the
+    gateway onto a half-installed, ungated venv — the one thing that tool's
+    design exists to prevent. `setup.sh` holds it while it (re)builds the
+    venv. The file holds the holder's PID, so a run that crashed and left it
+    behind is ignored rather than switching the watch off for good.
 
 Env: RUNTIME_WATCH_SEC (default 60; 0 disables).
 """
@@ -46,6 +54,48 @@ log = logging.getLogger("dlna.runtime")
 EXIT_CODE = 75
 
 Fingerprint = dict[str, tuple[int, int] | None]
+
+MAINTENANCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                ".maintenance.pid")
+
+
+def maintenance_holder(path: str = MAINTENANCE_FILE) -> int | None:
+    """PID of the live process holding the maintenance marker, or None
+    (no marker, unreadable, or its holder is dead — a stale marker)."""
+    try:
+        with open(path) as fh:
+            pid = int(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    if pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None                     # crashed run left it behind
+    except PermissionError:
+        return pid                      # alive, just not ours to signal
+    return pid
+
+
+class maintenance:
+    """`with maintenance():` — hold the marker for the duration of a venv
+    swap. Used by tools/upgrade.py; setup.sh writes the same file in bash."""
+
+    def __init__(self, path: str = MAINTENANCE_FILE):
+        self.path = path
+
+    def __enter__(self):
+        with open(self.path, "w") as fh:
+            fh.write(f"{os.getpid()}\n")
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            os.remove(self.path)
+        except FileNotFoundError:
+            log.debug("maintenance marker already gone: %s", self.path)
+        return False
 
 
 def runtime_files() -> list:
@@ -103,28 +153,41 @@ class RuntimeWatch:
 
     def __init__(self, paths=None, *, confirm: int = 2,
                  exit_fn: Callable[[int], None] = os._exit,
-                 ready_fn: Callable[[], bool] = replacement_ready):
+                 ready_fn: Callable[[], bool] = replacement_ready,
+                 holder_fn: Callable[[], int | None] = maintenance_holder):
         self.paths = list(paths if paths is not None else runtime_files())
         self.boot = fingerprint(self.paths)
         self.confirm = max(1, confirm)
         self.exit_fn = exit_fn
         self.ready_fn = ready_fn
+        self.holder_fn = holder_fn
         self.strikes = 0
         self._warned_not_ready = False
+        self._noted_holder = None
 
     def tick(self) -> str:
-        """Returns what it did: 'ok' | 'suspect' | 'waiting' | 'exit'."""
+        """Returns what it did: 'ok' | 'suspect' | 'deferred' | 'waiting' |
+        'exit'."""
         reason = stale_reason(self.boot, fingerprint(self.paths))
         if reason is None:
             if self.strikes:
                 log.info("runtime watch: runtime files are back; standing down")
             self.strikes = 0
             self._warned_not_ready = False
+            self._noted_holder = None
             return "ok"
         self.strikes += 1
         if self.strikes < self.confirm:
             log.warning(f"runtime watch: {reason} — re-checking before acting")
             return "suspect"
+        holder = self.holder_fn()
+        if holder is not None:
+            if holder != self._noted_holder:
+                log.info(f"runtime watch: {reason}, but maintenance (pid "
+                         f"{holder}) is in progress — it restarts the gateway "
+                         f"itself; standing by")
+                self._noted_holder = holder
+            return "deferred"
         if not self.ready_fn():
             if not self._warned_not_ready:
                 log.warning(f"runtime watch: {reason}, but no replacement "

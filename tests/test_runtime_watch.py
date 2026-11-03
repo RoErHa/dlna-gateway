@@ -39,7 +39,8 @@ class _Files(unittest.TestCase):
     def watch(self, confirm=2, ready=True):
         return rw.RuntimeWatch([self.a, self.b], confirm=confirm,
                                exit_fn=self.exits.append,
-                               ready_fn=lambda: ready)
+                               ready_fn=lambda: ready,
+                               holder_fn=lambda: None)
 
 
 class TestStaleReason(_Files):
@@ -117,7 +118,7 @@ class TestTick(_Files):
     def test_exits_once_replacement_arrives(self):
         ready = {"v": False}
         w = rw.RuntimeWatch([self.a], confirm=1, exit_fn=self.exits.append,
-                            ready_fn=lambda: ready["v"])
+                            ready_fn=lambda: ready["v"], holder_fn=lambda: None)
         os.remove(self.a)
         self.assertEqual(w.tick(), "waiting")
         ready["v"] = True
@@ -131,6 +132,66 @@ class TestTick(_Files):
             w.tick()
             w.tick()
         self.assertEqual(len(cm.output), 1)
+
+
+class TestMaintenance(_Files):
+    """upgrade.py --apply renames .venv aside and gates a new one for
+    minutes before restarting the gateway itself; the watch must not beat
+    it to the restart onto a half-built venv."""
+
+    def marker(self, body):
+        return self._make(".maintenance.pid", body)
+
+    def test_no_marker_no_holder(self):
+        self.assertIsNone(rw.maintenance_holder(
+            os.path.join(self.tmp.name, "absent")))
+
+    def test_live_holder(self):
+        self.assertEqual(rw.maintenance_holder(self.marker(f"{os.getpid()}\n")),
+                         os.getpid())
+
+    def test_dead_holder_is_stale(self):
+        """A crashed run must not switch the watch off for good."""
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        self.assertIsNone(rw.maintenance_holder(self.marker(str(p.pid))))
+
+    def test_garbage_marker_is_ignored(self):
+        for body in ("", "abc", "0", "-5"):
+            self.assertIsNone(rw.maintenance_holder(self.marker(body)), body)
+
+    def test_context_manager_writes_and_removes(self):
+        path = os.path.join(self.tmp.name, "m.pid")
+        with rw.maintenance(path):
+            self.assertEqual(rw.maintenance_holder(path), os.getpid())
+        self.assertFalse(os.path.exists(path))
+
+    def test_context_manager_removes_on_error(self):
+        path = os.path.join(self.tmp.name, "m.pid")
+        with self.assertRaises(RuntimeError), rw.maintenance(path):
+            raise RuntimeError("upgrade failed")
+        self.assertFalse(os.path.exists(path))
+
+    def test_held_marker_defers_the_restart(self):
+        holder = {"pid": 4242}
+        w = rw.RuntimeWatch([self.a], confirm=1, exit_fn=self.exits.append,
+                            ready_fn=lambda: True,
+                            holder_fn=lambda: holder["pid"])
+        os.remove(self.a)
+        self.assertEqual(w.tick(), "deferred")
+        self.assertEqual(w.tick(), "deferred")
+        self.assertEqual(self.exits, [])
+        holder["pid"] = None             # maintenance ended without a restart
+        self.assertEqual(w.tick(), "exit")
+
+    def test_setup_sh_releases_marker_before_exec(self):
+        """setup.sh --run EXECs the gateway in its own PID; a marker still
+        on disk then would name the gateway itself and defer it forever."""
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        text = open(os.path.join(repo, "setup.sh")).read()
+        release = text.index('rm -f "$MAINT_FILE"\ntrap - EXIT')
+        self.assertLess(text.index("setup_venv\nrm -f"), release + 20)
+        self.assertLess(release, text.index('exec "$SCRIPT_DIR/run-2.0-asgi.sh"'))
 
 
 class TestReplacementReady(unittest.TestCase):
@@ -187,7 +248,8 @@ class TestRealExit(unittest.TestCase):
             sys.path.insert(0, {repo!r})
             import dlna_runtime_watch as rw
             fd, p = tempfile.mkstemp(); os.close(fd)
-            w = rw.RuntimeWatch([p], confirm=1, ready_fn=lambda: True)
+            w = rw.RuntimeWatch([p], confirm=1, ready_fn=lambda: True,
+                                holder_fn=lambda: None)
             os.remove(p)
             threading.Thread(target=w.tick, daemon=True).start()
             time.sleep(10)

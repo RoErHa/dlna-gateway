@@ -18,6 +18,8 @@ PREPARE_PUBLIC_RELEASE.md
 __pycache__/
 *.pyc
 .venv/
+# held by setup.sh / tools/upgrade.py during a venv swap (dlna_runtime_watch)
+.maintenance.pid
 .venv
 venv/
 video_posters/

@@ -341,7 +341,7 @@ checklist**: **[docs/TESTING.md](docs/TESTING.md)**.
 | `api_radio.py` | Internet-radio API handlers (`/api/radio/*` — search, favourites, nowplaying). |
 | `dlna_lyrics.py` | On-demand lyrics fetch via lrclib.net (the network half; the cache lives in `LibraryDB`). |
 | `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. **That scanner never prunes on an untrustworthy walk** (2026-10-04): `os.walk` swallows directory errors, so a drive dropping mid-scan reads as an empty tree — on 2026-10-03 a walk that saw 0 files pruned all 4,104 videos, and the next scan re-probed and re-geocoded every one. A walk that hit an error, or saw nothing while the index holds rows, now WARNs and prunes nothing (`force=True` still clears). `tests/test_video_scan.py`. The music scanner got the same guard, finer-grained, via `dlna_walk.py`. Together those two were **295 of 400 lines**. |
-| `dlna_runtime_watch.py` | Is the Python running us still the one on disk? Fingerprints the interpreter, stdlib and venv site-packages (`st_dev`/`st_ino`) at boot and re-checks every `RUNTIME_WATCH_SEC` (60 s). Gone/replaced on 2 consecutive checks AND a launchable venv `python3` → logs CRITICAL and `os._exit(75)`: **non-zero on purpose** — hypercorn's master respawns a worker that exits 0 from its own (equally stale) interpreter path, while a non-zero exit shuts the master down so launchd `KeepAlive` restarts the job on the new keg. Exists because on 2026-10-31 a `brew upgrade` deleted the running python@3.15 keg: `:8200` dropped every request and macOS refused `/Volumes/SAMDATA` (`EPERM`) while radio kept playing — 2.5 days half-alive until a manual restart. `tests/test_runtime_watch.py` (19). |
+| `dlna_runtime_watch.py` | Is the Python running us still the one on disk? Fingerprints the interpreter, stdlib and venv site-packages (`st_dev`/`st_ino`) at boot and re-checks every `RUNTIME_WATCH_SEC` (60 s). Gone/replaced on 2 consecutive checks AND a launchable venv `python3` AND no live `.maintenance.pid` holder → logs CRITICAL and `os._exit(75)`: **non-zero on purpose** — hypercorn's master respawns a worker that exits 0 from its own (equally stale) interpreter path, while a non-zero exit shuts the master down so launchd `KeepAlive` restarts the job on the new keg. Exists because on 2026-10-31 a `brew upgrade` deleted the running python@3.15 keg: `:8200` dropped every request and macOS refused `/Volumes/SAMDATA` (`EPERM`) while radio kept playing — 2.5 days half-alive until a manual restart. **`.maintenance.pid`** (holder's PID; dead PID = ignored) is held by `tools/upgrade.py --apply/--rollback` and by `setup.sh` around `setup_venv` — without it the watch restarts the gateway onto a venv upgrade.py is still building and gating. `tests/test_runtime_watch.py` (27). |
 | `api_playlists.py` | Playlist CRUD endpoints |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
@@ -1171,7 +1171,10 @@ snapshot itself succeeded, which is the worst shape of bug for a backup job.
 (osv.dev) across brew / pip / dev pins / vendored hls.js, and `--apply`
 upgrades them into a fresh venv that the test gates must pass, with an
 automatic rollback and a `--rollback` afterwards. `upgrade-check.sh` +
-`com.roha.dlna-upgrade-check` (Saturdays 05:00) runs `--check` weekly. The
+`com.roha.dlna-upgrade-check` (Saturdays 05:00) runs `--check` weekly.
+`--apply`/`--rollback` hold `.maintenance.pid` so the gateway's runtime
+watch does not restart onto the venv still being built (see "Restarting the
+gateway"). The
 report ends in an Attention list (DO / DECIDE / WAIT / NOTE); it notifies on
 a DO item or a DECIDE/WAIT that is NEW since last week, never on the same
 nag twice. It never applies; that stays a person's call.
@@ -1214,6 +1217,28 @@ launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
 > needs `bootout` + `bootstrap`, not `kickstart`.
 
 `kill <pid> && ./setup.sh --run` is wrong — launchd will respawn the old copy before the manual one starts, leading to port conflicts.
+
+### The gateway restarts ITSELF after a brew Python swap (2026-11-03)
+
+A `brew upgrade` that replaces python@3.x deletes the old keg the running
+process was started from. The process stays up but is stale: on 2026-10-31
+the `:8200` file server dropped every request (`RemoteDisconnected`, PWA
+`MediaError code 4`) and macOS refused `/Volumes/SAMDATA` with `[Errno 1]
+Operation not permitted` while the disk was mounted. Radio, which touches
+neither, kept playing — so it looked half-alive for 2.5 days.
+`dlna_runtime_watch` now exits the worker 75 within ~2 min and launchd
+restarts the job. Tells:
+
+- `runtime watch: … is gone — … Exiting 75` (CRITICAL) → it fired.
+- `… but maintenance (pid N) is in progress` → `upgrade.py`/`setup.sh` is
+  swapping the venv and will restart the gateway itself.
+- `… but no replacement Python is installed yet` → it is waiting rather
+  than launching a respawn loop; install the Python and it proceeds.
+
+**Never wrap a venv swap without the marker.** Any new tool that moves or
+rebuilds `.venv` under a running gateway must hold `.maintenance.pid`
+(`with dlna_runtime_watch.maintenance():`) — and must not hold it across an
+`exec` of the gateway, which would then defer itself forever.
 
 ## Renderer playback diagnostics
 
