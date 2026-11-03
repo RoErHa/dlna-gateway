@@ -51,29 +51,17 @@ def avtransport_send(av_url: str, media_url: str, title: str,
     Returns True on success, False on failure.
     """
     def soap_call(action: str, body_inner: str) -> bool:
-        envelope = (
-            '<?xml version="1.0" encoding="utf-8"?>'
-            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
-            ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-            f'<s:Body>{body_inner}</s:Body></s:Envelope>'
-        ).encode()
-        parsed = urllib.parse.urlparse(av_url)
-        conn   = http.client.HTTPConnection(parsed.netloc, timeout=10)
-        try:
-            conn.request("POST", parsed.path, envelope, {
-                "Content-Type":   "text/xml; charset=utf-8",
-                "SOAPAction":     f'"urn:schemas-upnp-org:service:AVTransport:1#{action}"',
-                "Content-Length": str(len(envelope)),
-                "User-Agent":     "DLNAGateway/1.0",
-            })
-            resp = conn.getresponse()
-            body = read_capped(resp, what=f"AVTransport {action}")
-            if resp.status not in (200, 204):
-                log.error(f"AVTransport {action} → HTTP {resp.status}: {body[:800]}")
-                return False
-            return True
-        finally:
-            close_quietly(conn)
+        # Through _av_soap, so a renderer that is off or vanishes mid-send
+        # is a False, never an exception. This used to be its own copy of
+        # the request without the except: a raise here killed the queue's
+        # monitor thread instead of counting towards the 5-failure abort
+        # (found 2026-11-03 by chaos.py --fake-renderer).
+        text, err = _av_soap(av_url, action, body_inner, timeout=10)
+        if err:
+            log.error(f"AVTransport {action} → {av_url} failed: {err}"
+                      + (f": {text[:800]}" if text else ""))
+            return False
+        return True
 
     safe_url   = _xml_esc(media_url)
     safe_title = _xml_esc(title)
@@ -196,15 +184,17 @@ def avtransport_pause(av_url: str) -> bool:
         close_quietly(conn)
 
 
-def _av_soap(av_url: str, action: str,
-             body_inner: str) -> tuple[str | None, str | None]:
-    """Generic AVTransport SOAP helper.
+def _av_soap(av_url: str, action: str, body_inner: str,
+             timeout: float = 6) -> tuple[str | None, str | None]:
+    """Generic AVTransport SOAP helper. Never raises.
 
     Returns ``(text, err)``:
       * success → ``(response_body, None)``
-      * failure → ``(None, "<short reason>")`` — the reason is the
-        underlying transport error (e.g. ``[Errno 61] Connection
-        refused``, ``timed out``) or ``HTTP <status>`` for a non-2xx.
+      * transport failure → ``(None, "<short reason>")`` — e.g.
+        ``[Errno 61] Connection refused``, ``timed out``;
+      * non-2xx → ``(fault_body, "HTTP <status>")`` — the body is the
+        renderer's SOAP fault (a Naim's `714 Illegal MIME-type`), kept so
+        a failed SetAVTransportURI can log WHY.
 
     Callers use the reason to distinguish "renderer unreachable" from
     "renderer genuinely reported UNKNOWN" instead of collapsing both
@@ -216,19 +206,20 @@ def _av_soap(av_url: str, action: str,
         f'<s:Body>{body_inner}</s:Body></s:Envelope>'
     ).encode()
     parsed = urllib.parse.urlparse(av_url)
-    conn   = http.client.HTTPConnection(parsed.netloc, timeout=6)
+    conn   = http.client.HTTPConnection(parsed.netloc, timeout=timeout)
     try:
         conn.request("POST", parsed.path, envelope, {
             "Content-Type":   "text/xml; charset=utf-8",
             "SOAPAction":     f'"urn:schemas-upnp-org:service:AVTransport:1#{action}"',
             "Content-Length": str(len(envelope)),
+            "User-Agent":     "DLNAGateway/1.0",
         })
         resp = conn.getresponse()
         text = read_capped(resp, what=f"AVTransport {action}").decode(
             "utf-8", errors="replace")
         if resp.status in (200, 204):
             return text, None
-        return None, f"HTTP {resp.status}"
+        return text, f"HTTP {resp.status}"
     except Exception as e:
         log.debug(f"_av_soap {action}: {e}")
         return None, (str(e) or type(e).__name__)
@@ -297,7 +288,7 @@ def avtransport_get_position(av_url: str) -> dict:
     currently-playing URI (GetPositionInfo's <TrackURI>) — used to detect
     a gapless auto-advance to a queued SetNextAVTransportURI.
     """
-    raw, _err = _av_soap(av_url, "GetPositionInfo",
+    raw, err = _av_soap(av_url, "GetPositionInfo",
         '<u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
         '<InstanceID>0</InstanceID></u:GetPositionInfo>')
 
@@ -317,7 +308,7 @@ def avtransport_get_position(av_url: str) -> dict:
 
     result: dict = {"position": None, "duration": None,
                     "title": None, "state": None, "track_uri": None}
-    if not raw:
+    if err or not raw:                  # a fault body is not a position
         return result
     try:
         root = safe_fromstring(raw, what="avtransport")

@@ -85,6 +85,16 @@ class DeviceRoleCache:
         self._db.role_set(udn, name, location=new_location, host=new_host,
                           is_server=new_server, is_renderer=new_renderer)
 
+    def forget(self, udn: str) -> bool:
+        """Remove one device from the cache AND the DB. The host index is
+        REBUILT, not edited: another device may share the host, and its
+        roles must survive this one leaving."""
+        with self._lock:
+            known = self._cache.pop(udn, None) is not None
+            self._host_index = self._build_host_index(self._cache)
+        removed = self._db.roles_delete(udn) > 0
+        return known or removed
+
     def is_renderer(self, udn: str) -> bool:
         """True if this exact UDN is a known renderer."""
         with self._lock:

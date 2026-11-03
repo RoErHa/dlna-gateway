@@ -192,6 +192,20 @@ unaffected: the monitor thread probes independently while a queue is actually
 playing. After both fixes chaos passes and runs 400 actions in 9.5 s instead
 of 25.1 s.
 
+**12. The one write that removes devices is loopback-only (2026-11-03).**
+`POST /api/renderers/forget {udn}` (`dlna_asgi_devices.py`) exists so
+`tests/chaos.py --fake-renderer` can take its fake renderer away — the
+gateway otherwise never forgets one, and `ssdp:byebye` stays ignored on
+purpose. Every other route is open to the LAN and tailnet by design; a route
+that deletes `device_roles` rows is not something a LAN peer needs, so it
+answers **403** to anything but `127.0.0.1` / `::1`. That check is sound here
+because hypercorn terminates every connection itself — there is no proxy in
+front whose address every request would share. The damage of a misuse is
+bounded twice over: it acts on renderers only (a MediaServer's UDN is
+refused), and forgetting also releases the device's seen location, so a live
+renderer is back on the next M-SEARCH (≤ 30 s). Guarded by
+`tests/test_forget_renderer.py::TestRoute`.
+
 ### Can a media file phone home? No — and here is what keeps it that way
 
 The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with

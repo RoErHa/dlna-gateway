@@ -126,6 +126,15 @@ class RendererRegistry:
             return sorted(self._d.values(),
                           key=lambda r: now - r.last_seen)
 
+    def remove(self, udn: str) -> MediaRenderer | None:
+        """Forget a renderer (`POST /api/renderers/forget`). Returns what was
+        removed, or None. A live device comes back on its next discovery."""
+        with self._lock:
+            rnd = self._d.pop(udn, None)
+        if rnd:
+            log.info(f"[RENDERER-] {rnd.name!r}  @ {rnd.location}")
+        return rnd
+
 
 # Singletons — imported by all other modules
 SERVERS   = ServerRegistry()

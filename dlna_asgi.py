@@ -49,6 +49,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 import dlna_asgi_browse
+import dlna_asgi_devices
 import dlna_asgi_media
 import dlna_asgi_static
 import dlna_asgi_subsonic
@@ -195,6 +196,7 @@ app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url=None,
 # Grouped by surface; see the module docstring for why order is free.
 app.include_router(dlna_asgi_browse.router)
 app.include_router(dlna_asgi_artist.router)
+app.include_router(dlna_asgi_devices.router)
 app.include_router(dlna_asgi_books.router)
 app.include_router(dlna_asgi_media.router)
 app.include_router(dlna_asgi_video.router)

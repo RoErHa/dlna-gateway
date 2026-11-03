@@ -99,6 +99,18 @@ class QueueRegistry:
         with self._lock:
             return self._queues.get(udn)
 
+    def discard(self, udn: str) -> bool:
+        """Drop this UDN's queue, stopping it first if it is playing — for a
+        forgotten renderer. Queues are otherwise never evicted, and
+        `snapshot_all` would keep polling one whose renderer is gone."""
+        with self._lock:
+            q = self._queues.pop(udn, None)
+        if q is None:
+            return False
+        if q.snapshot().get("alive"):
+            q.stop()
+        return True
+
     def is_busy(self, udn: str) -> bool:
         """True iff this UDN has an active queue (renderer not stopped).
         Step C will use this to return 409 Conflict on second-session

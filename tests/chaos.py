@@ -13,6 +13,16 @@ Usage:
     python3 tests/chaos.py --base https://192.168.1.125:8443
     python3 tests/chaos.py --seed 1234                      # reproduce a failure
     python3 tests/chaos.py --quiet                          # only summary
+    python3 tests/chaos.py --fake-renderer                  # play to a fake, not the Naim/TV
+
+--fake-renderer (2026-11-03): without it, the playback actions go to EVERY
+renderer the gateway knows — a real Naim starts playing random tracks out
+loud. With it, tests/fake_renderer.py is registered with the gateway through
+real SSDP discovery (a NOTIFY sent unicast to 127.0.0.1, so no LAN device
+hears it), the run targets ONLY that renderer, and it is removed afterwards
+with the loopback-only POST /api/renderers/forget. The gateway must be on
+this machine. A cleanup that does not leave the renderer list as it was
+fails the run.
 
 Pass criteria:
   - No 5xx responses at all.
@@ -504,9 +514,13 @@ def _stderr_since(offset: int):
 
 # ── Main loop ─────────────────────────────────────────────────────
 
-def run(base, iterations, workers, seed, quiet):
+def run(base, iterations, workers, seed, quiet, only_udn=None):
     _rng = random.Random(seed)
     target = Target(base)
+    if only_udn:
+        # --fake-renderer: never let an action reach a real renderer.
+        target.renderers = [r for r in target.renderers if r["udn"] == only_udn]
+        target.udns = [only_udn]
     print(f"chaos: {target.describe()}")
     print(f"chaos: base={base}  iterations={iterations}  workers={workers}  seed={seed}")
 
@@ -613,6 +627,66 @@ def run(base, iterations, workers, seed, quiet):
     sys.exit(0)
 
 
+def _start_fake(base):
+    """Start the fake renderer and register it with the gateway at `base`."""
+    from fake_renderer import FakeRenderer
+    host = urllib.parse.urlsplit(base).hostname
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        print(f"chaos: FATAL — --fake-renderer needs the gateway on this "
+              f"machine (got {host}); its NOTIFY is sent to 127.0.0.1 only")
+        sys.exit(2)
+    fake = FakeRenderer().start()
+    print(f"chaos: fake renderer at {fake.location} — registering…")
+    if not fake.register(base, opener=_opener):
+        fake.stop()
+        print("chaos: FATAL — the gateway never listed the fake renderer "
+              "(is its SSDP listener up? see gateway.log)")
+        sys.exit(2)
+    print(f"chaos: fake renderer registered as {fake.udn}")
+    return fake
+
+
+def _quiet_for(fake, quiet_sec, max_sec) -> bool:
+    """True once the fake has received no SOAP call for `quiet_sec`."""
+    deadline = time.monotonic() + max_sec
+    last, since = sum(fake.calls.values()), time.monotonic()
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
+        now = sum(fake.calls.values())
+        if now != last:
+            last, since = now, time.monotonic()
+        elif time.monotonic() - since >= quiet_sec:
+            return True
+    return False
+
+
+def _cleanup_fake(fake, base) -> bool:
+    """Forget the fake, then shut it down. True when the gateway no longer
+    lists it AND has stopped talking to it.
+
+    Order matters. /api/render_queue answers 200 and starts the queue on a
+    background thread, so the last few starts are still in flight when the
+    run ends; forgetting first would leave them sending to a renderer that
+    is about to vanish. So: let the burst settle, forget (which stops the
+    queue while the fake still answers), then require silence for longer
+    than the monitor's 2 s poll before shutting it down."""
+    _quiet_for(fake, 1.0, 10.0)
+    calls = sum(fake.calls.values())
+    top = ", ".join(f"{k} {v}" for k, v in fake.calls.most_common(6))
+    print(f"chaos: fake renderer received {calls} SOAP call(s): {top or '—'}")
+    status = fake.forget(base, opener=_opener)
+    silent = _quiet_for(fake, 3.0, 15.0)
+    fake.stop()
+    listed = _get_json(base, "/api/renderers") or []
+    gone = not any(r.get("udn") == fake.udn for r in listed)
+    if status == 200 and gone and silent:
+        print("chaos: fake renderer forgotten — renderer list is as it was")
+        return True
+    print(f"chaos: ✗ cleanup failed — forget returned {status}, "
+          f"still listed: {not gone}, still polled after forget: {not silent}")
+    return False
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--base",       default="https://localhost:8443")
@@ -621,7 +695,21 @@ if __name__ == "__main__":
     ap.add_argument("--seed",       type=int, default=None,
                     help="seed for reproducibility (default: random)")
     ap.add_argument("--quiet",      action="store_true")
+    ap.add_argument("--fake-renderer", action="store_true",
+                    help="play to a fake renderer registered for the run, "
+                         "never to the real ones")
     args = ap.parse_args()
     if args.seed is None:
         args.seed = random.randint(1, 10**6)
-    run(args.base, args.iterations, args.workers, args.seed, args.quiet)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    fake = _start_fake(args.base) if args.fake_renderer else None
+    code = 0
+    try:
+        run(args.base, args.iterations, args.workers, args.seed, args.quiet,
+            only_udn=fake.udn if fake else None)
+    except SystemExit as e:
+        code = e.code
+    finally:
+        if fake and not _cleanup_fake(fake, args.base):
+            code = code or 1
+    sys.exit(code)

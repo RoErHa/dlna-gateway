@@ -44,6 +44,7 @@
     "dlna_asgi_books.py": 400,
     "dlna_asgi_bridge.py": 400,
     "dlna_asgi_browse.py": 400,
+    "dlna_asgi_devices.py": 400,
     "dlna_asgi_media.py": 400,
     "dlna_asgi_state.py": 400,
     "dlna_asgi_static.py": 400,

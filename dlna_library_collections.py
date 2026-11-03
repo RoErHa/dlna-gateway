@@ -99,6 +99,12 @@ class CollectionsMixin(WorklistMixin):
             conn.execute("DELETE FROM device_roles")
         return int(n)
 
+    def roles_delete(self, udn: str) -> int:
+        """Remove ONE device's row (`POST /api/renderers/forget`)."""
+        with self._pool.write() as conn:
+            return conn.execute("DELETE FROM device_roles WHERE udn=?",
+                                (udn,)).rowcount
+
     def get_lyrics(self, url: str):
         with self._pool.read() as conn:
             row = conn.execute(

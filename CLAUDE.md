@@ -84,7 +84,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **108/108 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **109/109 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -181,6 +181,7 @@ xcrun simctl boot "iPhone 15"                   # boot a sim (see boot cmds belo
 # Layer 3 — chaos simulator (live gateway, randomized + adversarial):
 python3 tests/chaos.py --iterations 500 --workers 4
 python3 tests/chaos.py --seed 42 --quiet    # reproduce a past failure
+python3 tests/chaos.py --fake-renderer      # playback to a fake renderer, never the Naim/TV
 
 # Layer 3b — /stream concurrency load test (live gateway, opt-in):
 python3 tests/load_stream.py --concurrency 40 --count 80
@@ -190,6 +191,20 @@ python3 tests/load_stream.py --gateway https://127.0.0.1:8443 --insecure --max-p
 python3 tests/subsonic_verify.py
 python3 tests/subsonic_verify.py --seed 42 --reps 5 --art-sample 40
 ```
+
+**`chaos.py` without `--fake-renderer` plays to EVERY real renderer** — the
+Naim starts playing random tracks out loud, with take-overs, stops and volume
+changes. `--fake-renderer` (2026-11-03) registers `tests/fake_renderer.py`
+with the live gateway through real discovery (an SSDP NOTIFY sent **unicast
+to 127.0.0.1**, so no LAN device hears it), targets only it, and removes it
+afterwards via the loopback-only `POST /api/renderers/forget`. The cleanup is
+checked: the renderer list must be as it was AND the gateway must stop
+talking to the fake. The fake simulates playback in time (each track "plays"
+`track_sec`, then hands over gaplessly or stops), and
+`tests/test_fake_renderer.py` (10) drives it with the gateway's own
+`_fetch_device` / `dlna_avtransport` code so it cannot drift from what a real
+renderer has to answer. Its first run found the `avtransport_send` bug under
+"Why SEND FAILED matters".
 
 `tests/load_stream.py` guards the **threadpool-starvation regression** (the
 "stops after one track" bug): it fires N concurrent full `/stream` pulls
@@ -284,6 +299,7 @@ Appium.
 | `dlna_asgi_static.py` | PWA shell serving + the generated manifest/icons. |
 | `dlna_asgi_subsonic.py` | The `/rest/*` Subsonic surface (Amperfy/CarPlay). |
 | `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
+| `dlna_asgi_devices.py` | `POST /api/renderers/forget {udn}` — the one way the gateway FORGETS a renderer (live list, `device_roles` row, playback queue, and its seen location, so a live device is rediscovered on the next M-SEARCH). **Loopback only** (403 otherwise). Built for `chaos.py --fake-renderer`'s cleanup; `ssdp:byebye` stays ignored on purpose (a Naim announcing byebye on standby would drop out of the picker). `tests/test_forget_renderer.py` (16). |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
 | `dlna_asgi_artist.py` | `GET /api/artist_info` — the ℹ️ panel's ONE request. Its own module because `dlna_asgi_browse.py` sits at 397/400, and because the panel is a feature seam that will grow. Resolves the line-up for the track's year and LABELS it, so the PWA can't promote a guess to a fact. |
 | `dlna_art_cache.py` | On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
@@ -1309,6 +1325,22 @@ The fix has two parts:
 1. `_send_current()` now checks the SOAP return and emits `✗ SEND FAILED` with the track URL for every failure.
 2. `RendererQueue._MAX_CONSECUTIVE_FAILS = 5` caps the damage: after 5 consecutive SetURI/Play failures the queue aborts itself with `⚠ ABORT`. A transient blip (1–4 failures) auto-advances past the bad track and resets the counter on the next success.
 
+**A renderer that is OFF must be a SEND FAILED, never an exception
+(2026-11-03).** `avtransport_send` carried its own copy of the SOAP request
+with no `except`, so against a renderer that was off or vanished mid-send it
+RAISED `ConnectionRefusedError` / `ConnectionResetError`. From the watchdog's
+advance that killed the queue's monitor thread instead of counting towards
+the 5-failure abort — the queue was never marked stopped, so the clean abort
+described above never happened. `TestRendererQueueSendFailure` had MOCKED
+`avtransport_send` to return False, which is exactly why it never showed.
+It now goes through `_av_soap` (never raises; a non-2xx returns the fault
+body alongside `HTTP <status>`, so a refused SetAVTransportURI still logs
+why). Found by `chaos.py --fake-renderer`, whose fake was shut down under
+queues that were still starting. Guarded by
+`test_unreachable_renderer_is_a_failure_not_an_exception` and
+`test_queue_to_an_unreachable_renderer_aborts_cleanly`, which use the REAL
+send.
+
 ### Duration parsing (`_dur_to_sec`)
 
 Track durations in `playlist_tracks` are stored as TEXT in UPnP `H:MM:SS(.fff)` format, NOT as seconds. `_dur_to_sec()` in `dlna_player.py` tolerates every format the DB stores (int, float, empty/None, `H:MM:SS.fff`, `MM:SS`, malformed strings → 0). Prior to 2026-04-23 this was `int(dur)` and blew up silently inside the daemon thread, killing playback before SetURI was ever sent. Regression-guarded by `tests/test_player.py::TestDurToSec` and `TestRendererQueueDurationSafety`.
@@ -1398,6 +1430,11 @@ reasoning, measurements and limits: **[docs/SECURITY_POSTURE.md](docs/SECURITY_P
 11. **A dead renderer is cheap** — `snapshot_all` fans out in parallel and
     `_UNREACHABLE_BACKOFF_SEC` (30 s) stops re-dialling a renderer that
     answered `UNREACHABLE`.
+12. **The one device-removing write is loopback-only** —
+    `POST /api/renderers/forget` answers 403 to any peer that is not
+    `127.0.0.1`/`::1` (hypercorn terminates every connection, so the peer
+    is real). Forgetting also releases the seen location, so even a
+    mistaken forget is undone by the next M-SEARCH. `tests/test_forget_renderer.py`.
 
 **A media file cannot phone home.** The tag reader reads a fixed allowlist of
 scalar fields (never the ID3 URL frames); art MIME is **sniffed from magic

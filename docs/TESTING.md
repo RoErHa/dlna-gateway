@@ -86,6 +86,27 @@ xcrun simctl shutdown all
 open -a Simulator                                 # optional: show the sim window
 ```
 
+**Run it with `--fake-renderer` (2026-11-03).** Without it, every playback
+action — queue take-overs, a 10,000-track queue, next/prev/stop/volume — goes
+to the real renderers the gateway knows, and the Naim plays random tracks out
+loud. With it, `tests/fake_renderer.py` is registered with the live gateway
+through real discovery and is the only renderer the run uses:
+
+- its SSDP NOTIFY is sent **unicast to 127.0.0.1:1900**, never to the
+  multicast group, so the Naim, the TV and Jellyfin never see it — and the
+  gateway's rule that LOCATION's host must be the datagram source holds;
+- it simulates playback in time: a track "plays" for `track_sec` (3 s), then
+  hands over to a `SetNextAVTransportURI` (gapless, no STOPPED) or stops,
+  which is what makes the queue monitor advance; unknown actions get a UPnP
+  401 fault;
+- afterwards it is removed with the loopback-only `POST /api/renderers/forget`
+  — after the last background queue starts have settled, and followed by a
+  check that the gateway has stopped talking to it. A cleanup that leaves the
+  renderer listed or still polled **fails the run**.
+
+The gateway must be on the same machine. `.venv/bin/python
+tests/fake_renderer.py` runs the fake on its own for poking at by hand.
+
 `chaos.py` hard-fails if it sees any 5xx, a **crash signature** is appended
 to `/tmp/dlna-gateway.err` (= silent thread death), or a snapshot takes >5s.
 Its first real-world find was the `playlist_tracks.duration` HH:MM:SS-string

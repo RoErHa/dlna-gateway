@@ -300,6 +300,34 @@ def probe_url(location: str, gw_udn: str = ""):
     _register_location(location, gw_udn)
 
 
+# ── Forgetting a renderer ─────────────────────────────────────────
+
+def forget_renderer(udn: str) -> bool:
+    """Forget a renderer completely: the live list, its `device_roles` row,
+    its playback queue (stopped first) — and its LOCATION from the seen set.
+
+    That last part is what makes forgetting safe to get wrong: without it a
+    device that is still on the network could never be registered again until
+    a restart, because `_register_location` skips every location it has seen.
+    With it, a live renderer is back on the gateway's next M-SEARCH (≤ 30 s).
+    Built for `tests/chaos.py --fake-renderer`'s cleanup; the endpoint in
+    `dlna_asgi_devices` is loopback-only. Returns False when the UDN is not a
+    renderer we know of — live, or only remembered in `device_roles` (a
+    run that crashed before cleaning up, then a restart). Acts on renderers
+    only; a pure MediaServer's UDN is refused."""
+    from dlna_player import QUEUES
+    rnd = RENDERERS.get(udn)
+    if rnd is None and not DEVICE_ROLES.is_renderer(udn):
+        return False
+    QUEUES.discard(udn)          # stop it while the renderer still answers
+    RENDERERS.remove(udn)
+    DEVICE_ROLES.forget(udn)
+    if rnd is not None:
+        with _seen_lock:
+            _seen_locations.discard(rnd.location)
+    return True
+
+
 # ── Standalone test ───────────────────────────────────────────────
 
 def _test():

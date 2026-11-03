@@ -273,6 +273,30 @@ class TestRendererQueueSendFailure(unittest.TestCase):
                              f"Aborted too late: {send.call_count} sends "
                              f"(limit {RendererQueue._MAX_CONSECUTIVE_FAILS})")
 
+    def test_unreachable_renderer_is_a_failure_not_an_exception(self):
+        """The test above MOCKS avtransport_send to return False — and that
+        mock hid the real behaviour until 2026-11-03: against a renderer that
+        is off, the REAL function raised ConnectionRefusedError, which killed
+        the monitor thread instead of counting towards the abort."""
+        import dlna_avtransport
+        self.assertFalse(dlna_avtransport.avtransport_send(
+            "http://127.0.0.1:1/av", "http://x/1.flac", "t"))
+
+    def test_queue_to_an_unreachable_renderer_aborts_cleanly(self):
+        """The same, through the queue, with the real send: no exception
+        escapes start(), and the queue stops itself."""
+        q = RendererQueue()
+        tracks = [{"url": f"http://x/t{i}", "title": f"T{i}",
+                   "duration": "0:03:00.000"} for i in range(10)]
+        with patch("dlna_avtransport.avtransport_stop", return_value=True), \
+             patch("dlna_avtransport.avtransport_probe_state",
+                   return_value=("UNREACHABLE", "refused")):
+            try:
+                q.start("http://127.0.0.1:1/av", tracks, "Off")
+                self.assertTrue(q._stop_event.is_set())
+            finally:
+                q._cancel()
+
 
 class TestRendererQueueSseEvents(unittest.TestCase):
     """R2: RendererQueue publishes a `state` SSE nudge when now-playing

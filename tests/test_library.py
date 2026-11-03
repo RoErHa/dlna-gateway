@@ -494,6 +494,13 @@ class TestDeviceRoles(unittest.TestCase):
     def test_roles_clear_on_an_empty_table_is_zero_not_an_error(self):
         self.assertEqual(self.db.roles_clear(), 0)
 
+    def test_roles_delete_removes_only_that_device(self):
+        """`POST /api/renderers/forget` must not take the neighbours with it."""
+        self._seed()
+        self.assertEqual(self.db.roles_delete("uuid:naim"), 1)
+        self.assertEqual(set(self.db.roles_load()), {"uuid:localfs"})
+        self.assertEqual(self.db.roles_delete("uuid:naim"), 0)
+
     def test_device_roles_survive_clear_udn(self):
         """Same invariant as play_counts / album_art / lyrics: re-indexing
         must not forget which devices the gateway has met."""
