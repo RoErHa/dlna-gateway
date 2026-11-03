@@ -537,7 +537,8 @@ The suite runs in layers of increasing fidelity:
   drives the real `static/` files; runs on **Chromium** by default and on
   **WebKit** via `--browser webkit` (engine parity).
 - **Opt-in real-browser smoke layers** (not in CI — they open real browsers /
-  simulators): `safari_smoke.py` (real desktop Safari), `ios_sim_smoke.py`
+  simulators): `safari_smoke.py` (real desktop Safari — quit Safari before
+  running it; a Safari that is already open can make the session time out), `ios_sim_smoke.py`
   (real Mobile Safari in the iOS Simulator via Appium), and
   `ios_permission_smoke.py` (an applesimutils permission-automation demo).
   Recent npm versions no longer run a global package's install script unless

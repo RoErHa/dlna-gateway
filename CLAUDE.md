@@ -239,6 +239,12 @@ Safari and *not* iOS. **Honest scope:** none of these can script standalone
 home-screen PWA mode, autoplay/audio-session policy or WKWebView networking —
 the real-device checklist stays the final iOS gate.
 
+**A real-Safari session timeout usually means Safari was already running**
+(2026-11-03): safaridriver attaches to it, and a long-lived Safari never
+answered — re-enabling safaridriver / Remote Automation did nothing, quitting
+Safari (`osascript -e 'quit app "Safari"'`) passed at once. Quit Safari before
+`safari_smoke.py` rather than debugging the driver.
+
 One-time setup (safaridriver, Appium, simulator runtimes), the Appium /
 `xcrun simctl` start-stop commands, and the **Mobile / PWA real-device
 checklist**: **[docs/TESTING.md](docs/TESTING.md)**.

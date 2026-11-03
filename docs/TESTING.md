@@ -21,10 +21,21 @@ the exact 2026-06-27 outage condition; see the SW cache-tiers note above).
 Deliberately **NOT** in `run_all.py`: safaridriver has no headless mode (a real
 Safari window opens), allows only one session, and needs one-time enablement.
 Setup: `.venv/bin/pip install selenium` (optional dev dep, not in
-`requirements.txt` — same as pytest/playwright) · `safaridriver --enable` ·
+`requirements.txt` — same as pytest/playwright) · `sudo safaridriver --enable` ·
 Safari → Settings → Advanced → "Show features for web developers" → Develop →
 "Allow Remote Automation". Run: `.venv/bin/python tests/frontend/safari_smoke.py`
-(exit 0 = pass). **Honest scope:** desktop Safari ≠ iOS Safari — no
+(exit 0 = pass).
+
+**If it fails with a session timeout although both switches are on, quit
+Safari first** (seen 2026-11-03, Safari 27.2). safaridriver attaches to a
+Safari that is already running, and a long-lived one with many windows never
+answered the new automation session: `sudo safaridriver --enable` and
+re-ticking "Allow Remote Automation" changed nothing, and a diagnostic run hung
+outright. `osascript -e 'quit app "Safari"'`, then re-run — it passed 3/3 at
+once. Safari restores its windows on the next launch (History → Reopen All
+Windows from Last Session if not).
+
+**Honest scope:** desktop Safari ≠ iOS Safari — no
 standalone-PWA mode, autoplay/audio-session policy, or WKWebView networking, so
 the "Mobile / PWA testing checklist" (real device) stays the iOS gate; this
 covers the Safari engine + SW class only.
