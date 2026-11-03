@@ -193,11 +193,11 @@
   </p>
 
   <div class="spec">
-    <div><span class="k">Music</span><span class="v">26,341</span></div>
+    <div><span class="k">Music</span><span class="v">27,252</span></div>
     <div><span class="k">Audiobooks</span><span class="v">11,629</span></div>
-    <div><span class="k">Videos</span><span class="v">3,977</span></div>
-    <div><span class="k">Modules</span><span class="v">87</span></div>
-    <div><span class="k">Routes</span><span class="v">75</span></div>
+    <div><span class="k">Videos</span><span class="v">4,104</span></div>
+    <div><span class="k">Modules</span><span class="v">108</span></div>
+    <div><span class="k">Routes</span><span class="v">81</span></div>
   </div>
   <p style="font-size:.82rem;color:var(--ink-faint);margin:0">
     Listeners — <code>8443</code> TLS + HTTP/2 <em>(tailnet + LAN + loopback)</em> ·
@@ -370,7 +370,7 @@
         <!-- edge -->
         <rect x="255" y="150" width="390" height="56" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
         <text x="450" y="174" text-anchor="middle" font-size="13" font-family="Chivo, sans-serif" font-weight="700" fill="currentColor">ASGI edge — FastAPI on Hypercorn</text>
-        <text x="450" y="192" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">terminates TLS + HTTP/2 · 75 routes</text>
+        <text x="450" y="192" text-anchor="middle" font-size="11" fill="currentColor" opacity=".65">terminates TLS + HTTP/2 · 81 routes</text>
 
         <line x1="450" y1="208" x2="450" y2="238" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
         <text x="462" y="228" font-size="11" fill="currentColor" opacity=".7">reads</text>
@@ -379,7 +379,7 @@
         <rect x="255" y="242" width="390" height="58" rx="2"
               fill="none" stroke="var(--accent-line)" stroke-width="2.5"/>
         <text x="450" y="267" text-anchor="middle" font-size="13" font-family="Chivo, sans-serif" font-weight="700" fill="var(--accent-line)">LibraryDB — one SQLite index</text>
-        <text x="450" y="285" text-anchor="middle" font-size="11" fill="var(--accent-line)" opacity=".85">FTS5 search · WAL · six mixins</text>
+        <text x="450" y="285" text-anchor="middle" font-size="11" fill="var(--accent-line)" opacity=".85">FTS5 search · WAL · 15 mixins</text>
 
         <line x1="450" y1="302" x2="450" y2="332" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
 
@@ -416,19 +416,21 @@
   </figure>
 
   <div class="wrap">
-    <h3>How the 89 modules group</h3>
+    <h3>How the 108 modules group</h3>
     <div class="t-scroll">
       <table>
         <thead><tr><th>Family</th><th class="num">Modules</th><th>Responsibility</th></tr></thead>
         <tbody>
-          <tr><td class="mono">dlna_library_*</td><td class="num">14</td><td>The index — schema, migrations, browse, facets, collections, videos</td></tr>
-          <tr><td class="mono">dlna_asgi_*</td><td class="num">9</td><td>The HTTP edge, split per surface</td></tr>
+          <tr><td class="mono">dlna_library_*</td><td class="num">21</td><td>The index — schema + DDL, migrations, tracks, browse, search, facets, artists, credits, collections, worklist, languages, videos</td></tr>
+          <tr><td class="mono">dlna_asgi_*</td><td class="num">11</td><td>The HTTP edge, split per surface (incl. the ℹ️ artist panel and the 🌐 book-language view)</td></tr>
           <tr><td class="mono">api_subsonic_*</td><td class="num">7</td><td>Subsonic protocol — auth, ids, browse, media, extras</td></tr>
           <tr><td class="mono">api_upnp_*</td><td class="num">7</td><td>Gateway-as-MediaServer — DIDL, descriptors, browse, SSDP</td></tr>
+          <tr><td class="mono">dlna_providers/*</td><td class="num">7</td><td>The backend seam — LocalFs split into scan, tags, art and read halves</td></tr>
           <tr><td class="mono">dlna_player_*</td><td class="num">6</td><td>Per-renderer queue, monitor, transport, volume</td></tr>
-          <tr><td class="mono">dlna_providers/*</td><td class="num">6</td><td>The backend seam</td></tr>
+          <tr><td class="mono">artist knowledge</td><td class="num">5</td><td><code>dlna_mbid</code>, <code>dlna_lineup</code>, <code>dlna_artist_fetch</code>, <code>dlna_artist_infer</code>, <code>dlna_credits</code> — pure decisions that refuse rather than guess</td></tr>
           <tr><td class="mono">api_playback_*</td><td class="num">4</td><td>Playback control, cover art, track metadata</td></tr>
-          <tr><td class="mono">…</td><td class="num">36</td><td>Discovery, proxies, indexer, config, events, SSRF guard</td></tr>
+          <tr><td class="mono">dlna_localfs_*</td><td class="num">4</td><td>The <code>:8200</code> file server, its pure HTTP helpers, boot wiring, and the root watcher</td></tr>
+          <tr><td class="mono">…</td><td class="num">36</td><td>Discovery, proxies, indexer, config, events, SSRF guard, XML safety, watchdogs</td></tr>
         </tbody>
       </table>
     </div>
@@ -436,9 +438,10 @@
       <span class="eyebrow">Enforced, not aspirational</span>
       <p>
         Every module carries a line ceiling in a committed budget file: it may
-        shrink, never grow, and a new module is held to 400 lines from birth. As of
-        v2.1.0 all 89 are within that target and the over-budget list is empty — so
-        the ratchet now behaves as a flat limit without ever having needed a flag day.
+        shrink, never grow, and a new module is held to 400 lines from birth. All
+        108 are within that target and the over-budget list is empty — it has
+        stayed that way since the debt was paid off at 84 modules — so the ratchet
+        behaves as a flat limit without ever having needed a flag day.
       </p>
     </div>
   </div>
@@ -453,28 +456,65 @@
   <p>
     This is the rule most likely to be broken by accident, because the natural
     instinct is to key user data to a track row. Instead each of these tables is
-    independent of <code>tracks</code> and untouched by <code>clear(udn)</code>:
+    independent of <code>tracks</code> and untouched by <code>clear(udn)</code>.
+    Some were authored by a person; others were earned at real cost — a
+    rate-limited MusicBrainz or lrclib round-trip per row — and a rebuild that
+    threw them away would be data loss, not tidying:
   </p>
   <div class="t-scroll">
     <table>
       <thead><tr><th>Table</th><th>Holds</th><th>Keyed by</th></tr></thead>
       <tbody>
-        <tr><td class="mono">playlists</td><td>User playlists + ⭐ favourites</td><td class="mono">url</td></tr>
-        <tr><td class="mono">album_favourites</td><td>Bookmarked albums</td><td class="mono">artist, album, album_key</td></tr>
+        <tr><td class="mono">playlists · playlist_tracks</td><td>User playlists</td><td class="mono">id · pl_id, url</td></tr>
+        <tr><td class="mono">album_favourites</td><td>Bookmarked albums — a LocalFs favourite is its folder</td><td class="mono">artist, album, album_key</td></tr>
         <tr><td class="mono">playback_positions</td><td>Audiobook resume — one row per book</td><td class="mono">album_key</td></tr>
+        <tr><td class="mono">book_meta</td><td>OpenLibrary series overlay; <code>manual</code> wins</td><td class="mono">album_key</td></tr>
+        <tr><td class="mono">book_language</td><td>ASSERTED book languages (a detected one is never stored)</td><td class="mono">album_key</td></tr>
         <tr><td class="mono">play_counts</td><td>Radio-rotation bias</td><td class="mono">url</td></tr>
         <tr><td class="mono">lyrics</td><td>Fetched lyrics, incl. sticky misses</td><td class="mono">url</td></tr>
         <tr><td class="mono">album_art</td><td>Resolved cover URLs</td><td class="mono">artist, album</td></tr>
-        <tr><td class="mono">radio_favourites</td><td>Stations (capped at 25)</td><td class="mono">station_uuid</td></tr>
+        <tr><td class="mono">track_credits</td><td>Composer / lyricist from MusicBrainz works; the file tag wins on read</td><td class="mono">url</td></tr>
+        <tr><td class="mono">artist_meta · artist_members</td><td>Artist MBID, facts, bio, band line-up</td><td class="mono">artist_key</td></tr>
+        <tr><td class="mono">radio_favourites</td><td>Stations (capped at 25, server-side)</td><td class="mono">station_uuid</td></tr>
         <tr><td class="mono">metadata_overrides</td><td>Corrections; <code>manual</code> always wins</td><td class="mono">url</td></tr>
+        <tr><td class="mono">device_roles</td><td>Which known device is a server, a renderer, or both</td><td class="mono">udn</td></tr>
       </tbody>
     </table>
   </div>
+  <p>
+    The video side has the same contract against <code>clear_videos</code>:
+    hand-set and inferred locations (<code>video_location_overrides</code>) and
+    Immich person tags (<code>video_people</code>) are re-applied after every scan.
+  </p>
   <p>
     The audiobook position is deliberately <strong>server-side and keyed to the
     book</strong>, not to a device or a session. That is what makes a book resume
     on whichever thing you pick up next — phone, car, or the PWA.
   </p>
+</section>
+
+<section class="wrap">
+  <h2><span class="n">Operations</span>What looks after itself</h2>
+  <p class="lede">
+    The gateway runs unattended on one Mac. Most of what used to need a person
+    now either heals or refuses to do damage — each rule below came from an
+    incident, written up in <code>docs/LIBRARY_RULES.md</code> or <code>FIXES.md</code>.
+  </p>
+  <div class="t-scroll">
+    <table>
+      <thead><tr><th>When</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td>A volume is not mounted</td><td>That root WAITS and is re-checked every 30 s; the others serve normally. The PWA names the drive to mount.</td></tr>
+        <tr><td>A rescan cannot read a folder</td><td>Removals under it are held back. A walk that saw no audio at all removes nothing — a dropped drive is not an emptied library.</td></tr>
+        <tr><td>The FTS5 index corrupts</td><td>Every mass-write path repairs it and retries once.</td></tr>
+        <tr><td><code>brew</code> replaces the running Python</td><td>The runtime watch exits the worker non-zero within ~2 min and launchd restarts it on the new Python — unless <code>upgrade.py</code> or <code>setup.sh</code> holds <code>.maintenance.pid</code>, since they restart it themselves.</td></tr>
+        <tr><td>A renderer goes silent mid-track</td><td>The monitor watchdog advances past it; five failed sends or five minutes out of contact stop the queue cleanly.</td></tr>
+        <tr><td>Mondays 04:30</td><td>The <code>tailscale cert</code> is renewed when under 30 days remain, and services are restarted only if the expiry actually moved.</td></tr>
+        <tr><td>Sundays 03:30</td><td><code>library.db</code> is snapshotted with SQLite's online backup, verified, and pruned to the newest eight.</td></tr>
+        <tr><td>Saturdays 05:00</td><td><code>tools/upgrade.py --check</code> reports outdated and vulnerable pieces. It never applies; that stays a person's call.</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <section class="wrap">
@@ -505,8 +545,10 @@
 </section>
 
 <footer class="wrap">
-  DLNA Gateway v2.1.0 · 26,341 music tracks + 11,629 audiobook chapters + 3,977 videos ·
-  The living reference is <code>CLAUDE.md</code>; this page is the orientation for a cold start.
+  DLNA Gateway v2.1.0 · 27,252 music tracks + 11,629 audiobook chapters + 4,104 videos ·
+  figures as of 2026-11-03 ·
+  The living reference is <code>CLAUDE.md</code> and the write-ups under <code>docs/</code>;
+  this page is the orientation for a cold start.
 </footer>
 </body>
 </html>
