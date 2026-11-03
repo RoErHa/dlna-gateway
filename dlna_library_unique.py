@@ -284,7 +284,8 @@ class UniqueMigrationsMixin:
         conn.execute(
             "CREATE UNIQUE INDEX idx_tracks_udn_url ON tracks(udn, url)")
         conn.execute(
-            "CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key)")
+            "CREATE INDEX idx_tracks_udn_album_key "
+            "ON tracks(udn, album_key, artist, album)")
         conn.execute("""
             CREATE TRIGGER tracks_ai
                 AFTER INSERT ON tracks BEGIN

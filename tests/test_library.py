@@ -460,6 +460,38 @@ class TestAllAlbumsPagination(unittest.TestCase):
         self.assertEqual(len(self.db.all_albums(self.udn)), 4)
 
 
+class TestAlbumKeyIndexIsWide(unittest.TestCase):
+    """The folder grouping's per-track "does this artist have a tagged
+    track here?" needs (artist, album) in the index — without them the
+    Albums views were measured 10x slower (2026-11-03). An existing DB
+    carries the narrow index, which IF NOT EXISTS would never replace."""
+
+    def setUp(self):
+        self._fd, self._path = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+
+    def tearDown(self):
+        os.unlink(self._path)
+
+    def _index_sql(self, db):
+        with db._pool.read() as c:
+            return c.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND name='idx_tracks_udn_album_key'").fetchone()[0]
+
+    def test_a_fresh_db_gets_the_wide_index(self):
+        self.assertIn("artist, album", self._index_sql(LibraryDB(db_file=self._path)))
+
+    def test_an_existing_narrow_index_is_widened_on_start(self):
+        db = LibraryDB(db_file=self._path)
+        with db._pool.write() as c:
+            c.execute("DROP INDEX idx_tracks_udn_album_key")
+            c.execute("CREATE INDEX idx_tracks_udn_album_key "
+                      "ON tracks(udn, album_key)")
+        self.assertNotIn("artist", self._index_sql(db))
+        self.assertIn("artist, album", self._index_sql(LibraryDB(db_file=self._path)))
+
+
 class TestDeviceRoles(unittest.TestCase):
     """The `device_roles` table had NO test coverage until 2026-08-26, which
     is why `--reset-devices` could call the long-retired `DB._connect()` and

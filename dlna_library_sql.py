@@ -112,9 +112,12 @@ def _localfs_album_name(a: str = "t") -> str:
 
     A BLANK album tag falls through to the leaf too. It used to satisfy
     `COUNT(DISTINCT album)=1` and win, so a folder where nothing declares
-    an album name rendered as an album with no name at all."""
-    return (f"CASE WHEN COUNT(DISTINCT {a}.album)=1 "
-            f"          AND COALESCE(MAX({a}.album),'')<>'' "
+    an album name rendered as an album with no name at all.
+
+    Blanks are not a second name: since a stray with no album tag can join
+    its artist's tagged album (`_localfs_album_group`), 12 tracks tagged X
+    plus 1 untagged are still album X, not a disagreement."""
+    return (f"CASE WHEN COUNT(DISTINCT NULLIF({a}.album,''))=1 "
             f"     THEN MAX({a}.album) "
             f"     ELSE {_localfs_album_leaf(a)} END")
 
@@ -163,9 +166,24 @@ def _localfs_album_group(a: str = "t") -> str:
     without it a blank-album/blank-artist track keys on '' — the same key
     the album branch uses — and the untagged strays merge into whatever
     properly-tagged album shares their folder, which is how the junk
-    folder first rendered as one 190-track 'Various Artists' record."""
+    folder first rendered as one 190-track 'Various Artists' record.
+
+    ONE exception (2026-11-03): a blank-album track whose OWN ARTIST has a
+    tagged track in the same folder is a stray of that album, and joins it.
+    Split off, it became a second album with the same artist, the same
+    fallback name and the same folder — the same id on every surface, so
+    Amperfy showed one of the two and both opened all the folder's tracks
+    (`Hootie And The Blowfish/`: 12 tagged + 1 untagged). The junk drawer
+    is untouched: there, no untagged artist also has a tagged track. The
+    test is per ARTIST, never "does anything in this folder name an
+    album?" — that question is the one the drawer's four tagged strays
+    answered yes to. Backed by idx_tracks_udn_album_key."""
     return (f"{a}.album_key, "
-            f"CASE WHEN COALESCE({a}.album,'')='' "
+            f"CASE WHEN COALESCE({a}.album,'')='' AND NOT EXISTS ("
+            f"       SELECT 1 FROM tracks {a}_s"
+            f"        WHERE {a}_s.udn={a}.udn AND {a}_s.album_key={a}.album_key"
+            f"          AND COALESCE({a}_s.artist,'')=COALESCE({a}.artist,'')"
+            f"          AND COALESCE({a}_s.album,'')<>'')"
             f"     THEN 'a:'||COALESCE({a}.artist,'') ELSE '' END")
 
 

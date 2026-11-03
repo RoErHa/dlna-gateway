@@ -235,4 +235,4 @@ CREATE TRIGGER tracks_au
                     INSERT INTO tracks_fts(rowid, title, artist, album)
                     VALUES (new.id, new.title, new.artist, new.album);
                 END;
-CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key);
+CREATE INDEX idx_tracks_udn_album_key ON tracks(udn, album_key, artist, album);

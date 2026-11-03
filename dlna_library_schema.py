@@ -106,8 +106,19 @@ class SchemaMixin:
             # here (after the table-rebuild migrations, so it isn't dropped)
             # and idempotent. NB: regenerate schema.sql when this changes —
             # tests/test_schema_sync.py enforces it.
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_udn_album_key "
-                         "ON tracks(udn, album_key)")
+            # WIDENED to (artist, album) on 2026-11-03: the folder grouping
+            # asks, per untagged track, "does this artist have a tagged
+            # track in this folder?" — without these columns that scans
+            # the folder for every row (all_albums 50 → 500 ms). An index
+            # keeps its old definition under IF NOT EXISTS, so an existing
+            # narrow one is dropped and rebuilt once.
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND name='idx_tracks_udn_album_key'").fetchone()
+            if row is None or "artist" not in (row[0] or ""):
+                conn.execute("DROP INDEX IF EXISTS idx_tracks_udn_album_key")
+                conn.execute("CREATE INDEX idx_tracks_udn_album_key "
+                             "ON tracks(udn, album_key, artist, album)")
             # One-shot album-art backfill across all existing tracks. Cheap
             # and idempotent — harvest is INSERT OR IGNORE, backfill only
             # touches tracks whose art is empty AND whose album_art exists.

@@ -217,6 +217,35 @@ and tagged rows by folder as before. Three things there are load-bearing:
 is blank; it used to satisfy `COUNT(DISTINCT album)=1` and win, so such a
 folder displayed as an album with no name at all.
 
+**A stray joins its OWN ARTIST's album (2026-11-03).** The per-artist split
+had a gap one level down: a folder of tagged tracks plus a few with a blank
+album tag BY THE SAME ARTIST split into two albums with the same artist, the
+same name (the blank group falls back to the folder leaf, which is usually
+the album's name) and the same folder — **the same id on every surface**.
+`tests/subsonic_verify.py` found three (`Hootie And The Blowfish/` 12 + 1,
+`Hall & Oates/The Very Best of…` 2 + 2, `Hawkwind/` 45 + 3). Amperfy, keyed
+by id, showed one of each pair; both opened all the folder's tracks, so the
+counts were wrong as well. Now a blank-album track whose artist has a tagged
+track in the same folder joins that album; measured on the live library it
+merged 9 albums (2,420 → 2,411) and removed every duplicate identity, with no
+new identity appearing — existing favourites and Subsonic ids are unchanged.
+
+- **The test is per ARTIST, never per folder.** "Does anything in this folder
+  name an album?" is the question the drawer's four tagged strays answered
+  yes to. In the drawer no untagged artist also has a tagged track, so it is
+  untouched (`TestUntaggedFolderIsNotOneAlbum` passes unchanged).
+- **Blanks are not a second name.** `_localfs_album_name` counts
+  `DISTINCT NULLIF(album,'')`, so 12 tracks tagged X + 1 untagged is album X,
+  not a disagreement that falls back to the folder leaf.
+- **It needs the WIDE index.** The rule is a correlated `EXISTS` per untagged
+  track; with `idx_tracks_udn_album_key` on `(udn, album_key)` alone it scans
+  the folder each time and every Albums view went ~10× slower (all albums
+  50 → 497 ms, letter H 85 → 1,007 ms). Widened to
+  `(udn, album_key, artist, album)` it is 50 → 55 ms. The schema step drops
+  and rebuilds a narrow index once, because `IF NOT EXISTS` never replaces
+  one. Guarded by `tests/test_album_grouping.py::TestStrayJoinsItsArtistsAlbum`
+  and `tests/test_library.py::TestAlbumKeyIndexIsWide`.
+
 The remaining lump is honest: ~186 files with no artist tag either, so
 there is nothing to split them by. That is a **media** problem, and no
 rebuild fixes any of this — re-reading the same files with the same blank
@@ -420,7 +449,7 @@ Two things keep that safe:
   saved before a retag, an id a client cached — falls back to the whole
   folder, because an album resolving to nothing reads as data loss.
 
-Guarded by `tests/test_album_grouping.py` (44), including a
+Guarded by `tests/test_album_grouping.py` (50), including a
 cross-surface class that round-trips the real UPnP container id and the
 real Subsonic album id — the rule is easy to undo by "fixing"
 `artist_albums` to report the aggregate again.

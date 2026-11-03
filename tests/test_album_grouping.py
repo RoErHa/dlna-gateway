@@ -525,5 +525,83 @@ class TestArtistAlbumsCarriesTheSplit(unittest.TestCase):
         self.assertEqual(r["folder_tracks"], 9)
 
 
+class TestStrayJoinsItsArtistsAlbum(unittest.TestCase):
+    """A track with no album tag, in a folder where its OWN artist has
+    tagged tracks, is a stray of that album — not a second album.
+
+    Found 2026-11-03 by `tests/subsonic_verify.py`: three folders split
+    into two albums with the same artist, the same fallback name and the
+    same folder, i.e. the SAME id on every surface. Amperfy showed one of
+    each pair; both opened all the folder's tracks; the counts were wrong."""
+
+    def setUp(self):
+        self._fd, self._p = tempfile.mkstemp(suffix=".db")
+        os.close(self._fd)
+        self.db = LibraryDB(db_file=self._p)
+        rows = []
+        # Hootie: 3 tagged with the self-titled album + 1 untagged.
+        for i in range(3):
+            rows.append(_row(f"h{i}", "Hootie", "Hootie", "Hootie", f"H{i}",
+                             f"/m/Hootie/{i}.flac"))
+        rows.append(_row("h9", "Hootie", "Hootie", "", "Stray",
+                         "/m/Hootie/9.flac"))
+        # Hawkwind: one artist folder holding two albums loose + 1 untagged.
+        rows += [_row("k1", "Hawkwind", "Hawkwind", "Alien 4", "A",
+                      "/m/Hawkwind/a.flac"),
+                 _row("k2", "Hawkwind", "Hawkwind", "Distant Horizons", "D",
+                      "/m/Hawkwind/d.flac"),
+                 _row("k3", "Hawkwind", "Hawkwind", "", "Loose",
+                      "/m/Hawkwind/z.flac")]
+        # A folder tagged by artist A with an untagged track by artist B:
+        # B has nothing tagged here, so B stays its own album.
+        rows += [_row("m1", "Mixed", "Alpha", "Alpha LP", "One",
+                      "/m/Mixed/1.flac"),
+                 _row("m2", "Mixed", "Beta", "", "Other",
+                      "/m/Mixed/2.flac")]
+        self.db.upsert_tracks(LF, rows)
+
+    def tearDown(self):
+        os.unlink(self._p)
+
+    def _albums(self, key):
+        return [a for a in self.db.all_albums(LF) if a["album_key"] == key]
+
+    def test_the_stray_joins_the_tagged_album(self):
+        (a,) = self._albums("Hootie")
+        self.assertEqual((a["album"], a["artist"], a["track_count"]),
+                         ("Hootie", "Hootie", 4))
+
+    def test_a_loose_artist_folder_stays_one_album_with_the_stray_in_it(self):
+        (a,) = self._albums("Hawkwind")
+        self.assertEqual((a["album"], a["track_count"]), ("Hawkwind", 3))
+
+    def test_another_artists_untagged_track_still_splits_off(self):
+        """Per ARTIST, never per folder — the junk-drawer rule."""
+        rows = {a["artist"]: a for a in self._albums("Mixed")}
+        self.assertEqual(set(rows), {"Alpha", "Beta"})
+        self.assertEqual(rows["Alpha"]["album"], "Alpha LP")
+        t = self.db.album_tracks(LF, "Beta", rows["Beta"]["album"],
+                                 album_key="Mixed")
+        self.assertEqual([x["title"] for x in t], ["Other"])
+
+    def test_no_two_albums_share_an_identity(self):
+        ids = [(a["artist"], a["album"], a["album_key"])
+               for a in self.db.all_albums(LF)]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_opening_it_plays_every_track(self):
+        t = self.db.album_tracks(LF, "Hootie", "Hootie", album_key="Hootie")
+        self.assertEqual(len(t), 4)
+
+    def test_every_surface_agrees(self):
+        """artist_albums, search and the genre facet group through the same
+        expression; one album each, not two."""
+        self.assertEqual(
+            [a["track_count"] for a in self.db.artist_albums(LF, "Hootie")], [4])
+        found = [a for a in self.db.search(LF, "Hootie")["albums"]
+                 if a.get("album_key") == "Hootie"]
+        self.assertEqual(len(found), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

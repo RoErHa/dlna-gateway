@@ -228,9 +228,10 @@ KNOWN LIMITATIONS, reported but never failures (2026-11-03): an album
 findable only by its raw tag (folder display name not in FTS), and an album
 with no album tag on any track (shown as "Unknown Album" / its folder, in no
 index — `has_searchable_name`, `tests/test_subsonic_verify.py`). A
-`DUPLICATE ALBUM ID` names two albums sharing one id — so far always one
-folder mixing tagged and blank-album tracks, which the folder-album rule
-groups apart but renders identically; a client keyed by id shows one.
+`DUPLICATE ALBUM ID` names two albums sharing one id; a client keyed by id
+shows only one. The three found on 2026-11-03 (one folder mixing tagged and
+blank-album tracks by the same artist) are fixed by the stray-joins rule
+under "Folder-album identity".
 
 ### Frontend test architecture (`tests/frontend/`)
 
@@ -631,7 +632,13 @@ the obvious way and broke something else.
   **per artist**, the artist branch PREFIXED `'a:'||artist`; `album_tracks`
   narrows on the ROW not the folder; narrowing may never EMPTY an album
   (fall back to the whole folder). `_localfs_album_name` falls through to
-  the folder leaf. No rebuild fixes untagged media.
+  the folder leaf. No rebuild fixes untagged media. **Exception (2026-11-03):
+  a blank-album track whose OWN artist has a tagged track in that folder
+  joins that album** — split off, it had the same artist, name and folder,
+  i.e. the same id on every surface. Per artist, never per folder (the
+  drawer stays split); needs the WIDE `idx_tracks_udn_album_key`
+  `(udn, album_key, artist, album)`, without which the Albums views ran 10×
+  slower. `tests/test_album_grouping.py::TestStrayJoinsItsArtistsAlbum`.
 - **Missing artist tags — infer, or hand it over** (2026-08-25).
   `dlna_artist_infer.infer_artist` is the ONE decision shared by
   `tools/artist_from_folder.py` and the `- Unknown Artists -` sweep.
@@ -660,7 +667,7 @@ the obvious way and broke something else.
   Naim gets one `gappears:` container, CarPlay gets order + a display-name
   marker (never change the id). An artist with no own records shows
   appearances directly. `Various Artists` never narrows.
-  `tests/test_album_grouping.py` (44), `tests/frontend/test_appears_on.py` (11),
+  `tests/test_album_grouping.py` (50), `tests/frontend/test_appears_on.py` (11),
   `tests/test_appears_on_devices.py` (10).
 - **An album has TWO dates** (2026-09-21). `year` = EDITION (`MAX` of tag
   years, `_ALBUM_EDITION_YEAR`), `year_original` = oldest recording
