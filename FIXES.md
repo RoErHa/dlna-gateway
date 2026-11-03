@@ -17,6 +17,38 @@ the symptom looked like something it wasn't.
 
 ---
 
+## 4846067 — 20261103 — music dead, radio fine: brew deleted the Python we were running
+
+**Symptom.** From the evening of 2026-10-31 the PWA skipped every track
+(`MediaError code=4`, a whole album in 14 s) while internet radio played
+normally. Nothing changed until a manual restart on 11-03 fixed it at once.
+
+**What the logs said.** `gateway.log` at 21:59:18: every `:8200` request
+ended `RemoteDisconnected: Remote end closed connection without response`;
+`/tmp/dlna-gateway.err` filled with `:8200` tracebacks (`Errno 57`) whose
+frames point into `Cellar/python@3.15/3.15.0_1/…` — with no source lines,
+because those files no longer existed. From 22:28, every video scan:
+`[Errno 1] Operation not permitted: '/Volumes/SAMDATA/GWMovies'` — the disk
+was mounted; macOS was refusing *this process*. That warning was the only
+line in the whole 11-02 log.
+
+**Cause.** `Cellar/python@3.15/3.15.2` has mtime **21:57:43** on 10-31: a
+brew upgrade (glib and clamav moved at the same minute — not `upgrade.py`)
+installed 3.15.2 and cleaned up the 3.15.0_1 keg the gateway had been
+started from 26 minutes earlier. Radio survived because its relay lives in
+the already-loaded hypercorn process and reads nothing from SAMDATA. The
+EPERM mechanism (macOS judging file access against a binary no longer on
+disk) is inference; the trigger and timing are not.
+
+**Fix.** `dlna_runtime_watch` fingerprints interpreter, stdlib and venv
+site-packages at boot and, on two consecutive mismatches with a launchable
+venv `python3` to restart into, exits the worker **75**. Not 0: hypercorn's
+master respawns a worker that exits 0 — from its own deleted interpreter.
+Non-zero shuts the master down and launchd `KeepAlive` starts the new keg.
+
+**Don't.** Don't make it exit 0, and don't drop the `replacement_ready`
+check — exiting with nothing to restart into is a launchd respawn loop.
+
 ## 15f0922 — 20261023 — a TLS failure that wasn't renewal, and two renewal bugs that were
 
 **Symptom.** epub-reader failed to start once, on 2026-08-15 13:37: hypercorn's
@@ -162,64 +194,3 @@ category Discogs would have served.
 was quoted as "17% of notfound rows get a better query". That was 664
 rows whose query *shape* changed — not hits. Actual conversion was ~2%
 on that biased sample. Query shapes are not outcomes.
-
-## 339eed0 — 20260921 — the full UI, no content, and "works on iOS but not Mac"
-
-**Symptom.** "Not seeing any content in music or audio books." Both
-libraries. The app painted its complete chrome — header, letter bar,
-panels — and never loaded a single row. Nothing in `gateway.log`.
-
-**What it wasn't.** Everything server-side was healthy, and checking that
-first is what made the real cause findable rather than guessable:
-
-```
-/api/servers   → both online: 26,548 music, 11,629 audiobook tracks
-/api/libraries → all three roots active
-/api/browse_letter, /api/albums → returning data
-volumes        → mounted
-```
-
-A fresh Chromium pointed at the live gateway rendered 100 rows. So the
-gateway was fine and the *client* was not.
-
-**The tell was the platform split.** iOS worked; the Mac didn't. That is
-not a WebKit-versus-Blink story — it means the two clients were holding
-**different files**.
-
-**Cause.** The ℹ️ Artist button was added to `index.html`, and `app.js`
-bound it at the top level:
-
-```js
-$("np-btn-artist").addEventListener("click", …)
-```
-
-`app.js` is ONE long script. A client whose cached `index.html` predated
-the button got `null` from `$()`, threw
-`Cannot read properties of null (reading 'addEventListener')`, and
-**every line below that point never ran** — including the initialisation
-that loads content. iOS happened to hold a matching pair of files and
-was unaffected.
-
-**Proved before fixing**, by serving the previous `index.html` beside the
-current `app.js` on a throwaway static server: the null throw appears,
-and disappears once bound through the guard.
-
-**Fix.** `bindClick(id, handler)` warns and skips when the element is
-absent — a missing button is cosmetic, a dead `app.js` is the whole
-application — and `APP_CACHE` v16 → v17 evicts the stale shell so clients
-pull the matching HTML. The guard makes the mismatch survivable; the
-bump is what ends it.
-
-**What would re-introduce it.** Any new `$("id").addEventListener(...)`
-at the top level of `app.js`. Bind through `bindClick`, and bump
-`APP_CACHE` whenever `index.html` gains an element `app.js` reaches for.
-Guarded by
-`tests/frontend/test_artist_panel.py::test_a_missing_control_cannot_kill_app_js`,
-which asserts both halves: an absent control returns false rather than
-throwing, and the app is still alive afterwards.
-
-**Worth remembering.** This failure mode is invisible from the server. No
-log line, no failed request, no 5xx — the gateway answered every call
-correctly throughout. When the UI is blank and the API is healthy, the
-next question is which *files* the client is holding, not what the server
-is doing.
