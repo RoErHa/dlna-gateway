@@ -243,6 +243,15 @@ One-time setup (safaridriver, Appium, simulator runtimes), the Appium /
 `xcrun simctl` start-stop commands, and the **Mobile / PWA real-device
 checklist**: **[docs/TESTING.md](docs/TESTING.md)**.
 
+**npm no longer runs Appium's install script by default** (seen 2026-11-03,
+appium 3.9.0: `install-scripts not yet covered by allowScripts`). Its
+`postinstall` installs the drivers, so a bare `npm install -g appium` — and
+`tools/upgrade.py --apply`, which runs exactly that — can leave the iOS-Sim
+smoke without a working driver. Use `npm install -g --allow-scripts=appium
+appium`, or allow it once with `npm config set allow-scripts=appium
+--location=user`. Only Layer 2c is affected; nothing in `run_all.py` uses
+Appium.
+
 ## Architecture
 
 ### Entry Point & Thread Model

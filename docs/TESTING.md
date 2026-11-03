@@ -47,7 +47,9 @@ networking; the real-device checklist stays the final iOS gate.
 One-time setup:
 ```bash
 xcodebuild -downloadPlatform iOS                 # iOS Simulator runtime (~8.5 GB)
-npm install -g appium && appium driver install xcuitest
+npm install -g --allow-scripts=appium appium && appium driver install xcuitest
+# (recent npm skips a global package's install script unless allowed; to allow
+#  it for good instead: npm config set allow-scripts=appium --location=user)
 .venv/bin/pip install Appium-Python-Client        # optional dev dep, not in requirements.txt
 ```
 

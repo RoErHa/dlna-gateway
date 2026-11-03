@@ -540,6 +540,10 @@ The suite runs in layers of increasing fidelity:
   simulators): `safari_smoke.py` (real desktop Safari), `ios_sim_smoke.py`
   (real Mobile Safari in the iOS Simulator via Appium), and
   `ios_permission_smoke.py` (an applesimutils permission-automation demo).
+  Recent npm versions no longer run a global package's install script unless
+  you allow it, and Appium needs its script to install its drivers — so
+  install or upgrade it with `npm install -g --allow-scripts=appium appium`
+  (or once: `npm config set allow-scripts=appium --location=user`).
 - **Chaos simulator** (`tests/chaos.py`) — randomized/adversarial load against a
   live gateway.
 - **Live verification tools** (opt-in, against a running gateway):
