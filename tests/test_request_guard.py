@@ -124,6 +124,15 @@ class TestOriginRule(unittest.TestCase):
         self.assertEqual(why("POST", host="192.168.1.125:8765",
                              origin="https://192.168.1.125:8443"), "")
 
+    def test_csp_reports_pass_with_a_null_origin(self):
+        """WebKit posts violation reports with Origin: null (measured live)."""
+        h = {"host": "192.168.1.125:8765", "origin": "null"}
+        self.assertEqual(g.refusal("POST", h, NAMES, "/api/csp_report"), "")
+        self.assertEqual(g.refusal("POST", h, NAMES, "/api/csp_reportx"), "origin")
+        self.assertEqual(g.refusal("POST", h, NAMES, "/api/control"), "origin")
+        self.assertEqual(g.refusal("POST", {"host": "evil.example", "origin": "null"},
+                                   NAMES, "/api/csp_report"), "host")
+
     def test_reads_are_not_judged_by_origin(self):
         self.assertEqual(why("GET", host=TS, origin="http://evil.example"), "")
 

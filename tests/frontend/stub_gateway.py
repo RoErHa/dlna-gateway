@@ -21,6 +21,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from dlna_asgi_headers import header_list
+
+# The gateway's policy, enforced — with ONE addition: 'unsafe-eval', because
+# Playwright's own wait_for_function() evaluates its predicate with eval()
+# inside the page, and the real policy (rightly) refuses that. The app itself
+# never evaluates strings; tests/test_security_headers.py greps it to keep it
+# so, which is what makes this exception safe.
+_SECURITY_HEADERS = [
+    (k, v.replace(b"script-src 'self'", b"script-src 'self' 'unsafe-eval'"))
+    for k, v in header_list("enforce")]
+
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 
@@ -191,6 +202,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a, **k):  # silence default access logging
         pass
+
+    def end_headers(self) -> None:
+        # The gateway's security headers, with the CSP ENFORCED whatever the
+        # live CSP_MODE is: the suite is where the policy is proven, and
+        # conftest.py fails any test that trips it.
+        for k, v in _SECURITY_HEADERS:
+            self.send_header(k.decode(), v.decode())
+        super().end_headers()
 
     def _capture(self, body: bytes = b"") -> dict:
         u = urlparse(self.path)

@@ -271,9 +271,59 @@ is a name you use, add it to GATEWAY_ALLOWED_HOSTS in .env`. **Do not loosen
 rule 1 to "allow any name"** — that is the rebinding hole. Not covered: the
 LocalFs file server on `:8200` is a separate server; it serves file bytes
 read-only, so rebinding there could read music, not change anything.
-Guarded by `tests/test_request_guard.py` (26) and the frontend stub, which
+Guarded by `tests/test_request_guard.py` (27) and the frontend stub, which
 answers a GET to any `QUERY_POST_ROUTES` path with 405 so a GET left in
 `app.js` fails the browser suite.
+
+**14. The PWA runs only its own script** (2026-11-04, `dlna_asgi_headers.py`,
+hardening timeline #4). Every response except `/gw/*` carries
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
+`X-Frame-Options: DENY` and a Content-Security-Policy whose point is
+`script-src 'self'`: an injected `<script>`, an inline `onclick=` or a
+`javascript:` URL does not run. That turns an escaping slip (item 4) from
+code execution into a cosmetic bug. `frame-ancestors 'none'` stops
+clickjacking. The full policy, with the reason for each source, is in the
+module docstring.
+
+What it took:
+- **46 inline handlers had to go.** `index.html` had 24 `onclick=`/
+  `onchange=` attributes and `app.js` built 22 more (mostly image `onerror=`
+  fallbacks). Markup now declares `data-act="name" data-arg="x"`,
+  `data-change="name"`, `data-onerr="hide"` or `data-onerr-text="💿"`, and
+  three delegated listeners at the top of `app.js` act on them through an
+  ALLOWLIST (`ACTIONS`), resolved at call time. **A new control gets an
+  ACTIONS entry, never an `onclick`**; the suite fails on any violation.
+- **`style-src` keeps `'unsafe-inline'`**: `app.js` writes `style=""` in
+  about 100 places. CSS cannot run script, so the trade is far cheaper than
+  it would be for script.
+- **Google Fonts** stays allowed (`fonts.googleapis.com` / `fonts.gstatic.com`).
+  Self-hosting the two fonts would remove the last third-party load from
+  the PWA; not done here.
+
+**Rollout.** `CSP_MODE` in `.env`: `report-only` (the code default until the
+policy has run clean on real devices), `enforce`, or `off`. In report-only
+the browser blocks nothing and POSTs each violation to `/api/csp_report`,
+which logs `csp ✗ violation (report-only) directive=… blocked=… page=…
+source=…:line` at most once per (directive, blocked) per 10 minutes, and at
+most 30 lines per 10 minutes in all, with bounded memory and a 16 KB body cap.
+**WebKit sends reports with `Origin: null`**, which the request guard's rule 3
+refuses for any write. Found by forcing a violation on the live gateway in
+both engines: Chromium's report arrived, WebKit's was refused, which would
+have hidden every iPhone report. The guard now lets exactly
+`/api/csp_report` skip rules 2 and 3 (the Host rule still applies). That is
+also why the overall line cap exists: any page can post a fake report. The suites cannot see a real iPhone, so
+that log is what the enforcement decision rests on.
+
+**How it is tested.** The Playwright stub serves the policy ENFORCED, and
+`tests/frontend/conftest.py` fails any test during which the page logs a
+violation; the XSS tests, which inject attack markup on purpose, are marked
+`csp_violations_expected`. The stub adds one thing, `'unsafe-eval'`, because
+Playwright's own `wait_for_function` evaluates its predicate with `eval`
+inside the page. That exception hides nothing: `tests/test_security_headers.py`
+greps `app.js`/`sw.js` for string evaluation and `index.html` for inline
+script or handlers. Verified the guard bites by removing the marker from the
+injection test (it errors). `tests/test_security_headers.py` (19),
+`tests/frontend/test_csp.py` (4).
 
 ### Can a media file phone home? No — and here is what keeps it that way
 

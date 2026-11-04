@@ -19,6 +19,8 @@ UDN test below FAILS (the attribute value truncates at the injected quote —
 nodes where the original `& < >` escaping was already sufficient; they are
 kept as guards against a future edit moving that text into an attribute.
 """
+import pytest
+
 
 _XSS_UDN = 'uuid:evil" onfocus="window.__pwned=1" autofocus x="'
 _XSS_NAME = 'Evil<img src=x onerror="window.__pwned=1">Server'
@@ -31,6 +33,12 @@ def _boot(page, stub):
         "!document.getElementById('source-sel').textContent.includes('Scanning')",
         timeout=5000,
     )
+
+
+# These inject attack markup on purpose; the CSP blocking it (and logging the
+# violation) is the second layer, not a failure. The assertions here are
+# about the FIRST layer, escaping.
+pytestmark = pytest.mark.csp_violations_expected
 
 
 def test_quote_in_udn_cannot_break_out_of_the_value_attribute(page, stub, gateway):

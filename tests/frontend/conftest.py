@@ -32,6 +32,49 @@ def gateway(stub):
     return stub.gateway
 
 
+# Every CSP violation in a test is a failure (2026-11-04): the stub serves the
+# gateway's policy ENFORCED, so a violation means a feature the policy breaks.
+# Both engines log one as "Refused to …"; the event catches the rest.
+_CSP_LISTENER = ("document.addEventListener('securitypolicyviolation', e => "
+                 "console.error('CSP violation: ' + e.effectiveDirective + ' ' "
+                 "+ e.blockedURI))")
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "csp_violations_expected: the test injects markup the "
+        "Content-Security-Policy is meant to block (XSS tests)")
+
+
+def _csp_check(page, request):
+    violations: list[str] = []
+    page.add_init_script(_CSP_LISTENER)
+    page.on("console", lambda m: violations.append(m.text)
+            if m.type == "error" and ("CSP violation" in m.text
+                                      or "Content Security Policy" in m.text
+                                      or m.text.startswith("Refused to"))
+            else None)
+    return violations
+
+
+def _fail_on_csp(violations, request):
+    if violations and not request.node.get_closest_marker("csp_violations_expected"):
+        pytest.fail("Content-Security-Policy violation(s):\n" + "\n".join(violations),
+                    pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def csp_guard(request):
+    """Any test that uses `page` (directly or via app/mobile_app) is watched."""
+    if "page" not in request.fixturenames:
+        yield
+        return
+    page = request.getfixturevalue("page")
+    violations = _csp_check(page, request)
+    yield
+    _fail_on_csp(violations, request)
+
+
 def _boot(page, stub):
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))

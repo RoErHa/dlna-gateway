@@ -84,7 +84,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **112/112 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **113/113 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -308,9 +308,10 @@ Appium.
 | `dlna_asgi_subsonic.py` | The `/rest/*` Subsonic surface (Amperfy/CarPlay). |
 | `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
 | `dlna_asgi_devices.py` | `POST /api/renderers/forget {udn}` — the one way the gateway FORGETS a renderer (live list, `device_roles` row, playback queue, and its seen location, so a live device is rediscovered on the next M-SEARCH). **Loopback only** (403 otherwise). Built for `chaos.py --fake-renderer`'s cleanup; `ssdp:byebye` stays ignored on purpose (a Naim announcing byebye on standby would drop out of the picker). `tests/test_forget_renderer.py` (16). |
-| `dlna_asgi_guard.py` | `RequestGuard` — which BROWSER requests are answered (CSRF + DNS rebinding). Pure ASGI, outermost, applies to every route and the static mount. Host must be an IP literal or a known name (`GATEWAY_ALLOWED_HOSTS`); `Sec-Fetch-Site: cross-site` only as a GET navigation; without Sec-Fetch-Site a write's `Origin` must match the Host. Devices send none of these headers and are never affected. See Security posture 13. `tests/test_request_guard.py` (26). |
+| `dlna_asgi_guard.py` | `RequestGuard` — which BROWSER requests are answered (CSRF + DNS rebinding). Pure ASGI, outermost, applies to every route and the static mount. Host must be an IP literal or a known name (`GATEWAY_ALLOWED_HOSTS`); `Sec-Fetch-Site: cross-site` only as a GET navigation; without Sec-Fetch-Site a write's `Origin` must match the Host. Devices send none of these headers and are never affected. See Security posture 13. `tests/test_request_guard.py` (27). |
 | `dlna_alerts.py` | Alerts to the owner's phone, on two channels, each OFF until its `.env` key is set: a **text message via this Mac's Messages app** (`ALERT_SMS_TO`, the owner's choice — it stays local; `dlna_alerts_sms.py`) and an ntfy push (`ALERT_PUSH_URL`/`ALERT_PUSH_TOKEN`). `alert(kind, …)` only QUEUES (bounded, one daemon sender) and is rate-limited per kind (`ALERT_MIN_INTERVAL_SEC`, 1 h), so it is safe to call from any hot path and never raises. Raised by: the runtime watch (no replacement Python → now; a self-restart → reported by the NEXT process at `on_boot` from a `.alerts/runtime-exit` marker, since a process whose Python is gone cannot be trusted with TLS), a restart loop (≥5 boots in 10 min, `.alerts/boot-history`), a root waiting > `ALERT_ROOT_WAIT_SEC` (1 h), a guard refusal (low priority), cert < 14 days, and — via the CLI `python3 dlna_alerts.py <kind> <title> <msg>` — failed backup / cert renewal / upgrade check. **Never log the URL or the number** (on ntfy.sh the topic name IS the secret). Tests are kept off both by empty `ALERT_SMS_TO`/`ALERT_PUSH_URL` and a throwaway `ALERT_STATE_DIR`, set in `tests/__init__.py` + `run_all.py`. `tests/test_alerts.py` (38). |
 | `dlna_alerts_sms.py` | The text-message channel: `osascript` drives Messages, SMS first (iPhone Text Message Forwarding), iMessage as fallback (`ALERT_SMS_SERVICE`). **The number and the text are passed as `argv`, never pasted into the AppleScript** — alert text can carry a stranger's Host header, and string-built AppleScript would run it. Needs a one-time macOS Automation grant (error -1743 until then). The number must carry `+` and the country code (`0316…` reads as a Dutch landline). Verified live 2026-11-04 from the CLI and from the launchd gateway; a weekly job's first text may still need its own grant. Cannot report the Mac itself being down — accepted: a dead Mac shows itself when you try to use it. |
+| `dlna_asgi_headers.py` | `SecurityHeaders` — nosniff, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` and the Content-Security-Policy (`script-src 'self'`) on every response except `/gw/*`; never overrides a header a route set. `CSP_MODE` (`.env`): `report-only` (default) / `enforce` / `off`. `POST /api/csp_report` logs violations (`csp ✗ violation …`, rate-limited, bounded). Mounted INSIDE the guard. See Security posture 14. `tests/test_security_headers.py` (19). |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
 | `dlna_asgi_artist.py` | `GET /api/artist_info` — the ℹ️ panel's ONE request. Its own module because `dlna_asgi_browse.py` sits at 397/400, and because the panel is a feature seam that will grow. Resolves the line-up for the track's year and LABELS it, so the PWA can't promote a guess to a fact. |
 | `dlna_art_cache.py` | On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
@@ -714,6 +715,13 @@ measurements, incidents, the things that bit — are in
   `app.js` below it (a half-updated SW cache pairs an old `index.html` with
   a new `app.js`; tell: "works on iOS, not on Mac"). Bump `APP_CACHE` when
   `index.html` gains an element `app.js` reaches for.
+- **No inline handlers — the CSP forbids them.** Use `data-act="name"
+  data-arg="x"` (+ `data-stop`), `data-change`, `<img data-onerr="hide">` /
+  `data-onerr-text="💿"`, and add the action to the `ACTIONS` allowlist at
+  the top of `app.js` (arrow wrappers — resolved at call time). The
+  Playwright stub enforces the policy and any violation fails the test;
+  XSS tests are marked `csp_violations_expected`.
+  `tests/frontend/test_csp.py` (4).
 - **SW cache tiers** (`sw.js`): `APP_CACHE` shell is **network-first** (the
   cache is the offline fallback only — stale-while-revalidate once pinned a
   broken `app.js` forever); `install` calls `skipWaiting()`
@@ -1469,6 +1477,14 @@ reasoning, measurements and limits: **[docs/SECURITY_POSTURE.md](docs/SECURITY_P
     state-changing route must be a POST; `TestWritesAreNotGets` checks the
     table. Refusals log `guard ✗ refused … ` once a minute per host.
     `tests/test_request_guard.py`.
+14. **The PWA runs only its own script** (2026-11-04,
+    `dlna_asgi_headers.py`). CSP `script-src 'self'` (no inline handlers —
+    `ACTIONS`/`data-act` instead), `frame-ancestors 'none'`, nosniff,
+    same-origin referrer. `CSP_MODE` report-only until it has run clean on
+    real devices; violations log as `csp ✗ violation`. The browser stub adds
+    only `'unsafe-eval'` (Playwright's predicates), and
+    `TestTheAppNeedsNoLooseScript` keeps the app eval-free. **Never add
+    `'unsafe-inline'` to `script-src`.**
 
 **Hardening timeline** — the November 2026 review's recommendations
 (browser guard, off-disk backups, alerts, security headers, optional web

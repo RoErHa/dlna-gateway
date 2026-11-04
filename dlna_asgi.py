@@ -58,6 +58,7 @@ import dlna_asgi_video
 import dlna_routes
 from dlna_asgi_bridge import make_bridged_route
 from dlna_asgi_guard import RequestGuard
+import dlna_asgi_headers
 from dlna_asgi_state import DB, INDEXER, PLAIN_PORT, SERVERS  # noqa: F401
 from dlna_config import VERSION, raise_fd_limit  # noqa: F401
 from dlna_events import EVENTS
@@ -198,6 +199,7 @@ app = FastAPI(title="DLNA Gateway", version=VERSION, docs_url=None,
 app.include_router(dlna_asgi_browse.router)
 app.include_router(dlna_asgi_artist.router)
 app.include_router(dlna_asgi_devices.router)
+app.include_router(dlna_asgi_headers.router)
 app.include_router(dlna_asgi_books.router)
 app.include_router(dlna_asgi_media.router)
 app.include_router(dlna_asgi_video.router)
@@ -263,6 +265,10 @@ for _path, _handler in dlna_routes.QUERY_POST_ROUTES.items():
 
 # ── Static mount ─────────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# ── Security headers (CSP, nosniff, framing, referrer) ──────────────
+# Inside the guard, so a 403 is still a bare refusal. See dlna_asgi_headers.
+app.add_middleware(dlna_asgi_headers.SecurityHeaders)
 
 # ── Browser request guard (CSRF + DNS rebinding) ─────────────────────
 # Outermost, so it sees every request — routes, the static mount and the

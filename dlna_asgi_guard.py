@@ -71,6 +71,13 @@ import dlna_alerts
 log = logging.getLogger("dlna.guard")
 
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
+# CSP violation reports (dlna_asgi_headers). WebKit sends them with
+# `Origin: null`, which rule 3 rightly refuses for a real write — measured
+# live 2026-11-04, and it would have hidden every iPhone/Safari report, the
+# ones the report-only rollout exists for. A report can only add a
+# rate-limited, globally capped log line, so it skips rules 2 and 3; the Host
+# rule still applies.
+_REPORT_PATHS = frozenset({"/api/csp_report"})
 _WARN_EVERY_SEC = 60.0
 _WARN_KEYS_MAX = 256        # the rate-limit memory must stay bounded too
 
@@ -127,12 +134,14 @@ def host_allowed(host_value: str, names: frozenset) -> bool:
     return bool(name) and (_is_ip(name) or name in names)
 
 
-def refusal(method: str, headers: dict, names: frozenset) -> str:
+def refusal(method: str, headers: dict, names: frozenset, path: str = "") -> str:
     """Why this request must be refused — '' when it may proceed. `headers`
     is lowercased name → value. Pure, so the rules are tested directly."""
     host = headers.get("host") or headers.get(":authority", "")
     if not host_allowed(host, names):
         return "host"
+    if method == "POST" and path in _REPORT_PATHS:
+        return ""
     site = headers.get("sec-fetch-site", "").lower()
     if site == "cross-site":
         if method in _SAFE_METHODS and \
@@ -162,7 +171,8 @@ class RequestGuard:
             return
         headers = {k.decode("latin-1").lower(): v.decode("latin-1")
                    for k, v in scope.get("headers") or ()}
-        why = refusal(scope.get("method", "GET").upper(), headers, self.names)
+        why = refusal(scope.get("method", "GET").upper(), headers, self.names,
+                      str(scope.get("path", "")))
         if not why:
             await self.app(scope, receive, send)
             return

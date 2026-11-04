@@ -19,7 +19,7 @@ comes up, and note why.
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
 | 2 | Off-disk copy of the library backups | 2026-11-08 | ☐ open — the owner does it, weekend of 7–8 Nov |
 | 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
-| 4 | Security headers on the web app | 2026-11-25 | ☐ open |
+| 4 | Security headers on the web app | 2026-11-25 | ◐ built 2026-11-04, CSP report-only; enforce ~2026-11-11 if the log stays clean |
 | 5 | Optional login for the web app | 2026-12-09 | ☐ open — **go/no-go not decided** |
 | 6 | Rate limiting on Subsonic logins | 2026-12-16 | ☐ open — **go/no-go not decided** |
 
@@ -175,7 +175,31 @@ secrets.
 
 ## 4. Security headers on the web app — target 2026-11-25
 
-- [ ] Not started.
+- [ ] **Built 2026-11-04; CSP in report-only.** `dlna_asgi_headers.py`,
+  SECURITY_POSTURE item 14. Tick when `CSP_MODE` defaults to `enforce`.
+
+Progress against "done when":
+- [x] the shell and the API send `Content-Security-Policy` (report-only for
+  now), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`
+  and `frame-ancestors 'none'` (+ `X-Frame-Options: DENY`);
+- [x] report-only first: live since 2026-11-04, violations logged as
+  `csp ✗ violation …` via `/api/csp_report`;
+- [ ] enforced, once a week of real use (iPhone PWA, Mac, iPad) has logged no
+  violations. **Check due 2026-11-11**: `grep "csp ✗" gateway.log`, then flip
+  `DEFAULT_MODE` to `enforce`;
+- [x] both engines pass the browser suite with the CSP ENFORCED, and any
+  violation fails the test;
+- [x] real-Safari smoke and its poison-recovery check pass with the policy
+  ENFORCED (the smoke runs against the stub), 2026-11-04;
+- [x] `/gw/*` is untouched (tested); byte relays get only the headers, which
+  renderers never see.
+
+**What it took.** 46 inline handlers (`onclick=`, image `onerror=`) became
+`data-act` / `data-onerr` attributes handled by delegated listeners through
+an allowlist; `style-src` keeps `'unsafe-inline'` (about 100 `style=""` in
+generated HTML; CSS cannot run script). Playwright's `wait_for_function`
+uses `eval` inside the page, so the stub's policy adds `'unsafe-eval'`, and a
+unit test keeps the app itself eval-free.
 
 **Why.** Expected in a public project, and cheap defence in depth.
 - A Content-Security-Policy limits what an injected script could do.

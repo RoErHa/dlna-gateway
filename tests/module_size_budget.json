@@ -48,6 +48,7 @@
     "dlna_asgi_browse.py": 400,
     "dlna_asgi_devices.py": 400,
     "dlna_asgi_guard.py": 400,
+    "dlna_asgi_headers.py": 400,
     "dlna_asgi_media.py": 400,
     "dlna_asgi_state.py": 400,
     "dlna_asgi_static.py": 400,

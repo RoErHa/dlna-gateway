@@ -17,6 +17,17 @@ with nothing in the log. That is not hypothetical: a half-updated
 Service Worker cache pairs an OLD `index.html` with a NEW `app.js`, and
 adding the ℹ️ button did exactly this to a live client. The tell was
 "works on iOS but not on Mac" — iOS had a matching pair of files.
+**No inline handlers — the CSP forbids them (2026-11-04).** Markup built
+in `app.js` or written in `index.html` declares what it wants instead:
+`data-act="name" data-arg="x"` (click; add `data-stop` for what
+`event.stopPropagation()` did), `data-change="name"` (gets `el.value`),
+`<img data-onerr="hide">` or `<img data-onerr-text="💿">`. Three delegated
+listeners near the top of `app.js` act on them through the `ACTIONS`
+allowlist, whose entries are arrow wrappers so a `const` declared further
+down is resolved at call time (a direct reference would throw and kill the
+script). An `onclick="…"` written today does nothing in an enforced browser
+and fails the suite. See docs/SECURITY_POSTURE.md item 14.
+
 **New controls bind through `bindClick(id, handler)`**, which warns and
 skips when the element is absent: a missing button is cosmetic, a dead
 `app.js` is the whole application. Bump `APP_CACHE` when `index.html`

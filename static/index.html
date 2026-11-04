@@ -21,7 +21,7 @@
   <div class="sep"></div>
   <div class="hdr-pick">
     <span class="hdr-pick-label">SRC</span>
-    <select id="source-sel" onchange="selectSource(this.value)" title="Library source">
+    <select id="source-sel" data-change="selectSource" title="Library source">
       <option value="">Scanning…</option>
     </select>
   </div>
@@ -42,14 +42,14 @@
   <div class="hdr-right" id="hdr-status">Ready</div>
 </header>
 <div class="tab-bar">
-  <div class="tab active" id="tab-browse" onclick="showTab('browse')">Browse</div>
-  <div class="tab" id="tab-search" onclick="showTab('search')">Search</div>
+  <div class="tab active" id="tab-browse" data-act="showTab" data-arg="browse">Browse</div>
+  <div class="tab" id="tab-search" data-act="showTab" data-arg="search">Search</div>
   <!-- Tablet-width only (768–1023px): at that size the playlist column is
        dropped so the player has room, so these two need a way in. Hidden
        by CSS on phone (bottom nav owns navigation) and on desktop (the
        panel is permanently on screen). -->
-  <div class="tab tablet-only" id="tab-playlists" onclick="showTab('playlists')">Playlists</div>
-  <div class="tab tablet-only" id="tab-favourites" onclick="showTab('favourites')">Favourites</div>
+  <div class="tab tablet-only" id="tab-playlists" data-act="showTab" data-arg="playlists">Playlists</div>
+  <div class="tab tablet-only" id="tab-favourites" data-act="showTab" data-arg="favourites">Favourites</div>
 </div>
 <div class="workspace">
   <!-- LEFT: browser / search / playlist view -->
@@ -68,7 +68,7 @@
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <span style="font-size:11px;color:var(--ink-dim)" id="index-label">Indexing library…</span>
         <span style="display:flex;gap:6px;flex-shrink:0">
-          <button class="icon-btn" style="font-size:10px" onclick="reindex()">↺ Rebuild</button>
+          <button class="icon-btn" style="font-size:10px" data-act="reindex">↺ Rebuild</button>
         </span>
       </div>
       <div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden">
@@ -77,17 +77,17 @@
     </div>
     <!-- Browse mode bar (only shown in browse tab) -->
     <div class="browse-modes" id="browse-modes" style="display:none">
-      <div class="browse-mode active" id="bmode-artists" onclick="setBrowseMode('artists')">Artists</div>
-      <div class="browse-mode"       id="bmode-albums"  onclick="setBrowseMode('albums')">Albums</div>
-      <div class="browse-mode"       id="bmode-tracks"  onclick="setBrowseMode('tracks')">Tracks</div>
-      <div class="browse-mode"       id="bmode-genres"  onclick="setBrowseMode('genres')">Genres</div>
-      <div class="browse-mode"       id="bmode-decades" onclick="setBrowseMode('decades')">Decades</div>
+      <div class="browse-mode active" id="bmode-artists" data-act="setBrowseMode" data-arg="artists">Artists</div>
+      <div class="browse-mode"       id="bmode-albums"  data-act="setBrowseMode" data-arg="albums">Albums</div>
+      <div class="browse-mode"       id="bmode-tracks"  data-act="setBrowseMode" data-arg="tracks">Tracks</div>
+      <div class="browse-mode"       id="bmode-genres"  data-act="setBrowseMode" data-arg="genres">Genres</div>
+      <div class="browse-mode"       id="bmode-decades" data-act="setBrowseMode" data-arg="decades">Decades</div>
     </div>
     <!-- Letter picker (only shown in browse tab) -->
     <div class="letter-bar" id="letter-bar" style="display:none" id="letter-bar"></div>
     <!-- Back / section header (drill-down) -->
     <div class="browse-back" id="browse-back" style="display:none">
-      <span onclick="drillBack()">← back</span>
+      <span data-act="drillBack">← back</span>
       <span id="browse-back-title" style="color:var(--ink);font-weight:600"></span>
     </div>
     <div class="browse-section-hdr" id="browse-section-hdr" style="display:none">
@@ -111,7 +111,7 @@
   <!-- CENTRE: player -->
   <div id="player">
     <!-- Back button — mobile only, closes Now Playing fullscreen -->
-    <button id="np-back" onclick="mobileTab('browse')" style="display:none;position:absolute;top:14px;left:16px;background:none;border:none;color:var(--ink-dim);font-size:22px;cursor:pointer;z-index:10;padding:4px 8px">‹</button>
+    <button id="np-back" data-act="mobileTab" data-arg="browse" style="display:none;position:absolute;top:14px;left:16px;background:none;border:none;color:var(--ink-dim);font-size:22px;cursor:pointer;z-index:10;padding:4px 8px">‹</button>
     <div class="art-wrap"><div class="art" id="art">🎵</div></div>
     <div class="np-title" id="np-title">Nothing playing</div>
     <div class="np-artist" id="np-artist" style="font-size:11px;color:var(--amber);text-align:center;margin-bottom:2px;max-width:380px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:16px"></div>
@@ -174,10 +174,10 @@
   <!-- RIGHT: playlists panel -->
   <div id="pl-panel">
     <div class="pl-header">
-      <button class="icon-btn" id="pl-back-btn" onclick="showPlaylists()" style="display:none">← back</button>
+      <button class="icon-btn" id="pl-back-btn" data-act="showPlaylists" style="display:none">← back</button>
       <span class="pl-header-title" id="pl-panel-title">Playlists</span>
       <div class="pl-actions" id="pl-actions" style="margin-left:auto">
-        <button class="btn" style="font-size:11px;padding:5px 10px" onclick="newPlaylist()">+ New playlist</button>
+        <button class="btn" style="font-size:11px;padding:5px 10px" data-act="newPlaylist">+ New playlist</button>
       </div>
     </div>
     <div class="pl-list" id="pl-list"></div>
@@ -195,25 +195,25 @@
 <audio id="browser-audio" preload="auto" playsinline controls style="display:none"></audio>
 
 <!-- Mini player — mobile only, shown when playing -->
-<div id="mini-player" onclick="mobileTab('nowplaying');$('bnav-nowplaying').classList.add('active')">
+<div id="mini-player" data-act="openNowPlaying">
   <div id="mini-art">🎵</div>
   <div id="mini-info">
     <div id="mini-title">Nothing playing</div>
     <div id="mini-artist"></div>
   </div>
-  <button class="btn" id="mini-pp" onclick="event.stopPropagation();control({action:'pause'})">⏸</button>
-  <button class="btn" id="mini-next" onclick="event.stopPropagation();control({action:'next'})">⏭</button>
+  <button class="btn" id="mini-pp" data-act="miniPause" data-stop>⏸</button>
+  <button class="btn" id="mini-next" data-act="miniNext" data-stop>⏭</button>
   <div id="mini-progress"></div>
 </div>
 
 <!-- Bottom navigation — mobile only -->
 <nav id="bottom-nav">
-  <button class="bnav-btn active" id="bnav-browse"      onclick="mobileTab('browse')"><span>📁</span><span>Browse</span></button>
-  <button class="bnav-btn"        id="bnav-search"      onclick="mobileTab('search')"><span>🔍</span><span>Search</span></button>
-  <button class="bnav-btn"        id="bnav-playlists"   onclick="mobileTab('playlists')"><span>📋</span><span>Playlists</span></button>
-  <button class="bnav-btn"        id="bnav-favourites"  onclick="mobileTab('favourites')"><span>⭐</span><span>Favs</span></button>
-  <button class="bnav-btn"        id="bnav-radio"       onclick="startRadio()" title="100 random tracks"><span>📻</span><span>Radio</span></button>
-  <button class="bnav-btn"        id="bnav-nowplaying"  onclick="mobileTab('nowplaying')"><span id="bnav-np-icon">🎵</span><span>Playing</span></button>
+  <button class="bnav-btn active" id="bnav-browse"      data-act="mobileTab" data-arg="browse"><span>📁</span><span>Browse</span></button>
+  <button class="bnav-btn"        id="bnav-search"      data-act="mobileTab" data-arg="search"><span>🔍</span><span>Search</span></button>
+  <button class="bnav-btn"        id="bnav-playlists"   data-act="mobileTab" data-arg="playlists"><span>📋</span><span>Playlists</span></button>
+  <button class="bnav-btn"        id="bnav-favourites"  data-act="mobileTab" data-arg="favourites"><span>⭐</span><span>Favs</span></button>
+  <button class="bnav-btn"        id="bnav-radio"       data-act="startRadio" title="100 random tracks"><span>📻</span><span>Radio</span></button>
+  <button class="bnav-btn"        id="bnav-nowplaying"  data-act="mobileTab" data-arg="nowplaying"><span id="bnav-np-icon">🎵</span><span>Playing</span></button>
 </nav>
 
 <!-- Lyrics modal -->

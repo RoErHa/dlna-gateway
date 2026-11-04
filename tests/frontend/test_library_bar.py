@@ -7,6 +7,8 @@ wires it the moment it appears, but waiting is only half the job: from
 the sofa the library is still missing, and nothing in the window said
 so. These tests are about the half that is visible.
 """
+import pytest
+
 
 
 def _waiting(label="Music", root="/Volumes/SAMDATA/Music"):
@@ -77,6 +79,7 @@ def test_the_bar_clears_itself_once_the_drive_is_mounted(gateway, app):
     app.wait_for_selector("#library-bar", state="hidden", timeout=5000)
 
 
+@pytest.mark.csp_violations_expected
 def test_the_message_is_escaped_not_interpreted(gateway, app):
     """`message` and `root` are server-built strings, but a root is a
     path from config and paths can hold anything. It lands in innerHTML,

@@ -320,6 +320,13 @@ def test_album_rows_carry_series_chip(page, stub, gateway):
         timeout=3000)
     # Wait for the meta map, then render the albums letter view.
     page.wait_for_function("abMeta !== null", timeout=3000)
+    # …and for the source switch's OWN render to finish: on a slow run it
+    # landed after ours and replaced the rows with 'No albums starting with
+    # "A"' (seen once on WebKit, 2026-11-04).
+    page.wait_for_function(
+        "(() => { const el = document.getElementById('item-list');"
+        " return !el.querySelector('.spinner') && el.textContent.trim().length > 0; })()",
+        timeout=5000)
     page.evaluate("browseMode='albums'; renderBrowseItems("
                   + json.dumps([{"artist": "Peter F Hamilton",
                                  "album": "The Reality Dysfunction",

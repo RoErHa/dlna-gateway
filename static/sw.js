@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v19';  // v19: edit form gains the book-language field
+const APP_CACHE = 'dlna-gw-app-v20';  // v20: inline handlers → data-act (CSP)
 // v17: ℹ️ Artist panel — index.html gained
 //   #np-btn-artist / #artist-modal. Bumped to evict any client holding the OLD
 //   index.html beside the NEW app.js: that pairing threw on the button's
