@@ -50,6 +50,7 @@ import tempfile as _tempfile                                  # noqa: E402
 # (dlna_config's loader never overrides one), so an empty one keeps alerts
 # off for this process and every subprocess it starts.
 os.environ["ALERT_PUSH_URL"] = ""
+os.environ["ALERT_SMS_TO"] = ""         # …and must never text it
 # …and its state files (the runtime-exit marker, the boot history) go to a
 # throwaway: the runtime-watch tests run the real exit path, and a marker
 # left in the repo made the next live boot push a false "restarted itself"

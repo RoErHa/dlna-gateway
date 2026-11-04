@@ -21,6 +21,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dlna_alerts as A  # noqa: E402
+import dlna_alerts_sms as S  # noqa: E402
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 URL = "https://ntfy.example/secret-topic-name"
@@ -50,8 +51,10 @@ class TestOffByDefault(unittest.TestCase):
         self.assertEqual(sent, [])
 
     def test_the_test_suite_itself_has_alerts_off(self):
-        """tests/__init__.py blanks it, so no test can reach the phone."""
+        """tests/__init__.py blanks both channels, so no test can reach the
+        phone."""
         self.assertEqual(os.environ.get("ALERT_PUSH_URL"), "")
+        self.assertEqual(os.environ.get("ALERT_SMS_TO"), "")
         self.assertFalse(A.ALERTS.enabled())
 
     def test_the_test_suite_never_writes_the_live_state_dir(self):
@@ -320,6 +323,68 @@ class TestCertificate(unittest.TestCase):
     def test_default_certfile_follows_the_tailscale_host(self):
         self.assertIsNone(A.default_certfile({"TAILSCALE_CERT_HOST": "nope.invalid"}))
         self.assertIsNone(A.default_certfile({}))
+
+
+class TestSms(unittest.TestCase):
+    """The Messages channel (dlna_alerts_sms.py)."""
+
+    def test_number_and_text_are_arguments_never_script_source(self):
+        """Alert text can carry a stranger's Host header; pasted into the
+        AppleScript it would run as code."""
+        evil = 'x" & (do shell script "touch /tmp/pwned") & "'
+        cmd = S.command("+31600000000", evil)
+        self.assertEqual(cmd[:2], ["/usr/bin/osascript", "-e"])
+        self.assertEqual(cmd[2], S.APPLESCRIPT)            # fixed source
+        self.assertEqual(cmd[3:], ["+31600000000", evil, "SMS"])
+
+    def test_service_order(self):
+        self.assertEqual(S.command("n", "t", "iMessage")[-1], "iMessage")
+        self.assertEqual(S.command("n", "t", "imessage")[-1], "iMessage")
+        self.assertEqual(S.command("n", "t", "anything")[-1], "SMS")
+
+    def test_text_is_bounded(self):
+        t = S.sms_text("title", "x" * 5000)
+        self.assertLessEqual(len(t), 600)
+        self.assertTrue(t.startswith("DLNA Gateway: title\n"))
+
+    def test_a_refusal_raises_without_the_number(self):
+        def run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 1, "", "Not authorized (-1743)")
+        with self.assertRaises(RuntimeError) as cm:
+            S.send("t", "m", env={"ALERT_SMS_TO": "+31612345678"}, run=run)
+        self.assertIn("-1743", str(cm.exception))
+        self.assertNotIn("612345678", str(cm.exception))
+
+    def test_sms_alone_enables_alerts_and_is_used(self):
+        texts = []
+        a = A.Alerter(env={"ALERT_SMS_TO": "+31612345678"},
+                      sms=lambda t, m, env: texts.append((t, m)))
+        self.assertTrue(a.enabled())
+        self.assertTrue(a.send_now("k", "volume gone", "mount it"))
+        self.assertEqual(texts, [("volume gone", "mount it")])
+
+    def test_both_channels_and_one_failing_still_counts(self):
+        pushed = []
+
+        def bad_sms(t, m, env):
+            raise RuntimeError("Messages not signed in")
+        a = A.Alerter(env={"ALERT_SMS_TO": "+31612345678", "ALERT_PUSH_URL": URL},
+                      post=pushed.append, sms=bad_sms)
+        with self.assertLogs("dlna.alerts", "WARNING") as logs:
+            self.assertTrue(a.send_now("k", "t", "m"))
+        self.assertEqual(len(pushed), 1)
+        self.assertNotIn("612345678", "\n".join(logs.output))
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("osacompile"),
+                         "macOS only")
+    def test_the_applescript_compiles(self):
+        """Syntax only: compiling sends nothing."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        r = subprocess.run(["osacompile", "-o", os.path.join(d, "a.scpt"),
+                            "-e", S.APPLESCRIPT], capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 class TestShellJobs(unittest.TestCase):

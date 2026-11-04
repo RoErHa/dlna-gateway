@@ -35,6 +35,7 @@
     "conftest.py": 400,
     "db_pool.py": 400,
     "dlna_alerts.py": 400,
+    "dlna_alerts_sms.py": 400,
     "dlna_art_cache.py": 400,
     "dlna_art_fetcher.py": 400,
     "dlna_art_query.py": 400,

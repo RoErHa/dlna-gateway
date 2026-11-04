@@ -18,7 +18,7 @@ comes up, and note why.
 |---|---|---|---|
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
 | 2 | Off-disk copy of the library backups | 2026-11-08 | ☐ open — the owner does it, weekend of 7–8 Nov |
-| 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (push to phone; live once `ALERT_PUSH_URL` is set) |
+| 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
 | 4 | Security headers on the web app | 2026-11-25 | ☐ open |
 | 5 | Optional login for the web app | 2026-12-09 | ☐ open — **go/no-go not decided** |
 | 6 | Rate limiting on Subsonic logins | 2026-12-16 | ☐ open — **go/no-go not decided** |
@@ -92,8 +92,14 @@ this, and the rest of the Mac.
 ## 3. Alerts when something goes wrong — target 2026-11-18
 
 - [x] **Done 2026-11-04**, ahead of target. `dlna_alerts.py`,
-  `tests/test_alerts.py` (31). Live as soon as `ALERT_PUSH_URL` is set in
-  `.env` and the phone subscribes to that topic.
+  `dlna_alerts_sms.py`, `tests/test_alerts.py` (38). Live as soon as
+  `ALERT_SMS_TO` is set in `.env` and macOS has allowed the gateway to
+  control Messages. **Verified live 2026-11-04:** the CLI test text and an
+  alert raised by the running gateway itself (a deliberately refused
+  request, sent from the launchd process ~6 s later) both arrived on the
+  owner's phone. Not yet seen live: a text from one of the weekly launchd
+  jobs, which may need its own one-time Automation grant. The log shows
+  `could not text … (-1743)` if so.
 
 **What was built.**
 - `dlna_alerts.alert(kind, …)` queues (bounded, one daemon sender), is
@@ -114,6 +120,10 @@ this, and the rest of the Mac.
 14 days left. That check (`_warn_if_cert_expiring_soon`) left with the stdlib
 TLS server in `baa2c0c`; the paragraph had described nothing for a year. It
 is back, as `dlna_alerts.check_cert`, at boot and every 6 h.
+
+**Watch out for.** Give the number with a `+` and the country code. It was
+first entered as `0316…`, which Messages would read as a Dutch landline
+(area code 0316) instead of the intended `+316…` mobile number.
 
 **Limit.** A gateway that dies before any app code runs (the 2026-09-20
 `RLIMIT_NPROC` respawn loop failed inside hypercorn's own startup) never
@@ -139,9 +149,17 @@ And:
 - a failing notifier never affects playback, and its own failure is logged;
 - `tests/test_alerts.py` covers the rate limit and the off-by-default path.
 
-**Decided 2026-11-04: a push notification to the owner's phone.** Every
-detail of the channel lives in `.env` (and is documented, empty, in
-`.env.example`), never in code or the plist:
+**Decided 2026-11-04: a text message, sent by this Mac's Messages app.**
+First built as an ntfy push, which was a misunderstanding: the owner wanted
+SMS. Messages was chosen over an SMS provider such as Twilio because it stays
+local, with no account and no third party. The one thing it cannot report is
+the Mac itself being down, which was accepted: that shows itself the moment
+you try to use the gateway. Settings: `ALERT_SMS_TO` (the number) and
+`ALERT_SMS_SERVICE` (SMS first, iMessage as fallback).
+
+The ntfy push was kept as a second, optional channel for installs without a
+Mac signed in to Messages. Every detail lives in `.env` (and is documented,
+empty, in `.env.example`), never in code or the plist:
 - `ALERT_PUSH_URL`: the endpoint to POST to, e.g. an ntfy topic URL
   (`https://ntfy.sh/<long-random-topic>` or a self-hosted server). A public
   ntfy topic is readable by anyone who guesses its name, so the topic must be

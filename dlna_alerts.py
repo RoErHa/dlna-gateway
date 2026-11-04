@@ -8,22 +8,28 @@ browser request, a failed weekly job), but it only wrote them to
 `gateway.log`, which nobody reads. On 2026-10-31 it ran half-alive for 2.5
 days for exactly that reason.
 
-THE CHANNEL is a push notification over the ntfy protocol: a POST whose body
-is the message, with `Title` / `Priority` / `Tags` headers. ntfy.sh or a
-self-hosted ntfy server both speak it, and the ntfy phone app shows it.
-Everything about the channel lives in `.env`:
+TWO CHANNELS, each on when its `.env` key is set, both off by default:
 
-  ALERT_PUSH_URL          the topic URL. Unset = alerts are OFF.
-  ALERT_PUSH_TOKEN        optional bearer token (protected topic / server).
-  ALERT_MIN_INTERVAL_SEC  per-kind quiet period, default 3600.
+* **A text message** from this Mac's Messages app (dlna_alerts_sms.py) —
+  the owner's choice, because it stays local:
+    ALERT_SMS_TO            the phone number to text.
+    ALERT_SMS_SERVICE       "SMS" (default) or "iMessage", tried first.
+* **A push notification** over the ntfy protocol, for setups without a Mac
+  signed in to Messages: a POST whose body is the message, with `Title` /
+  `Priority` / `Tags` headers (ntfy.sh or a self-hosted server).
+    ALERT_PUSH_URL          the topic URL. A public ntfy.sh topic is
+                            readable by anyone who knows its name.
+    ALERT_PUSH_TOKEN        optional bearer token.
 
-A public ntfy.sh topic is readable by anyone who knows its name, so the topic
-must be long and random. Messages say WHAT happened and WHEN, never library
-content or secrets.
+  ALERT_MIN_INTERVAL_SEC    per-kind quiet period, default 3600.
+
+An alert goes to every configured channel and counts as sent when one of
+them took it. Messages say WHAT happened and WHEN, never library content or
+secrets.
 
 THE RULES this module keeps:
 
-* **Off unless configured.** No URL → nothing is sent and nothing is logged
+* **Off unless configured.** No channel → nothing is sent and nothing is logged
   above DEBUG. A fresh clone never phones anywhere.
 * **One problem, one notification.** Each `kind` (e.g. `root_waiting`) is
   rate-limited to one push per `ALERT_MIN_INTERVAL_SEC`, so a problem that
@@ -58,6 +64,8 @@ import threading
 import time
 import urllib.request
 
+import dlna_alerts_sms
+
 log = logging.getLogger("dlna.alerts")
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,6 +77,8 @@ def _state_dir(state_dir: str | None) -> str:
     (ALERT_STATE_DIR) — a test that runs the runtime watch's exit path must
     not leave a marker the live gateway then reports."""
     return state_dir or os.environ.get("ALERT_STATE_DIR") or STATE_DIR
+
+
 RUNTIME_EXIT_MARKER = "runtime-exit"
 BOOT_HISTORY = "boot-history"
 
@@ -125,11 +135,13 @@ def _post(req: urllib.request.Request) -> None:
 
 
 class Alerter:
-    """Rate-limited, queued, never-raising push alerts."""
+    """Rate-limited, queued, never-raising alerts."""
 
-    def __init__(self, env=None, post=_post, clock=time.monotonic):
+    def __init__(self, env=None, post=_post, clock=time.monotonic,
+                 sms=dlna_alerts_sms.send):
         self._env = env                 # None → os.environ at call time
         self._post = post
+        self._sms = sms
         self._clock = clock
         self._last: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -137,7 +149,8 @@ class Alerter:
         self._thread: threading.Thread | None = None
 
     def enabled(self) -> bool:
-        return bool(_env("ALERT_PUSH_URL", self._env))
+        return bool(_env("ALERT_PUSH_URL", self._env)) or \
+            dlna_alerts_sms.configured(self._env)
 
     def _admit(self, kind: str) -> bool:
         """True when `kind` is outside its quiet period (and claims it)."""
@@ -154,7 +167,7 @@ class Alerter:
         """Queue an alert. True when queued; never raises, never blocks."""
         try:
             if not self.enabled():
-                log.debug(f"alert {kind!r} not sent — ALERT_PUSH_URL unset")
+                log.debug(f"alert {kind!r} not sent — no alert channel configured")
                 return False
             if not self._admit(kind):
                 log.debug(f"alert {kind!r} suppressed — sent one recently")
@@ -172,20 +185,29 @@ class Alerter:
 
     def send_now(self, kind: str, title: str, message: str, *,
                  priority: str = "default", tags=()) -> bool:
-        """Send synchronously (the CLI). Not rate-limited: a weekly job is
-        its own rate limit. True when the server accepted it."""
+        """Send synchronously to every configured channel (the CLI uses this
+        directly). Not rate-limited: a weekly job is its own rate limit.
+        True when at least one channel accepted it."""
+        sent = []
+        if dlna_alerts_sms.configured(self._env):
+            try:
+                self._sms(title, message, env=self._env)
+                sent.append("sms")
+            except Exception as e:                            # noqa: BLE001
+                # Never log the number.
+                log.warning(f"alert ✗ could not text {kind!r}: {e}")
         url = _env("ALERT_PUSH_URL", self._env)
-        if not url:
-            return False
-        try:
-            self._post(build_request(url, _env("ALERT_PUSH_TOKEN", self._env),
-                                     title, message, priority, tags))
-            log.info(f"alert ✉ sent {kind}: {title}")
-            return True
-        except Exception as e:                                # noqa: BLE001
-            # Never log the URL: the topic name IS the secret on ntfy.sh.
-            log.warning(f"alert ✗ could not send {kind!r}: {e!r}")
-            return False
+        if url:
+            try:
+                self._post(build_request(url, _env("ALERT_PUSH_TOKEN", self._env),
+                                         title, message, priority, tags))
+                sent.append("push")
+            except Exception as e:                            # noqa: BLE001
+                # Never log the URL: the topic name IS the secret on ntfy.sh.
+                log.warning(f"alert ✗ could not push {kind!r}: {e!r}")
+        if sent:
+            log.info(f"alert ✉ sent {kind} ({'+'.join(sent)}): {title}")
+        return bool(sent)
 
     def _ensure_worker(self) -> None:
         with self._lock:
@@ -339,7 +361,7 @@ def main(argv: list[str]) -> int:
         print(__doc__.split("The weekly shell jobs", 1)[1].split("Guarded")[0])
         return 2
     if not ALERTS.enabled():
-        print("alerts are off (ALERT_PUSH_URL is not set in .env)")
+        print("alerts are off (neither ALERT_SMS_TO nor ALERT_PUSH_URL is set in .env)")
         return 3
     return 0 if ALERTS.send_now(*argv, priority=priority) else 1
 
