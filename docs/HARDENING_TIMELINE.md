@@ -21,7 +21,7 @@ comes up, and note why.
 | 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
 | 4 | Security headers on the web app | 2026-11-25 | ◐ built 2026-11-04, CSP report-only; enforce ~2026-11-11 if the log stays clean |
 | 5 | Optional login for the web app | — | ⏸ deferred 2026-11-04 (see §5) |
-| 6 | Rate limiting on Subsonic logins | 2026-12-16 | ✅ done 2026-11-04 (Amperfy verified live) |
+| 6 | Rate limiting on Subsonic logins | 2026-12-16 | ✅ done 2026-11-04 (Amperfy + CarPlay verified live) |
 
 **Decisions (2026-11-04).** #2 is done by the owner over the weekend of 7–8
 November, depending on when the new disk arrives. #6: build — built the same
@@ -262,8 +262,11 @@ password. Reuse is simpler, but means one leaked secret opens both.
   `/rest/*` route (7efa582). Verified with Amperfy on the owner's iPhone
   after deployment: 25 requests in two minutes (15:29–15:31, up to 12 a
   minute: album lists, playlists, radio stations, cover art, scrobbles),
-  every one authenticated, no failed login, no throttling. The only
-  throttle entries in the log are the deliberate loopback test at 15:09.
+  every one authenticated, no failed login, no throttling. Then a CarPlay
+  session (15:59–16:00): 62 requests, up to 38 a minute — the heaviest
+  Subsonic burst on record, mostly cover art and albums, plus 9 streams,
+  all ending `reason=eof` — again no failed login and no throttling. The
+  only throttle entries in the log are the deliberate loopback test at 15:09.
 
 **Why.** `/rest/*` is the one surface protected by a password, and nothing
 slows down guessing it. It matters mainly if the gateway is ever reachable
@@ -276,7 +279,7 @@ beyond the tailnet, but it is cheap.
   example, after 10 failures in a minute every further attempt from that IP
   answers the Subsonic auth error without checking, for a growing interval);
 - a successful login resets the counter, and Amperfy's normal traffic never
-  trips it (measured against a real CarPlay session); ✅ reset; ✅ Amperfy, live.
+  trips it (measured against a real CarPlay session); ✅ reset; ✅ Amperfy and CarPlay, live.
   Evidence so far: two weeks of `gateway.log` hold 161 Amperfy requests,
   at most 20 a minute, and **not one failed login** — and only failures are
   counted;
