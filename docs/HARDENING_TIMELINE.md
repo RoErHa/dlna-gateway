@@ -17,16 +17,15 @@ comes up, and note why.
 | # | Item | Target | Status |
 |---|---|---|---|
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
-| 2 | Off-disk copy of the library backups | 2026-11-08 | ☐ open — the owner does it, weekend of 7–8 Nov |
+| 2 | Off-disk copy of the library backups | 2026-11-07/08 | ☐ open — the owner does it, weekend of 7–8 Nov (when the new disk arrives) |
 | 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
 | 4 | Security headers on the web app | 2026-11-25 | ◐ built 2026-11-04, CSP report-only; enforce ~2026-11-11 if the log stays clean |
-| 5 | Optional login for the web app | 2026-12-09 | ☐ open — **go/no-go not decided** |
-| 6 | Rate limiting on Subsonic logins | 2026-12-16 | ☐ open — **go/no-go not decided** |
+| 5 | Optional login for the web app | — | ⏸ deferred 2026-11-04 (see §5) |
+| 6 | Rate limiting on Subsonic logins | 2026-12-16 | ◐ built 2026-11-04; ticked once a real CarPlay session shows no throttling |
 
-**Decisions still open (2026-11-04).** #2 is done by the owner over the weekend
-of 7–8 November. Whether to build #5 and #6 at all is not decided yet. Until it is,
-every working session starts with a reminder, and an item is not started
-before its decision is recorded here.
+**Decisions (2026-11-04).** #2 is done by the owner over the weekend of 7–8
+November, depending on when the new disk arrives. #6: build — built the same
+day. #5: deferred — see its section. No decision is open.
 
 Order: #1 first because it was the only one where a stranger could act on
 the system. #2 next because it is cheap and its failure mode, losing every
@@ -59,7 +58,7 @@ works.
 
 ---
 
-## 2. Off-disk copy of the library backups — target 2026-11-11
+## 2. Off-disk copy of the library backups — target 2026-11-07/08
 
 - [ ] Not started.
 
@@ -226,7 +225,7 @@ unit test keeps the app itself eval-free.
 
 ---
 
-## 5. Optional login for the web app — target 2026-12-09
+## 5. Optional login for the web app — deferred
 
 - [ ] Not started.
 
@@ -245,7 +244,12 @@ default; this is an opt-in for those who want more.
 - the service worker and offline mode still work behind it;
 - the browser suite runs both with and without a password set.
 
-**Decision pending: build it at all?** Not decided as of 2026-11-04.
+**Decision (2026-11-04): deferred.** For the owner's own install it adds
+nothing — Tailscale and the home LAN are the access control, and the guard
+(#1) already stops a web page from driving the gateway. The cost is the
+device carve-out (the Naim, the TV and `:8200` must never be asked) and the
+service worker behind a login. Revisit when someone running the public
+release asks for it; the criteria above stay as the spec.
 
 **Open question, if built.** Reuse the Subsonic credentials or a separate
 password. Reuse is simpler, but means one leaked secret opens both.
@@ -254,21 +258,39 @@ password. Reuse is simpler, but means one leaked secret opens both.
 
 ## 6. Rate limiting on Subsonic logins — target 2026-12-16
 
-- [ ] Not started.
+- [x] Built 2026-11-04 — `dlna_auth_throttle.py`, consulted first by the
+  `/rest/*` route. Not yet ticked: the Amperfy criterion wants a real
+  CarPlay session, which has to happen after deployment.
 
 **Why.** `/rest/*` is the one surface protected by a password, and nothing
 slows down guessing it. It matters mainly if the gateway is ever reachable
 beyond the tailnet, but it is cheap.
 
-**Decision pending: build it at all?** Not decided as of 2026-11-04.
+**Decision (2026-11-04): build.**
 
 **Done when:**
 - failed authentications are counted per client IP and back off (for
   example, after 10 failures in a minute every further attempt from that IP
   answers the Subsonic auth error without checking, for a growing interval);
 - a successful login resets the counter, and Amperfy's normal traffic never
-  trips it (measured against a real CarPlay session);
+  trips it (measured against a real CarPlay session); ✅ reset; ☐ CarPlay.
+  Evidence so far: two weeks of `gateway.log` hold 161 Amperfy requests,
+  at most 20 a minute, and **not one failed login** — and only failures are
+  counted;
 - the counter's memory is bounded (posture rule 10: nothing unbounded);
-- a WARN is logged when an IP is throttled, which also feeds #3;
+  ✅ 1,024 addresses, evicting stale records first and a block last;
+- a WARN is logged when an IP is throttled, which also feeds #3; ✅
+  `Subsonic ✗ throttled <ip>` + a `subsonic_throttled` text;
 - `tests/test_subsonic.py` covers the throttle, the reset and the memory
-  bound.
+  bound. ✅ `TestLoginThrottle` (8) + `TestLoginThrottleRoute` (5); the
+  route tests fail with the gate removed.
+
+**As built.** 10 failures within 60 s block the address for 60 s, doubling
+per further trip up to 1 h; a success, or a day without failures, forgets
+it. While blocked, a request gets the ordinary wrong-password answer
+without its credentials being checked — a guess made then cannot succeed,
+and the answer gives nothing away. IPv6 is keyed by /64, since one host
+owns a whole /64. A request with no peer address, or with no
+`SUBSONIC_PASSWORD` configured, is not counted. A client whose stored
+password went stale WILL be blocked — it needed updating anyway, and it is
+let back in a minute after it stops failing.

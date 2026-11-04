@@ -42,6 +42,8 @@ from starlette.responses import Response
 
 import api_playback
 import api_subsonic
+import dlna_alerts
+from dlna_auth_throttle import THROTTLE
 from dlna_asgi_media import _audio_relay_response
 from dlna_asgi_state import _peer
 from dlna_asgi_bridge import _LegacyH, run_subsonic_sync
@@ -91,6 +93,37 @@ def _subsonic_auth_gate(query, body) -> Response | None:
     return None
 
 
+def _throttle_gate(ip: str, params: dict, query, body, method: str,
+                   client: str) -> Response | None:
+    """Hardening #6 (dlna_auth_throttle): a refusal while `ip` is blocked —
+    the ordinary wrong-auth answer, the credentials never checked — else
+    None, after counting this request's credentials as a success or a
+    failure. Runs before every method, so the byte routes and the bridged
+    ones are throttled alike. No password set (everything 503s anyway) or no
+    peer address (not a network request) → not counted."""
+    if ip == "?" or not api_subsonic._subsonic_password():
+        return None
+    left = THROTTLE.blocked(ip)
+    if left:
+        log.info(f"Subsonic {method} client={client!r} ip={ip} → throttled "
+                 f"({left:.0f}s left)")
+        return _subsonic_fail_response(query, body, api_subsonic.ERR_WRONG_AUTH,
+                                       "Wrong username or password")
+    if api_subsonic._check_auth(params):
+        THROTTLE.success(ip)
+        return None
+    tripped = THROTTLE.failure(ip)
+    if tripped:
+        log.warning(f"Subsonic ✗ throttled {ip}: too many failed logins — "
+                    f"blocked {tripped:.0f}s (client={client[:40]!r})")
+        dlna_alerts.alert(
+            "subsonic_throttled", "Subsonic logins blocked",
+            f"{ip} failed to log in too often and is blocked for "
+            f"{tripped:.0f}s. If that is your own app, update its password.",
+            tags=("lock",))
+    return None
+
+
 @router.api_route("/rest/{rest_path:path}", methods=["GET", "POST"],
                include_in_schema=False)
 async def subsonic(request: Request, rest_path: str):
@@ -104,6 +137,9 @@ async def subsonic(request: Request, rest_path: str):
     _params = api_subsonic._parse_params(query, body)
     _client = _params.get("c", "?")
     _ip = _peer(request)
+    throttled = _throttle_gate(_ip, _params, query, body, method, _client)
+    if throttled is not None:
+        return throttled
 
     if method in _SUBSONIC_BYTE_METHODS:
         gate = _subsonic_auth_gate(query, body)

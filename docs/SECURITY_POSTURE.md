@@ -325,6 +325,23 @@ script or handlers. Verified the guard bites by removing the marker from the
 injection test (it errors). `tests/test_security_headers.py` (19),
 `tests/frontend/test_csp.py` (4).
 
+**15. Subsonic password guessing is throttled** (2026-11-04,
+`dlna_auth_throttle.py`, hardening timeline #6). `/rest/*` is the one surface
+behind a password, and every guess used to be answered at full speed. Now
+10 failed logins within a minute from one address block it for 60 s,
+doubling per further trip up to an hour; a successful login, or a day
+without failures, forgets it. While blocked the route answers the ordinary
+Subsonic "wrong username or password" WITHOUT checking the credentials, so
+a guess made while blocked can never succeed and the answer is no oracle
+(item 2). The peer address is real (hypercorn terminates every
+connection); IPv6 is keyed by its /64 because a single host can rotate
+through one. Memory is capped at 1,024 addresses (item 10): stale records
+are evicted first, a live block last. A trip logs `Subsonic ✗ throttled
+<ip>` and sends a `subsonic_throttled` alert. Only failures count, and two
+weeks of logs show Amperfy never failing a login (161 requests, at most 20
+a minute), so normal traffic cannot trip it. `tests/test_subsonic.py`
+(`TestLoginThrottle`, `TestLoginThrottleRoute`).
+
 ### Can a media file phone home? No — and here is what keeps it that way
 
 The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with

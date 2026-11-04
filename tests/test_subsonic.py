@@ -971,5 +971,147 @@ class TestFamilyStateBinding(unittest.TestCase):
             api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = None
 
 
+class TestLoginThrottle(unittest.TestCase):
+    """Hardening #6 — dlna_auth_throttle, the pure half."""
+
+    def setUp(self):
+        import dlna_auth_throttle as T
+        self.T = T
+        self.now = [1000.0]
+        self.t = T.AuthThrottle(clock=lambda: self.now[0])
+
+    def fail(self, n, ip="100.72.54.16"):
+        return [self.t.failure(ip) for _ in range(n)]
+
+    def test_blocks_on_the_tenth_failure_in_a_minute(self):
+        self.assertEqual(self.fail(self.T.MAX_FAILURES - 1), [0.0] * 9)
+        self.assertEqual(self.t.blocked("100.72.54.16"), 0.0)
+        self.assertEqual(self.t.failure("100.72.54.16"), self.T.BLOCK_SEC)
+        self.assertEqual(self.t.blocked("100.72.54.16"), self.T.BLOCK_SEC)
+        self.assertEqual(self.t.blocked("100.90.97.36"), 0.0)   # others unaffected
+        self.now[0] += self.T.BLOCK_SEC
+        self.assertEqual(self.t.blocked("100.72.54.16"), 0.0)
+
+    def test_each_trip_doubles_up_to_the_cap(self):
+        lengths = []
+        for _ in range(10):
+            lengths.append(self.fail(self.T.MAX_FAILURES)[-1])
+            self.now[0] += lengths[-1]
+        self.assertEqual(lengths[:3], [60.0, 120.0, 240.0])
+        self.assertEqual(max(lengths), self.T.MAX_BLOCK_SEC)
+
+    def test_slow_failures_never_trip(self):
+        for _ in range(50):
+            self.assertEqual(self.t.failure("100.72.54.16"), 0.0)
+            self.now[0] += self.T.WINDOW_SEC / 5 + 1
+
+    def test_a_success_forgets_the_address(self):
+        self.fail(self.T.MAX_FAILURES)                  # first trip
+        self.now[0] += self.T.BLOCK_SEC
+        self.t.success("100.72.54.16")
+        self.assertEqual(self.fail(self.T.MAX_FAILURES)[-1], self.T.BLOCK_SEC)
+
+    def test_a_quiet_day_is_a_clean_slate(self):
+        self.fail(self.T.MAX_FAILURES)
+        self.now[0] += self.T.FORGET_SEC + 1
+        self.assertEqual(self.fail(self.T.MAX_FAILURES)[-1], self.T.BLOCK_SEC)
+
+    def test_ipv6_is_keyed_by_its_64(self):
+        k = self.T.client_key
+        self.assertEqual(k("2001:db8:1:2::a"), k("2001:db8:1:2:ffff::1"))
+        self.assertNotEqual(k("2001:db8:1:2::a"), k("2001:db8:1:3::a"))
+        self.assertEqual(k("::ffff:192.168.1.50"), "192.168.1.50")
+        for i in range(self.T.MAX_FAILURES):       # a rotating host is one key
+            self.t.failure(f"2001:db8:1:2::{i + 1:x}")
+        self.assertGreater(self.t.blocked("2001:db8:1:2::beef"), 0)
+
+    def test_memory_is_bounded_and_a_flood_cannot_free_a_block(self):
+        t = self.T.AuthThrottle(clock=lambda: self.now[0], max_tracked=8)
+        for _ in range(self.T.MAX_FAILURES):
+            t.failure("10.0.0.1")                   # blocked
+        for i in range(500):
+            t.failure(f"10.1.{i // 250}.{i % 250}")
+        self.assertLessEqual(t.tracked(), 8)
+        self.assertGreater(t.blocked("10.0.0.1"), 0)
+
+    def test_bounded_even_when_every_record_is_a_block(self):
+        t = self.T.AuthThrottle(clock=lambda: self.now[0], max_tracked=4)
+        for i in range(20):
+            for _ in range(self.T.MAX_FAILURES):
+                t.failure(f"10.2.0.{i}")
+        self.assertLessEqual(t.tracked(), 4)
+
+
+class TestLoginThrottleRoute(unittest.TestCase):
+    """Hardening #6 — the /rest/* route consults the throttle first."""
+
+    def setUp(self):
+        import dlna_asgi_subsonic
+        import dlna_auth_throttle as T
+        self.S, self.T = dlna_asgi_subsonic, T
+        self.now = [1000.0]
+        p = patch.object(dlna_asgi_subsonic, "THROTTLE",
+                         T.AuthThrottle(clock=lambda: self.now[0]))
+        p.start()
+        self.addCleanup(p.stop)
+        self.alert = patch.object(dlna_asgi_subsonic.dlna_alerts, "alert").start()
+        self.addCleanup(patch.stopall)
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = "pw"
+        self.addCleanup(setattr, api_subsonic_proto,
+                        "SUBSONIC_PASSWORD_OVERRIDE", None)
+
+    def call(self, password, ip="100.72.54.16", path="ping", **extra):
+        import asyncio
+        import types
+        import urllib.parse
+        q = urllib.parse.urlencode({"u": "user", "p": password, "f": "json",
+                                    "c": "Amperfy", **extra})
+        req = types.SimpleNamespace(
+            url=types.SimpleNamespace(query=q), method="GET", headers={},
+            client=types.SimpleNamespace(host=ip) if ip else None)
+        r = asyncio.run(self.S.subsonic(req, rest_path=path))
+        import json
+        return json.loads(r.body)["subsonic-response"]["status"]
+
+    def trip(self, ip="100.72.54.16"):
+        with self.assertLogs("dlna.asgi", "WARNING") as logs:
+            for _ in range(self.T.MAX_FAILURES):
+                self.assertEqual(self.call("WRONG", ip), "failed")
+        return logs
+
+    def test_blocked_client_is_refused_even_with_the_right_password(self):
+        logs = self.trip()
+        self.assertIn("Subsonic ✗ throttled 100.72.54.16", logs.output[0])
+        self.assertEqual(self.call("pw"), "failed")
+        self.assertEqual(self.call("pw", ip="100.90.97.36"), "ok")
+        self.now[0] += self.T.BLOCK_SEC
+        self.assertEqual(self.call("pw"), "ok")
+
+    def test_the_byte_methods_are_throttled_too(self):
+        self.trip()
+        r_status = self.call("pw", path="stream",
+                             id=api_subsonic._track_id("http://x/a.flac"))
+        self.assertEqual(r_status, "failed")
+
+    def test_a_trip_raises_one_alert(self):
+        self.trip()
+        self.assertEqual(self.alert.call_count, 1)
+        self.assertEqual(self.alert.call_args.args[0], "subsonic_throttled")
+
+    def test_normal_traffic_is_never_counted(self):
+        for _ in range(500):
+            self.assertEqual(self.call("pw"), "ok")
+        self.assertEqual(self.S.THROTTLE.tracked(), 0)
+
+    def test_no_password_set_or_no_peer_is_not_counted(self):
+        for _ in range(self.T.MAX_FAILURES * 2):
+            self.call("WRONG", ip=None)
+        api_subsonic_proto.SUBSONIC_PASSWORD_OVERRIDE = ""
+        with self.assertLogs("dlna.api.subsonic", "WARNING"):
+            for _ in range(self.T.MAX_FAILURES * 2):
+                self.call("WRONG")
+        self.assertEqual(self.S.THROTTLE.tracked(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

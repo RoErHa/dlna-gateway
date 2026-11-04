@@ -137,6 +137,13 @@ deliberate, prevents accidental auth-disabled exposure. Auth is a
 defence-in-depth layer; the primary access control is Tailscale (the
 gateway is not exposed to the public internet).
 
+**Failed logins are throttled** (2026-11-04, `dlna_auth_throttle.py`): 10
+failures in a minute from one address block it for 60 s, doubling per trip
+up to an hour; a success clears it. While blocked even the RIGHT password
+gets "Wrong username or password". So after changing `SUBSONIC_PASSWORD`,
+update Amperfy promptly: a client still sending the old password locks
+itself out until a minute after it stops. `grep "throttled" gateway.log`.
+
 ### Observability (2026-07-02)
 
 Every `/rest/*` request logs **one INFO line** in `gateway.log` (added
@@ -147,6 +154,8 @@ traffic was previously visible only at `debug`):
 Subsonic getAlbum client='amperfy' ip=100.x.y.z → 200 in 12ms   # bridged JSON/XML methods
 Subsonic stream id=tr:… client='amperfy' ip=100.x.y.z           # byte methods
 Subsonic ping client='…' ip=… → refused                         # auth-gate refusals
+Subsonic ping client='…' ip=… → throttled (42s left)            # blocked address
+Subsonic ✗ throttled 100.x.y.z: too many failed logins — blocked 60s   # WARN, once per trip
 ```
 
 The shared audio-relay `stream ▶ START` / `■ END` lines also carry
@@ -192,4 +201,4 @@ iOS app — it uses `AVAudioSession` properly, which the PWA can't.
 
 | File | What it covers |
 |---|---|
-| `tests/test_subsonic.py` | 38 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status |
+| `tests/test_subsonic.py` | 84 tests — auth: token+salt / plaintext / enc:hex / wrong-password / wrong-user / no-env-503; ID round-trip (track/album/artist incl. unicode); ping/getLicense/getMusicFolders hard-coded responses; unimplemented method → 404; `.view` legacy suffix routes the same; getArtists/getIndexes/getArtist/getAlbum/search3 against seeded DB; getAlbumList2 alphabetical + starred; getPlaylists includes `__favourites__`; getPlaylist round-trip; star → album_favourites add, unstar → remove, getStarred2 returns favs; scrobble bumps play_counts; submission=false doesn't; getCoverArt resolves to art_url and delegates to /art proxy; unknown cover ID → 404; XML format — default-when-no-`f`, `f=json` vs `f=xml`, special-char escaping, nested-array repeated elements, `<error>` on failed status; the login throttle (pure + through the route) |
