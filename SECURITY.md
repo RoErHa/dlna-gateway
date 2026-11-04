@@ -87,12 +87,15 @@ a note on what must not be reverted. The headlines:
 | TLS | Outbound fetches did not verify certificates. |
 | Injection | The PWA's escaping did not cover quoted attributes, where discovered-device text lands. |
 | Browser (Nov 2026) | Any web page could act on the API — writes answered GETs, `text/plain` POSTs needed no preflight, and no `Host` check stopped DNS rebinding. |
+| Headers (Nov 2026) | No Content-Security-Policy, so an escaping slip would have been script execution; the PWA could be framed; no `nosniff`. Now `script-src 'self'` with no inline handlers (report-only until verified on real devices), `frame-ancestors 'none'`, `nosniff`, same-origin referrer. |
+| Subsonic (Nov 2026) | Nothing limited how fast the `/rest/*` password could be guessed. Now 10 failures a minute block the address, doubling up to an hour, and a blocked address is refused without its credentials being checked. |
 
 The regression tests for these live in `tests/test_ssrf.py`,
 `tests/test_localfs_traversal.py`, `tests/test_xml_safety.py`,
 `tests/test_ssdp_parsing.py`, `tests/test_resource_limits.py`,
-`tests/test_art_safety.py`, `tests/test_request_guard.py` and
-`tests/frontend/test_xss.py`.
+`tests/test_art_safety.py`, `tests/test_request_guard.py`,
+`tests/test_security_headers.py`, `tests/test_subsonic.py` (the login
+throttle), `tests/frontend/test_csp.py` and `tests/frontend/test_xss.py`.
 
 ## Running it safely
 
@@ -101,6 +104,8 @@ The regression tests for these live in `tests/test_ssrf.py`,
   `0.0.0.0` default, so the API appears only on interfaces you intended.
 - Set `SUBSONIC_PASSWORD`, or leave it empty — empty makes the Subsonic API
   refuse every call, which is the safe default if you do not use it.
+  After changing it, update your Subsonic apps promptly: a client still
+  sending the old password is throttled like a guesser.
 - If you enable video, know that **GPS coordinates from your clips are sent
   to Nominatim** to turn them into place names. Leave `LOCALFS_VIDEO_ROOT`
   unset to opt out.
