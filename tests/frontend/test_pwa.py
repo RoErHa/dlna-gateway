@@ -1,5 +1,25 @@
 """PWA install + Service Worker registration."""
 import json
+import time
+
+_SW_ACTIVE = ("navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
+              " .then(r => !!(r && r.active && r.active.state === 'activated'))")
+
+
+def _until(page, js, timeout=8000):
+    """Poll `js` until it is truthy — AWAITING a Promise it returns.
+
+    Not `page.wait_for_function`: that does NOT await a returned Promise,
+    and a pending Promise is truthy, so every SW/cache wait in this file
+    passed instantly whatever the state (found 2026-11-03, when the art-cache
+    test flaked once in a full run). `evaluate` does await, so poll it."""
+    deadline = time.monotonic() + timeout / 1000
+    while True:
+        if page.evaluate(js):
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out after {timeout} ms waiting for: {js}")
+        page.wait_for_timeout(50)
 
 
 # ── HTML / manifest contract ──────────────────────────────────────
@@ -69,11 +89,7 @@ def test_sw_js_served(app):
 def test_sw_registers(app):
     """After page load, navigator.serviceWorker should have a registration
     pointing at /sw.js. The PWA install banner depends on this."""
-    app.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        " .then(r => r && r.active && r.active.state === 'activated')",
-        timeout=8000,
-    )
+    _until(app, _SW_ACTIVE)
     state = app.evaluate(
         "navigator.serviceWorker.getRegistration().then(r => r ? r.active.state : null)"
     )
@@ -86,11 +102,7 @@ def test_sw_caches_app_shell(app):
     sw.js — if it breaks, the offline mode silently fails. Reads the cache
     name from sw.js so a version bump there doesn't break this test."""
     # Wait for activation
-    app.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        " .then(r => r && r.active && r.active.state === 'activated')",
-        timeout=8000,
-    )
+    _until(app, _SW_ACTIVE)
     # Give the cache.addAll() a beat to settle
     app.wait_for_timeout(500)
     # Look up the live cache name straight from window, so this test
@@ -115,11 +127,7 @@ def test_sw_navigation_is_network_first(app):
     NETWORK-FIRST: when online, a poisoned cache entry for '/' must be ignored
     in favour of the fresh network document, so a bad cache can't trap the user
     with "full UI, no content"."""
-    app.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        " .then(r => r && r.active && r.active.state === 'activated')",
-        timeout=8000,
-    )
+    _until(app, _SW_ACTIVE)
     # Poison the app-shell cache entry for '/' with a broken document.
     app.evaluate("""
       caches.keys()
@@ -144,11 +152,7 @@ def test_poisoned_shell_cache_still_renders(app):
     online load must never be held hostage by a bad cached shell asset. The
     earlier network-first fix only covered '/', so a poisoned app.js still
     blanked the app; this guards the asset path too."""
-    app.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        " .then(r => r && r.active && r.active.state === 'activated')",
-        timeout=8000,
-    )
+    _until(app, _SW_ACTIVE)
     # Poison the two critical shell entries with broken bodies.
     app.evaluate("""
       caches.keys()
@@ -191,8 +195,11 @@ def test_sw_update_rolls_out_from_broken_worker(page, stub):
     import pathlib
     new_sw = pathlib.Path("static/sw.js").read_text()
     import re
-    assert re.search(r"dlna-gw-app-v\d+", new_sw), \
-        "expected a dlna-gw-app-v<N> cache version in sw.js"
+    m = re.search(r"dlna-gw-app-v\d+", new_sw)
+    assert m, "expected a dlna-gw-app-v<N> cache version in sw.js"
+    # Read from sw.js, never typed: a hardcoded 'v14' went stale five bumps
+    # ago, and only passed because the wait below never really waited.
+    new_cache = m.group(0)
     old_sw = """
 const APP_CACHE='dlna-gw-app-vOLD';
 const SHELL=['/','/static/app.css','/static/app.js','/static/vendor/hls.min.js','/manifest.json','/icon-192.png','/icon-512.png'];
@@ -208,15 +215,18 @@ self.addEventListener('fetch',e=>{
 });
 """
     serve = {"sw": old_sw}
-    page.route("**/sw.js", lambda r: r.fulfill(
+    # CONTEXT route, not page route: on Chromium a page route never sees the
+    # service-worker script fetch, so the REAL sw.js installed from the start,
+    # nothing was ever wedged, and this test proved nothing there (found
+    # 2026-11-03). Verified by mutation: with the old-cache cleanup removed
+    # from sw.js it now fails on Chromium and WebKit alike.
+    page.context.route("**/sw.js", lambda r: r.fulfill(
         status=200, body=serve["sw"], content_type="application/javascript",
         headers={"Cache-Control": "no-store"}))
 
     # 1) Wedge the client on the broken worker.
     page.goto(stub.base_url + "/", wait_until="domcontentloaded")
-    page.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        ".then(r => r && r.active && r.active.state === 'activated')", timeout=8000)
+    _until(page, _SW_ACTIVE)
 
     # 2) Poison the old shell cache (the outage condition).
     page.evaluate("""caches.open('dlna-gw-app-vOLD').then(c => Promise.all([
@@ -228,10 +238,9 @@ self.addEventListener('fetch',e=>{
     # 3) Deploy the fixed worker; the client updates itself — NO storage clear.
     serve["sw"] = new_sw
     page.evaluate("navigator.serviceWorker.getRegistration().then(r => r.update())")
-    page.wait_for_function(
+    _until(page,
         "caches.keys().then(ks =>"
-        " ks.includes('dlna-gw-app-v14') && !ks.includes('dlna-gw-app-vOLD'))",
-        timeout=8000)
+        f" ks.includes('{new_cache}') && !ks.includes('dlna-gw-app-vOLD'))")
 
     # 4) Reload (still no clear) — the app must boot with real content.
     page.reload(wait_until="domcontentloaded")
@@ -249,11 +258,7 @@ def test_sw_does_not_intercept_api_calls(app, gateway):
     misrouted SW would freeze server status / playlist updates after the
     network goes away."""
     # Wait for SW to activate
-    app.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        " .then(r => r && r.active && r.active.state === 'activated')",
-        timeout=8000,
-    )
+    _until(app, _SW_ACTIVE)
     gateway.clear_requests()
     app.evaluate("fetch('/api/servers').then(r => r.json())")
     req = gateway.wait_for_request("/api/servers", timeout=2.0)
@@ -263,21 +268,24 @@ def test_sw_does_not_intercept_api_calls(app, gateway):
 def test_sw_caches_art_proxy(app, gateway):
     """sw.js should cache /art images (cache-first). After two fetches of the
     same art URL, only one should reach the gateway — the second comes from
-    ART_CACHE."""
-    app.wait_for_function(
-        "navigator.serviceWorker && navigator.serviceWorker.getRegistration()"
-        " .then(r => r && r.active && r.active.state === 'activated')",
-        timeout=8000,
-    )
+    ART_CACHE.
+
+    Waits on STATE, never on a fixed sleep (flaked once in a full run,
+    2026-11-03): sw.js answers first and stores the copy with an un-awaited
+    `cache.put`, so under load the store can land after any fixed delay. And
+    an ACTIVATED worker may not yet CONTROL the page, in which case the first
+    fetch bypasses it and nothing is cached at all."""
+    _until(app, _SW_ACTIVE)
+    _until(app, "!!navigator.serviceWorker.controller")
     art_url = "/art?url=" + "http%3A%2F%2Fstub%2Fcover.jpg"
     gateway.clear_requests()
     # First fetch — populates the cache
     app.evaluate(f"fetch('{art_url}').then(r => r.blob())")
-    app.wait_for_timeout(500)
+    _until(app, f"caches.match('{art_url}').then(r => !!r)")
     first = len(gateway.captured(path_contains="/art"))
-    # Second fetch — should be served from cache, no extra hit
+    # Second fetch — must be served from cache. Awaited to completion, so
+    # any network hit it made is already captured when we count.
     app.evaluate(f"fetch('{art_url}').then(r => r.blob())")
-    app.wait_for_timeout(500)
     second = len(gateway.captured(path_contains="/art"))
     assert second == first, (
         f"second /art fetch hit network ({second - first} new requests); "
