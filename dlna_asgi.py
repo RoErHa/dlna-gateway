@@ -57,6 +57,7 @@ import dlna_asgi_upnp
 import dlna_asgi_video
 import dlna_routes
 from dlna_asgi_bridge import make_bridged_route
+from dlna_asgi_guard import RequestGuard
 from dlna_asgi_state import DB, INDEXER, PLAIN_PORT, SERVERS  # noqa: F401
 from dlna_config import VERSION, raise_fd_limit  # noqa: F401
 from dlna_events import EVENTS
@@ -253,9 +254,20 @@ for _path, _handler in dlna_routes.POST_ROUTES.items():
         app.add_api_route(_path, make_bridged_route(_handler, is_post=True),
                           methods=["POST"], name=f"bridged_post:{_path}")
 
+# Query-string writes, served as POST (dlna_routes.QUERY_POST_ROUTES): the
+# handler still reads `params` from the query, so it is bridged like a GET.
+for _path, _handler in dlna_routes.QUERY_POST_ROUTES.items():
+    app.add_api_route(_path, make_bridged_route(_handler, is_post=False),
+                      methods=["POST"], name=f"bridged_qpost:{_path}")
+
 
 # ── Static mount ─────────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# ── Browser request guard (CSRF + DNS rebinding) ─────────────────────
+# Outermost, so it sees every request — routes, the static mount and the
+# byte relays alike. See dlna_asgi_guard.py for the two rules.
+app.add_middleware(RequestGuard)
 
 
 def _run(host: str = "127.0.0.1", port: int = 8768) -> None:

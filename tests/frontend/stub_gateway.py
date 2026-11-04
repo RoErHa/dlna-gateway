@@ -24,6 +24,15 @@ from urllib.parse import parse_qs, urlparse
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 
+
+# The state-changing routes that take their arguments in the query string and
+# are POST-only since 2026-11-04 (dlna_routes.QUERY_POST_ROUTES).
+QUERY_POST_PATHS = frozenset({
+    "/api/index/rebuild", "/api/playlist/create", "/api/playlist/delete",
+    "/api/playlist/add", "/api/playlist/remove",
+    "/api/album_favourites/add", "/api/album_favourites/remove",
+})
+
 class StubGateway:
     """In-process state for a single test. Created by the `gateway` fixture."""
 
@@ -234,6 +243,12 @@ class _Handler(BaseHTTPRequestHandler):
         path = u.path
         self._capture()
         gw = self.gateway
+        # Like the real gateway (dlna_routes.QUERY_POST_ROUTES): these writes
+        # read the query string but are POST-only, so a GET left in app.js
+        # fails the tests instead of silently passing against a lenient stub.
+        if path in QUERY_POST_PATHS and self.command != "POST":
+            self._send_json({"detail": "Method Not Allowed"}, status=405)
+            return
 
         # SSE (R2): serve a minimal text/event-stream. A long `retry` keeps
         # EventSource from reconnect-churning during a test; any frames in
@@ -579,6 +594,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802
+        if urlparse(self.path).path in QUERY_POST_PATHS:
+            self.do_GET()               # same handler; it reads the query
+            return
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         self._capture(body=body)

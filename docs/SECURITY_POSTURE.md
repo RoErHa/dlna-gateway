@@ -206,6 +206,75 @@ refused), and forgetting also releases the device's seen location, so a live
 renderer is back on the next M-SEARCH (≤ 30 s). Guarded by
 `tests/test_forget_renderer.py::TestRoute`.
 
+**13. A web page you open must not be able to drive the gateway
+(2026-11-04, `dlna_asgi_guard.py`).** "The LAN is the access control" missed
+one way in that is neither LAN peer nor tailnet: the owner's own browser. Any
+page opened on a LAN device runs inside the network. Found on review, all
+three confirmed in code:
+
+- **Writes on GET.** `/api/playlist/delete?id=N` (ids are sequential),
+  `/api/index/rebuild`, playlist create/add/remove and album-favourite
+  add/remove all changed state on a GET, so a hidden `<img>` on any page did
+  it.
+- **Cross-site POSTs.** Handlers parse the body as JSON whatever its
+  Content-Type, so a `text/plain` POST — sent without a CORS preflight —
+  reached `/api/render_queue` (plays on the Naim), `/api/control` (volume)
+  and `/api/edit_track`. The page cannot read the reply; it does not need to.
+- **DNS rebinding.** Nothing checked `Host`, so a page re-pointing its own
+  name at our IP could also READ every reply.
+
+The fix is one pure-ASGI middleware, outermost, plus a method change:
+
+1. **Host must name the gateway.** Any IP literal passes (a rebinding browser
+   always sends the attacker's NAME, so no address list needs maintaining);
+   a name must be `localhost`, this Mac's name, `TAILSCALE_CERT_HOST` or its
+   MagicDNS short form, or listed in **`GATEWAY_ALLOWED_HOSTS`** (`.env`).
+   No Host at all passes (not a browser).
+2. **`Sec-Fetch-Site: cross-site` → 403**, except a GET navigation (a link
+   to the PWA keeps working). `same-site` passes: it is another port on this
+   host.
+3. **No Sec-Fetch-Site + a write whose `Origin` names another host → 403.**
+4. **Every write is a POST** (`dlna_routes.QUERY_POST_ROUTES`; a GET is now
+   405). The handlers still read the query string, so nothing else changed.
+
+**Measured, not assumed** — real Chromium and WebKit against the live
+gateway, a hostile page served from another origin:
+
+- Browsers send `Sec-Fetch-*` **only to HTTPS origins.** On the plain
+  `:8765` listener the hostile `text/plain` POST arrived with `Origin` and no
+  `Sec-Fetch-Site`, so rule 3 — not rule 2 — refused it. Rule 3 is the
+  primary defence on `:8765`, not a fallback for old browsers.
+- So on plain HTTP a cross-site **GET** carries nothing to judge and passes.
+  That is why rule 4 is load-bearing: the only thing a cross-site GET can do
+  is cause a reply it cannot read, so no GET may change anything. (One
+  accepted exception: `/api/radio` bumps play counts, which shifts the
+  shuffle bias and nothing else.)
+- The PWA boots, reads and POSTs normally over both `http://<lan-ip>:8765`
+  and `https://<tailnet-name>:8443`, on both engines.
+- curl probes after deploy: devices by LAN IP, `/gw/device.xml`, Subsonic
+  and the PWA over HTTP/2 → 200; `Host: evil.example` over h1 **and h2**
+  (`:authority`) → 403; a cross-site no-cors GET and POST → 403; a foreign
+  `Origin` POST → 403; a cross-site navigation → 200; `GET
+  /api/playlist/delete` → 405.
+
+It also closes a gap in item 12: a page in a browser ON this Mac reaches
+`http://127.0.0.1:8765/api/renderers/forget` from loopback, which the
+loopback check alone allowed; its cross-origin POST now fails rule 3.
+
+Side effect worth knowing: `tools/beets_enrich.py --reindex` has always sent
+`POST /api/index/rebuild`, which was GET-only — that step had been failing
+silently and works now.
+
+**When a legitimate client is refused**, the log says so once a minute per
+host: `guard ✗ refused <METHOD> <path> from <ip>: host (host='…') — if this
+is a name you use, add it to GATEWAY_ALLOWED_HOSTS in .env`. **Do not loosen
+rule 1 to "allow any name"** — that is the rebinding hole. Not covered: the
+LocalFs file server on `:8200` is a separate server; it serves file bytes
+read-only, so rebinding there could read music, not change anything.
+Guarded by `tests/test_request_guard.py` (26) and the frontend stub, which
+answers a GET to any `QUERY_POST_ROUTES` path with 405 so a GET left in
+`app.js` fails the browser suite.
+
 ### Can a media file phone home? No — and here is what keeps it that way
 
 The tag reader (`dlna_providers/localfs_tags._read_tags`) opens files with

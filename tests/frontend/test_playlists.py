@@ -9,7 +9,7 @@ def test_new_playlist_button_present(app):
 def test_new_playlist_prompt_creates(app, gateway):
     app.on("dialog", lambda d: d.accept("My new mix"))
     app.locator("#pl-actions button", has_text="New playlist").click()
-    req = gateway.wait_for_request("/api/playlist/create", timeout=2.0)
+    req = gateway.wait_for_request("/api/playlist/create", method="POST", timeout=2.0)
     assert req is not None
     assert req["query"].get("name") == "My new mix"
 
@@ -84,7 +84,7 @@ def test_remove_track_button_removes(page, stub, gateway):
         timeout=4000)
     gateway.clear_requests()
     page.locator("#pl-tracks .pl-track .pl-remove").first.click()
-    req = gateway.wait_for_request("/api/playlist/remove", timeout=2.0)
+    req = gateway.wait_for_request("/api/playlist/remove", method="POST", timeout=2.0)
     assert req is not None
 
 

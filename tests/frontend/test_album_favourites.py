@@ -110,7 +110,7 @@ def test_click_unfavourited_star_calls_add(app, gateway):
     _navigate_to_album(app, "Pink Floyd", "Animals")
     gateway.clear_requests()
     app.locator("#browse-fav-album").click()
-    req = gateway.wait_for_request("/api/album_favourites/add",
+    req = gateway.wait_for_request("/api/album_favourites/add", method="POST",
                                    match=lambda r: r["query"].get("artist") == "Pink Floyd"
                                                    and r["query"].get("album") == "Animals")
     assert req is not None, "Click must trigger /api/album_favourites/add"
@@ -134,7 +134,7 @@ def test_click_favourited_star_calls_remove(app, gateway):
         timeout=3000)
     gateway.clear_requests()
     app.locator("#browse-fav-album").click()
-    req = gateway.wait_for_request("/api/album_favourites/remove",
+    req = gateway.wait_for_request("/api/album_favourites/remove", method="POST",
                                    match=lambda r: r["query"].get("album") == "Animals")
     assert req is not None, "Click must trigger /api/album_favourites/remove"
     app.wait_for_function(
@@ -177,6 +177,6 @@ def test_star_add_uses_album_key(app, gateway):
     gateway.clear_requests()
     app.locator("#browse-fav-album").click()
     req = gateway.wait_for_request(
-        "/api/album_favourites/add", timeout=2.0,
+        "/api/album_favourites/add", method="POST", timeout=2.0,
         match=lambda r: r["query"].get("album_key") == "VA/Comp2")
     assert req is not None, "fav add must carry album_key"

@@ -24,7 +24,7 @@ def test_actions_visible_after_play(app):
 def test_fav_button_posts_to_favourites(app, gateway):
     _start_track(app)
     app.locator("#np-btn-fav").click()
-    req = gateway.wait_for_request("/api/playlist/add", timeout=2.0)
+    req = gateway.wait_for_request("/api/playlist/add", method="POST", timeout=2.0)
     assert req is not None
     assert req["query"].get("pl") == "__favourites__"
 

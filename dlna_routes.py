@@ -43,24 +43,33 @@ GET_ROUTES = {
     "/api/version":        api_playback.version,
     "/api/renderer_state": api_playback.renderer_state,
     "/api/index/status":    api_playback.index_status,
-    "/api/index/rebuild":   api_playback.index_rebuild,
     "/api/lyrics":         api_playback.lyrics,
     "/api/track_meta":     api_playback.track_meta,
     "/stream":             api_playback.stream,
     "/art":                api_playback.art,
     "/api/playlists":      api_playlists.playlists,
     "/api/playlist":       api_playlists.playlist,
+    "/api/album_favourites":        api_playlists.album_favourites,
+    "/api/album_favourites/check":  api_playlists.album_favourite_check,
+    "/gw/device.xml":      api_upnp.device_xml,
+    "/gw/cd/desc.xml":     api_upnp.cd_desc_xml,
+    "/gw/cd/events":       api_upnp.cd_events,
+}
+
+# Writes whose legacy handler reads its arguments from the QUERY STRING, served
+# as POST (2026-11-04). They were GETs, so `<img src=".../api/playlist/delete
+# ?id=1">` on any web page acted on them — see dlna_asgi_guard.py. POST alone
+# is not the protection (a form can POST); the guard's cross-site rule is.
+# Making them POST keeps an <img>, a link prefetch or a crawler from ever
+# changing anything. A GET to any of these is now a 405.
+QUERY_POST_ROUTES = {
+    "/api/index/rebuild":   api_playback.index_rebuild,
     "/api/playlist/create":api_playlists.playlist_create,
     "/api/playlist/delete":api_playlists.playlist_delete,
     "/api/playlist/add":   api_playlists.playlist_add,
     "/api/playlist/remove":api_playlists.playlist_remove,
-    "/api/album_favourites":        api_playlists.album_favourites,
-    "/api/album_favourites/check":  api_playlists.album_favourite_check,
     "/api/album_favourites/add":    api_playlists.album_favourite_add,
     "/api/album_favourites/remove": api_playlists.album_favourite_remove,
-    "/gw/device.xml":      api_upnp.device_xml,
-    "/gw/cd/desc.xml":     api_upnp.cd_desc_xml,
-    "/gw/cd/events":       api_upnp.cd_events,
 }
 
 POST_ROUTES = {

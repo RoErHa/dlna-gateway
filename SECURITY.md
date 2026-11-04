@@ -36,6 +36,10 @@ Anything that lets a peer on the network do more than browse and play:
   attacker-controlled data if you ever download music. A file that makes the
   gateway fetch a URL, run code, or read something it shouldn't is in scope.
 - **Leaking data off the machine** beyond what the README documents.
+- **A web page driving the gateway.** "Whoever can reach it can control it"
+  means a peer on the network, not a site you happen to open in a browser on
+  it. A page that can change state here (CSRF) or read replies (DNS
+  rebinding) is in scope.
 
 ## Out of scope
 
@@ -69,9 +73,9 @@ fail on the unfixed code, and the reasoning goes into `CLAUDE.md` →
 ## What has already been looked at
 
 An audit in August 2026 and two follow-up passes found and fixed eleven
-issues; each is written up in `CLAUDE.md` → "Security posture", with the
-measurement that justified it and a note on what must not be reverted. The
-headlines:
+issues, and a review in November 2026 a twelfth. Each is written up in
+`CLAUDE.md` → "Security posture", with the measurement that justified it and
+a note on what must not be reverted. The headlines:
 
 | Area | What was wrong |
 |---|---|
@@ -82,11 +86,13 @@ headlines:
 | Resource limits | Reads from devices were unbounded; audio relays and event streams had no ceiling. |
 | TLS | Outbound fetches did not verify certificates. |
 | Injection | The PWA's escaping did not cover quoted attributes, where discovered-device text lands. |
+| Browser (Nov 2026) | Any web page could act on the API — writes answered GETs, `text/plain` POSTs needed no preflight, and no `Host` check stopped DNS rebinding. |
 
 The regression tests for these live in `tests/test_ssrf.py`,
 `tests/test_localfs_traversal.py`, `tests/test_xml_safety.py`,
 `tests/test_ssdp_parsing.py`, `tests/test_resource_limits.py`,
-`tests/test_art_safety.py` and `tests/frontend/test_xss.py`.
+`tests/test_art_safety.py`, `tests/test_request_guard.py` and
+`tests/frontend/test_xss.py`.
 
 ## Running it safely
 

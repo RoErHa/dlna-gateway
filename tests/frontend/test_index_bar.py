@@ -29,7 +29,7 @@ def test_rebuild_click_confirms_and_posts(app, gateway):
     # OR call reindex() directly via evaluate.
     app.on("dialog", lambda d: d.accept())
     app.evaluate("reindex()")
-    req = gateway.wait_for_request("/api/index/rebuild", timeout=2.0)
+    req = gateway.wait_for_request("/api/index/rebuild", method="POST", timeout=2.0)
     assert req is not None
 
 

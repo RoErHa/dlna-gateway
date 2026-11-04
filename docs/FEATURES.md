@@ -138,9 +138,9 @@ GET /api/album_favourites
     → [{artist, album, art, track_count, udn, added_at}, …]
 GET /api/album_favourites/check?artist=X&album=Y
     → {is_favourite: bool}
-GET /api/album_favourites/add?artist=X&album=Y
+POST /api/album_favourites/add?artist=X&album=Y     (POST since 2026-11-04 — see SECURITY_POSTURE item 13)
     → {ok: true, created: bool}
-GET /api/album_favourites/remove?artist=X&album=Y
+POST /api/album_favourites/remove?artist=X&album=Y
     → {ok: bool}   (false if it wasn't there)
 ```
 

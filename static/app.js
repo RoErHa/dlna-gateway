@@ -1512,7 +1512,7 @@ async function _wireAlbumFavStar(artist, album, albumKey=""){
     _setAlbumFavStar(true, !wasFav);
     const path = wasFav ? "/api/album_favourites/remove" : "/api/album_favourites/add";
     try {
-      const r = await api(`${path}?artist=${enc(artist)}&album=${enc(album)}${kq}`);
+      const r = await api(`${path}?artist=${enc(artist)}&album=${enc(album)}${kq}`,{method:"POST"});
       if(!r){ _setAlbumFavStar(true, wasFav); return; }
     } catch(e){ _setAlbumFavStar(true, wasFav); }
   };
@@ -1879,7 +1879,7 @@ async function addAlbumToPlaylist(plId,artist,album){
   let added=0;
   for(const t of data.tracks){
     const params=new URLSearchParams({pl:plId,url:t.url,title:t.title||"",artist:t.artist||"",album:t.album||"",duration:t.duration||"",art:t.art||""});
-    const res=await api("/api/playlist/add?"+params.toString());
+    const res=await api("/api/playlist/add?"+params.toString(),{method:"POST"});
     if(res){const d=await res.json();if(d.ok&&!d.duplicate)added++;}
   }
   await loadPlaylists();
@@ -2548,7 +2548,7 @@ async function playPlaylist(plId){
 async function newPlaylist(){
   const name=prompt("Playlist name:");
   if(!name)return;
-  const r=await api(`/api/playlist/create?name=${enc(name)}`);
+  const r=await api(`/api/playlist/create?name=${enc(name)}`,{method:"POST"});
   if(!r)return;
   await showPlaylists();
   toast(`Created: ${name}`);
@@ -2556,12 +2556,12 @@ async function newPlaylist(){
 
 async function deletePlaylist(plId){
   if(!confirm("Delete this playlist?"))return;
-  await api(`/api/playlist/delete?id=${enc(plId)}`);
+  await api(`/api/playlist/delete?id=${enc(plId)}`,{method:"POST"});
   curPlId=null;showPlaylists();toast("Playlist deleted");
 }
 
 async function removeFromPlaylist(plId,url){
-  await api(`/api/playlist/remove?pl=${enc(plId)}&url=${enc(url)}`);
+  await api(`/api/playlist/remove?pl=${enc(plId)}&url=${enc(url)}`,{method:"POST"});
   openPlaylist(plId);
 }
 
@@ -2605,7 +2605,7 @@ async function addToPlaylist(plId,item){
     duration: item.duration||"",
     art: item.art||""
   });
-  const r=await api("/api/playlist/add?"+params.toString());
+  const r=await api("/api/playlist/add?"+params.toString(),{method:"POST"});
   if(!r){toast("❌ Network error");return;}
   const data=await r.json();
   await loadPlaylists();
@@ -2976,7 +2976,7 @@ async function pollIndex(){
 async function reindex(){
   if(!curServer)return;
   if(!confirm("Rebuild the full library index? This takes a few minutes."))return;
-  await api(`/api/index/rebuild?udn=${enc(curServer.udn)}`);
+  await api(`/api/index/rebuild?udn=${enc(curServer.udn)}`,{method:"POST"});
   toast("Rebuilding index…",3000);
 }
 
