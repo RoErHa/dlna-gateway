@@ -66,6 +66,8 @@ import socket
 import time
 from urllib.parse import urlsplit
 
+import dlna_alerts
+
 log = logging.getLogger("dlna.guard")
 
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
@@ -187,3 +189,13 @@ class RequestGuard:
                     f" from {client}: {why} (host={host!r}"
                     f" origin={headers.get('origin', '')!r}"
                     f" site={headers.get('sec-fetch-site', '')!r}){hint}")
+        # One push an hour at most (dlna_alerts rate-limits per kind): either
+        # someone is probing, or a client you use was refused and needs a
+        # GATEWAY_ALLOWED_HOSTS entry. Header text is clipped — it is the
+        # caller's, not ours.
+        dlna_alerts.alert(
+            "guard_refused", "browser request refused",
+            f"{scope.get('method')} {str(scope.get('path'))[:80]} from "
+            f"{client}: {why} (host={host[:80]!r}). If this is one of your "
+            f"own clients, add its name to GATEWAY_ALLOWED_HOSTS in .env.",
+            priority="low", tags=("shield",))

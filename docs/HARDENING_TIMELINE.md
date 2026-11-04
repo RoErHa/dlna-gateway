@@ -17,14 +17,14 @@ comes up, and note why.
 | # | Item | Target | Status |
 |---|---|---|---|
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
-| 2 | Off-disk copy of the library backups | 2026-11-11 | ☐ open — destination decided 2026-11-07/08 |
-| 3 | Alerts when something goes wrong | 2026-11-18 | ☐ open — decided: push to phone, config in `.env` |
+| 2 | Off-disk copy of the library backups | 2026-11-08 | ☐ open — the owner does it, weekend of 7–8 Nov |
+| 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (push to phone; live once `ALERT_PUSH_URL` is set) |
 | 4 | Security headers on the web app | 2026-11-25 | ☐ open |
 | 5 | Optional login for the web app | 2026-12-09 | ☐ open — **go/no-go not decided** |
 | 6 | Rate limiting on Subsonic logins | 2026-12-16 | ☐ open — **go/no-go not decided** |
 
-**Decisions still open (2026-11-04).** #2's destination is due on 7 or 8
-November. Whether to build #5 and #6 at all is not decided yet. Until it is,
+**Decisions still open (2026-11-04).** #2 is done by the owner over the weekend
+of 7–8 November. Whether to build #5 and #6 at all is not decided yet. Until it is,
 every working session starts with a reminder, and an item is not started
 before its decision is recorded here.
 
@@ -81,17 +81,44 @@ only in that file.
 - the script stays bash 3.2-compatible and `tests/test_backup*.py` covers the
   copy, the verification and the missing-destination path.
 
-**Decision due 2026-11-07/08.** Where to: `/Volumes/SAMDATA` (always
+**The owner does this over the weekend of 7–8 November** and
+decides the destination then. The options: `/Volumes/SAMDATA` (always
 attached, but in the same room and on the same power), another machine over
 the tailnet, or a cloud bucket. Setting up Time Machine would also cover
-this, and the rest of the Mac. The 2026-11-11 target assumes the decision
-lands on time.
+this, and the rest of the Mac.
 
 ---
 
 ## 3. Alerts when something goes wrong — target 2026-11-18
 
-- [ ] Not started.
+- [x] **Done 2026-11-04**, ahead of target. `dlna_alerts.py`,
+  `tests/test_alerts.py` (31). Live as soon as `ALERT_PUSH_URL` is set in
+  `.env` and the phone subscribes to that topic.
+
+**What was built.**
+- `dlna_alerts.alert(kind, …)` queues (bounded, one daemon sender), is
+  rate-limited per kind (1 h), and never raises, so it can be called from
+  any path, including the request guard.
+- Raised by: the runtime watch when no replacement Python is installed
+  (half-alive, now); a self-restart, reported by the NEXT process at boot from
+  a marker, because a process whose Python was deleted cannot be trusted to
+  make a TLS call; a restart loop (5 boots in 10 minutes); a library root
+  still missing after an hour; a refused browser request (low priority); the
+  certificate under 14 days; and a failed weekly backup, certificate renewal
+  or upgrade check, through the CLI `python3 dlna_alerts.py <kind> <title>
+  <message>` from each script's failure path.
+- The test suite cannot reach the phone: `tests/__init__.py` and
+  `run_all.py` set an empty `ALERT_PUSH_URL`, which `.env` never overrides.
+
+**Learned.** CLAUDE.md said the gateway WARNs when the certificate has under
+14 days left. That check (`_warn_if_cert_expiring_soon`) left with the stdlib
+TLS server in `baa2c0c`; the paragraph had described nothing for a year. It
+is back, as `dlna_alerts.check_cert`, at boot and every 6 h.
+
+**Limit.** A gateway that dies before any app code runs (the 2026-09-20
+`RLIMIT_NPROC` respawn loop failed inside hypercorn's own startup) never
+reaches `on_boot`, so that loop is not reported. The weekly jobs are
+unaffected.
 
 **Why.** The gateway now detects its own failures (a stale Python, an
 unmounted volume, a dead renderer, a refused browser request) but only writes

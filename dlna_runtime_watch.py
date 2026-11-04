@@ -48,6 +48,8 @@ import threading
 import time
 from collections.abc import Callable
 
+import dlna_alerts
+
 log = logging.getLogger("dlna.runtime")
 
 # EX_TEMPFAIL — "try again later", which is exactly what we are asking for.
@@ -192,12 +194,22 @@ class RuntimeWatch:
             if not self._warned_not_ready:
                 log.warning(f"runtime watch: {reason}, but no replacement "
                             f"Python is installed yet — not restarting")
+                dlna_alerts.alert(
+                    "runtime_stale", "half-alive — Python is gone",
+                    f"{reason}. No replacement Python is installed yet, so "
+                    f"the gateway cannot restart itself; music from the "
+                    f"library will fail until it does. Install the Python "
+                    f"(brew) and it restarts on its own.",
+                    priority="high", tags=("warning",))
                 self._warned_not_ready = True
             return "waiting"
         log.critical(f"runtime watch: {reason} — this process is running a "
                      f"Python that is no longer on disk (a brew upgrade?). "
                      f"Exiting {EXIT_CODE} so launchd restarts the gateway "
                      f"on the new one.")
+        # This process cannot be trusted to make a TLS call any more; the
+        # NEXT one reports the restart (dlna_alerts.on_boot).
+        dlna_alerts.note_runtime_exit(reason)
         for h in logging.getLogger().handlers + log.handlers:
             h.flush()
         self.exit_fn(EXIT_CODE)

@@ -95,3 +95,6 @@ docs/CUTOVER_RUNBOOK.md
 docs/CLEANUP_C_RUNBOOK.md
 docs/dlna_gateway_refactoring_plan.pdf
 docs/REPORTS.html
+
+# dlna_alerts state: the runtime-exit marker + boot history
+.alerts/

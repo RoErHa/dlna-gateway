@@ -21,6 +21,7 @@ import logging
 import socket
 import threading
 
+import dlna_alerts
 import dlna_discovery as _disc
 from dlna_config import load_config, raise_fd_limit, save_config, setup_logging
 from dlna_events import EVENTS
@@ -95,6 +96,12 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
     # from leaves us half-alive (radio works, music doesn't); restart instead.
     # See dlna_runtime_watch.
     start_runtime_watch()
+
+    # Alerts (dlna_alerts) — report what the PREVIOUS process could not (a
+    # self-restart, a restart loop), and watch the TLS certificate's expiry.
+    # Both are no-ops unless ALERT_PUSH_URL is set (the cert WARN still logs).
+    dlna_alerts.on_boot()
+    dlna_alerts.start_cert_watch(dlna_alerts.default_certfile())
 
     # Open the library DB here, explicitly. The handle is lazy (see
     # dlna_library.get_db) so that importing the module can't migrate a live

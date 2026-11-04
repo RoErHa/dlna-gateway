@@ -21,6 +21,15 @@ set -u
 cd "$(dirname "$0")"
 
 LOG="upgrade-check.log"
+ALERT_REPO="$(pwd)"
+# Push alert to the owner's phone via dlna_alerts.py (hardening #3). Off
+# unless ALERT_PUSH_URL is set in .env; it can never fail the job itself.
+push_alert() {
+    local py="${ALERT_REPO}/.venv/bin/python"
+    [ -x "${py}" ] || py=python3
+    [ -f "${ALERT_REPO}/dlna_alerts.py" ] || return 0
+    "${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" >/dev/null 2>&1 || true
+}
 KEEP_LINES=3000
 
 {
@@ -39,6 +48,8 @@ if [ "$status" -ne 0 ]; then
     [ "$fresh" -gt 0 ] && msg="$fresh new item(s). $msg"
     osascript -e "display notification \"$msg — see the Attention list in upgrade-check.log\" with title \"DLNA Gateway — needs attention\"" \
         >/dev/null 2>&1 || true
+    push_alert upgrade_check "toolchain needs attention" \
+        "$msg. See the Attention list in upgrade-check.log."
 fi
 
 # Bounded log: keep the most recent runs only.

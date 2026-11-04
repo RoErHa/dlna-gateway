@@ -41,6 +41,18 @@ KEEP="${KEEP:-8}"
 LOG="library-backup.log"
 
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
+FAIL_MSG=""
+fail() { FAIL_MSG="$*"; log "✗ FAILED: $*"; }
+
+ALERT_REPO="$(pwd)"
+# Push alert to the owner's phone via dlna_alerts.py (hardening #3). Off
+# unless ALERT_PUSH_URL is set in .env; it can never fail the job itself.
+push_alert() {
+    local py="${ALERT_REPO}/.venv/bin/python"
+    [ -x "${py}" ] || py=python3
+    [ -f "${ALERT_REPO}/dlna_alerts.py" ] || return 0
+    "${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" >/dev/null 2>&1 || true
+}
 
 # ── flags ────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -60,12 +72,24 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Any non-zero exit from here on is a failed backup, including one `set -e`
+# raised on a line nobody anticipated: tell the owner, not just the log.
+on_exit() {
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    push_alert backup_failed "library backup FAILED" \
+      "${FAIL_MSG:-backup-library.sh exited $rc}. Existing snapshots are untouched; see library-backup.log." \
+      --priority high
+  fi
+}
+trap on_exit EXIT
+
 # ── preconditions ────────────────────────────────────────────────────────
 if [ ! -f "$DB" ]; then
-  log "✗ FAILED: $DB not found (cwd $(pwd))"
+  fail "$DB not found (cwd $(pwd))"
   exit 1
 fi
-command -v sqlite3 >/dev/null 2>&1 || { log "✗ FAILED: sqlite3 not on PATH"; exit 1; }
+command -v sqlite3 >/dev/null 2>&1 || { fail "sqlite3 not on PATH"; exit 1; }
 mkdir -p "$DEST"
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
@@ -83,7 +107,7 @@ drop_db() { rm -f "$1" "$1-shm" "$1-wal"; }
 # .part file so an interrupted run can never leave a half-written file
 # looking like a valid backup.
 if ! sqlite3 "$DB" ".backup '$OUT.part'" 2>>"$LOG"; then
-  log "✗ FAILED: sqlite3 .backup errored"
+  fail "sqlite3 .backup errored"
   drop_db "$OUT.part"
   exit 1
 fi
@@ -91,7 +115,7 @@ fi
 # ── verify before trusting it ────────────────────────────────────────────
 CHECK="$(sqlite3 "$OUT.part" 'PRAGMA integrity_check;' 2>&1 | head -1)"
 if [ "$CHECK" != "ok" ]; then
-  log "✗ FAILED: integrity_check on the snapshot said: $CHECK"
+  fail "integrity_check on the snapshot said: $CHECK"
   drop_db "$OUT.part"
   exit 1
 fi
@@ -101,7 +125,7 @@ fi
 # newest backup while pruning a good one.
 TRACKS="$(sqlite3 "$OUT.part" 'SELECT count(*) FROM tracks;' 2>/dev/null || echo 0)"
 if [ "${TRACKS:-0}" -lt 1 ]; then
-  log "✗ FAILED: snapshot holds $TRACKS tracks — refusing to keep it"
+  fail "snapshot holds $TRACKS tracks — refusing to keep it"
   drop_db "$OUT.part"
   exit 1
 fi

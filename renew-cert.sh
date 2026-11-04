@@ -38,6 +38,31 @@ env_get() {
     printf '%s' "${val}"
 }
 
+ALERT_REPO="${REPO_DIR}"
+# Push alert to the owner's phone via dlna_alerts.py (hardening #3). Off
+# unless ALERT_PUSH_URL is set in .env; it can never fail the job itself.
+push_alert() {
+    local py="${ALERT_REPO}/.venv/bin/python"
+    [ -x "${py}" ] || py=python3
+    [ -f "${ALERT_REPO}/dlna_alerts.py" ] || return 0
+    "${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" >/dev/null 2>&1 || true
+}
+
+# A failed renewal must reach the owner: on 2026-07-20 one "succeeded" in the
+# log only. The message is the last ERROR/FATAL line THIS run wrote.
+LOG_START=0
+on_exit() {
+    local rc=$? last=""
+    [ "${rc}" -eq 0 ] && return 0
+    if [ -n "${LOG:-}" ] && [ -f "${LOG}" ]; then
+        last=$(tail -n "+$((LOG_START + 1))" "${LOG}" | grep -E 'ERROR|FATAL' \
+            | tail -1 | sed -E 's/^\[[^]]*\] //')
+    fi
+    push_alert cert_renew_failed "certificate renewal FAILED" \
+        "${last:-renew-cert.sh exited ${rc}}. See cert-renewal.log." --priority high
+}
+trap on_exit EXIT
+
 CERT_HOST="$(env_get TAILSCALE_CERT_HOST)"
 if [ -z "${CERT_HOST}" ]; then
     echo "[$(date '+%F %T')] FATAL TAILSCALE_CERT_HOST not set (put it in .env)" >&2
@@ -46,6 +71,7 @@ fi
 
 RENEW_DAYS="$(env_get RENEW_DAYS)"; RENEW_DAYS="${RENEW_DAYS:-30}"
 LOG="${REPO_DIR}/cert-renewal.log"
+[ -f "${LOG}" ] && LOG_START=$(wc -l < "${LOG}" | tr -d ' ')
 TAILSCALE="$(env_get TAILSCALE_BIN)"; TAILSCALE="${TAILSCALE:-$(command -v tailscale)}"
 OPENSSL="$(env_get OPENSSL_BIN)"; OPENSSL="${OPENSSL:-$(command -v openssl)}"
 

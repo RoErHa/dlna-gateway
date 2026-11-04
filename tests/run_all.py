@@ -45,6 +45,17 @@ PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # tests/test_library_singleton.py::test_a_stray_open_cannot_reach_the_live_library
 sys.path.insert(0, PROJECT)
 import tempfile as _tempfile                                  # noqa: E402
+# A test must never push to the owner's phone: tests trip the browser guard
+# and the root watch on purpose. A REAL environment value wins over .env
+# (dlna_config's loader never overrides one), so an empty one keeps alerts
+# off for this process and every subprocess it starts.
+os.environ["ALERT_PUSH_URL"] = ""
+# …and its state files (the runtime-exit marker, the boot history) go to a
+# throwaway: the runtime-watch tests run the real exit path, and a marker
+# left in the repo made the next live boot push a false "restarted itself"
+# (2026-11-04).
+import tempfile as _alert_tmp                                 # noqa: E402
+os.environ["ALERT_STATE_DIR"] = _alert_tmp.mkdtemp(prefix="dlna-test-alerts-")
 import dlna_config as _dlna_config                            # noqa: E402
 
 _TEST_DB_DIR = _tempfile.mkdtemp(prefix="dlna-test-db-")

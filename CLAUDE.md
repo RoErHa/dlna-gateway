@@ -84,7 +84,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **110/110 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **111/111 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -309,6 +309,7 @@ Appium.
 | `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
 | `dlna_asgi_devices.py` | `POST /api/renderers/forget {udn}` — the one way the gateway FORGETS a renderer (live list, `device_roles` row, playback queue, and its seen location, so a live device is rediscovered on the next M-SEARCH). **Loopback only** (403 otherwise). Built for `chaos.py --fake-renderer`'s cleanup; `ssdp:byebye` stays ignored on purpose (a Naim announcing byebye on standby would drop out of the picker). `tests/test_forget_renderer.py` (16). |
 | `dlna_asgi_guard.py` | `RequestGuard` — which BROWSER requests are answered (CSRF + DNS rebinding). Pure ASGI, outermost, applies to every route and the static mount. Host must be an IP literal or a known name (`GATEWAY_ALLOWED_HOSTS`); `Sec-Fetch-Site: cross-site` only as a GET navigation; without Sec-Fetch-Site a write's `Origin` must match the Host. Devices send none of these headers and are never affected. See Security posture 13. `tests/test_request_guard.py` (26). |
+| `dlna_alerts.py` | Push alerts to the owner's phone (ntfy protocol; `ALERT_PUSH_URL`/`ALERT_PUSH_TOKEN` in `.env`, unset = OFF). `alert(kind, …)` only QUEUES (bounded, one daemon sender) and is rate-limited per kind (`ALERT_MIN_INTERVAL_SEC`, 1 h), so it is safe to call from any hot path and never raises. Raised by: the runtime watch (no replacement Python → now; a self-restart → reported by the NEXT process at `on_boot` from a `.alerts/runtime-exit` marker, since a process whose Python is gone cannot be trusted with TLS), a restart loop (≥5 boots in 10 min, `.alerts/boot-history`), a root waiting > `ALERT_ROOT_WAIT_SEC` (1 h), a guard refusal (low priority), cert < 14 days, and — via the CLI `python3 dlna_alerts.py <kind> <title> <msg>` — failed backup / cert renewal / upgrade check. **Never log the URL** (on ntfy.sh the topic name IS the secret). Tests are kept off it by an empty `ALERT_PUSH_URL` set in `tests/__init__.py` + `run_all.py`. `tests/test_alerts.py` (31). |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
 | `dlna_asgi_artist.py` | `GET /api/artist_info` — the ℹ️ panel's ONE request. Its own module because `dlna_asgi_browse.py` sits at 397/400, and because the panel is a feature seam that will grow. Resolves the line-up for the track's year and LABELS it, so the PWA can't promote a guess to a fact. |
 | `dlna_art_cache.py` | On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
@@ -854,7 +855,7 @@ three-slow-client test moved RSS 114 MB → 133 MB (**10× less**).
 
 The gateway auto-detects `*.crt` + `*.key` in the working directory on startup. Currently uses a Tailscale-issued Let's Encrypt cert: `ronsmacmini.tail5be6ad.ts.net.{crt,key}`. Mobile devices on the tailnet get a trusted cert with no install or exception needed.
 
-**Cert renewal is automated** via `renew-cert.sh` + `com.roha.dlna-cert-renew` LaunchAgent (Mondays 04:30). The script no-ops unless the cert has < 30 days left, then runs `tailscale cert …`, and **only if the expiry actually MOVED** restarts every LaunchAgent in `CERT_RELOAD_LABELS` (`.env`, comma-separated; unset → the gateway alone). Both rules came from `cert-renewal.log` (2026-10-23): on 2026-07-20 Tailscale answered "Public cert unchanged" and the script still logged "renewal complete" (now a WARN, and nothing is restarted); and epub-reader loads these same files but was never restarted, so after the 2026-09-21 renewal it served the old certificate until a development restart happened along, ~7 h before that one expired. **`.env` is READ by the script, never sourced** (`env_get`; the real environment still wins): sourcing executes it as shell, so `GW_NAME=DLNA Gateway (IINA)` was a syntax error that made `.` abandon every key after line 48, an unquoted `a, b` assigned `a,` and ran `b`, and `KEY=x word` would RUN `word`. Found by the first live `--force` run, 2026-10-23. `tests/test_renew_cert.py` (8) runs the real script in a sandbox under `/bin/bash` 3.2. All output appended to `cert-renewal.log` (separate from `gateway.log` for grep-ability). Belt-and-braces: on every successful HTTPS bind the gateway logs a WARN if the cert has < 14 days left (`_warn_if_cert_expiring_soon` in `dlna_gateway.py`) — surfaces a silently-dead LaunchAgent.
+**Cert renewal is automated** via `renew-cert.sh` + `com.roha.dlna-cert-renew` LaunchAgent (Mondays 04:30). The script no-ops unless the cert has < 30 days left, then runs `tailscale cert …`, and **only if the expiry actually MOVED** restarts every LaunchAgent in `CERT_RELOAD_LABELS` (`.env`, comma-separated; unset → the gateway alone). Both rules came from `cert-renewal.log` (2026-10-23): on 2026-07-20 Tailscale answered "Public cert unchanged" and the script still logged "renewal complete" (now a WARN, and nothing is restarted); and epub-reader loads these same files but was never restarted, so after the 2026-09-21 renewal it served the old certificate until a development restart happened along, ~7 h before that one expired. **`.env` is READ by the script, never sourced** (`env_get`; the real environment still wins): sourcing executes it as shell, so `GW_NAME=DLNA Gateway (IINA)` was a syntax error that made `.` abandon every key after line 48, an unquoted `a, b` assigned `a,` and ran `b`, and `KEY=x word` would RUN `word`. Found by the first live `--force` run, 2026-10-23. `tests/test_renew_cert.py` (8) runs the real script in a sandbox under `/bin/bash` 3.2. All output appended to `cert-renewal.log` (separate from `gateway.log` for grep-ability). Belt-and-braces: the gateway checks the cert at boot and every 6 h and logs a WARN, plus a push alert, if it has < 14 days left (`dlna_alerts.check_cert`) — surfaces a silently-dead LaunchAgent. (The original `_warn_if_cert_expiring_soon` went with the stdlib TLS server in `baa2c0c`; for a year this paragraph described a check that no longer existed. Restored 2026-11-04.) A failed run also pushes `cert_renew_failed` via the script's EXIT trap.
 
 Manual override:
 
@@ -1187,6 +1188,10 @@ a good one. Snapshots are written to `.part` first, so an interrupted run
 can't leave a half-file looking valid. Pruning runs only AFTER a good
 snapshot exists, so a failing run never reduces how many backups you have.
 
+Any non-zero exit (an EXIT trap, so a `set -e` surprise counts too) pushes a
+`backup_failed` alert naming the reason (`dlna_alerts.py`; off unless
+`ALERT_PUSH_URL` is set).
+
 Retention: newest 8 (≈2 months, ~64 MB each). `BACKUP_DIR` / `KEEP` override
 via env or the plist.
 
@@ -1223,7 +1228,8 @@ watch does not restart onto the venv still being built (see "Restarting the
 gateway"). The
 report ends in an Attention list (DO / DECIDE / WAIT / NOTE); it notifies on
 a DO item or a DECIDE/WAIT that is NEW since last week, never on the same
-nag twice. It never applies; that stays a person's call.
+nag twice. The same notification is also pushed to the phone (`upgrade_check`, via
+`dlna_alerts.py`). It never applies; that stays a person's call.
 `--python 3.N` without `--apply` dry-runs a minor move (which packages lack
 a wheel).
 The README's **version strip** (`tools/versions.py`, between
@@ -1478,7 +1484,7 @@ bytes), and the allowlist is raster-only — never add `image/svg+xml`.
 
 ## External services (outbound HTTP)
 
-The gateway is LAN-only except for album-art, artist-metadata, songwriting-credit, lyrics and radio-catalogue lookups. All over TLS:
+The gateway is LAN-only except for album-art, artist-metadata, songwriting-credit, lyrics and radio-catalogue lookups, and the optional failure alerts. All over TLS:
 
 | Host | Purpose | Method + path |
 |---|---|---|
@@ -1487,6 +1493,7 @@ The gateway is LAN-only except for album-art, artist-metadata, songwriting-credi
 | `en.wikipedia.org` | The biography paragraph + the artist photo behind the ℹ️ panel | `GET /api/rest_v1/page/summary/{title}` — CC BY-SA, so **the text is dropped when its url is missing**: the link IS the attribution and they travel together or not at all |
 | `ws.audioscrobbler.com` | "Best known for", by actual listening | `GET /2.0/?method=artist.gettoptracks&api_key=…` — needs a registered APPLICATION key (`LASTFM_API_KEY`), not an account password. Absent → the block is omitted and nothing else changes |
 | `lrclib.net` | On-demand lyrics for the currently-playing track | `GET /api/get?track_name=&artist_name=&album_name=&duration=` — 200 with body or 404 |
+| ntfy topic (`ALERT_PUSH_URL`) | Failure alerts to the owner's phone — **only when configured** | `POST <topic url>` — body = message, `Title`/`Priority`/`Tags` headers. What went wrong and when (a volume path, a refused request's host), never library content |
 | `*.api.radio-browser.info` | Internet-radio station catalogue search | `GET /json/stations/search?name=&tagList=&countrycode=&hidebroken=true` — see the "Internet radio" section |
 
 (beets calls AcoustID from its own process; the key-types bullet below is

@@ -45,6 +45,8 @@ import time
 from pathlib import Path
 from collections.abc import Callable
 
+import dlna_alerts
+
 log = logging.getLogger("dlna.localfs.watch")
 
 # How often a waiting root is re-resolved. 30 s is chosen against the
@@ -187,9 +189,34 @@ class RootWatch:
             time.sleep(_recheck_sec())
             for label in self.waiting():
                 self._activate(label)
+            self.alert_long_waits()
             if not self.waiting():
                 log.debug("every configured root is up — watch thread exiting")
                 return
+
+    def alert_long_waits(self, now: float | None = None) -> list[str]:
+        """Push an alert, once per root, when one has been waiting longer
+        than `ALERT_ROOT_WAIT_SEC` (1 h): a volume that stays unmounted is
+        a library that stays missing, and nobody reads the log."""
+        now = time.time() if now is None else now
+        try:
+            limit = float(os.environ.get("ALERT_ROOT_WAIT_SEC", "3600"))
+        except ValueError:
+            limit = 3600.0
+        due = []
+        with self._lock:
+            for v in self._roots.values():
+                if v["state"] == WAITING and not v.get("alerted") \
+                        and now - v["since"] >= limit:
+                    v["alerted"] = True
+                    due.append((v["label"], v["root"], now - v["since"]))
+        for label, root, waited in due:
+            dlna_alerts.alert(
+                f"root_waiting:{label}", f"{label} library unavailable",
+                f"{root} has not been there for {waited / 3600:.1f} h, so the "
+                f"{label} library is missing. Mount or unlock the volume; it "
+                f"is picked up automatically.", tags=("floppy_disk",))
+        return [d[0] for d in due]
 
     def waiting(self) -> list[str]:
         with self._lock:
