@@ -309,7 +309,7 @@ Appium.
 | `dlna_asgi_upnp.py` | The `/gw/*` UPnP surface the Naim and the LG TV talk to, on the PLAIN `:8765` bind. |
 | `dlna_asgi_devices.py` | `POST /api/renderers/forget {udn}` — the one way the gateway FORGETS a renderer (live list, `device_roles` row, playback queue, and its seen location, so a live device is rediscovered on the next M-SEARCH). **Loopback only** (403 otherwise). Built for `chaos.py --fake-renderer`'s cleanup; `ssdp:byebye` stays ignored on purpose (a Naim announcing byebye on standby would drop out of the picker). `tests/test_forget_renderer.py` (16). |
 | `dlna_asgi_guard.py` | `RequestGuard` — which BROWSER requests are answered (CSRF + DNS rebinding). Pure ASGI, outermost, applies to every route and the static mount. Host must be an IP literal or a known name (`GATEWAY_ALLOWED_HOSTS`); `Sec-Fetch-Site: cross-site` only as a GET navigation; without Sec-Fetch-Site a write's `Origin` must match the Host. Devices send none of these headers and are never affected. See Security posture 13. `tests/test_request_guard.py` (27). |
-| `dlna_alerts.py` | Alerts to the owner's phone, on two channels, each OFF until its `.env` key is set: a **text message via this Mac's Messages app** (`ALERT_SMS_TO`, the owner's choice — it stays local; `dlna_alerts_sms.py`) and an ntfy push (`ALERT_PUSH_URL`/`ALERT_PUSH_TOKEN`). `alert(kind, …)` only QUEUES (bounded, one daemon sender) and is rate-limited per kind (`ALERT_MIN_INTERVAL_SEC`, 1 h), so it is safe to call from any hot path and never raises. Raised by: the runtime watch (no replacement Python → now; a self-restart → reported by the NEXT process at `on_boot` from a `.alerts/runtime-exit` marker, since a process whose Python is gone cannot be trusted with TLS), a restart loop (≥5 boots in 10 min, `.alerts/boot-history`), a root waiting > `ALERT_ROOT_WAIT_SEC` (1 h), a guard refusal (low priority), cert < 14 days, and — via the CLI `python3 dlna_alerts.py <kind> <title> <msg>` — failed backup / cert renewal / upgrade check. **Never log the URL or the number** (on ntfy.sh the topic name IS the secret). Tests are kept off both by empty `ALERT_SMS_TO`/`ALERT_PUSH_URL` and a throwaway `ALERT_STATE_DIR`, set in `tests/__init__.py` + `run_all.py`. `tests/test_alerts.py` (38). |
+| `dlna_alerts.py` | Alerts to the owner's phone, on two channels, each OFF until its `.env` key is set: a **text message via this Mac's Messages app** (`ALERT_SMS_TO`, the owner's choice — it stays local; `dlna_alerts_sms.py`) and an ntfy push (`ALERT_PUSH_URL`/`ALERT_PUSH_TOKEN`). `alert(kind, …)` only QUEUES (bounded, one daemon sender) and is rate-limited per kind (`ALERT_MIN_INTERVAL_SEC`, 1 h), so it is safe to call from any hot path and never raises. Raised by: the runtime watch (no replacement Python → now; a self-restart → reported by the NEXT process at `on_boot` from a `.alerts/runtime-exit` marker, since a process whose Python is gone cannot be trusted with TLS), a restart loop (≥5 boots in 10 min, `.alerts/boot-history`), a root waiting > `ALERT_ROOT_WAIT_SEC` (1 h), a guard refusal (low priority), cert < 14 days, and — via the CLI `python3 dlna_alerts.py <kind> <title> <msg>` — failed backup / cert renewal / upgrade check. **Never log the URL or the number** (on ntfy.sh the topic name IS the secret). Tests are kept off both by empty `ALERT_SMS_TO`/`ALERT_PUSH_URL` and a throwaway `ALERT_STATE_DIR`, set in `tests/__init__.py` + `run_all.py`. `tests/test_alerts.py` (39). |
 | `dlna_alerts_sms.py` | The text-message channel: `osascript` drives Messages, SMS first (iPhone Text Message Forwarding), iMessage as fallback (`ALERT_SMS_SERVICE`). **The number and the text are passed as `argv`, never pasted into the AppleScript** — alert text can carry a stranger's Host header, and string-built AppleScript would run it. Needs a one-time macOS Automation grant (error -1743 until then). The number must carry `+` and the country code (`0316…` reads as a Dutch landline). Verified live 2026-11-04 from the CLI and from the launchd gateway; a weekly job's first text may still need its own grant. Cannot report the Mac itself being down — accepted: a dead Mac shows itself when you try to use it. |
 | `dlna_asgi_headers.py` | `SecurityHeaders` — nosniff, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` and the Content-Security-Policy (`script-src 'self'`) on every response except `/gw/*`; never overrides a header a route set. `CSP_MODE` (`.env`): `report-only` (default) / `enforce` / `off`. `POST /api/csp_report` logs violations (`csp ✗ violation …`, rate-limited, bounded). Mounted INSIDE the guard. See Security posture 14. `tests/test_security_headers.py` (19). |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
@@ -1107,6 +1107,14 @@ installs. Rules that keep it sane:
   `bootstrap` (a `kickstart -k` does NOT re-read plist env — and
   bootout is async: retry the bootstrap if it fails with I/O error).
   Editing `.env` only needs the normal `./setup.sh --restart`.
+- **`.env.example` is GATED** (2026-11-04, `tests/test_env_example.py` (8)).
+  Every key the code reads (an `ast` scan of `os.environ`/`getenv`/`_env`/
+  `_truthy` calls, plus `renew-cert.sh`'s `env_get`) must be in the example —
+  commented out when it has a default — and every key there must be read, or
+  sit under "Not read by the gateway". No key twice, in the example or in
+  your `.env` (python-dotenv keeps the LAST, the fallback parser the FIRST).
+  Your `.env` may hold only known keys; that half skips on a fresh clone.
+  New setting → add it to `.env.example` in the same commit.
 
 ## Album art persistence
 
@@ -1199,7 +1207,7 @@ snapshot exists, so a failing run never reduces how many backups you have.
 
 Any non-zero exit (an EXIT trap, so a `set -e` surprise counts too) sends a
 `backup_failed` alert naming the reason (`dlna_alerts.py`; off unless
-`ALERT_PUSH_URL` is set).
+`ALERT_SMS_TO` or `ALERT_PUSH_URL` is set).
 
 Retention: newest 8 (≈2 months, ~64 MB each). `BACKUP_DIR` / `KEEP` override
 via env or the plist.
@@ -1522,7 +1530,7 @@ Required contract:
 - **Rate limit** — `_MB_RATE_LIMIT_SEC = 1.1` between calls, enforced in `AlbumArtFetcher.run_once()`. MB allows 1 req/sec sustained; 1.1s gives a small safety margin.
 - **Timeout** — `_MB_TIMEOUT = 10.0` per connection. Exceptions inside `_mb_lookup_cover()` are caught and returned as `None` (album gets cached as `notfound`).
 - **No retries** — a transient failure ends up as `notfound` and stays sticky; see the "Sticky notfound cache" subsection above for how to force a retry.
-- **AcoustID has TWO key types — use the right one.** `https://acoustid.org/api-key` gives you a **user** key, intended for *submitting* fingerprints to the AcoustID database. `https://acoustid.org/applications` (register a new application) gives you an **application** key, which is what `/v2/lookup` requires. Calling `/v2/lookup` with a user key returns `HTTP 400 {"error":{"code":4,"message":"invalid API key"}}` — distinctive failure mode worth remembering. `ACOUSTID_API_KEY` in `.env` must be the application key.
+- **AcoustID has TWO key types — use the right one.** `https://acoustid.org/api-key` gives you a **user** key, intended for *submitting* fingerprints to the AcoustID database. `https://acoustid.org/applications` (register a new application) gives you an **application** key, which is what `/v2/lookup` requires. Calling `/v2/lookup` with a user key returns `HTTP 400 {"error":{"code":4,"message":"invalid API key"}}` — distinctive failure mode worth remembering. **The gateway reads no AcoustID key**: beets takes its key from `~/.config/beets/config.yaml`. An `ACOUSTID_API_KEY` (or `DISCOGS_TOKEN`) in `.env` is a note for beets only, listed under "Not read by the gateway" in `.env.example`.
 
 ## Volume control (UPnP renderer)
 

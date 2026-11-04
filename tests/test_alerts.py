@@ -295,6 +295,22 @@ class TestGuardRefusalAlerts(unittest.TestCase):
         self.assertEqual(alert.call_args.args[0], "guard_refused")
         self.assertEqual(alert.call_args.kwargs["priority"], "low")
         self.assertIn("GATEWAY_ALLOWED_HOSTS", alert.call_args.args[2])
+        self.assertIn("not an IP", alert.call_args.args[2])
+
+    def test_only_a_host_refusal_points_at_allowed_hosts(self):
+        """An origin/cross-site refusal is not fixed by any setting; the old
+        text said it was, and an IP got added to GATEWAY_ALLOWED_HOSTS."""
+        import dlna_asgi_guard as g
+        from tests.test_request_guard import NAMES, _asgi
+
+        async def app(scope, receive, send):
+            raise AssertionError("must not be reached")
+        with mock.patch.object(A, "alert") as alert, \
+                self.assertLogs("dlna.guard", "WARNING"):
+            _asgi(g.RequestGuard(app, names=NAMES), "POST", "/api/control",
+                  [("host", "192.168.1.125:8765"), ("origin", "null")])
+        self.assertIn("Nothing to configure", alert.call_args.args[2])
+        self.assertNotIn("GATEWAY_ALLOWED_HOSTS", alert.call_args.args[2])
 
 
 class TestCertificate(unittest.TestCase):

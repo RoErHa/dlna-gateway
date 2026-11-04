@@ -157,6 +157,15 @@ def refusal(method: str, headers: dict, names: frozenset, path: str = "") -> str
     return ""
 
 
+_ALERT_WHY = {
+    "host": "unknown name in the address bar. If you typed that name "
+            "yourself, add it (the name, not an IP) to GATEWAY_ALLOWED_HOSTS",
+    "cross-site": "sent by a page on another site. Nothing to configure; "
+                  "a web page you opened tried to reach the gateway",
+    "origin": "a write from another site's page. Nothing to configure",
+}
+
+
 class RequestGuard:
     """ASGI middleware applying `refusal()` to every HTTP request."""
 
@@ -203,9 +212,12 @@ class RequestGuard:
         # someone is probing, or a client you use was refused and needs a
         # GATEWAY_ALLOWED_HOSTS entry. Header text is clipped — it is the
         # caller's, not ours.
+        # Only a "host" refusal is fixed by GATEWAY_ALLOWED_HOSTS, and only
+        # with the NAME typed in the address bar: an IP address is always
+        # allowed and the client's own address is never checked. Saying so
+        # for every refusal (2026-11-04) sent the owner off to list IPs.
         dlna_alerts.alert(
             "guard_refused", "browser request refused",
             f"{scope.get('method')} {str(scope.get('path'))[:80]} from "
-            f"{client}: {why} (host={host[:80]!r}). If this is one of your "
-            f"own clients, add its name to GATEWAY_ALLOWED_HOSTS in .env.",
+            f"{client}: {_ALERT_WHY.get(why, why)} (host={host[:80]!r}).",
             priority="low", tags=("shield",))

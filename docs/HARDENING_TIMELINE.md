@@ -92,7 +92,7 @@ this, and the rest of the Mac.
 ## 3. Alerts when something goes wrong — target 2026-11-18
 
 - [x] **Done 2026-11-04**, ahead of target. `dlna_alerts.py`,
-  `dlna_alerts_sms.py`, `tests/test_alerts.py` (38). Live as soon as
+  `dlna_alerts_sms.py`, `tests/test_alerts.py` (39). Live as soon as
   `ALERT_SMS_TO` is set in `.env` and macOS has allowed the gateway to
   control Messages. **Verified live 2026-11-04:** the CLI test text and an
   alert raised by the running gateway itself (a deliberately refused
