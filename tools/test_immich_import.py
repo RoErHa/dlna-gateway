@@ -354,6 +354,27 @@ class TestMovedFilesAreRepointed(_Base):
         self.assertIn("lead nowhere", buf.getvalue())
         self.assertTrue((self.dest / "a.mov").is_symlink())
 
+    def test_most_links_dead_is_a_failure_exit(self):
+        src = self.put("library/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        src.unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.run_tool("--apply"), 3)
+
+    def test_one_deleted_video_among_many_links_is_not_a_failure(self):
+        srcs = [self.put(f"library/{i}.mov", f"V{i}".encode()) for i in range(30)]
+        self.run_tool("--apply")
+        srcs[0].unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.run_tool("--apply"), 0)
+
+    def test_repaired_links_do_not_count_as_dead(self):
+        src = self.put("library/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        src.rename(self.source / "library/b.mov")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.run_tool("--apply"), 0)
+
     def test_a_broken_link_keeps_its_name_from_a_new_video(self):
         src = self.put("library/a.mov", b"OLD")
         self.run_tool("--apply")

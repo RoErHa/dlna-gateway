@@ -1689,7 +1689,7 @@ beets → `artist_mbid` → `artist_meta` → `track_credits`.
 | `post_beets_reindex.py` | Makes beets' tags visible | Deletes ONLY `source='acoustid'` overrides, then rescans |
 | `openlibrary_books.py` | Audiobook series/author → `book_meta` | English/Dutch only — non-ASCII series names hard-rejected |
 | `book_language.py` | Asserted audiobook languages | `--set` refused without `--match` |
-| `immich_import.py` | Links new Immich videos into GWMovies, from every Immich library | Only takes videos longer than 3 s (no Live Photo clips on the TV); content-hash dedup is sticky; `--reimport-deleted` to undo that |
+| `immich_import.py` | Links new Immich videos into GWMovies, from every Immich library | Only takes videos longer than 3 s (no Live Photo clips on the TV); content-hash dedup is sticky; `--reimport-deleted` to undo that; runs nightly at 02:45 via `immich-import.sh` + `com.roha.dlna-immich-import` |
 | `infer_video_locations.py` | Location for GPS-less clips from neighbours | Real-GPS evidence only; needed `--no-device-check` |
 | `immich_people_sync.py` | Immich persons → `video_people` | Checksum match, then (name, size) — Immich checksums go stale |
 | `upgrade.py` | Whole toolchain to newest: brew (python, sqlite, openssl, ffmpeg, node…), pip, dev pins + Playwright, vendored hls.js; reports osv.dev vulns | Fresh venv, old one MOVED aside; gates decide; failure → auto-rollback, `--rollback` undoes a passed run. Brew downgrades are HELD (pinned). Brew itself is not rolled back |

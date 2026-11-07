@@ -299,6 +299,12 @@ the originals; add `--apply` to do it. `--limit N` stops early.
 next scan prunes that video. The next importer run finds the file by hash and
 re-points the same link, so its id, people tags and overrides come back.
 
+**Nightly job:** `immich-import.sh` + `com.roha.dlna-immich-import` LaunchAgent
+(02:45, or on wake) runs `--apply` and appends to `immich-import.log`. Any
+non-zero exit sends an `immich_import_failed` alert: exit 2 is a library or the
+video root not mounted, exit 3 is more than 5% of the links leading nowhere. One
+dead link after deleting a video in Immich is normal and only logged.
+
 **The dedup cache is deliberately STICKY** — `dest_files` keeps every
 content hash EVER seen in dest, so a clip you deleted from GWMovies never
 comes back on a re-run. That stickiness once silently withheld 1,783
@@ -313,7 +319,7 @@ python3 tools/immich_import.py               # preview
 python3 tools/immich_import.py --apply       # link new videos
 python3 tools/immich_import.py --source /Volumes/SAMDATA-1TB/PHOTOS-ALL \
     --subdirs "" --reimport-deleted --apply  # one library, deleted clips too
-python3 -m unittest tools.test_immich_import -v   # 41 tests
+python3 -m unittest tools.test_immich_import -v   # 44 tests
 ```
 
 ### `tools/infer_video_locations.py`

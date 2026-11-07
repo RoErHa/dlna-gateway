@@ -57,6 +57,9 @@ DEFAULT_SOURCES = (
     (DEFAULT_SOURCE, SOURCE_SUBDIRS),
 )
 DEFAULT_MIN_SECONDS = 3.0
+# Deleting a video in Immich leaves one dead link, which is normal. Many at once
+# means a lost permission or a moved library, which the nightly job must report.
+DEAD_LINK_ALARM = 0.05
 PROJECT = Path(__file__).resolve().parent.parent
 VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".3gp", ".avi", ".mkv", ".webm",
               ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg"}
@@ -311,8 +314,13 @@ def main(argv=None):
     # Links whose file moved, by what they used to lead to. Sources were checked
     # as mounted above, so a broken link here means the file really is elsewhere.
     broken = {}
+    links = dead = 0
     for p in dest.rglob("*"):
-        if p.is_symlink() and not p.exists():
+        if not p.is_symlink():
+            continue
+        links += 1
+        if not p.exists():
+            dead += 1
             h = cache.seen_hash(p)
             if h:
                 broken[h] = p
@@ -385,6 +393,10 @@ def main(argv=None):
     if not args.apply and (stats["new"] or stats["relinked"]):
         print("DRY-RUN — re-run with --apply to link. The gateway's "
               "periodic scan picks new files up within 5 minutes.")
+    still_dead = dead - stats["relinked"]
+    if links and still_dead / links > DEAD_LINK_ALARM:
+        print(f"ALARM: {still_dead} of {links} links lead nowhere")
+        return 3
     return 0
 
 

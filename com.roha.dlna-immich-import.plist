@@ -1,0 +1,57 @@
+<!--
+  com.roha.dlna-immich-import.plist  —  TEMPLATE (macOS LaunchAgent)
+  ───────────────────────────────────────────────────────────────────
+  Links new Immich videos into the video root every night at 02:45, away from
+  the weekly jobs (Sun 03:30, Mon 04:30, Sat 05:00). If the Mac was asleep,
+  launchd runs it on wake.
+
+  Output goes to immich-import.log (script-managed). The plist's
+  StandardOut/Error catch only launchd-level errors before the script starts.
+
+  BEFORE YOU INSTALL: replace `/path/to/dlna-gateway` with your clone's path.
+
+  INSTALL:
+    cp com.roha.dlna-immich-import.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.roha.dlna-immich-import.plist
+
+  MANAGE:
+    launchctl kickstart gui/$(id -u)/com.roha.dlna-immich-import    # run now
+    launchctl bootout gui/$(id -u)/com.roha.dlna-immich-import      # stop it
+    tail -f /path/to/dlna-gateway/immich-import.log                 # results
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roha.dlna-immich-import</string>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/dlna-gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/dlna-gateway/immich-import.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/dlna-immich-import.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/dlna-immich-import.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
