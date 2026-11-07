@@ -252,6 +252,56 @@ class TestLinksInsteadOfCopies(_Base):
         names = [Path(r).name for r, _ in immich_import.DEFAULT_SOURCES]
         self.assertEqual(names, ["PHOTOS-ALL", "PHOTOS-Mar", "IMMICH-UPLOAD"])
 
+    def _with_duration(self, durations, *args):
+        real = immich_import.video_duration
+        immich_import.video_duration = lambda p: durations[Path(p).name]
+        try:
+            return self.run_tool(*args)
+        finally:
+            immich_import.video_duration = real
+
+    def test_exactly_three_seconds_is_not_longer_than_three(self):
+        self.put("upload/three.mov", b"THREE")
+        self.put("upload/more.mov", b"MORE")
+        self._with_duration({"three.mov": 3.0, "more.mov": 3.1}, "--apply")
+        self.assertFalse(os.path.lexists(self.dest / "three.mov"))
+        self.assertTrue((self.dest / "more.mov").is_symlink())
+
+    def _linked(self, *names):
+        for n in names:
+            self.put(f"upload/{n}", n.encode())
+        self._with_duration(dict.fromkeys(names, 60.0), "--apply")
+
+    def test_prune_removes_only_short_links_and_keeps_the_originals(self):
+        self._linked("short.mov", "exact.mov", "long.mov")
+        self._with_duration({"short.mov": 2.0, "exact.mov": 3.0, "long.mov": 3.5},
+                            "--prune-short", "--apply")
+        self.assertFalse(os.path.lexists(self.dest / "short.mov"))
+        self.assertFalse(os.path.lexists(self.dest / "exact.mov"))
+        self.assertTrue((self.dest / "long.mov").is_symlink())
+        self.assertTrue((self.source / "upload/short.mov").exists())
+
+    def test_prune_is_a_preview_without_apply(self):
+        self._linked("short.mov")
+        self._with_duration({"short.mov": 2.0}, "--prune-short")
+        self.assertTrue((self.dest / "short.mov").is_symlink())
+
+    def test_prune_never_touches_a_real_file(self):
+        (self.dest / "real.mov").write_bytes(b"REAL")
+        self._with_duration({"real.mov": 1.0}, "--prune-short", "--apply")
+        self.assertTrue((self.dest / "real.mov").exists())
+
+    def test_prune_keeps_a_clip_whose_length_is_unknown(self):
+        self._linked("odd.mov")
+        self._with_duration({"odd.mov": -1.0}, "--prune-short", "--apply")
+        self.assertTrue((self.dest / "odd.mov").is_symlink())
+
+    def test_a_pruned_clip_stays_out_on_later_runs(self):
+        self._linked("short.mov")
+        self._with_duration({"short.mov": 2.0}, "--prune-short", "--apply")
+        self._with_duration({"short.mov": 2.0}, "--apply")
+        self.assertFalse(os.path.lexists(self.dest / "short.mov"))
+
     def test_clips_under_the_default_cutoff_are_skipped(self):
         self.put("upload/live.mov", b"CLIP")
         self.put("upload/real.mov", b"REAL")

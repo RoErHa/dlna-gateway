@@ -290,8 +290,10 @@ sources are skipped by (path, size, mtime) without re-reading. Re-running
 after new phone uploads only links what's new — safe as a habit. A name
 collision with different content gets a ` (2)` suffix. DRY-RUN by
 default (`--apply` links; the hash cache is warmed even in dry-run so
-the apply is fast). Clips under 4 seconds are skipped as Live-Photo motion
-clips (`--min-seconds 0` includes them); `--limit N` stops early.
+the apply is fast). Only videos longer than 3 seconds come in, which keeps
+Live-Photo motion clips off the TV (`--min-seconds 0` includes them).
+`--prune-short` removes existing links that are too short, without touching
+the originals; add `--apply` to do it. `--limit N` stops early.
 
 **When Immich moves a file** inside its own storage the link breaks, and the
 next scan prunes that video. The next importer run finds the file by hash and
@@ -311,7 +313,7 @@ python3 tools/immich_import.py               # preview
 python3 tools/immich_import.py --apply       # link new videos
 python3 tools/immich_import.py --source /Volumes/SAMDATA-1TB/PHOTOS-ALL \
     --subdirs "" --reimport-deleted --apply  # one library, deleted clips too
-python3 -m unittest tools.test_immich_import -v   # 35 tests
+python3 -m unittest tools.test_immich_import -v   # 41 tests
 ```
 
 ### `tools/infer_video_locations.py`

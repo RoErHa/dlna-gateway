@@ -23,8 +23,10 @@ step was bringing phone videos over from Immich: this tool automates it.
   * Immich can move files inside its own storage, which breaks a link. A run
     finds the moved file by its hash and re-points the SAME link, so its video
     id, people tags and location overrides survive.
-  * Clips under 4 seconds are skipped: those are Live-Photo motion clips.
-    `--min-seconds 0` includes them.
+  * Only videos LONGER than 3 seconds come in, so Live-Photo motion clips and
+    other very short clips don't flood the TV. `--min-seconds 0` includes them.
+    `--prune-short` removes existing links that are too short: the originals
+    stay untouched, the clips stay out on later runs, and real files are left alone.
   * Filenames are preserved (the gateway titles by metadata, not name);
     a name collision with DIFFERENT content gets a ` (2)` suffix.
   * DRY-RUN by default; --apply links. The hash cache is warmed even
@@ -32,7 +34,8 @@ step was bringing phone videos over from Immich: this tool automates it.
 
     python3 tools/immich_import.py                # preview
     python3 tools/immich_import.py --apply        # link new videos
-    python3 tools/immich_import.py --min-seconds 0   # include Live-Photo clips
+    python3 tools/immich_import.py --min-seconds 0   # include very short clips
+    python3 tools/immich_import.py --prune-short     # preview removing short links
 """
 import argparse
 import hashlib
@@ -53,7 +56,7 @@ DEFAULT_SOURCES = (
     ("/Volumes/SAMDATA-1TB/PHOTOS-Mar", ("",)),
     (DEFAULT_SOURCE, SOURCE_SUBDIRS),
 )
-DEFAULT_MIN_SECONDS = 4.0
+DEFAULT_MIN_SECONDS = 3.0
 PROJECT = Path(__file__).resolve().parent.parent
 VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".3gp", ".avi", ".mkv", ".webm",
               ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg"}
@@ -196,6 +199,26 @@ def unservable(source: Path, subdirs, roots: list[str]) -> list[str]:
             if not any(b == Path(r) or Path(r) in b.parents for r in roots)]
 
 
+def prune_short_links(dest: Path, min_seconds: float, apply: bool) -> int:
+    """Remove symlinks to clips not longer than the cutoff. Only ever unlinks a
+    symlink, never a real file, and keeps a clip whose length can't be read."""
+    removed = kept_unknown = 0
+    for p in sorted(dest.rglob("*")):
+        if not p.is_symlink() or p.suffix.lower() not in VIDEO_EXTS or not p.exists():
+            continue
+        dur = video_duration(p)
+        if dur < 0:
+            kept_unknown += 1
+        elif dur <= min_seconds:
+            removed += 1
+            if apply:
+                p.unlink()
+    verb = "removed" if apply else "would remove"
+    print(f"{verb}: {removed} link(s) of {min_seconds:g}s or less · "
+          f"kept, length unreadable: {kept_unknown}")
+    return removed
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Link new Immich videos into the gateway video root "
@@ -211,8 +234,11 @@ def main(argv=None):
     ap.add_argument("--apply", action="store_true",
                     help="actually link (default: preview only)")
     ap.add_argument("--min-seconds", type=float, default=DEFAULT_MIN_SECONDS,
-                    help="skip clips shorter than this; the default skips "
-                         "Live-Photo motion clips, 0 = everything")
+                    help="only take videos longer than this; the default keeps "
+                         "out Live-Photo motion clips, 0 = everything")
+    ap.add_argument("--prune-short", action="store_true",
+                    help="remove links in dest that are not longer than "
+                         "--min-seconds, then stop (preview unless --apply)")
     ap.add_argument("--limit", type=int, default=0,
                     help="stop after N new imports (0 = no limit)")
     ap.add_argument("--retry-short", action="store_true",
@@ -248,6 +274,10 @@ def main(argv=None):
         print("FATAL: not in LOCALFS_VIDEO_LINK_ROOTS, so these links would "
               f"not play: {', '.join(refused)}")
         return 2
+
+    if args.prune_short:
+        prune_short_links(dest, args.min_seconds, args.apply)
+        return 0
 
     cache = Cache(dest / ".immich-import.db")
     if args.retry_short:
@@ -315,7 +345,7 @@ def main(argv=None):
                 continue
             if args.min_seconds > 0:
                 dur = video_duration(src)
-                if 0 <= dur < args.min_seconds:
+                if 0 <= dur <= args.min_seconds:
                     cache.record_src(src, "", "short")
                     stats["short"] += 1
                     continue
