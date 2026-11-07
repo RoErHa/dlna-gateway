@@ -90,6 +90,12 @@ a note on what must not be reverted. The headlines:
 | Headers (Nov 2026) | No Content-Security-Policy, so an escaping slip would have been script execution; the PWA could be framed; no `nosniff`. Now `script-src 'self'` with no inline handlers (report-only until verified on real devices), `frame-ancestors 'none'`, `nosniff`, same-origin referrer. |
 | Subsonic (Nov 2026) | Nothing limited how fast the `/rest/*` password could be guessed. Now 10 failures a minute block the address, doubling up to an hour, and a blocked address is refused without its credentials being checked. |
 
+**One deliberate exception to path containment (2026-11-07).** With `LOCALFS_VIDEO_LINK_ROOTS` set, the
+video route may follow a symlink out of the video root, so `GWMovies` can link to Immich originals instead
+of copying them. It requires a real symlink inside the video root, a target inside a listed folder, and a
+video extension. Audio, art and direct database paths get no exception. The server still answers any
+unauthenticated LAN peer, and still serves only videos that are in the database.
+
 The regression tests for these live in `tests/test_ssrf.py`,
 `tests/test_localfs_traversal.py`, `tests/test_xml_safety.py`,
 `tests/test_ssdp_parsing.py`, `tests/test_resource_limits.py`,

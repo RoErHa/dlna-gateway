@@ -26,6 +26,7 @@ containment test, which is how one of them drifted.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Default Content-Type when we can't infer one. Keeps Range responses
@@ -111,6 +112,51 @@ def resolve_within(file_path: str,
         except (OSError, ValueError):
             continue
     return None
+
+
+# Keep in step with dlna_video_index.VIDEO_EXTS (a test holds them together).
+_LINKABLE_VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi",
+                        ".3gp", ".m2ts", ".mts"}
+
+
+def _video_link_roots() -> tuple[str, ...]:
+    """`LOCALFS_VIDEO_LINK_ROOTS`, colon-separated. Unset means no exception."""
+    raw = os.environ.get("LOCALFS_VIDEO_LINK_ROOTS", "")
+    return tuple(r.strip() for r in raw.split(":") if r.strip())
+
+
+def resolve_video_link(file_path: str,
+                       allowed_roots: tuple[str, ...]) -> Path | None:
+    """`resolve_within` for the VIDEO route, plus one narrow exception.
+
+    GWMovies may hold symlinks to the originals in Immich's external libraries
+    instead of copies, which live outside the video root. Such a target is
+    served only if ALL of these hold; anything else is refused as usual:
+
+    * the path from the database lies inside an allowed root, by its parent
+      resolved. Since the file resolved outside, it can only be a symlink there,
+      and a row naming the outside file directly gets no exception;
+    * the target resolves inside a `LOCALFS_VIDEO_LINK_ROOTS` folder, compared
+      by path components like everything else here;
+    * the target has a video extension, because the same folders hold photos.
+
+    Audio and art routes never come through here.
+    """
+    safe = resolve_within(file_path, allowed_roots)
+    if safe is not None:
+        return safe
+    link_roots = _video_link_roots()
+    if not link_roots:
+        return None
+    try:
+        if resolve_within(str(Path(file_path).parent), allowed_roots) is None:
+            return None
+    except (OSError, ValueError):
+        return None
+    target = resolve_within(file_path, tuple(str(Path(r).resolve()) for r in link_roots))
+    if target is None or target.suffix.lower() not in _LINKABLE_VIDEO_EXTS:
+        return None
+    return target
 
 
 def _parse_range_header(value: str, file_size: int) -> tuple[int, int] | None:

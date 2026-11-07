@@ -240,5 +240,100 @@ class TestVideoRouteIsContainedToo(unittest.TestCase):
         self.assertNotIn(b"SHOULD NOT BE SERVED", body)
 
 
+class TestVideoLinkException(unittest.TestCase):
+    """GWMovies may link to Immich's originals. This is the only hole in the
+    containment rule, so every way of abusing it is attacked here."""
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(prefix="localfs-link-")).resolve()
+        self.root = self.base / "GWMovies"
+        self.lib = self.base / "PHOTOS-ALL"
+        self.sibling = self.base / "PHOTOS-ALL-private"
+        self.other = self.base / "Elsewhere"
+        for d in (self.root, self.lib, self.sibling, self.other):
+            d.mkdir()
+        (self.lib / "clip.mov").write_bytes(b"VIDEO BYTES")
+        (self.lib / "photo.jpg").write_bytes(b"PHOTO BYTES")
+        (self.lib / "CLIP2.MOV").write_bytes(b"UPPER CASE")
+        (self.sibling / "clip.mov").write_bytes(b"SIBLING SECRET")
+        (self.other / "clip.mov").write_bytes(b"ELSEWHERE SECRET")
+        links = {"good": self.lib / "clip.mov", "photo": self.lib / "photo.jpg",
+                 "upper": self.lib / "CLIP2.MOV",
+                 "sib": self.sibling / "clip.mov", "else": self.other / "clip.mov"}
+        for name, target in links.items():
+            (self.root / f"{name}.mov").symlink_to(target)
+        (self.other / "outside-link.mov").symlink_to(self.lib / "clip.mov")
+        (self.root / "hop.mov").symlink_to(self.root / "good.mov")
+        self.srv = _Server(
+            rows={"aud": self.root / "good.mov"},
+            roots=(str(self.root),),
+            video_rows={**{n: self.root / f"{n}.mov" for n in (*links, "hop")},
+                        "direct": self.lib / "clip.mov",
+                        "outlink": self.other / "outside-link.mov"})
+        self._old = os.environ.get("LOCALFS_VIDEO_LINK_ROOTS")
+        os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = str(self.lib)
+
+    def tearDown(self):
+        if self._old is None:
+            os.environ.pop("LOCALFS_VIDEO_LINK_ROOTS", None)
+        else:
+            os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = self._old
+        self.srv.close()
+        shutil.rmtree(self.base, ignore_errors=True)
+
+    def video(self, vid):
+        return self.srv.get(f"/localfs/video/{vid}")
+
+    def test_a_link_to_a_video_in_a_listed_folder_plays(self):
+        self.assertEqual(self.video("good"), (200, b"VIDEO BYTES"))
+
+    def test_extension_check_ignores_case(self):
+        self.assertEqual(self.video("upper"), (200, b"UPPER CASE"))
+
+    def test_a_chain_of_links_ending_in_a_listed_folder_plays(self):
+        self.assertEqual(self.video("hop"), (200, b"VIDEO BYTES"))
+
+    def test_without_the_setting_nothing_changes(self):
+        del os.environ["LOCALFS_VIDEO_LINK_ROOTS"]
+        status, body = self.video("good")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"VIDEO", body)
+
+    def test_a_photo_in_a_listed_folder_stays_refused(self):
+        status, body = self.video("photo")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"PHOTO", body)
+
+    def test_a_folder_merely_starting_with_a_listed_name_is_refused(self):
+        status, body = self.video("sib")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"SECRET", body)
+
+    def test_a_link_to_an_unlisted_folder_is_refused(self):
+        status, body = self.video("else")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"SECRET", body)
+
+    def test_a_row_naming_the_outside_file_directly_is_refused(self):
+        status, body = self.video("direct")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"VIDEO", body)
+
+    def test_a_link_living_outside_the_video_root_is_refused(self):
+        status, body = self.video("outlink")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"VIDEO", body)
+
+    def test_the_audio_route_gets_no_exception(self):
+        status, body = self.srv.get("/localfs/stream/aud")
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"VIDEO", body)
+
+    def test_extension_list_matches_the_scanner(self):
+        import dlna_localfs_http
+        import dlna_video_index
+        self.assertEqual(dlna_localfs_http._LINKABLE_VIDEO_EXTS, dlna_video_index.VIDEO_EXTS)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

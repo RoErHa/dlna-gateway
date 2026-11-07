@@ -263,5 +263,6 @@ V2 (serve + a minimal `<video>` player) is the first visible result.
 Files in `GWMovies` may be symlinks to the Immich originals in `PHOTOS-ALL` and `PHOTOS-Mar`, to save
 disk and backup space. The id comes from the path inside `GWMovies`, so ids, people tags and location
 overrides are unaffected. A link into a drive that is not mounted stops the scan from pruning, like any
-walk error. A link whose file was really deleted is pruned. `tools/immich_import.py` still copies new
+walk error. A link whose file was really deleted is pruned. `LOCALFS_VIDEO_LINK_ROOTS` must list those
+folders or port 8200 refuses the links with a 403 (see SECURITY.md). `tools/immich_import.py` still copies new
 videos as real files.

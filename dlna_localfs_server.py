@@ -51,6 +51,7 @@ from dlna_localfs_http import (
     _FALLBACK_MIME,
     _dlna_headers_for_mime,
     _parse_range_header,
+    resolve_video_link,
     resolve_within,
 )
 from dlna_providers.localfs import _extract_art_bytes
@@ -131,12 +132,11 @@ class LocalFsHTTPHandler(http.server.BaseHTTPRequestHandler):
             return
 
         # Containment: the resolved path must lie inside an allowed root.
-        # (The DB column is normally trustworthy — only LocalFsProvider
-        # writes to it — but this server answers any unauthenticated peer on
-        # the LAN, so it does not take the database's word for what it may
-        # read.) Everything below uses the RESOLVED path, so a symlink can't
-        # be swapped between the check and the open.
-        safe = resolve_within(file_path, self.allowed_roots)
+        # This server answers any unauthenticated peer on the LAN, so it does
+        # not take the database's word for what it may read. Everything below
+        # uses the RESOLVED path, so a symlink can't be swapped before the open.
+        guard = resolve_video_link if prefix == _VIDEO_PREFIX else resolve_within
+        safe = guard(file_path, self.allowed_roots)
         if safe is None:
             log.warning(f"path-traversal blocked: {file_path} "
                         f"not under {self.allowed_roots}")
