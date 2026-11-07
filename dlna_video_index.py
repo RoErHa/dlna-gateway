@@ -47,6 +47,18 @@ def _walk(root: Path, errors: list = None):
                 yield Path(dirpath) / name
 
 
+def _target_volume_gone(path: Path) -> bool:
+    """A symlink into a drive that is not mounted: the video still exists, it is
+    just unreachable right now. A link whose file was really deleted is not this."""
+    try:
+        target = os.readlink(path)
+    except OSError:
+        return False
+    if not target.startswith("/Volumes/"):
+        return False
+    return not os.path.ismount("/".join(target.split("/")[:3]))
+
+
 def _mtime_iso(mtime: float) -> str:
     return _dt.datetime.fromtimestamp(mtime, _dt.UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
@@ -177,7 +189,10 @@ def scan_videos(root, udn: str, db, base_url: str, *, force: bool = False,
         try:
             st = path.stat()
             rel = str(path.relative_to(root))
-        except OSError:
+        except OSError as e:
+            # Same reasoning as a walk error below: don't prune what we can't see.
+            if _target_volume_gone(path):
+                walk_errors.append(e)
             continue
         scanned += 1
         vid = video_id(rel)

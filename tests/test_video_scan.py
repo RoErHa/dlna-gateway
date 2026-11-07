@@ -8,6 +8,7 @@ Run: python3 -m unittest tests.test_video_scan -v
 """
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -265,6 +266,52 @@ class TestScan(unittest.TestCase):
             st = self._scan()
         self.assertEqual(st["pruned"], 0)
         self.assertEqual(len(self.db.all_videos(UDN)), 2)
+
+    def _link_to(self, name, target):
+        path = os.path.join(self.root, name)
+        os.symlink(target, path)
+        return path
+
+    def test_a_symlinked_video_is_indexed_under_its_own_path(self):
+        # GWMovies can link to the Immich originals instead of copying them.
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        real = os.path.join(outside, "orig.mov")
+        with open(real, "wb") as f:
+            f.write(b"x" * 100)
+        self._link_to("a.mov", real)
+        self.assertEqual(self._scan()["added"], 1)
+        row = self.db.all_videos(UDN)[0]
+        self.assertEqual(row["id"], vix.video_id("a.mov"))
+        self.assertEqual(row["file_path"], os.path.join(self.root, "a.mov"))
+        self.assertEqual(self._scan()["skipped"], 1)
+
+    def test_a_link_into_an_unmounted_drive_never_prunes(self):
+        # 3,900 links must not read as "files gone" when their drive is away.
+        self._mkfile("real.mov")
+        self._mkfile("linked.mov")
+        self._scan()
+        os.unlink(os.path.join(self.root, "linked.mov"))
+        self._link_to("linked.mov", "/Volumes/NotMountedDedupTest/linked.mov")
+        st = self._scan()
+        self.assertEqual(st["pruned"], 0)
+        self.assertTrue(st["missing_root"])
+        self.assertEqual(len(self.db.all_videos(UDN)), 2)
+
+    def test_a_link_whose_file_was_really_deleted_is_pruned(self):
+        # The drive is fine and the video is gone: that one should leave.
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        real = os.path.join(outside, "orig.mov")
+        with open(real, "wb") as f:
+            f.write(b"x" * 100)
+        self._mkfile("real.mov")
+        self._link_to("linked.mov", real)
+        self._scan()
+        os.unlink(real)
+        st = self._scan()
+        self.assertEqual(st["pruned"], 1)
+        self.assertEqual(len(self.db.all_videos(UDN)), 1)
 
     def test_an_empty_root_with_an_empty_index_is_not_an_alarm(self):
         st = self._scan()

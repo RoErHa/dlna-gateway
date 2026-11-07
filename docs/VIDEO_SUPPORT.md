@@ -257,3 +257,11 @@ store it in `videos.title` so browse/sort/search are simple.
 Phase V0 + V1 (deps helper + `videos` table + ffprobe extractor + scan, all
 test-first) is the clean first chunk — backend-only, no UI risk, fully gated.
 V2 (serve + a minimal `<video>` player) is the first visible result.
+
+## Symlinks in the video root (2026-11-07)
+
+Files in `GWMovies` may be symlinks to the Immich originals in `PHOTOS-ALL` and `PHOTOS-Mar`, to save
+disk and backup space. The id comes from the path inside `GWMovies`, so ids, people tags and location
+overrides are unaffected. A link into a drive that is not mounted stops the scan from pruning, like any
+walk error. A link whose file was really deleted is pruned. `tools/immich_import.py` still copies new
+videos as real files.
