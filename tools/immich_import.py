@@ -1,34 +1,42 @@
 #!/usr/bin/env python3
-"""Copy new videos from Immich's originals into the gateway's video root.
+"""Link new Immich videos into the gateway's video root.
 
 The pipeline the gateway already provides: anything landing in
 `/Volumes/SAMDATA/GWMovies` is picked up by the 5-minute periodic video
 scan, GPS-reverse-geocoded, titled `<location>_<YYYYMMDD>_<HHMM>` and
 served in the Videos section (see docs/VIDEO_SUPPORT.md). The one manual
-step was copying phone videos out of Immich — this tool automates it.
+step was bringing phone videos over from Immich: this tool automates it.
 
-  * Sources: Immich's ORIGINALS — `library/` + `upload/` under the
-    Immich data volume. `encoded-video/` (transcodes), `thumbs/`,
-    `profile/` and `backups/` are never touched.
+  * Each new video becomes a SYMLINK to its Immich original, not a copy, so
+    it costs no disk or backup space. The file server follows these links
+    only into `LOCALFS_VIDEO_LINK_ROOTS`, so every source must be listed there.
+  * Sources: all of Immich's ORIGINALS. The external libraries come first
+    because their paths never change, then `library/` + `upload/` under the
+    Immich data volume. `encoded-video/` (transcodes), `thumbs/`, `profile/`
+    and `backups/` are never touched.
   * Dedup is by CONTENT HASH (BLAKE2b), recorded in a cache DB at
     `<dest>/.immich-import.db`: files already in GWMovies (however they
     got there, whatever their name) are registered on first run and
-    never copied again; sources already processed are skipped by
+    never linked again; sources already processed are skipped by
     (path, size, mtime) without re-reading them. Re-running after new
-    phone uploads only copies what's new — safe as a habit.
+    phone uploads only links what's new: safe as a habit.
+  * Immich can move files inside its own storage, which breaks a link. A run
+    finds the moved file by its hash and re-points the SAME link, so its video
+    id, people tags and location overrides survive.
+  * Clips under 4 seconds are skipped: those are Live-Photo motion clips.
+    `--min-seconds 0` includes them.
   * Filenames are preserved (the gateway titles by metadata, not name);
     a name collision with DIFFERENT content gets a ` (2)` suffix.
-  * DRY-RUN by default; --apply copies. The hash cache is warmed even
+  * DRY-RUN by default; --apply links. The hash cache is warmed even
     in dry-run (that's the slow part) so the following --apply is fast.
 
     python3 tools/immich_import.py                # preview
-    python3 tools/immich_import.py --apply        # copy new videos
-    python3 tools/immich_import.py --min-seconds 10   # skip Live-Photo clips
+    python3 tools/immich_import.py --apply        # link new videos
+    python3 tools/immich_import.py --min-seconds 0   # include Live-Photo clips
 """
 import argparse
 import hashlib
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -38,6 +46,15 @@ from pathlib import Path
 DEFAULT_SOURCE = "/Volumes/SAMDATA-1TB/IMMICH-UPLOAD"
 DEFAULT_DEST = "/Volumes/SAMDATA/GWMovies"
 SOURCE_SUBDIRS = ("library", "upload")
+# (root, subdirs) in preference order: when the same video exists twice, the
+# link goes to the first, and external libraries never move their files.
+DEFAULT_SOURCES = (
+    ("/Volumes/SAMDATA-1TB/PHOTOS-ALL", ("",)),
+    ("/Volumes/SAMDATA-1TB/PHOTOS-Mar", ("",)),
+    (DEFAULT_SOURCE, SOURCE_SUBDIRS),
+)
+DEFAULT_MIN_SECONDS = 4.0
+PROJECT = Path(__file__).resolve().parent.parent
 VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".3gp", ".avi", ".mkv", ".webm",
               ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg"}
 FFPROBE = "/opt/homebrew/bin/ffprobe"
@@ -103,6 +120,16 @@ class Cache:
                 (h, path.name, st.st_size))
         return h
 
+    def seen_hash(self, path: Path):
+        row = self.conn.execute("SELECT hash FROM dest_seen WHERE path=?",
+                                (str(path),)).fetchone()
+        return row[0] if row else None
+
+    def src_hash(self, path: Path):
+        row = self.conn.execute("SELECT hash FROM src_seen WHERE path=?",
+                                (str(path),)).fetchone()
+        return row[0] if row else None
+
     def src_status(self, path: Path):
         st = path.stat()
         row = self.conn.execute(
@@ -135,28 +162,57 @@ def unique_dest(dest_dir: Path, name: str) -> Path:
     out = dest_dir / name
     stem, suffix = out.stem, out.suffix
     n = 2
-    while out.exists():
+    while os.path.lexists(out):   # a broken link still occupies its name
         out = dest_dir / f"{stem} ({n}){suffix}"
         n += 1
     return out
 
 
+def make_link(src: Path, out: Path) -> None:
+    """Point `out` at `src`, and prove the link really leads to that file."""
+    out.symlink_to(src.resolve())
+    if not os.path.samefile(out, src):
+        out.unlink()
+        raise OSError(f"link does not lead to {src}")
+
+
+def listed_link_roots() -> list[str]:
+    """`LOCALFS_VIDEO_LINK_ROOTS`, from the environment or the project's .env."""
+    raw = os.environ.get("LOCALFS_VIDEO_LINK_ROOTS")
+    if raw is None:
+        try:
+            for line in (PROJECT / ".env").read_text().splitlines():
+                if line.startswith("LOCALFS_VIDEO_LINK_ROOTS="):
+                    raw = line.split("=", 1)[1]
+        except OSError:
+            pass
+    return [r.strip() for r in (raw or "").split(":") if r.strip()]
+
+
+def unservable(source: Path, subdirs, roots: list[str]) -> list[str]:
+    """Source folders the file server would refuse to follow links into."""
+    bases = [(source / sub) if sub else source for sub in subdirs]
+    return [str(b) for b in bases
+            if not any(b == Path(r) or Path(r) in b.parents for r in roots)]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Copy new Immich videos into the gateway video root "
+        description="Link new Immich videos into the gateway video root "
                     "(dry-run by default).")
-    ap.add_argument("--source", default=DEFAULT_SOURCE)
+    ap.add_argument("--source", default=None,
+                    help="one source root (default: every Immich library)")
     ap.add_argument("--dest", default=DEFAULT_DEST)
-    ap.add_argument("--subdirs", default=",".join(SOURCE_SUBDIRS),
+    ap.add_argument("--subdirs", default=None,
                     help="comma list of source subdirs to walk (default "
                          "'library,upload' = Immich's originals); pass '' "
                          "to walk the source root itself (a plain folder "
                          "tree like an external library)")
     ap.add_argument("--apply", action="store_true",
-                    help="actually copy (default: preview only)")
-    ap.add_argument("--min-seconds", type=float, default=0,
-                    help="skip clips shorter than this (e.g. 10 to skip "
-                         "Live-Photo motion clips); default 0 = all")
+                    help="actually link (default: preview only)")
+    ap.add_argument("--min-seconds", type=float, default=DEFAULT_MIN_SECONDS,
+                    help="skip clips shorter than this; the default skips "
+                         "Live-Photo motion clips, 0 = everything")
     ap.add_argument("--limit", type=int, default=0,
                     help="stop after N new imports (0 = no limit)")
     ap.add_argument("--retry-short", action="store_true",
@@ -166,15 +222,32 @@ def main(argv=None):
     ap.add_argument("--reimport-deleted", action="store_true",
                     help="dedup against files PRESENT in dest now, not "
                          "everything ever seen — content once in dest but "
-                         "since deleted gets copied again (default keeps "
+                         "since deleted gets linked again (default keeps "
                          "deliberately-deleted clips gone forever)")
     args = ap.parse_args(argv)
 
-    source, dest = Path(args.source), Path(args.dest)
-    if not source.is_dir():
-        print(f"FATAL: source not mounted: {source}"); return 2
+    dest = Path(args.dest)
+    if args.source:
+        if args.subdirs is None:
+            subdirs = SOURCE_SUBDIRS
+        else:
+            subdirs = tuple(x.strip() for x in args.subdirs.split(",")) \
+                if args.subdirs else ("",)
+        sources = ((args.source, subdirs),)
+    else:
+        sources = DEFAULT_SOURCES
+    sources = tuple((Path(root), subs) for root, subs in sources)
+    for source, _subs in sources:
+        if not source.is_dir():
+            print(f"FATAL: source not mounted: {source}"); return 2
     if not dest.is_dir():
         print(f"FATAL: dest not mounted: {dest}"); return 2
+    roots = listed_link_roots()
+    refused = [b for s, subs in sources for b in unservable(s, subs, roots)]
+    if refused:
+        print("FATAL: not in LOCALFS_VIDEO_LINK_ROOTS, so these links would "
+              f"not play: {', '.join(refused)}")
+        return 2
 
     cache = Cache(dest / ".immich-import.db")
     if args.retry_short:
@@ -193,7 +266,8 @@ def main(argv=None):
               f"will be re-evaluated against files present now")
 
     # 1. Register everything already in the video root (incremental —
-    #    only new/changed files get hashed).
+    #    only new/changed files get hashed). is_file() follows symlinks, so a
+    #    link counts as the video it leads to.
     dest_files = [p for p in dest.rglob("*")
                   if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
     print(f"registering {len(dest_files)} existing files in {dest} …")
@@ -204,50 +278,82 @@ def main(argv=None):
     # the user deleted from the video root never come back on a re-run.
     # --reimport-deleted narrows it to what's physically present now.
     have = present if args.reimport_deleted else cache.dest_hashes()
+    # Links whose file moved, by what they used to lead to. Sources were checked
+    # as mounted above, so a broken link here means the file really is elsewhere.
+    broken = {}
+    for p in dest.rglob("*"):
+        if p.is_symlink() and not p.exists():
+            h = cache.seen_hash(p)
+            if h:
+                broken[h] = p
+
+    def repair(h: str, src: Path) -> bool:
+        link = broken.get(h)
+        if link is None:
+            return False
+        stats["relinked"] += 1
+        if args.apply:
+            link.unlink()
+            make_link(src, link)
+            cache.record_src(src, h, "imported", link.name)
+            print(f"  ~ {link.name}  →  {src}")
+        else:
+            print(f"  would re-point: {link.name}  →  {src}")
+        del broken[h]
+        return True
 
     # 2. Walk Immich originals.
-    stats = {"new": 0, "dup": 0, "seen": 0, "short": 0}
+    stats = {"new": 0, "dup": 0, "seen": 0, "short": 0, "relinked": 0}
     t0 = time.monotonic()
-    subdirs = tuple(s.strip() for s in args.subdirs.split(",")) \
-        if args.subdirs else ("",)
-    for src in iter_source_videos(source, subdirs=subdirs):
-        prior = cache.src_status(src)
-        if prior is not None:
-            stats["seen"] += 1
-            continue
-        if args.min_seconds > 0:
-            dur = video_duration(src)
-            if 0 <= dur < args.min_seconds:
-                cache.record_src(src, "", "short")
-                stats["short"] += 1
+    limit_hit = False
+    for source, subdirs in sources:
+        for src in iter_source_videos(source, subdirs=subdirs):
+            prior = cache.src_status(src)
+            if prior is not None:
+                stats["seen"] += 1
+                repair(cache.src_hash(src), src)
                 continue
-        h = file_hash(src)
-        if h in have:
-            cache.record_src(src, h, "duplicate")
-            stats["dup"] += 1
-            continue
-        stats["new"] += 1
-        rel = src.relative_to(source)
-        if args.apply:
-            out = unique_dest(dest, src.name)
-            shutil.copy2(src, out)
-            cache.register_dest(out)
-            cache.record_src(src, h, "imported", out.name)
-            have.add(h)
-            print(f"  + {rel}  →  {out.name}")
-        else:
-            print(f"  would copy: {rel}")
-        if args.limit and stats["new"] >= args.limit:
-            print(f"--limit {args.limit} reached, stopping")
+            if args.min_seconds > 0:
+                dur = video_duration(src)
+                if 0 <= dur < args.min_seconds:
+                    cache.record_src(src, "", "short")
+                    stats["short"] += 1
+                    continue
+            h = file_hash(src)
+            if repair(h, src):
+                continue
+            if h in have:
+                cache.record_src(src, h, "duplicate")
+                stats["dup"] += 1
+                continue
+            stats["new"] += 1
+            rel = src.relative_to(source)
+            if args.apply:
+                out = unique_dest(dest, src.name)
+                make_link(src, out)
+                cache.register_dest(out)
+                cache.record_src(src, h, "imported", out.name)
+                print(f"  + {source.name}/{rel}  →  {out.name}")
+            else:
+                print(f"  would link: {source.name}/{rel}")
+            have.add(h)    # the same video in a later library is a duplicate
+            if args.limit and stats["new"] >= args.limit:
+                print(f"--limit {args.limit} reached, stopping")
+                limit_hit = True
+                break
+        if limit_hit:
             break
 
     el = time.monotonic() - t0
-    verb = "imported" if args.apply else "would import"
-    print(f"\n{verb}: {stats['new']} · already in dest (content): "
-          f"{stats['dup']} · previously processed: {stats['seen']} · "
-          f"skipped short: {stats['short']}  ({el:.0f}s)")
-    if not args.apply and stats["new"]:
-        print("DRY-RUN — re-run with --apply to copy. The gateway's "
+    verb = "linked" if args.apply else "would link"
+    print(f"\n{verb}: {stats['new']} · re-pointed: {stats['relinked']} · "
+          f"already in dest (content): {stats['dup']} · previously processed: "
+          f"{stats['seen']} · skipped short: {stats['short']}  ({el:.0f}s)")
+    if broken:
+        print(f"{len(broken)} link(s) lead nowhere and no matching file was found: "
+              + ", ".join(p.name for p in list(broken.values())[:5]))
+    if not args.apply and (stats["new"] or stats["relinked"]):
+        print("DRY-RUN — re-run with --apply to link. The gateway's "
               "periodic scan picks new files up within 5 minutes.")
     return 0
 

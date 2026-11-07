@@ -1,5 +1,7 @@
 """Unit tests for tools/immich_import.py — throw-away temp dirs, no
 Immich volume, no ffprobe (min-seconds off in tests unless faked)."""
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -24,8 +26,14 @@ class _Base(unittest.TestCase):
         (self.source / "upload").mkdir(parents=True)
         (self.source / "encoded-video").mkdir(parents=True)
         self.dest.mkdir()
+        self._env = os.environ.get("LOCALFS_VIDEO_LINK_ROOTS")
+        os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = str(self.source)
 
     def tearDown(self):
+        if self._env is None:
+            os.environ.pop("LOCALFS_VIDEO_LINK_ROOTS", None)
+        else:
+            os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = self._env
         self._tmp.cleanup()
 
     def put(self, relpath, content):
@@ -169,6 +177,140 @@ class TestCache(_Base):
         p = self.dest / "h.mp4"
         p.write_bytes(b"CONTENT")
         self.assertEqual(file_hash(p), file_hash(p))
+
+
+class TestLinksInsteadOfCopies(_Base):
+    def test_a_new_video_becomes_a_link_to_the_original(self):
+        src = self.put("library/admin/a.mov", b"VIDEO")
+        self.assertEqual(self.run_tool("--apply"), 0)
+        out = self.dest / "a.mov"
+        self.assertTrue(out.is_symlink())
+        self.assertEqual(Path(os.readlink(out)), src.resolve())
+        self.assertEqual(out.read_bytes(), b"VIDEO")
+
+    def test_preview_creates_nothing(self):
+        self.put("upload/a.mov", b"VIDEO")
+        self.run_tool()
+        self.assertFalse(os.path.lexists(self.dest / "a.mov"))
+
+    def test_a_rerun_links_nothing_new(self):
+        self.put("upload/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        self.run_tool("--apply")
+        self.assertEqual(len(list(self.dest.glob("*.mov"))), 1)
+
+    def test_an_existing_real_copy_is_not_linked_again(self):
+        (self.dest / "mine.mov").write_bytes(b"VIDEO")
+        self.put("upload/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        self.assertFalse(os.path.lexists(self.dest / "a.mov"))
+        self.assertFalse((self.dest / "mine.mov").is_symlink())
+
+    def test_the_same_video_twice_in_the_source_is_linked_once(self):
+        self.put("library/a.mov", b"VIDEO")
+        self.put("upload/b.mov", b"VIDEO")
+        self.run_tool("--apply")
+        self.assertEqual(len(list(self.dest.glob("*.mov"))), 1)
+
+    def test_an_existing_link_counts_as_the_video_it_leads_to(self):
+        src = self.put("library/a.mov", b"VIDEO")
+        os.symlink(src, self.dest / "older-name.mov")
+        self.put("upload/b.mov", b"VIDEO")
+        self.run_tool("--apply")
+        self.assertFalse(os.path.lexists(self.dest / "a.mov"))
+        self.assertFalse(os.path.lexists(self.dest / "b.mov"))
+
+    def test_deleting_a_link_keeps_the_video_gone(self):
+        self.put("upload/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        (self.dest / "a.mov").unlink()
+        self.run_tool("--apply")
+        self.assertFalse(os.path.lexists(self.dest / "a.mov"))
+
+    def test_a_folder_the_file_server_would_refuse_stops_the_run(self):
+        os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = "/somewhere/else"
+        self.put("upload/a.mov", b"VIDEO")
+        self.assertEqual(self.run_tool("--apply"), 2)
+        self.assertFalse(os.path.lexists(self.dest / "a.mov"))
+
+    def test_a_folder_starting_with_a_listed_name_is_not_listed(self):
+        os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = str(self.source) + "-other"
+        self.put("upload/a.mov", b"VIDEO")
+        self.assertEqual(self.run_tool("--apply"), 2)
+
+    def test_a_missing_library_stops_the_run_before_any_repair(self):
+        src = self.put("upload/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = str(self.source)
+        moved = self.source.with_name("away")
+        self.source.rename(moved)
+        self.assertEqual(self.run_tool("--apply"), 2)
+        self.assertTrue((self.dest / "a.mov").is_symlink())
+        self.assertFalse(src.exists())
+
+    def test_default_sources_prefer_external_libraries(self):
+        names = [Path(r).name for r, _ in immich_import.DEFAULT_SOURCES]
+        self.assertEqual(names, ["PHOTOS-ALL", "PHOTOS-Mar", "IMMICH-UPLOAD"])
+
+    def test_clips_under_the_default_cutoff_are_skipped(self):
+        self.put("upload/live.mov", b"CLIP")
+        self.put("upload/real.mov", b"REAL")
+        real = immich_import.video_duration
+        immich_import.video_duration = lambda p: 2.7 if "live" in str(p) else 60.0
+        try:
+            self.run_tool("--apply")
+        finally:
+            immich_import.video_duration = real
+        self.assertFalse(os.path.lexists(self.dest / "live.mov"))
+        self.assertTrue((self.dest / "real.mov").is_symlink())
+
+
+class TestMovedFilesAreRepointed(_Base):
+    def test_the_same_link_follows_a_file_immich_moved(self):
+        src = self.put("library/2024/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        new = self.source / "library/2018/a.mov"
+        new.parent.mkdir(parents=True)
+        src.rename(new)
+        self.assertFalse((self.dest / "a.mov").exists())
+        self.run_tool("--apply")
+        self.assertEqual(Path(os.readlink(self.dest / "a.mov")), new.resolve())
+        self.assertEqual((self.dest / "a.mov").read_bytes(), b"VIDEO")
+        self.assertEqual(len(list(self.dest.glob("*.mov"))), 1)
+
+    def test_preview_reports_but_does_not_repoint(self):
+        src = self.put("library/2024/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        before = os.readlink(self.dest / "a.mov")
+        src.rename(self.source / "library/a.mov")
+        self.run_tool()
+        self.assertEqual(os.readlink(self.dest / "a.mov"), before)
+
+    def test_a_link_repointed_to_a_copy_already_known_as_duplicate(self):
+        src = self.put("library/a.mov", b"VIDEO")
+        twin = self.put("upload/twin.mov", b"VIDEO")
+        self.run_tool("--apply")
+        src.unlink()
+        self.run_tool("--apply")
+        self.assertEqual(Path(os.readlink(self.dest / "a.mov")), twin.resolve())
+
+    def test_a_file_really_gone_leaves_the_link_and_says_so(self):
+        src = self.put("library/a.mov", b"VIDEO")
+        self.run_tool("--apply")
+        src.unlink()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.run_tool("--apply")
+        self.assertIn("lead nowhere", buf.getvalue())
+        self.assertTrue((self.dest / "a.mov").is_symlink())
+
+    def test_a_broken_link_keeps_its_name_from_a_new_video(self):
+        src = self.put("library/a.mov", b"OLD")
+        self.run_tool("--apply")
+        src.unlink()
+        self.put("upload/a.mov", b"DIFFERENT")
+        self.run_tool("--apply")
+        self.assertEqual((self.dest / "a (2).mov").read_bytes(), b"DIFFERENT")
 
 
 if __name__ == "__main__":

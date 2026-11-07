@@ -272,9 +272,12 @@ python3 -m unittest tools.test_find_corrupt_audio -v
 
 ### `tools/immich_import.py`
 
-Copies **new videos from Immich's originals** (`library/` + `upload/` on
-the Immich data volume; `encoded-video/` transcodes never touched) into
-the gateway video root (`/Volumes/SAMDATA/GWMovies`). The gateway does
+Links **new videos from all of Immich's originals** into the gateway video
+root (`/Volumes/SAMDATA/GWMovies`) as symlinks, not copies: the external
+libraries (`PHOTOS-ALL`, `PHOTOS-Mar`) first, then `library/` + `upload/` on
+the Immich data volume (`encoded-video/` transcodes never touched). Every
+source must be listed in `LOCALFS_VIDEO_LINK_ROOTS`, or the run stops, because
+the file server would refuse those links. The gateway does
 the rest automatically: the 5-minute periodic scan picks new files up,
 reverse-geocodes their GPS and titles them `<location>_<YYYYMMDD>_<HHMM>`
 (see `docs/VIDEO_SUPPORT.md`) — filenames are preserved because titles
@@ -282,13 +285,17 @@ come from metadata, not names.
 
 Dedup is by **content hash** (BLAKE2b), remembered in
 `<dest>/.immich-import.db`: files already in GWMovies (any name, any
-origin) are registered on first run and never re-copied; processed
+origin) are registered on first run and never linked again; processed
 sources are skipped by (path, size, mtime) without re-reading. Re-running
-after new phone uploads only copies what's new — safe as a habit. A name
+after new phone uploads only links what's new — safe as a habit. A name
 collision with different content gets a ` (2)` suffix. DRY-RUN by
-default (`--apply` copies; the hash cache is warmed even in dry-run so
-the apply is fast). `--min-seconds 10` skips Live-Photo motion clips;
-`--limit N` stops early.
+default (`--apply` links; the hash cache is warmed even in dry-run so
+the apply is fast). Clips under 4 seconds are skipped as Live-Photo motion
+clips (`--min-seconds 0` includes them); `--limit N` stops early.
+
+**When Immich moves a file** inside its own storage the link breaks, and the
+next scan prunes that video. The next importer run finds the file by hash and
+re-points the same link, so its id, people tags and overrides come back.
 
 **The dedup cache is deliberately STICKY** — `dest_files` keeps every
 content hash EVER seen in dest, so a clip you deleted from GWMovies never
@@ -296,16 +303,15 @@ comes back on a re-run. That stickiness once silently withheld 1,783
 PHOTOS-ALL videos whose content had been in GWMovies before (2026-07-07);
 **`--reimport-deleted`** narrows the dedup set to files PRESENT now (and
 re-evaluates stale 'duplicate' source verdicts) when you DO want deleted
-content back. **`--subdirs ""`** walks the source root as a plain folder
-tree (e.g. Immich's external library, PHOTOS-ALL) instead of the default
-`library,upload` Immich storage layout.
+content back. **`--source`** limits a run to one folder; with **`--subdirs ""`** it is
+walked as a plain folder tree.
 
 ```bash
 python3 tools/immich_import.py               # preview
-python3 tools/immich_import.py --apply       # copy new videos
+python3 tools/immich_import.py --apply       # link new videos
 python3 tools/immich_import.py --source /Volumes/SAMDATA-1TB/PHOTOS-ALL \
-    --subdirs "" --reimport-deleted --apply  # external library, full
-python3 -m unittest tools.test_immich_import -v   # 18 tests
+    --subdirs "" --reimport-deleted --apply  # one library, deleted clips too
+python3 -m unittest tools.test_immich_import -v   # 35 tests
 ```
 
 ### `tools/infer_video_locations.py`
