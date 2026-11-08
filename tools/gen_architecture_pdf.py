@@ -158,9 +158,9 @@ LANES = [
          ["Phone backup. Immich runs FACE", "RECOGNITION in its own Postgres",
           "— never written into the files."],
          "Immich  (separate service)"),
-        ("Import originals",
-         ["Copies Immich's originals, never", "its transcodes. Dedup by BLAKE2b",
-          "content hash."],
+        ("Link originals",
+         ["Nightly, LINKS Immich's originals", "from every library — never copies,",
+          "never transcodes. Clips > 3 s only."],
          "T/a18 immich_import"),
         ("Scan and title",
          ["Every 5 min. Titles from METADATA,", "not filenames: GPS reverse-geocoded",
@@ -460,8 +460,9 @@ def list_pages():
     # The program inventory is the list a reader actually works through,
     # and it was 37 rows crammed onto page 3 with 7 stranded on an
     # otherwise empty page 4. Its own roomier style spreads it across
-    # both pages instead of filling one and spilling.
-    prog = ParagraphStyle('prog', parent=body, fontSize=8.8, leading=12.2)
+    # both pages instead of filling one and spilling. At 54 rows
+    # (2026-11-08) 8.8 pt spilled onto a third page; 8.2 pt fits two.
+    prog = ParagraphStyle('prog', parent=body, fontSize=8.2, leading=11.2)
     prog_code = ParagraphStyle('prog_code', parent=prog,
                                fontName='Helvetica-Bold')
 
@@ -741,10 +742,48 @@ def list_pages():
          "covered `tracks` and not `album_art`, so 3,982 cached covers "
          "were strings that could never be fetched. It now heals first, "
          "then refuses to harvest another, in both directions."),
+        ("P/g47", "dlna_asgi_guard.py",
+         "RequestGuard — which BROWSER requests are answered (CSRF + DNS "
+         "rebinding). Host must be an IP literal or a known name; "
+         "Sec-Fetch-Site cross-site only as a GET navigation; a write's "
+         "Origin must match. Every write is a POST. Devices send none of "
+         "these headers and are never affected."),
+        ("P/g48", "dlna_asgi_headers.py",
+         "Security headers on every response except /gw/*: the "
+         "Content-Security-Policy (script-src 'self', ENFORCED since "
+         "2026-11-08, still reporting to /api/csp_report), nosniff, "
+         "same-origin referrer, frame-ancestors 'none'."),
+        ("P/g49", "dlna_auth_throttle.py",
+         "Slows Subsonic password guessing: 10 failures a minute from one "
+         "address → blocked, doubling to 1 h. While blocked the right "
+         "password is refused too, unchecked — no oracle."),
+        ("P/g50", "dlna_alerts.py · dlna_alerts_sms.py",
+         "Failure alerts to the owner's phone: a text via this Mac's "
+         "Messages app (D/6) and/or an ntfy push (E/x9); both off until set "
+         "in .env. Queued, rate-limited per kind, never raises. Raised by "
+         "the runtime watch, a restart loop, a missing root, the cert, and "
+         "the weekly jobs (J/2, J/3, J/5) through its CLI."),
+        ("P/g51", "dlna_runtime_watch.py",
+         "Is the Python running us still the one on disk? A brew upgrade "
+         "that deletes the running keg leaves the gateway half-alive; the "
+         "watch exits 75 and launchd restarts it on the new Python, unless "
+         "a venv swap holds .maintenance.pid."),
+        ("P/g52", "dlna_walk.py",
+         "May a rescan call a file GONE? os.walk swallows directory "
+         "errors, so removals under an errored folder are held back, and a "
+         "walk that saw no audio removes nothing."),
+        ("P/g53", "dlna_book_language.py · dlna_library_languages.py "
+         "· dlna_asgi_books.py",
+         "Which language each audiobook is in, for the PWA's language view. "
+         "Asserted languages (tag, manual) are stored; a detected one is "
+         "derived on read and refuses rather than guesses."),
+        ("P/g54", "dlna_asgi_devices.py",
+         "POST /api/renderers/forget — the one way to forget a renderer. "
+         "Loopback only (403 otherwise); built for chaos.py's fake renderer."),
     ]
     for c, f, r in progs:
         prog_rows.append([P(c, prog_code), P(f, prog), P(r, prog)])
-    story.append(make_table(prog_rows, [44, 224, 792], INK, pad=4.5))
+    story.append(make_table(prog_rows, [44, 224, 792], INK, pad=3.5))
     story.append(PageBreak())
 
     # ---- Tools ----
@@ -815,6 +854,26 @@ def list_pages():
          "LASTFM_API_KEY FIRST \u2014 meta_fetched_at marks an artist done, "
          "so a keyless pass leaves them all without best-known. "
          "<b>--apply --limit N -v</b>."),
+        ("T/a17", "track_credits.py",
+         "Composer/lyricist for tracks whose files carry none, by browsing "
+         "each artist's MusicBrainz WORKS (100 per request). Writes "
+         "track_credits, never tracks — the file tag wins on read. ~2 h. "
+         "<b>--apply --limit N -v</b>."),
+        ("T/a18", "immich_import.py",
+         "Links new Immich videos into GWMovies from every Immich library "
+         "— symlinks to the originals, never copies. Only clips longer "
+         "than 3 s (no Live Photo snippets on the TV); content-hash dedup "
+         "is sticky. Nightly via J/6. <b>--apply --reimport-deleted</b>."),
+        ("T/a19", "immich_people_sync.py",
+         "Immich person tags → video_people, matched by content checksum "
+         "and then (name, size), since Immich's paths are container paths. "
+         "<b>--apply</b>."),
+        ("T/a20", "upgrade.py",
+         "The whole toolchain to newest — brew, pip, dev pins + "
+         "Playwright, vendored hls.js — plus known vulnerabilities from "
+         "osv.dev. <b>--check</b> reports (J/5); <b>--apply</b> builds a "
+         "fresh venv the test gates must pass, with automatic rollback; "
+         "<b>--rollback</b> undoes a passed run."),
     ]
     for c, f, p in tools:
         tool_rows.append([C(c), P(f), P(p)])
@@ -877,13 +936,35 @@ def list_pages():
          "Restart: launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway.",
          GREY),
         ("J/2", "com.roha.dlna-cert-renew + renew-cert.sh", "Weekly TLS cert "
-         "renewal (Mon 04:30; no-op unless &lt;30 days). cert-renewal.log.",
+         "renewal (Mon 04:30; no-op unless &lt;30 days). Restarts every "
+         "service in CERT_RELOAD_LABELS, and only when the expiry MOVED. "
+         "cert-renewal.log.",
          GREY),
+        ("J/3", "com.roha.dlna-library-backup + backup-library.sh",
+         "Weekly library.db snapshot (Sun 03:30): sqlite3 .backup, never cp; "
+         "integrity_check + a non-zero tracks count before it counts; keeps "
+         "8. Then checks Time Machine's newest backup is ≤ "
+         "BACKUP_TM_MAX_AGE_DAYS (3) old — the off-disk copy. "
+         "library-backup.log.", GREY),
         ("J/4", "setup.sh", "venv setup + run / restart / probe. --run "
          "--restart --no-browser --debug --probe URL --list-devices "
          "--reset-devices. See the setup.sh options reference.", GREY),
+        ("J/5", "com.roha.dlna-upgrade-check + upgrade-check.sh",
+         "Weekly toolchain report (Sat 05:00): T/a20 --check. Notifies on a "
+         "DO item or a NEW decide/wait item, never applies. "
+         "upgrade-check.log.", GREY),
+        ("J/6", "com.roha.dlna-immich-import + immich-import.sh",
+         "Nightly at 02:45: T/a18 --apply, and fails loudly when links "
+         "die.", GREY),
+        ("D/6", "Messages (this Mac)", "Sends the failure texts (P/g50) — "
+         "SMS via the iPhone's Text Message Forwarding, iMessage as "
+         "fallback. Local: the number and text are osascript arguments, "
+         "never script source.", GREY),
+        ("E/x9", "ntfy topic (ALERT_PUSH_URL)", "Optional push channel for "
+         "the same alerts, for installs without Messages. Off unless set; "
+         "the topic name is the secret, so it is never logged.", RED),
     ]
-    for c, n, r, _col in de:
+    for c, n, r, _col in sorted(de, key=lambda x: "DEJ".index(x[0][0])):
         de_rows.append([C(c), P(n), P(r)])
     story.append(make_table(de_rows, [40, 200, 820], GREEN))
     story.append(PageBreak())
@@ -899,14 +980,21 @@ def list_pages():
          "com.roha.dlna-gateway)"),
         ("Cert (J/2)", "./renew-cert.sh [--force]   ·   launchctl kickstart "
          "gui/$(id -u)/com.roha.dlna-cert-renew"),
-        ("Subsonic auth", "launchctl setenv SUBSONIC_PASSWORD … ; "
-         "launchctl getenv SUBSONIC_PASSWORD"),
+        ("Subsonic auth", "SUBSONIC_USER / SUBSONIC_PASSWORD in .env, then "
+         "./setup.sh --restart   (never the plist: its env overrides .env)"),
+        ("Backup (J/3)", "./backup-library.sh [--list] [--keep N]   ·   "
+         "launchctl kickstart gui/$(id -u)/com.roha.dlna-library-backup"),
+        ("Toolchain (J/5)", "python3 tools/upgrade.py --check | --apply | "
+         "--rollback   ·   ./upgrade-check.sh"),
+        ("Alerts (P/g50)", "python3 dlna_alerts.py --test   ·   "
+         "python3 dlna_alerts.py &lt;kind&gt; &lt;title&gt; &lt;message&gt; "
+         "[--priority high]"),
         ("Full test suite", "python tests/run_all.py [--offline | --frontend | "
          "--frontend-only | http://host:8765]"),
         ("Unit / Playwright", "python3 -m unittest tests.test_player … ; "
          ".venv/bin/pytest tests/frontend -v"),
         ("Chaos (live)", "python3 tests/chaos.py --iterations N --workers M "
-         "[--seed S] [--quiet] [--base https://host:8443]"),
+         "[--seed S] [--quiet] [--base https://host:8443] [--fake-renderer]   (without it, EVERY real renderer plays)"),
         ("Load (live)", "python3 tests/load_stream.py --concurrency 40 "
          "--count 80 [--gateway https://127.0.0.1:8443 --insecure] "
          "[--max-p95 6]   (threadpool-starvation guard)"),
