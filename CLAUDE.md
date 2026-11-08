@@ -1213,6 +1213,21 @@ Any non-zero exit (an EXIT trap, so a `set -e` surprise counts too) sends a
 Retention: newest 8 (≈2 months, ~64 MB each). `BACKUP_DIR` / `KEEP` override
 via env or the plist.
 
+**Off-disk = Time Machine, and the job checks it is still running**
+(2026-11-08, hardening #2). The snapshots sit on the same SSD as
+`library.db`; Time Machine (to the WD-SERVER disk) is the second copy. Time
+Machine never says when it stops, so after its own snapshot the job checks
+that Time Machine's newest backup is at most `BACKUP_TM_MAX_AGE_DAYS` old
+(`.env`, default 3, `0` = off). Too old or none on record → exit 1 →
+`backup_failed` alert; the local snapshot is already kept by then. It reads
+**`/Library/Preferences/com.apple.TimeMachine.plist`'s `SnapshotDates`,
+never `tmutil latestbackup`**: under launchd that needs Full Disk Access and
+stalled 26 s then refused on the first live run. No prefs file or no
+destination → skipped, so an install without Time Machine is not nagged. An
+alert that could not be SENT is now logged in `library-backup.log` (it went
+to `/dev/null` before), with the number scrubbed.
+`tests/test_backup_library.py` (14) runs the real script under `/bin/bash`.
+
 ```bash
 ./backup-library.sh              # snapshot now
 ./backup-library.sh --list       # what exists

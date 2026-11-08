@@ -21,6 +21,17 @@
 # Retention: keeps the newest $KEEP snapshots (default 8 ≈ two months) and
 # prunes older ones — an unbounded backup directory is its own failure.
 #
+# OFF-DISK (hardening #2, 2026-11-08): the snapshots live on the same SSD as
+# library.db, so the second copy is Time Machine's job. Time Machine says
+# nothing when it stops (an unplugged or full disk shows only in System
+# Settings), so after the local snapshot this job checks that Time Machine's
+# newest backup is at most BACKUP_TM_MAX_AGE_DAYS old (.env, default 3, 0 =
+# off), read from Time Machine's own preferences file. Too old, or none on
+# record, makes the job exit 1, and the EXIT trap sends the alert. The local
+# snapshot is already done by then, so this check can never cost one.
+# Skipped where that file is absent (not macOS) or names no destination, so
+# an install that never set Time Machine up isn't nagged every week.
+#
 # USAGE
 #   ./backup-library.sh              # take a snapshot now
 #   ./backup-library.sh --list       # show what exists
@@ -35,9 +46,23 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# .env is READ, never sourced: sourcing runs it as shell (the 2026-10-23
+# renew-cert.sh lesson). The real environment wins over .env.
+env_get() {
+  local key="$1" val
+  val="${!key:-}"
+  if [ -z "${val}" ] && [ -f .env ]; then
+    val=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" .env \
+        | tail -1 | cut -d= -f2- \
+        | sed -E "s/^[[:space:]]+|[[:space:]]+\$//g; s/^[\"'](.*)[\"']\$/\1/")
+  fi
+  printf '%s' "${val}"
+}
+
 DB="${LIBRARY_DB:-library.db}"
 DEST="${BACKUP_DIR:-$HOME/dlna-gateway-backups}"
 KEEP="${KEEP:-8}"
+TM_MAX_AGE_DAYS="$(env_get BACKUP_TM_MAX_AGE_DAYS)"; TM_MAX_AGE_DAYS="${TM_MAX_AGE_DAYS:-3}"
 LOG="library-backup.log"
 
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
@@ -45,13 +70,24 @@ FAIL_MSG=""
 fail() { FAIL_MSG="$*"; log "✗ FAILED: $*"; }
 
 ALERT_REPO="$(pwd)"
-# Push alert to the owner's phone via dlna_alerts.py (hardening #3). Off
-# unless ALERT_PUSH_URL is set in .env; it can never fail the job itself.
+# Alert the owner's phone via dlna_alerts.py (hardening #3). Off unless
+# ALERT_SMS_TO or ALERT_PUSH_URL is set in .env; it can never fail the job
+# itself. A send that FAILED is logged here (exit 1 = no channel took it,
+# e.g. macOS refusing this job control of Messages, -1743): before
+# 2026-11-08 its output went to /dev/null, so an alert that never left the
+# Mac looked exactly like one that did. Exit 3 (alerts off) stays quiet.
 push_alert() {
-    local py="${ALERT_REPO}/.venv/bin/python"
+    local py="${ALERT_REPO}/.venv/bin/python" out rc=0
     [ -x "${py}" ] || py=python3
     [ -f "${ALERT_REPO}/dlna_alerts.py" ] || return 0
-    "${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" >/dev/null 2>&1 || true
+    out="$("${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" 2>&1)" || rc=$?
+    if [ "${rc}" -ne 0 ] && [ "${rc}" -ne 3 ]; then
+        # Never log the number, even if an error message quotes it.
+        local num; num="$(env_get ALERT_SMS_TO)"
+        [ -n "${num}" ] && out="${out//"${num}"/<number>}"
+        log "  ✗ alert '$1' was NOT sent (exit ${rc}): $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-300)"
+    fi
+    return 0
 }
 
 # ── flags ────────────────────────────────────────────────────────────────
@@ -67,7 +103,7 @@ while [ $# -gt 0 ]; do
       fi
       exit 0 ;;
     --keep) KEEP="$2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -152,3 +188,49 @@ done
 
 COUNT="$(ls -1 "$DEST"/library-*.db 2>/dev/null | wc -l | tr -d ' ')"
 log "  $COUNT snapshot(s) retained in $DEST (keep=$KEEP)"
+
+# ── off-disk: is Time Machine still copying all of this? ─────────────────
+# Runs LAST on purpose: the local snapshot and its retention are finished,
+# so nothing here can cost a backup. Anything wrong → exit 1 → EXIT trap
+# → backup_failed alert naming the reason.
+tm_check() {
+  case "${TM_MAX_AGE_DAYS}" in
+    ''|*[!0-9]*) fail "BACKUP_TM_MAX_AGE_DAYS='${TM_MAX_AGE_DAYS}' is not a whole number of days"; return 1 ;;
+    0) return 0 ;;
+  esac
+  # Time Machine's own record, NOT `tmutil latestbackup`: under launchd that
+  # needs Full Disk Access, and without it stalls ~26 s and then refuses
+  # (measured 2026-11-08), which would be a false alarm every week. This
+  # plist is world-readable and lists each destination's SnapshotDates (UTC).
+  local prefs="${TM_PREFS:-/Library/Preferences/com.apple.TimeMachine.plist}"
+  [ -f "${prefs}" ] || return 0                     # not macOS, or never set up
+  command -v defaults >/dev/null 2>&1 || return 0
+  local dump newest tm_epoch now age
+  dump="$(defaults read "${prefs%.plist}" 2>&1)" || true
+  if ! printf '%s' "${dump}" | grep -q 'DestinationID'; then
+    log "  Time Machine: no destination configured — off-disk check skipped"
+    return 0
+  fi
+  # Newest date inside any SnapshotDates array, across every destination.
+  newest="$(printf '%s\n' "${dump}" \
+      | awk '/SnapshotDates/ {f=1; next} f && /\)/ {f=0} f' \
+      | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' \
+      | sort | tail -1)" || true
+  if [ -z "${newest}" ]; then
+    fail "local snapshot OK, but Time Machine has no completed backup on record — is the disk attached?"
+    return 1
+  fi
+  tm_epoch="$(date -j -u -f '%Y-%m-%d %H:%M:%S' "${newest}" '+%s' 2>/dev/null)" || true
+  if [ -z "${tm_epoch}" ]; then
+    fail "local snapshot OK, but Time Machine's backup date '${newest}' could not be read"
+    return 1
+  fi
+  now="$(date '+%s')"
+  age=$(( (now - tm_epoch) / 86400 ))
+  if [ "${age}" -gt "${TM_MAX_AGE_DAYS}" ]; then
+    fail "local snapshot OK, but Time Machine's newest backup is ${age} days old (${newest} UTC; limit ${TM_MAX_AGE_DAYS}) — is the disk attached?"
+    return 1
+  fi
+  log "  Time Machine: newest backup ${newest} UTC (${age} d old, limit ${TM_MAX_AGE_DAYS})"
+}
+tm_check || exit 1

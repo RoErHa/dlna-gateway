@@ -68,9 +68,15 @@ works.
   38,881 tracks), so every verified snapshot now also reaches a second
   device. Time Machine also covers the rest of the Mac. The script-based
   criteria below were the spec for doing it inside `backup-library.sh`;
-  that route was not needed. **Limit:** Time Machine does not alert when
-  backups stop (a disk that is unplugged or full only shows up in
-  System Settings), and the disk is in the same room as the Mac.
+  that route was not needed. Time Machine does not say when it stops (an
+  unplugged or full disk shows only in System Settings), so the weekly
+  backup job now checks that its newest backup is at most
+  `BACKUP_TM_MAX_AGE_DAYS` (3) days old and sends `backup_failed`
+  otherwise; `tests/test_backup_library.py`. It reads Time Machine's
+  preferences file, because `tmutil latestbackup` needs Full Disk Access
+  under launchd (found on the first live run). **Limit:** checked weekly,
+  so a stopped Time Machine can go up to ~10 days unnoticed; and the disk
+  is in the same room as the Mac.
 
 **Why.** `backup-library.sh` writes its weekly snapshots to
 `~/dlna-gateway-backups`, on the same internal SSD as `library.db`. That
@@ -103,7 +109,9 @@ this, and the rest of the Mac.
 - [x] **Done 2026-11-04**, ahead of target. `dlna_alerts.py`,
   `dlna_alerts_sms.py`, `tests/test_alerts.py` (39). Live as soon as
   `ALERT_SMS_TO` is set in `.env` and macOS has allowed the gateway to
-  control Messages. **Verified live 2026-11-04:** the CLI test text and an
+  control Messages. **A weekly launchd job texted on 2026-11-08** (the
+  backup job, unintentionally, during testing of the Time Machine check),
+  so that job needs no extra grant. **Verified live 2026-11-04:** the CLI test text and an
   alert raised by the running gateway itself (a deliberately refused
   request, sent from the launchd process ~6 s later) both arrived on the
   owner's phone. Not yet seen live: a text from one of the weekly launchd

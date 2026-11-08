@@ -10,8 +10,8 @@ while the owner's `.env` held a token nothing in the repo reads any more.
 What counts as "read": a string literal passed to `os.environ.get` /
 `os.getenv` / `os.environ[...]` / an `env.get(...)` / the `_env` and
 `_truthy` helpers, found with `ast` in every tracked .py outside tests/, plus
-every `env_get NAME` in renew-cert.sh (the one script that reads `.env`
-itself). A commented-out `#KEY=` line in the example counts as documented:
+every `env_get NAME` in the shell scripts that read `.env` themselves
+(renew-cert.sh, backup-library.sh). A commented-out `#KEY=` line in the example counts as documented:
 that is how an optional setting with a built-in default is shown.
 
 The `.env` half SKIPS on a clone without one.
@@ -34,6 +34,8 @@ NOT_ENV_SETTINGS = {
     "BACKUP_DIR": "read by backup-library.sh and tools/upgrade.py from their own "
                   "environment, which does not load .env",
 }
+# Shell scripts that read .env themselves, through an `env_get` helper.
+ENV_GET_SCRIPTS = ("renew-cert.sh", "backup-library.sh")
 # The header of the example's block for keys nothing here reads on purpose.
 UNREAD_BLOCK = "Not read by the gateway"
 
@@ -77,9 +79,10 @@ def code_keys():
             key = _reads(node)
             if key and _KEY.match(key):
                 found.setdefault(key, []).append(rel)
-    with open(os.path.join(PROJECT, "renew-cert.sh"), encoding="utf-8") as fh:
-        for key in re.findall(r"env_get\s+([A-Z][A-Z0-9_]+)", fh.read()):
-            found.setdefault(key, []).append("renew-cert.sh")
+    for script in ENV_GET_SCRIPTS:
+        with open(os.path.join(PROJECT, script), encoding="utf-8") as fh:
+            for key in re.findall(r"env_get\s+([A-Z][A-Z0-9_]+)", fh.read()):
+                found.setdefault(key, []).append(script)
     return found
 
 
@@ -118,7 +121,8 @@ class TestScanner(unittest.TestCase):
                     "ALERT_PUSH_URL",        # the _env helper
                     "GATEWAY_DEBUG",         # the _truthy helper
                     "GATEWAY_CERTFILE",      # _os.environ.get (aliased import)
-                    "RENEW_DAYS"):           # renew-cert.sh env_get
+                    "RENEW_DAYS",            # renew-cert.sh env_get
+                    "BACKUP_TM_MAX_AGE_DAYS"):  # backup-library.sh env_get
             self.assertIn(key, keys)
 
     def test_reads_only_settings(self):
