@@ -19,6 +19,44 @@ bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
 Releases are tagged (`v2.1.0`, `v2.2.0`). Tags are cheap and mark points worth
 returning to.
 
+## Open work — the next few days (set 2026-11-08, after v2.2.0)
+
+Tick an item (`- [x]`, with the date and commit) **in the commit that ships
+it**, and remove this section once every item is ticked or moved to its own
+doc. Dates are targets.
+
+- [ ] **1. GitHub Release for v2.2.0** (2026-11-08). The tag exists; the
+  Releases page is empty. Notes = the tag message. Known wart: the tag
+  message says "231 commits", the real count is 225 — left as is (owner's
+  call, 2026-11-08).
+- [ ] **2. Self-host the PWA's two fonts** (2026-11-08). Google Fonts is the
+  last third-party load: every page view tells Google the time and the IP.
+  Serve them from `static/`, then drop `fonts.googleapis.com` /
+  `fonts.gstatic.com` from the CSP (`dlna_asgi_headers.POLICY`) and the
+  "not done" note in docs/SECURITY_POSTURE.md.
+- [ ] **3. Today's `audio_error code=4`** (2026-11-08). The Mac PWA reported
+  "unsupported" at 12:08:16 with an empty title and `ready_state=0` — the
+  usual signature of a row pointing at a file the index no longer has.
+  Find the row, say why, fix the row or the cause.
+- [ ] **4. Check Time Machine daily, not weekly** (target 2026-11-10). The
+  check rides the Sunday backup job, so a stopped Time Machine can go ~10
+  days unnoticed. A small daily LaunchAgent running only the check — the
+  backup itself stays weekly so `KEEP=8` still means 8 weeks.
+- [ ] **5. Does the Naim play MP4 audio through the gateway?** (needs the
+  owner at the Naim; target 2026-11-12). Measured 2026-11-08 from the
+  files themselves: music holds **85 `.m4a`** — 63 AAC (9 albums, e.g.
+  *New Stories – Speakin' Out*) and 22 **ALAC** (*Two Steps From Hell –
+  Invincible*); **no `.m4b`** in music. Audiobooks hold **366 AAC** —
+  236 `.m4a` + 130 `.m4b` across 31 books, at sample rates from **11,025
+  Hz** to 48 kHz (22,050 Hz is the commonest m4b rate, 57 files). Every
+  one is served as `audio/mp4`, which `_GW_SOURCE_PROTOCOLS` advertises.
+  Test one of each: AAC music, ALAC music, a 44.1 kHz m4b, a 22.05 kHz m4b
+  (low rates are the likeliest refusal), plus resume (Seek) inside an m4b.
+  Record the answer in docs/AUDIOBOOKS.md and close its open question.
+- [ ] **6. Click-through installer — proposal first** (start week of
+  2026-11-16). `docs/PACKAGING.md` is the closest thing to a v3 roadmap.
+  Design-first rule: a proposal the owner reviews before any code.
+
 ## Running the Gateway
 
 ```bash
