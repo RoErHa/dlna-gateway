@@ -17,7 +17,7 @@ comes up, and note why.
 | # | Item | Target | Status |
 |---|---|---|---|
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
-| 2 | Off-disk copy of the library backups | 2026-11-07/08 | ☐ open — the owner does it, weekend of 7–8 Nov (when the new disk arrives) |
+| 2 | Off-disk copy of the library backups | 2026-11-07/08 | ✅ done 2026-11-08 (Time Machine to the new WD-SERVER disk) |
 | 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
 | 4 | Security headers on the web app | 2026-11-25 | ◐ built 2026-11-04, CSP report-only; enforce ~2026-11-11 if the log stays clean |
 | 5 | Optional login for the web app | — | ⏸ deferred 2026-11-04 (see §5) |
@@ -60,7 +60,17 @@ works.
 
 ## 2. Off-disk copy of the library backups — target 2026-11-07/08
 
-- [ ] Not started.
+- [x] **Done 2026-11-08 by the owner: Time Machine, to the new WD-SERVER
+  disk.** Checked the same day: `tmutil destinationinfo` names WD-SERVER,
+  there are two backups that day (08:17 and 10:13), and `tmutil isexcluded`
+  reports both `library.db` and `~/dlna-gateway-backups` as included. The
+  local weekly snapshot ran at 03:30 the same morning (`integrity ok`,
+  38,881 tracks), so every verified snapshot now also reaches a second
+  device. Time Machine also covers the rest of the Mac. The script-based
+  criteria below were the spec for doing it inside `backup-library.sh`;
+  that route was not needed. **Limit:** Time Machine does not alert when
+  backups stop (a disk that is unplugged or full only shows up in
+  System Settings), and the disk is in the same room as the Mac.
 
 **Why.** `backup-library.sh` writes its weekly snapshots to
 `~/dlna-gateway-backups`, on the same internal SSD as `library.db`. That
