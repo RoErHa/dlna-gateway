@@ -25,8 +25,9 @@ Tick an item (`- [x]`, with the date and commit) **in the commit that ships
 it**, and remove this section once every item is ticked or moved to its own
 doc. Dates are targets.
 
-- [ ] **1. GitHub Release for v2.2.0** (2026-11-08). The tag exists; the
-  Releases page is empty. Notes = the tag message. Known wart: the tag
+- [x] **1. GitHub Release for v2.2.0** — done 2026-11-08:
+  https://github.com/RoErHa/dlna-gateway/releases/tag/v2.2.0. Notes = the
+  tag message, with the count corrected in the notes only. Known wart: the tag
   message says "231 commits", the real count is 225 — left as is (owner's
   call, 2026-11-08).
 - [ ] **2. Self-host the PWA's two fonts** (2026-11-08). Google Fonts is the
@@ -34,10 +35,15 @@ doc. Dates are targets.
   Serve them from `static/`, then drop `fonts.googleapis.com` /
   `fonts.gstatic.com` from the CSP (`dlna_asgi_headers.POLICY`) and the
   "not done" note in docs/SECURITY_POSTURE.md.
-- [ ] **3. Today's `audio_error code=4`** (2026-11-08). The Mac PWA reported
-  "unsupported" at 12:08:16 with an empty title and `ready_state=0` — the
-  usual signature of a row pointing at a file the index no longer has.
-  Find the row, say why, fix the row or the cause.
+- [x] **3. Today's `audio_error code=4`** — done 2026-11-08. NOT a dead
+  row: the track (Texas, *Insane*, a valid 16/44.1 FLAC — ffmpeg decodes
+  it clean) had streamed in full. It was **Stop**: `src=""` resolves to the
+  page URL, every engine answers MediaError 4, and the handler ran with the
+  queue already emptied — a blank-titled `audio_error` and a "Can't play …
+  unsupported format" toast for pressing Stop. Stop now uses
+  `removeAttribute("src")`, and the handler ignores an element with no
+  source. `test_audio_errors.py::test_stop_is_not_reported_as_an_unsupported_track`
+  (fails on the old code, both engines).
 - [ ] **4. Check Time Machine daily, not weekly** (target 2026-11-10). The
   check rides the Sunday backup job, so a stopped Time Machine can go ~10
   days unnoticed. A small daily LaunchAgent running only the check — the

@@ -68,3 +68,26 @@ def test_autoplay_block_surfaces_toast(app, gateway):
     assert "blocked" in txt.lower()
     req = gateway.wait_for_request("/api/client_log", method="POST", timeout=2.0)
     assert req is not None and "play_rejected" in req["body"]
+
+
+def test_stop_is_not_reported_as_an_unsupported_track(app, gateway):
+    """Stop used to set `src = ""`, which every engine answers with a
+    MediaError 4 against the page's own URL. The handler then ran with the
+    queue already emptied: an `audio_error` with a blank title went to the
+    gateway and the user saw "Can't play … unsupported format" for pressing
+    Stop (seen 2026-11-08 12:08:16 from Safari on the Mac)."""
+    _setup_queue(app)
+    toasts = []
+    app.expose_function("__toastSeen", lambda t: toasts.append(t))
+    app.evaluate("""
+      const _t = toast;
+      toast = (m, ...r) => { window.__toastSeen(String(m)); return _t(m, ...r); };
+    """)
+    gateway.clear_requests()
+    app.locator("#btn-stop").click()
+    app.wait_for_timeout(1000)
+    errors = [r for r in gateway.captured(method="POST")
+              if r["path"] == "/api/client_log" and "audio_error" in r["body"]]
+    assert errors == [], errors
+    assert not any("Can't play" in t or "Skipping" in t for t in toasts), toasts
+    assert app.evaluate("browserQueue.length") == 0

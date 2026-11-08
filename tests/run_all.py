@@ -268,8 +268,14 @@ check("Error handler resets play button",
       "$" in js and "btn-pp" in js and "▶ Play" in js and "activeDevice" in js)
 check("play().catch handles NotAllowedError",
       "NotAllowedError" in js)
-check("control stop clears browserAudio.src",
-      'browserAudio.src=""' in js)
+# Stop UNLOADS the source with removeAttribute: `src=""` resolves to the
+# page URL and every engine answers it with MediaError 4, which reported
+# Stop as an unsupported track (2026-11-08).
+check("control stop unloads browserAudio's source",
+      'browserAudio.removeAttribute("src")' in js)
+check("nothing sets browserAudio.src to an empty string",
+      'browserAudio.src=""' not in js and "browserAudio.src = ''" not in js
+      and 'browserAudio.src = ""' not in js and "browserAudio.src=''" not in js)
 
 
 

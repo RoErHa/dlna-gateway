@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/tag/RoErHa/dlna-gateway?sort=semver&label=release)](https://github.com/RoErHa/dlna-gateway/tags)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-192%20checks%20%C2%B7%201%2C759%20unit%20%C2%B7%20299%20browser-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-193%20checks%20%C2%B7%201%2C759%20unit%20%C2%B7%20300%20browser-brightgreen.svg)](#testing)
 [![Lint: ruff](https://img.shields.io/badge/lint-ruff%20%C2%B7%200%20violations-brightgreen.svg)](#code-quality-gates)
 [![Quality gates](https://img.shields.io/badge/quality%20gates-5%20%C2%B7%20all%20at%20zero-brightgreen.svg)](#code-quality-gates)
 [![Security policy](https://img.shields.io/badge/security-policy-informational.svg)](SECURITY.md)

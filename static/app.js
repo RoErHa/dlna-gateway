@@ -482,6 +482,10 @@ async function _reportClientError(payload){
 
 browserAudio.addEventListener("error", e=>{
   if(activeDevice!=="browser") return;
+  // No source set = we unloaded it on purpose (Stop). Nothing failed, and
+  // reporting it put "Can't play … unsupported format" on the screen for
+  // pressing Stop, with a blank-titled audio_error in the log (2026-11-08).
+  if(!browserAudio.getAttribute("src")) return;
   _stallWatchdogStop();   // the error path owns the advance from here
   const err = browserAudio.error;
   const code = err ? err.code : 0;
@@ -2838,7 +2842,9 @@ async function control(cmd){
         }else{browserAudio.pause();$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
         break;
       case "stop":
-        browserAudio.pause();browserAudio.src="";browserAudio.load();
+        // removeAttribute, never src="": an empty src resolves to the page's
+        // own URL, and every engine answers it with MediaError 4 (2026-11-08).
+        browserAudio.pause();browserAudio.removeAttribute("src");browserAudio.load();
         browserQueue=[];browserIdx=0;browserQueueIsBook=false;_abApplyRate();
         $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
         break;
