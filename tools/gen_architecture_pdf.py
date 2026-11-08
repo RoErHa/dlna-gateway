@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.1)
+"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.2)
 DLNA Gateway architecture plus reference lists.
 
 Page 1  : the architecture drawing + colour legend.
@@ -215,7 +215,7 @@ EXTERNALS = [
 def build_diagram():
     d = Drawing(W, H)
 
-    txt(d, 6, H - 15, "DLNA Gateway — Architecture (2.1 · ASGI/Hypercorn)",
+    txt(d, 6, H - 15, "DLNA Gateway — Architecture (2.2 · ASGI/Hypercorn)",
         size=15, bold=True, color=INK)
     txt(d, 6, H - 28,
         "Four journeys, each read left to right · node codes (P/T/D/E/J) "

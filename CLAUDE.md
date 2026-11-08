@@ -16,7 +16,7 @@ bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
 (`~/dlna-gateway-2.0` — the directory name is vestigial). Commit on `main`, run the gates, deploy with
 `launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway`.
 
-Releases are tagged (`v2.1.0`). Tags are cheap and mark points worth
+Releases are tagged (`v2.1.0`, `v2.2.0`). Tags are cheap and mark points worth
 returning to.
 
 ## Running the Gateway
