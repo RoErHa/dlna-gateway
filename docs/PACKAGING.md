@@ -1,5 +1,9 @@
 # Packaging the gateway into a click-through installer (macOS / Linux / Windows)
 
+> **Superseded 2026-11-08 by [INSTALLER_PROPOSAL.md](INSTALLER_PROPOSAL.md)**,
+> which turns this plan into three stages with the decisions attached. Kept
+> as the background research.
+>
 > **Status: PARKED / freezer.** A feasibility plan + runbook for shipping the
 > gateway as a native, double-click installer that a non-technical user can run
 > — a wizard asks a few questions, then it installs + autostarts with no

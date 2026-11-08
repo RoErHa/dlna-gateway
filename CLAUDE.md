@@ -62,9 +62,11 @@ doc. Dates are targets.
   Test one of each: AAC music, ALAC music, a 44.1 kHz m4b, a 22.05 kHz m4b
   (low rates are the likeliest refusal), plus resume (Seek) inside an m4b.
   Record the answer in docs/AUDIOBOOKS.md and close its open question.
-- [ ] **6. Click-through installer — proposal first** (start week of
-  2026-11-16). `docs/PACKAGING.md` is the closest thing to a v3 roadmap.
-  Design-first rule: a proposal the owner reviews before any code.
+- [ ] **6. Click-through installer — proposal first.** Proposal WRITTEN
+  2026-11-08: [docs/INSTALLER_PROPOSAL.md](docs/INSTALLER_PROPOSAL.md) —
+  Stage 1 configurable without `.env` (data dir + loopback-only `/setup`),
+  Stage 2 a Homebrew tap, Stage 3 a signed menu-bar app. Waiting on the
+  owner's answers to its §7; no code until then. Work starts 2026-11-09.
 
 ## Running the Gateway
 
