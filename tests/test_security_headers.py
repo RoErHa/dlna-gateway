@@ -218,3 +218,30 @@ class TestTheAppNeedsNoLooseScript(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNoThirdParty(unittest.TestCase):
+    """The PWA loads nothing from another origin (2026-11-08). The fonts were
+    the last thing: Google Fonts saw the time and IP of every page view."""
+
+    def test_the_policy_names_no_other_origin(self):
+        self.assertNotIn("http", H.POLICY)
+
+    def test_index_html_links_nothing_off_site(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "static", "index.html")
+        with open(path, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertEqual(re.findall(r'(?:href|src)="(https?://[^"]+)"', html), [])
+
+    def test_the_fonts_are_ours(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "static", "app.css"), encoding="utf-8") as fh:
+            css = fh.read()
+        urls = re.findall(r"url\(([^)]+)\)", css)
+        fonts = [u for u in urls if u.endswith(".woff2")]
+        self.assertGreaterEqual(len(fonts), 7)
+        for u in fonts:
+            self.assertFalse(u.startswith(("http", "//")), u)
+            with open(os.path.join(root, "static", u), "rb") as fh:
+                self.assertEqual(fh.read(4), b"wOF2", u)

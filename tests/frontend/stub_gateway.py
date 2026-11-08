@@ -301,6 +301,14 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/static/app.css":
             self._send_static(STATIC_DIR / "app.css", "text/css")
             return
+        # The fonts app.css declares (served locally since 2026-11-08). A bare
+        # file name only — the stub is no place for a path-traversal hole.
+        if path.startswith("/static/fonts/"):
+            name = path[len("/static/fonts/"):]
+            font = STATIC_DIR / "fonts" / name
+            if "/" not in name and name.endswith(".woff2") and font.is_file():
+                self._send_static(font, "font/woff2")
+                return
         if path == "/sw.js":
             self._send_static(STATIC_DIR / "sw.js", "application/javascript")
             return

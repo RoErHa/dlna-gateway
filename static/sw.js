@@ -1,4 +1,4 @@
-const APP_CACHE = 'dlna-gw-app-v20';  // v20: inline handlers → data-act (CSP)
+const APP_CACHE = 'dlna-gw-app-v21';  // v21: fonts served locally, not by Google
 // v17: ℹ️ Artist panel — index.html gained
 //   #np-btn-artist / #artist-modal. Bumped to evict any client holding the OLD
 //   index.html beside the NEW app.js: that pairing threw on the button's
@@ -27,7 +27,15 @@ const SHELL = [
   '/static/vendor/hls.min.js',
   '/manifest.json',
   '/icon-192.png',
-  '/icon-512.png'
+  '/icon-512.png',
+  // The two fonts, served by the gateway since 2026-11-08 (app.css).
+  '/static/fonts/dm-mono-400-latin.woff2',
+  '/static/fonts/dm-mono-400-latin-ext.woff2',
+  '/static/fonts/dm-mono-500-latin.woff2',
+  '/static/fonts/dm-mono-500-latin-ext.woff2',
+  '/static/fonts/syne-var-latin.woff2',
+  '/static/fonts/syne-var-latin-ext.woff2',
+  '/static/fonts/syne-var-greek.woff2'
 ];
 
 // ── Install: pre-cache app shell ────────────────────────────────

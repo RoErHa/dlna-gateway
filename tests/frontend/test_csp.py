@@ -65,3 +65,18 @@ def test_data_act_runs_allowlisted_actions_only(app):
     app.click("#act-ok")
     app.wait_for_function(
         "document.getElementById('tab-search').classList.contains('active')", timeout=3000)
+
+
+def test_the_fonts_load_from_the_gateway(app):
+    """DM Mono and Syne are served from static/fonts since 2026-11-08 (they
+    were Google Fonts). With font-src 'self' enforced, a face that failed to
+    load would be a silent fallback to a system font — so ask the browser."""
+    app.wait_for_function("document.fonts.status === 'loaded'")
+    loaded = app.evaluate("""async () => {
+        await document.fonts.load("400 13px 'DM Mono'");
+        await document.fonts.load("800 15px 'Syne'");
+        return [...document.fonts].filter(f => f.status === 'loaded')
+                                  .map(f => f.family.replace(/["']/g, ''));
+    }""")
+    assert "DM Mono" in loaded, loaded
+    assert "Syne" in loaded, loaded

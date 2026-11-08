@@ -25,12 +25,13 @@ THE POLICY, directive by directive, and why each source is there:
                                  script and no inline handlers: app.js binds
                                  every event itself (data-act / data-onerr,
                                  see "CSP" in app.js).
-  style-src   'self' 'unsafe-inline' https://fonts.googleapis.com
+  style-src   'self' 'unsafe-inline'
                                  'unsafe-inline' because app.js builds HTML
                                  with style="" attributes in ~100 places. CSS
                                  cannot run script; the cost of allowing it is
                                  far smaller than script's.
-  font-src    'self' https://fonts.gstatic.com    the Google Fonts files.
+  font-src    'self'              the two fonts, served from static/fonts/
+                                 since 2026-11-08 (they were Google Fonts).
   img-src     'self' data: blob:  every cover goes through same-origin /art.
   media-src   'self' blob:        /stream, /radio_stream, video; hls.js feeds
                                  MSE from blob: URLs.
@@ -69,8 +70,8 @@ log = logging.getLogger("dlna.csp")
 POLICY = "; ".join([
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",
     "worker-src 'self' blob:",

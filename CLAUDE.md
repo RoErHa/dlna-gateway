@@ -30,11 +30,14 @@ doc. Dates are targets.
   tag message, with the count corrected in the notes only. Known wart: the tag
   message says "231 commits", the real count is 225 — left as is (owner's
   call, 2026-11-08).
-- [ ] **2. Self-host the PWA's two fonts** (2026-11-08). Google Fonts is the
-  last third-party load: every page view tells Google the time and the IP.
-  Serve them from `static/`, then drop `fonts.googleapis.com` /
-  `fonts.gstatic.com` from the CSP (`dlna_asgi_headers.POLICY`) and the
-  "not done" note in docs/SECURITY_POSTURE.md.
+- [x] **2. Self-host the PWA's two fonts** — done 2026-11-08. DM Mono +
+  Syne (SIL OFL 1.1, licences beside them) in `static/fonts/` (7 woff2,
+  ~89 KB; Syne is variable), declared at the top of `app.css`, precached by
+  the SW (`APP_CACHE` v21). The CSP's `style-src`/`font-src` are `'self'`
+  only; `test_security_headers.py::TestNoThirdParty` keeps any origin out
+  of the policy and `index.html`, and `test_csp.py::test_the_fonts_load_from_the_gateway`
+  asks the browser whether the faces loaded. The PWA now loads nothing
+  from another origin.
 - [x] **3. Today's `audio_error code=4`** — done 2026-11-08. NOT a dead
   row: the track (Texas, *Insane*, a valid 16/44.1 FLAC — ffmpeg decodes
   it clean) had streamed in full. It was **Stop**: `src=""` resolves to the
@@ -356,7 +359,7 @@ Appium.
 | `dlna_alerts.py` | Alerts to the owner's phone, on two channels, each OFF until its `.env` key is set: a **text message via this Mac's Messages app** (`ALERT_SMS_TO`, the owner's choice — it stays local; `dlna_alerts_sms.py`) and an ntfy push (`ALERT_PUSH_URL`/`ALERT_PUSH_TOKEN`). `alert(kind, …)` only QUEUES (bounded, one daemon sender) and is rate-limited per kind (`ALERT_MIN_INTERVAL_SEC`, 1 h), so it is safe to call from any hot path and never raises. Raised by: the runtime watch (no replacement Python → now; a self-restart → reported by the NEXT process at `on_boot` from a `.alerts/runtime-exit` marker, since a process whose Python is gone cannot be trusted with TLS), a restart loop (≥5 boots in 10 min, `.alerts/boot-history`), a root waiting > `ALERT_ROOT_WAIT_SEC` (1 h), a guard refusal (low priority), cert < 14 days, and — via the CLI `python3 dlna_alerts.py <kind> <title> <msg>` — failed backup / cert renewal / upgrade check. **Never log the URL or the number** (on ntfy.sh the topic name IS the secret). Tests are kept off both by empty `ALERT_SMS_TO`/`ALERT_PUSH_URL` and a throwaway `ALERT_STATE_DIR`, set in `tests/__init__.py` + `run_all.py`. `tests/test_alerts.py` (40). |
 | `dlna_alerts_sms.py` | The text-message channel: `osascript` drives Messages, SMS first (iPhone Text Message Forwarding), iMessage as fallback (`ALERT_SMS_SERVICE`). **The number and the text are passed as `argv`, never pasted into the AppleScript** — alert text can carry a stranger's Host header, and string-built AppleScript would run it. Needs a one-time macOS Automation grant (error -1743 until then). The number must carry `+` and the country code (`0316…` reads as a Dutch landline). Verified live 2026-11-04 from the CLI and from the launchd gateway, and 2026-11-08 from all three weekly launchd jobs (backup, cert renewal, upgrade check) — no extra grant needed. A text that could not be sent is logged by the weekly jobs (`✗ alert … was NOT sent`), and the number is scrubbed from Messages' error text in `send`. Cannot report the Mac itself being down — accepted: a dead Mac shows itself when you try to use it. |
 | `dlna_auth_throttle.py` | Slows Subsonic password guessing (hardening #6): 10 failed logins in 60 s from one address → blocked 60 s, doubling per trip to 1 h; a success or a quiet day forgets it. While blocked, `/rest/*` answers the plain wrong-auth error WITHOUT checking credentials (no oracle, and a guess can't succeed). IPv6 keyed by /64; capped at 1,024 addresses, a block evicted last. Only failures count — so a client with a STALE password locks itself out, by design. Consulted first by `dlna_asgi_subsonic._throttle_gate`; unpeered or password-unset requests are not counted. See Security posture 15. |
-| `dlna_asgi_headers.py` | `SecurityHeaders` — nosniff, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` and the Content-Security-Policy (`script-src 'self'`) on every response except `/gw/*`; never overrides a header a route set. `CSP_MODE` (`.env`): `enforce` (default since 2026-11-08; still reports) / `report-only` / `off`. `POST /api/csp_report` logs violations (`csp ✗ violation …`, rate-limited, bounded). Mounted INSIDE the guard. See Security posture 14. `tests/test_security_headers.py` (20). |
+| `dlna_asgi_headers.py` | `SecurityHeaders` — nosniff, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` and the Content-Security-Policy (`script-src 'self'`) on every response except `/gw/*`; never overrides a header a route set. `CSP_MODE` (`.env`): `enforce` (default since 2026-11-08; still reports) / `report-only` / `off`. `POST /api/csp_report` logs violations (`csp ✗ violation …`, rate-limited, bounded). Mounted INSIDE the guard. See Security posture 14. `tests/test_security_headers.py` (23). |
 | `dlna_asgi_video.py` | The video routes the PWA uses (same-origin so iOS will play them), incl. on-demand transcoding. |
 | `dlna_asgi_artist.py` | `GET /api/artist_info` — the ℹ️ panel's ONE request. Its own module because `dlna_asgi_browse.py` sits at 397/400, and because the panel is a feature seam that will grow. Resolves the line-up for the track's year and LABELS it, so the PWA can't promote a guess to a fact. |
 | `dlna_art_cache.py` | On-disk cover-art byte cache keyed by source URL (+ an optional `variant` for size-scaled copies). `api_playback.art_fetch_cached()` fronts `art_fetch` so `/art` + Subsonic `getCoverArt` serve repeat covers from disk (across clients + restarts) instead of re-fetching coverartarchive / re-decoding embedded art. `art_fetch_scaled()` adds `getCoverArt?size=N` downscaling (Pillow, snapped to a 96/256/512/1024 bucket ladder; scaled copies cached per bucket) so Amperfy/CarPlay pull KB-sized thumbnails instead of multi-MB originals — the dominant cost of a library art-sync over the tailnet. Pillow is optional: absent → the full-res original is served (old behaviour). Also negative-caches deterministic fetch failures (a candidate whose file has no embedded art, a CAA 404) under a short-TTL `__neg__` marker (`get_negative`/`put_negative`, default 1 h) so Amperfy's repeated getCoverArt doesn't re-decode the same dead candidate each time; TRANSIENT failures (art_fetch returns **503** when the upstream is unreachable) are never negative-cached, so a momentary localfs blip is retried at once. TTL + size-capped; `art_cache/` gitignored. `art_fetch` follows redirects (coverartarchive `front-500` 307→archive.org) + rejects <64 B junk bodies. |
@@ -766,7 +769,7 @@ measurements, incidents, the things that bit — are in
   the top of `app.js` (arrow wrappers — resolved at call time). The
   Playwright stub enforces the policy and any violation fails the test;
   XSS tests are marked `csp_violations_expected`.
-  `tests/frontend/test_csp.py` (4).
+  `tests/frontend/test_csp.py` (5).
 - **SW cache tiers** (`sw.js`): `APP_CACHE` shell is **network-first** (the
   cache is the offline fallback only — stale-while-revalidate once pinned a
   broken `app.js` forever); `install` calls `skipWaiting()`

@@ -296,9 +296,13 @@ What it took:
 - **`style-src` keeps `'unsafe-inline'`**: `app.js` writes `style=""` in
   about 100 places. CSS cannot run script, so the trade is far cheaper than
   it would be for script.
-- **Google Fonts** stays allowed (`fonts.googleapis.com` / `fonts.gstatic.com`).
-  Self-hosting the two fonts would remove the last third-party load from
-  the PWA; not done here.
+- **No third-party origin at all** (2026-11-08). The two fonts (DM Mono,
+  Syne; SIL OFL 1.1, licences beside them) are served from `static/fonts/`
+  and declared in `app.css`; they were Google Fonts, the PWA's last
+  third-party load, which told Google the time and the IP address of every
+  page view. `style-src` and `font-src` are `'self'` only, and
+  `TestNoThirdParty` fails if any origin returns to the policy or to
+  `index.html`.
 
 **Rollout.** `CSP_MODE` in `.env`: `enforce` (the code default since
 2026-11-08, after four days report-only on the owner's iPhone and Mac with
@@ -324,8 +328,8 @@ Playwright's own `wait_for_function` evaluates its predicate with `eval`
 inside the page. That exception hides nothing: `tests/test_security_headers.py`
 greps `app.js`/`sw.js` for string evaluation and `index.html` for inline
 script or handlers. Verified the guard bites by removing the marker from the
-injection test (it errors). `tests/test_security_headers.py` (20),
-`tests/frontend/test_csp.py` (4).
+injection test (it errors). `tests/test_security_headers.py` (23),
+`tests/frontend/test_csp.py` (5).
 
 **15. Subsonic password guessing is throttled** (2026-11-04,
 `dlna_auth_throttle.py`, hardening timeline #6). `/rest/*` is the one surface
