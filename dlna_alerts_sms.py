@@ -84,6 +84,11 @@ def send(title: str, message: str, env=None, run=subprocess.run) -> None:
     r = run(command(number, sms_text(title, message), service),
             capture_output=True, text=True, timeout=_TIMEOUT)
     if r.returncode != 0:
-        # The number is left out of the message on purpose.
-        raise RuntimeError(f"Messages refused: {(r.stderr or r.stdout).strip()[:300]}")
+        # The number is left out of the message on purpose — and scrubbed
+        # from Messages' own error text, which can quote the participant.
+        # The weekly jobs write this text to their logs.
+        detail = (r.stderr or r.stdout).strip()
+        if number:
+            detail = detail.replace(number, "<number>")
+        raise RuntimeError(f"Messages refused: {detail[:300]}")
     log.debug(f"alert sms: {r.stdout.strip()}")

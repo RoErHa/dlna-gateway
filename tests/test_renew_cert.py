@@ -122,6 +122,26 @@ class TestRenewCert(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("/com.x.reader", calls)
 
+    def test_an_alert_that_was_not_sent_is_logged(self):
+        # Before 2026-11-08 the alert CLI's output went to /dev/null, so a
+        # failed renewal whose text never left the Mac looked like one that
+        # had reached the owner.
+        with open(os.path.join(self.dir, "dlna_alerts.py"), "w") as fh:
+            fh.write("import sys\nprint('Messages refused: not authorized (-1743)')\n"
+                     "sys.exit(1)\n")
+        self._fake("tailscale", "exit 1")
+        rc, log, _ = self._run([])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("alert 'cert_renew_failed' was NOT sent (exit 1)", log)
+        self.assertIn("-1743", log)
+
+    def test_alerts_off_is_not_reported_as_a_failure(self):
+        with open(os.path.join(self.dir, "dlna_alerts.py"), "w") as fh:
+            fh.write("import sys\nsys.exit(3)\n")
+        self._fake("tailscale", "exit 1")
+        _, log, _ = self._run([])
+        self.assertNotIn("NOT sent", log)
+
     def test_a_value_in_env_is_never_executed(self):
         # Sourcing runs `KEY=value word` as the command `word`. A config file
         # must never be able to run anything.

@@ -76,15 +76,13 @@ ALERT_REPO="$(pwd)"
 # e.g. macOS refusing this job control of Messages, -1743): before
 # 2026-11-08 its output went to /dev/null, so an alert that never left the
 # Mac looked exactly like one that did. Exit 3 (alerts off) stays quiet.
+# dlna_alerts_sms scrubs the number from any error text it reports.
 push_alert() {
     local py="${ALERT_REPO}/.venv/bin/python" out rc=0
     [ -x "${py}" ] || py=python3
     [ -f "${ALERT_REPO}/dlna_alerts.py" ] || return 0
     out="$("${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" 2>&1)" || rc=$?
     if [ "${rc}" -ne 0 ] && [ "${rc}" -ne 3 ]; then
-        # Never log the number, even if an error message quotes it.
-        local num; num="$(env_get ALERT_SMS_TO)"
-        [ -n "${num}" ] && out="${out//"${num}"/<number>}"
         log "  ✗ alert '$1' was NOT sent (exit ${rc}): $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-300)"
     fi
     return 0

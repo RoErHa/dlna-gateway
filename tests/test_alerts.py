@@ -371,6 +371,16 @@ class TestSms(unittest.TestCase):
         self.assertIn("-1743", str(cm.exception))
         self.assertNotIn("612345678", str(cm.exception))
 
+    def test_a_refusal_that_quotes_the_number_is_scrubbed(self):
+        def run(cmd, **kw):
+            return subprocess.CompletedProcess(
+                cmd, 1, "", "Can't get participant \"+31612345678\" (-1728)")
+        with self.assertRaises(RuntimeError) as cm:
+            S.send("t", "m", env={"ALERT_SMS_TO": "+31612345678"}, run=run)
+        self.assertIn("<number>", str(cm.exception))
+        self.assertIn("-1728", str(cm.exception))
+        self.assertNotIn("612345678", str(cm.exception))
+
     def test_sms_alone_enables_alerts_and_is_used(self):
         texts = []
         a = A.Alerter(env={"ALERT_SMS_TO": "+31612345678"},

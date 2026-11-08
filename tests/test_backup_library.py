@@ -112,18 +112,19 @@ class TestBackupLibrary(unittest.TestCase):
         self.assertEqual(alert[0], "backup_failed")
         self.assertIn("not found", alert[2])
 
-    def test_an_alert_that_was_not_sent_is_logged_without_the_number(self):
+    def test_an_alert_that_was_not_sent_is_logged(self):
+        # The number is scrubbed by dlna_alerts_sms before the CLI prints
+        # anything (tests/test_alerts.py::TestSms).
         os.remove(os.path.join(self.dir, "library.db"))
         with open(os.path.join(self.dir, "dlna_alerts.py"), "w") as fh:
             fh.write("import sys\n"
-                     "print('alert ✗ could not text: participant +31612345678 (-1743)')\n"
+                     "print('Messages refused: participant <number> (-1743)')\n"
                      "sys.exit(1)\n")
-        self.run_script(dotenv="ALERT_SMS_TO=+31612345678\n")
+        self.run_script()
         with open(os.path.join(self.dir, "library-backup.log")) as fh:
             log = fh.read()
         self.assertIn("alert 'backup_failed' was NOT sent (exit 1)", log)
         self.assertIn("-1743", log)
-        self.assertNotIn("+31612345678", log)
 
     def test_alerts_off_is_not_reported_as_a_failure(self):
         os.remove(os.path.join(self.dir, "library.db"))

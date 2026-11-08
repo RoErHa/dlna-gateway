@@ -112,12 +112,14 @@ this, and the rest of the Mac.
   control Messages. **A weekly launchd job texted on 2026-11-08** (the
   backup job, unintentionally, during testing of the Time Machine check;
   the owner confirmed it arrived at 14:20),
-  so that job needs no extra grant. **Verified live 2026-11-04:** the CLI test text and an
+  so that job needs no extra grant. The certificate-renewal and
+  upgrade-check jobs were then each run under launchd with a harmless
+  forced failure (14:37); both reported their text sent. All three jobs
+  now log an alert that could NOT be sent instead of discarding it. **Verified live 2026-11-04:** the CLI test text and an
   alert raised by the running gateway itself (a deliberately refused
   request, sent from the launchd process ~6 s later) both arrived on the
-  owner's phone. Not yet seen live: a text from one of the weekly launchd
-  jobs, which may need its own one-time Automation grant. The log shows
-  `could not text … (-1743)` if so.
+  owner's phone. The weekly launchd jobs needed no grant of their own
+  (2026-11-08, below).
 
 **What was built.**
 - `dlna_alerts.alert(kind, …)` queues (bounded, one daemon sender), is

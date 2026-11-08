@@ -22,13 +22,22 @@ cd "$(dirname "$0")"
 
 LOG="upgrade-check.log"
 ALERT_REPO="$(pwd)"
-# Push alert to the owner's phone via dlna_alerts.py (hardening #3). Off
-# unless ALERT_PUSH_URL is set in .env; it can never fail the job itself.
+# Alert the owner's phone via dlna_alerts.py (hardening #3). Off unless
+# ALERT_SMS_TO or ALERT_PUSH_URL is set in .env; it can never fail the job
+# itself. A send that FAILED is logged here (exit 1 = no channel took it,
+# e.g. macOS refusing this job control of Messages, -1743): before
+# 2026-11-08 its output went to /dev/null, so an alert that never left the
+# Mac looked exactly like one that did. Exit 3 (alerts off) stays quiet.
+# dlna_alerts_sms scrubs the number from any error text it reports.
 push_alert() {
-    local py="${ALERT_REPO}/.venv/bin/python"
+    local py="${ALERT_REPO}/.venv/bin/python" out rc=0
     [ -x "${py}" ] || py=python3
     [ -f "${ALERT_REPO}/dlna_alerts.py" ] || return 0
-    "${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" >/dev/null 2>&1 || true
+    out="$("${py}" "${ALERT_REPO}/dlna_alerts.py" "$@" 2>&1)" || rc=$?
+    if [ "${rc}" -ne 0 ] && [ "${rc}" -ne 3 ]; then
+        echo "  ✗ alert '$1' was NOT sent (exit ${rc}): $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-300)" >> "$LOG"
+    fi
+    return 0
 }
 KEEP_LINES=3000
 
