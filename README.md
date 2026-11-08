@@ -735,6 +735,10 @@ This project would not exist without:
   CarPlay path runs on top of this protocol.
 - [Tailscale](https://tailscale.com/) — secure remote access without
   port forwarding.
+- The [DM Mono](https://github.com/googlefonts/dm-mono) and
+  [Syne](https://gitlab.com/bonjour-monde/fonderie/syne-typeface) typefaces —
+  the PWA's lettering, shipped in `static/fonts/` under the SIL Open Font
+  License 1.1 (licence files beside them).
 
 ## License
 
