@@ -51,17 +51,28 @@ doc. Dates are targets.
   making the BACKUP daily (owner's call) rather than adding a check-only
   job: the check rides every run. Retention moved to 7 daily + 8 weekly so
   the two months of reach survive. See "Backing up library.db (daily)".
-- [ ] **5. Does the Naim play MP4 audio through the gateway?** (needs the
-  owner at the Naim; target 2026-11-12). Measured 2026-11-08 from the
-  files themselves: music holds **85 `.m4a`** — 63 AAC (9 albums, e.g.
-  *New Stories – Speakin' Out*) and 22 **ALAC** (*Two Steps From Hell –
-  Invincible*); **no `.m4b`** in music. Audiobooks hold **366 AAC** —
-  236 `.m4a` + 130 `.m4b` across 31 books, at sample rates from **11,025
-  Hz** to 48 kHz (22,050 Hz is the commonest m4b rate, 57 files). Every
-  one is served as `audio/mp4`, which `_GW_SOURCE_PROTOCOLS` advertises.
-  Test one of each: AAC music, ALAC music, a 44.1 kHz m4b, a 22.05 kHz m4b
-  (low rates are the likeliest refusal), plus resume (Seek) inside an m4b.
-  Record the answer in docs/AUDIOBOOKS.md and close its open question.
+- [ ] **5. Does the Naim play MP4 audio through the gateway?** — FORMATS
+  ANSWERED 2026-11-08 (owner at the Naim, 16:29–16:38, read from
+  `gateway.log`): every one reached PLAYING within ~5 s, no SEND FAILED, no
+  watchdog — AAC music (*Stone Temple Pilots – Thank You*), ALAC (*Two Steps
+  From Hell – Invincible*), m4b at 44.1 kHz (*Poirot 01*, also pause/resume
+  OK), 22.05 kHz (*Poirot 09*) and 11.025 kHz (*A Clash of Kings Pt 1*, an
+  18.8 h single file). Library inventory: music 63 AAC + 22 ALAC `.m4a`, no
+  `.m4b`; audiobooks 366 AAC (130 `.m4b`, 31 books, 11–48 kHz). Still open
+  for 2026-11-09:
+  - **Resume was never exercised** — no Seek was sent. Cause found:
+    `playback_positions` keys ONE row per FOLDER, and *BBC Radio 4 Hercule
+    Poirot* holds 27 separate books as single files in one folder, so the
+    whole series shares one resume slot (it pointed at the episode played
+    last). Proposal: key per FILE when the files of a folder carry
+    different album tags (each Poirot file's album is "BBC Radio 4: <title>").
+    Then re-test a real Seek on the Naim with a multi-chapter book.
+  - Natural end of track → next file: not tested (Next by hand worked).
+  - Write the answer into docs/AUDIOBOOKS.md and close its open question.
+  - Two more blank-title `audio_error code=4` at 16:20 and 16:29 from
+    192.168.1.145, i.e. the Stop bug fixed at 15:46. Output switching does not
+    touch `<audio>`, so most likely that PWA was opened before the fix:
+    confirm none recur after a reload.
 - [ ] **6. Click-through installer — proposal first.** Proposal WRITTEN
   2026-11-08: [docs/INSTALLER_PROPOSAL.md](docs/INSTALLER_PROPOSAL.md) —
   Stage 1 configurable without `.env` (data dir + loopback-only `/setup`),
