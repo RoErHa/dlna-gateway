@@ -941,9 +941,9 @@ def list_pages():
          "cert-renewal.log.",
          GREY),
         ("J/3", "com.roha.dlna-library-backup + backup-library.sh",
-         "Weekly library.db snapshot (Sun 03:30): sqlite3 .backup, never cp; "
+         "Daily library.db snapshot (03:30): sqlite3 .backup, never cp; "
          "integrity_check + a non-zero tracks count before it counts; keeps "
-         "8. Then checks Time Machine's newest backup is ≤ "
+         "7 daily + 8 weekly. Then checks Time Machine's newest backup is ≤ "
          "BACKUP_TM_MAX_AGE_DAYS (3) old — the off-disk copy. "
          "library-backup.log.", GREY),
         ("J/4", "setup.sh", "venv setup + run / restart / probe. --run "

@@ -41,9 +41,9 @@ import unittest
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-@unittest.skipUnless(shutil.which("sqlite3"), "sqlite3 not installed")
-@unittest.skipUnless(os.path.exists("/bin/bash"), "needs /bin/bash")
-class TestBackupLibrary(unittest.TestCase):
+class _Sandbox:
+    """The script copied into a temp dir with its own .env, database and
+    Time Machine preferences. Holds no tests, so nothing runs twice."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="backup-lib-")
@@ -94,6 +94,11 @@ class TestBackupLibrary(unittest.TestCase):
             return []
         with open(self.alerts) as fh:
             return [line.split("\t") for line in fh.read().splitlines()]
+
+
+@unittest.skipUnless(shutil.which("sqlite3"), "sqlite3 not installed")
+@unittest.skipUnless(os.path.exists("/bin/bash"), "needs /bin/bash")
+class TestBackupLibrary(_Sandbox, unittest.TestCase):
 
     # ── the local snapshot ────────────────────────────────────────────
 
@@ -208,3 +213,88 @@ class TestBackupLibrary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("sqlite3"), "sqlite3 not installed")
+@unittest.skipUnless(os.path.exists("/bin/bash"), "needs /bin/bash")
+class TestRetention(_Sandbox, unittest.TestCase):
+    """Daily since 2026-11-08: the newest BACKUP_KEEP_DAILY snapshots plus the
+    newest of each of the last BACKUP_KEEP_WEEKLY ISO weeks. Weekly with
+    "newest 8" kept two months; daily with "newest 8" would have kept eight
+    days, which is why retention changed with the schedule."""
+
+    def seed(self, days_ago, extra=()):
+        os.makedirs(self.dest, exist_ok=True)
+        now = datetime.datetime.now()
+        names = []
+        for d in days_ago:
+            t = now - datetime.timedelta(days=d, hours=1)
+            names.append(t.strftime("library-%Y%m%d-%H%M%S.db"))
+        for name in list(names) + list(extra):
+            with open(os.path.join(self.dest, name), "wb") as fh:
+                fh.write(b"x")
+        return names
+
+    @staticmethod
+    def expected(names, daily, weekly):
+        keep, seen, weeks = set(), set(), 0
+        for i, name in enumerate(sorted(names, reverse=True), 1):
+            day = datetime.datetime.strptime(name[8:16], "%Y%m%d").date()
+            week = day.isocalendar()[:2]
+            if i <= daily:
+                keep.add(name)
+            if week not in seen:
+                seen.add(week)
+                if weeks < weekly:
+                    weeks += 1
+                    keep.add(name)
+        return keep
+
+    def kept(self):
+        return {os.path.basename(p) for p in self.snapshots()}
+
+    def run_and_expect(self, names, daily=7, weekly=8, dotenv=""):
+        r = self.run_script(dotenv=dotenv)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        today = self.kept() - set(names)
+        self.assertEqual(len(today), 1, "the run's own snapshot")
+        self.assertEqual(self.kept(), self.expected(set(names) | today, daily, weekly))
+        return self.kept()
+
+    def test_seventy_days_of_dailies_keep_two_months_in_about_fifteen(self):
+        kept = self.run_and_expect(self.seed(range(1, 71)))
+        self.assertLessEqual(len(kept), 15)
+        age = (datetime.datetime.now()
+               - datetime.datetime.strptime(min(kept)[8:16], "%Y%m%d")).days
+        self.assertGreaterEqual(age, 7 * 7 - 1, "lost the two months of reach")
+        self.assertLess(age, 9 * 7, "kept more weeks than asked for")
+
+    def test_an_old_weekly_history_keeps_eight_weeks_of_it(self):
+        names = self.seed(range(7, 7 * 12, 7))       # 11 past weeks, one each
+        kept = self.run_and_expect(names)
+        self.assertIn(len(set(names) & kept), (7, 8))
+
+    def test_settings_come_from_dotenv_and_keep_overrides_daily(self):
+        names = self.seed(range(1, 30))
+        self.run_script(dotenv="BACKUP_KEEP_DAILY=3\nBACKUP_KEEP_WEEKLY=0\n")
+        self.assertEqual(len(self.kept()), 3)
+        self.seed(range(1, 30))
+        r = subprocess.run(["/bin/bash", os.path.join(self.dir, "backup-library.sh"),
+                            "--keep", "5"], cwd=self.dir,
+                           env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": self.dir,
+                                "BACKUP_DIR": self.dest, "TM_PREFS": self.prefs_path},
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.kept()), 5)
+        del names
+
+    def test_a_name_that_does_not_parse_is_never_pruned(self):
+        self.seed(range(1, 40), extra=("library-before-migration.db",))
+        self.run_script(dotenv="BACKUP_KEEP_DAILY=1\nBACKUP_KEEP_WEEKLY=0\n")
+        self.assertIn("library-before-migration.db", self.kept())
+
+    def test_a_bad_setting_refuses_before_touching_anything(self):
+        names = self.seed(range(1, 20))
+        r = self.run_script(dotenv="BACKUP_KEEP_DAILY=0\n")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(self.kept(), set(names))

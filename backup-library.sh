@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# backup-library.sh — weekly snapshot of library.db
+# backup-library.sh — daily snapshot of library.db
 #
 # WHY: library.db is the gateway's whole index — 26k music tracks, 11k
 # audiobook chapters, 4k videos — plus everything a person CREATED that
@@ -18,8 +18,13 @@
 # stopping the gateway. Every snapshot is then integrity-checked before it
 # is allowed to count as a backup.
 #
-# Retention: keeps the newest $KEEP snapshots (default 8 ≈ two months) and
-# prunes older ones — an unbounded backup directory is its own failure.
+# Retention (daily since 2026-11-08; it ran weekly with "newest 8" before):
+# the newest BACKUP_KEEP_DAILY snapshots (default 7) PLUS the newest one of
+# each of the last BACKUP_KEEP_WEEKLY ISO weeks (default 8), so a daily
+# schedule keeps the old two months of reach in ~15 files instead of 8 days.
+# A snapshot's date comes from its NAME, never its mtime (a copy or restore
+# touches mtime), and a name that does not parse is never pruned. An
+# unbounded backup directory is its own failure, hence any pruning at all.
 #
 # OFF-DISK (hardening #2, 2026-11-08): the snapshots live on the same SSD as
 # library.db, so the second copy is Time Machine's job. Time Machine says
@@ -30,13 +35,14 @@
 # record, makes the job exit 1, and the EXIT trap sends the alert. The local
 # snapshot is already done by then, so this check can never cost one.
 # Skipped where that file is absent (not macOS) or names no destination, so
-# an install that never set Time Machine up isn't nagged every week.
+# an install that never set Time Machine up isn't nagged every day. Daily
+# since 2026-11-08: weekly, a stopped Time Machine went ~10 days unnoticed.
 #
 # USAGE
 #   ./backup-library.sh              # take a snapshot now
 #   ./backup-library.sh --list       # show what exists
-#   ./backup-library.sh --keep 12    # override retention for this run
-#   KEEP=4 ./backup-library.sh       # same, via env
+#   ./backup-library.sh --keep 12    # keep 12 daily snapshots this run
+#   BACKUP_KEEP_DAILY / BACKUP_KEEP_WEEKLY in .env set the defaults
 #
 # RESTORE (deliberately manual — clobbering a live index should be a choice)
 #   launchctl bootout gui/$(id -u)/com.roha.dlna-gateway
@@ -61,7 +67,8 @@ env_get() {
 
 DB="${LIBRARY_DB:-library.db}"
 DEST="${BACKUP_DIR:-$HOME/dlna-gateway-backups}"
-KEEP="${KEEP:-8}"
+KEEP_DAILY="$(env_get BACKUP_KEEP_DAILY)"; KEEP_DAILY="${KEEP_DAILY:-7}"
+KEEP_WEEKLY="$(env_get BACKUP_KEEP_WEEKLY)"; KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
 TM_MAX_AGE_DAYS="$(env_get BACKUP_TM_MAX_AGE_DAYS)"; TM_MAX_AGE_DAYS="${TM_MAX_AGE_DAYS:-3}"
 LOG="library-backup.log"
 
@@ -100,11 +107,14 @@ while [ $# -gt 0 ]; do
         echo "No backup directory yet: $DEST"
       fi
       exit 0 ;;
-    --keep) KEEP="$2"; shift 2 ;;
-    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
+    --keep) KEEP_DAILY="$2"; shift 2 ;;
+    -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+case "${KEEP_DAILY}" in ''|*[!0-9]*|0) echo "BACKUP_KEEP_DAILY / --keep must be a whole number ≥ 1, got '${KEEP_DAILY}'" >&2; exit 2 ;; esac
+case "${KEEP_WEEKLY}" in ''|*[!0-9]*) echo "BACKUP_KEEP_WEEKLY must be a whole number, got '${KEEP_WEEKLY}'" >&2; exit 2 ;; esac
 
 # Any non-zero exit from here on is a failed backup, including one `set -e`
 # raised on a line nobody anticipated: tell the owner, not just the log.
@@ -178,14 +188,39 @@ log "✓ snapshot $(basename "$OUT")  ${SIZE}  ${TRACKS} tracks  (integrity ok)"
 # NB: plain `while read`, not `mapfile` — macOS ships bash 3.2, where
 # mapfile does not exist, and this script's whole job is to run unattended
 # under launchd on exactly that bash.
-ls -1t "$DEST"/library-*.db 2>/dev/null | tail -n +$((KEEP + 1)) | while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  drop_db "$f"
-  log "  pruned $(basename "$f")"
-done
+#
+# Newest first BY NAME (library-YYYYMMDD-HHMMSS.db sorts by time). Keep the
+# first KEEP_DAILY; beyond those, keep the first (= newest) snapshot of each
+# ISO week until KEEP_WEEKLY distinct weeks are covered. The current week
+# counts as one of them, so "8 weekly" reaches back eight weeks from today.
+ls -1 "$DEST"/library-*.db 2>/dev/null | sort -r | {
+  n=0; weeks=0; seen=":"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1))
+    day="$(basename "$f" | sed -n 's/^library-\([0-9]\{8\}\)-[0-9]\{6\}\.db$/\1/p')"
+    week=""
+    [ -n "$day" ] && week="$(date -j -f '%Y%m%d' "$day" '+%G-%V' 2>/dev/null)" || true
+    keep=0
+    [ "$n" -le "$KEEP_DAILY" ] && keep=1
+    if [ -z "$week" ]; then
+      keep=1                               # undatable: never prune it
+    else
+      case "$seen" in
+        *":$week:"*) ;;                    # this week already has its newest
+        *) seen="$seen$week:"
+           if [ "$weeks" -lt "$KEEP_WEEKLY" ]; then weeks=$((weeks + 1)); keep=1; fi ;;
+      esac
+    fi
+    if [ "$keep" -eq 0 ]; then
+      drop_db "$f"
+      log "  pruned $(basename "$f")"
+    fi
+  done
+}
 
 COUNT="$(ls -1 "$DEST"/library-*.db 2>/dev/null | wc -l | tr -d ' ')"
-log "  $COUNT snapshot(s) retained in $DEST (keep=$KEEP)"
+log "  $COUNT snapshot(s) retained in $DEST (daily=$KEEP_DAILY, weekly=$KEEP_WEEKLY)"
 
 # ── off-disk: is Time Machine still copying all of this? ─────────────────
 # Runs LAST on purpose: the local snapshot and its retention are finished,

@@ -47,10 +47,10 @@ doc. Dates are targets.
   `removeAttribute("src")`, and the handler ignores an element with no
   source. `test_audio_errors.py::test_stop_is_not_reported_as_an_unsupported_track`
   (fails on the old code, both engines).
-- [ ] **4. Check Time Machine daily, not weekly** (target 2026-11-10). The
-  check rides the Sunday backup job, so a stopped Time Machine can go ~10
-  days unnoticed. A small daily LaunchAgent running only the check — the
-  backup itself stays weekly so `KEEP=8` still means 8 weeks.
+- [x] **4. Check Time Machine daily, not weekly** — done 2026-11-08, by
+  making the BACKUP daily (owner's call) rather than adding a check-only
+  job: the check rides every run. Retention moved to 7 daily + 8 weekly so
+  the two months of reach survive. See "Backing up library.db (daily)".
 - [ ] **5. Does the Naim play MP4 audio through the gateway?** (needs the
   owner at the Naim; target 2026-11-12). Measured 2026-11-08 from the
   files themselves: music holds **85 `.m4a`** — 63 AAC (9 albums, e.g.
@@ -1227,7 +1227,7 @@ directly because the risk in a file-trimming script is deleting the wrong
 half; `###` subsections inside an entry don't split it, and a `##` heading
 without a date (ordinary prose in the preamble) is never treated as an entry.
 
-## Backing up library.db (weekly)
+## Backing up library.db (daily)
 
 `library.db` holds the index **and everything a person created that
 deliberately survives a rebuild** — playlists, album favourites, audiobook
@@ -1236,9 +1236,10 @@ resume positions, play counts, lyrics, radio stations, `metadata_overrides`,
 is gitignored and, since the 2026-08-20 history rewrite, purged from git
 history entirely — so **git is not a safety net for it**. This job is.
 
-**`backup-library.sh` + `com.roha.dlna-library-backup` LaunchAgent (Sundays
-03:30)** — deliberately a different day/hour from the cert renewal (Mon
-04:30) so the two never contend. Output appends to `library-backup.log`.
+**`backup-library.sh` + `com.roha.dlna-library-backup` LaunchAgent (daily
+03:30; weekly on Sundays until 2026-11-08)** — clear of the Immich import
+(02:45), the cert renewal (Mon 04:30) and the upgrade check (Sat 05:00).
+Output appends to `library-backup.log`.
 
 The one thing that makes it correct: **`sqlite3 .backup`, not `cp`.** The
 gateway runs WAL mode and is writing while the job fires; a plain copy can
@@ -1257,8 +1258,13 @@ Any non-zero exit (an EXIT trap, so a `set -e` surprise counts too) sends a
 `backup_failed` alert naming the reason (`dlna_alerts.py`; off unless
 `ALERT_SMS_TO` or `ALERT_PUSH_URL` is set).
 
-Retention: newest 8 (≈2 months, ~64 MB each). `BACKUP_DIR` / `KEEP` override
-via env or the plist.
+Retention: **7 daily + 8 weekly** — the newest `BACKUP_KEEP_DAILY` (7)
+snapshots plus the newest of each of the last `BACKUP_KEEP_WEEKLY` (8) ISO
+weeks, ≈15 files, ~85 MB each (both in `.env`; `--keep N` sets the daily
+count for one run). It changed WITH the schedule: the old "newest 8" was two
+months weekly and would have been eight days daily. A snapshot's date comes
+from its NAME, never mtime, and an unparsable name is never pruned.
+`BACKUP_DIR` stays an environment override (the job's env, not `.env`).
 
 **Off-disk = Time Machine, and the job checks it is still running**
 (2026-11-08, hardening #2). The snapshots sit on the same SSD as
@@ -1273,7 +1279,7 @@ stalled 26 s then refused on the first live run. No prefs file or no
 destination → skipped, so an install without Time Machine is not nagged. An
 alert that could not be SENT is now logged in `library-backup.log` (it went
 to `/dev/null` before), with the number scrubbed.
-`tests/test_backup_library.py` (14) runs the real script under `/bin/bash`.
+`tests/test_backup_library.py` (19) runs the real script under `/bin/bash`.
 
 ```bash
 ./backup-library.sh              # snapshot now

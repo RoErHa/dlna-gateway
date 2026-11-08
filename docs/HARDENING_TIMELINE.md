@@ -74,9 +74,11 @@ works.
   `BACKUP_TM_MAX_AGE_DAYS` (3) days old and sends `backup_failed`
   otherwise; `tests/test_backup_library.py`. It reads Time Machine's
   preferences file, because `tmutil latestbackup` needs Full Disk Access
-  under launchd (found on the first live run). **Limit:** checked weekly,
-  so a stopped Time Machine can go up to ~10 days unnoticed; and the disk
-  is in the same room as the Mac.
+  under launchd (found on the first live run). Checked **daily** since the
+  same evening, when the backup itself went daily (7 daily + 8 weekly
+  retention), so a stopped Time Machine is reported within about 4 days
+  (the 3-day limit plus one run). **Limit:** the disk is in the same room
+  as the Mac.
 
 **Why.** `backup-library.sh` writes its weekly snapshots to
 `~/dlna-gateway-backups`, on the same internal SSD as `library.db`. That
