@@ -87,7 +87,7 @@ a note on what must not be reverted. The headlines:
 | TLS | Outbound fetches did not verify certificates. |
 | Injection | The PWA's escaping did not cover quoted attributes, where discovered-device text lands. |
 | Browser (Nov 2026) | Any web page could act on the API — writes answered GETs, `text/plain` POSTs needed no preflight, and no `Host` check stopped DNS rebinding. |
-| Headers (Nov 2026) | No Content-Security-Policy, so an escaping slip would have been script execution; the PWA could be framed; no `nosniff`. Now `script-src 'self'` with no inline handlers (report-only until verified on real devices), `frame-ancestors 'none'`, `nosniff`, same-origin referrer. |
+| Headers (Nov 2026) | No Content-Security-Policy, so an escaping slip would have been script execution; the PWA could be framed; no `nosniff`. Now `script-src 'self'` with no inline handlers (enforced since 2026-11-08, after running report-only on real devices), `frame-ancestors 'none'`, `nosniff`, same-origin referrer. |
 | Subsonic (Nov 2026) | Nothing limited how fast the `/rest/*` password could be guessed. Now 10 failures a minute block the address, doubling up to an hour, and a blocked address is refused without its credentials being checked. |
 
 **One deliberate exception to path containment (2026-11-07).** With `LOCALFS_VIDEO_LINK_ROOTS` set, the

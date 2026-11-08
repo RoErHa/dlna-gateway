@@ -300,10 +300,12 @@ What it took:
   Self-hosting the two fonts would remove the last third-party load from
   the PWA; not done here.
 
-**Rollout.** `CSP_MODE` in `.env`: `report-only` (the code default until the
-policy has run clean on real devices), `enforce`, or `off`. In report-only
-the browser blocks nothing and POSTs each violation to `/api/csp_report`,
-which logs `csp ✗ violation (report-only) directive=… blocked=… page=…
+**Rollout.** `CSP_MODE` in `.env`: `enforce` (the code default since
+2026-11-08, after four days report-only on the owner's iPhone and Mac with
+no violation), `report-only`, or `off`. Both CSP modes carry `report-uri`:
+enforced, a report is the only trace of something the policy broke. In
+report-only the browser blocks nothing. Each violation is POSTed to
+`/api/csp_report`, which logs `csp ✗ violation (<mode>) directive=… blocked=… page=…
 source=…:line` at most once per (directive, blocked) per 10 minutes, and at
 most 30 lines per 10 minutes in all, with bounded memory and a 16 KB body cap.
 **WebKit sends reports with `Origin: null`**, which the request guard's rule 3
@@ -317,12 +319,12 @@ that log is what the enforcement decision rests on.
 **How it is tested.** The Playwright stub serves the policy ENFORCED, and
 `tests/frontend/conftest.py` fails any test during which the page logs a
 violation; the XSS tests, which inject attack markup on purpose, are marked
-`csp_violations_expected`. The stub adds one thing, `'unsafe-eval'`, because
+`csp_violations_expected`. The stub adds one thing, `'unsafe-eval'` (and drops `report-uri`, having no report route), because
 Playwright's own `wait_for_function` evaluates its predicate with `eval`
 inside the page. That exception hides nothing: `tests/test_security_headers.py`
 greps `app.js`/`sw.js` for string evaluation and `index.html` for inline
 script or handlers. Verified the guard bites by removing the marker from the
-injection test (it errors). `tests/test_security_headers.py` (19),
+injection test (it errors). `tests/test_security_headers.py` (20),
 `tests/frontend/test_csp.py` (4).
 
 **15. Subsonic password guessing is throttled** (2026-11-04,

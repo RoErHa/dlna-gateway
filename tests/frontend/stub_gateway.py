@@ -27,9 +27,12 @@ from dlna_asgi_headers import header_list
 # Playwright's own wait_for_function() evaluates its predicate with eval()
 # inside the page, and the real policy (rightly) refuses that. The app itself
 # never evaluates strings; tests/test_security_headers.py greps it to keep it
-# so, which is what makes this exception safe.
+# so, which is what makes this exception safe. The report-uri is dropped:
+# conftest.py catches violations in the browser itself, and the stub has no
+# report route.
 _SECURITY_HEADERS = [
-    (k, v.replace(b"script-src 'self'", b"script-src 'self' 'unsafe-eval'"))
+    (k, v.replace(b"script-src 'self'", b"script-src 'self' 'unsafe-eval'")
+         .split(b"; report-uri")[0])
     for k, v in header_list("enforce")]
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"

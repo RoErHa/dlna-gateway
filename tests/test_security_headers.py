@@ -76,10 +76,16 @@ class TestPolicy(unittest.TestCase):
         ro = dict(H.header_list("report-only"))[b"content-security-policy-report-only"]
         self.assertTrue(ro.endswith(b"report-uri /api/csp_report"))
 
-    def test_mode_comes_from_env_and_defaults_to_report_only(self):
-        self.assertEqual(H.csp_mode({}), "report-only")
-        self.assertEqual(H.csp_mode({"CSP_MODE": "Enforce"}), "enforce")
-        self.assertEqual(H.csp_mode({"CSP_MODE": "nonsense"}), "report-only")
+    def test_enforced_still_reports(self):
+        """Enforced, a blocked script is otherwise a dead button with
+        nothing in the log."""
+        en = dict(H.header_list("enforce"))[b"content-security-policy"]
+        self.assertTrue(en.endswith(b"report-uri /api/csp_report"))
+
+    def test_mode_comes_from_env_and_defaults_to_enforce(self):
+        self.assertEqual(H.csp_mode({}), "enforce")
+        self.assertEqual(H.csp_mode({"CSP_MODE": "Report-Only"}), "report-only")
+        self.assertEqual(H.csp_mode({"CSP_MODE": "nonsense"}), "enforce")
 
 
 class TestMiddleware(unittest.TestCase):

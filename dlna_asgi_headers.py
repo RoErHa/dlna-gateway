@@ -39,10 +39,13 @@ THE POLICY, directive by directive, and why each source is there:
   manifest-src 'self'
   object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 
-ROLLOUT — `CSP_MODE` in .env: `report-only` (the default until the policy has
-run clean on real devices), `enforce`, or `off`. In report-only the browser
-blocks nothing and POSTs each violation to /api/csp_report, which logs it
-(`csp ✗ violation …`, rate-limited, bounded memory). The test suites run the
+ROLLOUT — `CSP_MODE` in .env: `enforce` (the default since 2026-11-08, after
+four days report-only on the owner's iPhone and Mac logged no violation),
+`report-only`, or `off`. Both CSP modes POST each violation to
+/api/csp_report, which logs it (`csp ✗ violation (<mode>) …`, rate-limited,
+bounded memory); enforced, that line is the only trace of something the
+policy broke. In report-only the browser blocks nothing — the switch back
+if enforcing ever breaks the PWA. The test suites run the
 policy ENFORCED on both engines, so report-only is only for what they cannot
 see — a real iPhone, a real Safari.
 
@@ -80,7 +83,7 @@ POLICY = "; ".join([
 ])
 REPORT_PATH = "/api/csp_report"
 _MODES = ("report-only", "enforce", "off")
-DEFAULT_MODE = "report-only"
+DEFAULT_MODE = "enforce"   # since 2026-11-08 (hardening #4)
 
 _REPORT_MAX_BYTES = 16 * 1024
 _WARN_EVERY_SEC = 600.0
@@ -102,8 +105,11 @@ def header_list(mode: str) -> list[tuple[bytes, bytes]]:
     out = [(b"x-content-type-options", b"nosniff"),
            (b"referrer-policy", b"same-origin"),
            (b"x-frame-options", b"DENY")]
+    # Enforced, the browser still REPORTS: without report-uri a blocked
+    # script is a dead button and nothing in the log (2026-11-08).
     if mode == "enforce":
-        out.append((b"content-security-policy", POLICY.encode()))
+        out.append((b"content-security-policy",
+                    f"{POLICY}; report-uri {REPORT_PATH}".encode()))
     elif mode == "report-only":
         out.append((b"content-security-policy-report-only",
                     f"{POLICY}; report-uri {REPORT_PATH}".encode()))

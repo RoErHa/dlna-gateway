@@ -19,7 +19,7 @@ comes up, and note why.
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
 | 2 | Off-disk copy of the library backups | 2026-11-07/08 | ✅ done 2026-11-08 (Time Machine to the new WD-SERVER disk) |
 | 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
-| 4 | Security headers on the web app | 2026-11-25 | ◐ built 2026-11-04, CSP report-only; enforce ~2026-11-11 if the log stays clean |
+| 4 | Security headers on the web app | 2026-11-25 | ✅ done 2026-11-08 (CSP enforced) |
 | 5 | Optional login for the web app | — | ⏸ deferred 2026-11-04 (see §5) |
 | 6 | Rate limiting on Subsonic logins | 2026-12-16 | ✅ done 2026-11-04 (Amperfy + CarPlay verified live) |
 
@@ -195,18 +195,26 @@ secrets.
 
 ## 4. Security headers on the web app — target 2026-11-25
 
-- [ ] **Built 2026-11-04; CSP in report-only.** `dlna_asgi_headers.py`,
-  SECURITY_POSTURE item 14. Tick when `CSP_MODE` defaults to `enforce`.
+- [x] **Done 2026-11-08: CSP enforced.** Built 2026-11-04 in report-only;
+  `dlna_asgi_headers.py`, SECURITY_POSTURE item 14.
 
 Progress against "done when":
-- [x] the shell and the API send `Content-Security-Policy` (report-only for
-  now), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`
+- [x] the shell and the API send `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`
   and `frame-ancestors 'none'` (+ `X-Frame-Options: DENY`);
 - [x] report-only first: live since 2026-11-04, violations logged as
   `csp ✗ violation …` via `/api/csp_report`;
-- [ ] enforced, once a week of real use (iPhone PWA, Mac, iPad) has logged no
-  violations. **Check due 2026-11-11**: `grep "csp ✗" gateway.log`, then flip
-  `DEFAULT_MODE` to `enforce`;
+- [x] enforced 2026-11-08, three days before the planned check, after four
+  days report-only. The wait existed to collect real-device use, and that
+  use was already in the log: the iPhone PWA (6 Nov) and Safari with a Mac
+  user agent (7 and 8 Nov; iPad Safari also identifies as a Mac, so the two
+  can't be told apart), with **no** `csp ✗` line. That this meant
+  "nothing to report" and not "reports lost" was checked on the day with a
+  synthetic report from loopback, which logged
+  (`source=claude-pipeline-test` — that one line in the 2026-11-08 log is
+  the check). Enforced, the header keeps `report-uri`, so anything it ever
+  blocks still logs a `csp ✗ violation (enforce)` line instead of failing
+  silently. The switch back is `CSP_MODE=report-only` in `.env` and a
+  restart;
 - [x] both engines pass the browser suite with the CSP ENFORCED, and any
   violation fails the test;
 - [x] real-Safari smoke and its poison-recovery check pass with the policy
