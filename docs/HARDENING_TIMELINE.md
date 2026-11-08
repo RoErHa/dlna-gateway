@@ -110,7 +110,8 @@ this, and the rest of the Mac.
   `dlna_alerts_sms.py`, `tests/test_alerts.py` (39). Live as soon as
   `ALERT_SMS_TO` is set in `.env` and macOS has allowed the gateway to
   control Messages. **A weekly launchd job texted on 2026-11-08** (the
-  backup job, unintentionally, during testing of the Time Machine check),
+  backup job, unintentionally, during testing of the Time Machine check;
+  the owner confirmed it arrived at 14:20),
   so that job needs no extra grant. **Verified live 2026-11-04:** the CLI test text and an
   alert raised by the running gateway itself (a deliberately refused
   request, sent from the launchd process ~6 s later) both arrived on the
