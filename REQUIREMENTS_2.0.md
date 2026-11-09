@@ -6,7 +6,7 @@
 > below:** TLS + HTTP/2 are **app-owned via Hypercorn + FastAPI
 > (`dlna_asgi.py`)**, NOT `tailscale serve` (tried and dropped — broken on this
 > mini's Tailscale `:443`). For the as-built picture see **`CLAUDE.md`** (living
-> reference), **`docs/BUILDING_2.0.md`** (build log + checklist), and
+> reference), the 2.0 build log (removed 2026-11-09, in git history), and
 > the cutover runbook (kept locally, untracked). Everything below is the
 > original proposal.
 

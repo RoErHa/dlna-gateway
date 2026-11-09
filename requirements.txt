@@ -38,7 +38,7 @@ Pillow>=10.0
 # NOT optional. The gateway IS `dlna_asgi:app` served by Hypercorn; the
 # stdlib BaseHTTPRequestHandler edge these once merely supplemented was
 # removed in Cleanup C, so without these there is no server at all.
-# See docs/BUILDING_2.0.md.
+# (The 2.0 build log, docs/BUILDING_2.0.md, is in git history.)
 #
 # UPPER BOUNDS: these own the entire TLS/HTTP-2 edge, so an unbounded
 # `>=` would let a future major silently replace the server on a fresh

@@ -55,10 +55,8 @@ def _load_env_file(path: str) -> None:
 _load_env_file(os.path.join(_BASE_DIR, ".env"))
 
 # ── Version ───────────────────────────────────────────────────────
-# Release-line marker. 1.x lives on `main`; this `2.0` branch carries
-# the transport/architecture refresh (see REQUIREMENTS_2.0.md and
-# docs/BUILDING_2.0.md). Surfaced at /api/version and in the
-# PWA header so a side-by-side 1.x / 2.0 instance is tellable apart.
+# Release-line marker (2.0 = the transport/architecture refresh; see
+# REQUIREMENTS_2.0.md). Surfaced at /api/version and in the PWA header.
 # Set via $APP_VERSION (.env).
 VERSION = os.environ.get("APP_VERSION", "2.2.0")
 # Ensure the base directory exists as soon as this module is imported.

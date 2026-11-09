@@ -12,7 +12,7 @@ Run it:
     .venv/bin/hypercorn dlna_asgi:app --bind 127.0.0.1:8768
 
 TLS is APP-OWNED, using a `tailscale cert`-issued cert. (`tailscale serve`
-was tried and dropped — broken on this tailnet; see docs/BUILDING_2.0.md.)
+was tried and dropped — broken on this tailnet.)
 
 ── Module family ────────────────────────────────────────────────────
 This file was 1,156 lines holding every route in the gateway until

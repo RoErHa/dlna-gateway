@@ -266,7 +266,11 @@ class TestRetention(_Sandbox, unittest.TestCase):
         self.assertLessEqual(len(kept), 15)
         age = (datetime.datetime.now()
                - datetime.datetime.strptime(min(kept)[8:16], "%Y%m%d")).days
-        self.assertGreaterEqual(age, 7 * 7 - 1, "lost the two months of reach")
+        # The current ISO week is one of the 8, and each week keeps its NEWEST
+        # snapshot — so on a Monday the oldest kept file is the Sunday seven
+        # weeks back: 6*7+1 = 43 days. (Written on a Sunday as 7*7-1, it
+        # failed the next day.)
+        self.assertGreaterEqual(age, 6 * 7 + 1, "lost the two months of reach")
         self.assertLess(age, 9 * 7, "kept more weeks than asked for")
 
     def test_an_old_weekly_history_keeps_eight_weeks_of_it(self):
