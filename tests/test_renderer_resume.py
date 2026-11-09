@@ -94,6 +94,7 @@ class TestQueueResume(unittest.TestCase):
         q._RESUME_POLL_SEC = 0.01
         q._RESUME_SETTLE_SEC = 0.01
         q._RESUME_PLAYING_TIMEOUT = 1.0
+        q._RESUME_CONFIRM_SEC = 0.1
 
         def probe(url):
             return (states.pop(0) if len(states) > 1 else states[0]), ""
@@ -155,6 +156,29 @@ class TestQueueResume(unittest.TestCase):
         self.assertEqual(len(seeks), 2)
         self.assertIn("did not land", "\n".join(logs.output))
         self.assertIsNone(q._resume_token)     # saving resumes afterwards
+
+    def test_a_position_that_arrives_late_still_confirms_the_seek(self):
+        """After a Seek into a long file the Naim reports 0:00:00 (None)
+        while it fetches the new spot (2026-11-09)."""
+        q = self._queue()
+        seeks = []
+        with self.assertLogs("dlna.player", "INFO") as logs:
+            self._start_book(q, ["PLAYING"], [None, None, 755.0], seeks)
+        self.assertEqual(len(seeks), 1)
+        self.assertIn("✓", "\n".join(logs.output))
+
+    def test_no_position_at_all_is_unconfirmed_not_failed(self):
+        """Three false "did not land" warnings on 2026-11-09 were resumes
+        the owner heard work: unknown is not wrong, and is not re-sought."""
+        q = self._queue()
+        seeks = []
+        with self.assertLogs("dlna.player", "INFO") as logs:
+            self._start_book(q, ["PLAYING"], [None], seeks)
+        self.assertEqual(len(seeks), 1)
+        out = "\n".join(logs.output)
+        self.assertIn("unconfirmed", out)
+        self.assertNotIn("WARNING", out)
+        self.assertIsNone(q._resume_token)
 
     def test_no_seek_if_the_renderer_never_plays(self):
         q = self._queue()

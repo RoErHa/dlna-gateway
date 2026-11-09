@@ -58,6 +58,7 @@ class TransportMixin:
     _RESUME_PLAYING_TIMEOUT = 20.0
     _RESUME_POLL_SEC = 0.5
     _RESUME_SETTLE_SEC = 1.5
+    _RESUME_CONFIRM_SEC = 6.0
     _RESUME_TOLERANCE_SEC = 10.0
 
     def _seek_async(self, seconds: float):
@@ -77,6 +78,18 @@ class TransportMixin:
         # newer queue owns the renderer now.
         return (getattr(self, "_resume_token", None) is token
                 and not self._stop_event.is_set())
+
+    def _position_after_seek(self, av_url: str, token, get_position):
+        """The renderer's position once it reports one, or None when it
+        still reports none after `_RESUME_CONFIRM_SEC`."""
+        waited = 0.0
+        while True:
+            at = get_position(av_url).get("position")
+            if at is not None or waited >= self._RESUME_CONFIRM_SEC \
+                    or not self._resume_current(token):
+                return at
+            self._stop_event.wait(self._RESUME_POLL_SEC)
+            waited += self._RESUME_POLL_SEC
 
     def _resume_seek(self, seconds: float, token) -> None:
         from dlna_avtransport import (_sec_to_hms, avtransport_get_position,
@@ -107,7 +120,18 @@ class TransportMixin:
                     return
                 ok = avtransport_seek(av_url, seconds)
                 self._stop_event.wait(self._RESUME_SETTLE_SEC)
-                at = avtransport_get_position(av_url).get("position")
+                at = self._position_after_seek(av_url, token,
+                                               avtransport_get_position)
+                if ok and at is None:
+                    # After a Seek into a long file the Naim reports
+                    # 0:00:00 (= no position) while it fetches the new
+                    # spot — three "did not land" warnings on 2026-11-09
+                    # were resumes the owner HEARD work. Unknown is not
+                    # wrong: don't seek again, don't cry failure.
+                    log.info(f"RendererQueue ⏩ RESUME → {target} sent "
+                             f"(renderer reports no position yet — "
+                             f"unconfirmed, attempt {attempt})")
+                    return
                 if ok and at is not None and \
                         abs(at - seconds) <= self._RESUME_TOLERANCE_SEC:
                     log.info(f"RendererQueue ⏩ RESUME → {target} ✓ "
