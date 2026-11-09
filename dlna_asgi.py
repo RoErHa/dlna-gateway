@@ -51,6 +51,7 @@ from fastapi.staticfiles import StaticFiles
 import dlna_asgi_browse
 import dlna_asgi_devices
 import dlna_asgi_media
+import dlna_asgi_photos
 import dlna_asgi_static
 import dlna_asgi_subsonic
 import dlna_asgi_upnp
@@ -204,6 +205,7 @@ app.include_router(dlna_asgi_books.router)
 app.include_router(dlna_asgi_media.router)
 app.include_router(dlna_asgi_video.router)
 app.include_router(dlna_asgi_upnp.router)
+app.include_router(dlna_asgi_photos.router)
 app.include_router(dlna_asgi_subsonic.router)
 app.include_router(dlna_asgi_static.router)
 

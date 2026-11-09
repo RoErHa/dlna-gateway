@@ -34,6 +34,12 @@ NOT_ENV_SETTINGS = {
     "BACKUP_DIR": "read by backup-library.sh and tools/upgrade.py from their own "
                   "environment, which does not load .env",
 }
+# Key FAMILIES: the code reads every key that starts with the name, so a
+# member is known without being listed (an ast scan cannot see a prefix).
+KEY_FAMILIES = {
+    "IMMICH_API_KEY": "dlna_photos.keys_from_env tries every IMMICH_API_KEY* "
+                      "key, one per Immich user (2026-11-09)",
+}
 # Shell scripts that read .env themselves, through an `env_get` helper.
 ENV_GET_SCRIPTS = ("renew-cert.sh", "backup-library.sh")
 # The header of the example's block for keys nothing here reads on purpose.
@@ -169,7 +175,8 @@ class TestYourDotenv(unittest.TestCase):
 
     def test_every_key_is_known(self):
         known = set(code_keys()) | {k for _, k, _ in env_file_keys(EXAMPLE)}
-        stray = [f"{k} (line {n})" for n, k in self.active if k not in known]
+        stray = [f"{k} (line {n})" for n, k in self.active if k not in known
+                 and not any(k.startswith(f) for f in KEY_FAMILIES)]
         self.assertEqual(stray, [], ".env holds a key nothing reads — a typo, "
                          "or a leftover; delete it, or document it in "
                          f".env.example under '{UNREAD_BLOCK}'")

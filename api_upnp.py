@@ -122,7 +122,7 @@ _GW_SOURCE_PROTOCOLS = (
     "http-get:*:audio/L16:*,http-get:*:audio/ogg:*,"
     "http-get:*:application/ogg:*,http-get:*:audio/x-aiff:*,"
     "http-get:*:audio/aiff:*,http-get:*:audio/dsd:*,"
-    "http-get:*:application/octet-stream:*"
+    "http-get:*:image/jpeg:*,http-get:*:application/octet-stream:*"
 )
 
 

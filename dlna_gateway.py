@@ -173,6 +173,11 @@ def start_background_services(lan_ip: str, port: int, *, probe: str = "") -> Non
     from dlna_localfs_wiring import maybe_start_localfs
     maybe_start_localfs(get_lan_ip)
 
+    # 📷 Photos for the LG TV — Immich albums named in PHOTOS_ALBUMS; off
+    # unless configured. The index refreshes on its own thread.
+    import dlna_photos
+    dlna_photos.start()
+
     # CLI --probe or config.json probe (fresh install / manual override). On
     # subsequent runs the DB cache handles this — but honour an explicit probe.
     probe_url = probe

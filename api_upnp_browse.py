@@ -31,19 +31,11 @@ every handler.
 import logging
 
 import api_upnp_ids as _ids
+import api_upnp_browse_photo as _photo
+from api_upnp_browse_photo import _br_ph, _br_phalbum, _br_photos
 from api_upnp_browse_video import (
-    _br_vid,
-    _br_vidall,
-    _br_vidcloc,
-    _br_vidcountry,
-    _br_viddate,
-    _br_viddates,
-    _br_videos,
-    _br_vidloc,
-    _br_vidlocs,
-    _br_vidpeople,
-    _br_vidperson,
-)
+    _br_vid, _br_vidall, _br_vidcloc, _br_vidcountry, _br_viddate, _br_viddates,
+    _br_videos, _br_vidloc, _br_vidlocs, _br_vidpeople, _br_vidperson)
 from api_upnp_didl import _Browse, _didl_album, _didl_container, _didl_track
 from api_upnp_ids import (
     GW_NAME,
@@ -76,9 +68,10 @@ def _br_root(ctx: _Browse) -> tuple:
     # Music only while it is actually SERVING (api_upnp_ids.music_udn): an
     # unmounted volume leaves its rows indexed, and music that 404s on play
     # is worse than no music folder at all.
+    n_photos = _photo.photo_album_count()
     udn = _ids.music_udn()
     if ctx.is_meta:
-        return ctx.meta("-1", GW_NAME, 2 + (3 if udn else 0)
+        return ctx.meta("-1", GW_NAME, 2 + (3 if udn else 0) + (1 if n_photos else 0)
                         + (1 if n_videos else 0) + (1 if n_books else 0))
     music = [                           # albums = one entry per letter bucket
         _didl_container("artists", "0", "Artists", len(_lib_artists(udn))),
@@ -93,6 +86,8 @@ def _br_root(ctx: _Browse) -> tuple:
     # Naim's view unless GWMovies is enabled + populated).
     if n_videos:
         items.append(_didl_container("videos", "0", "\U0001F4F9 Videos", n_videos))
+    if n_photos:                        # 📷 Immich albums, for the LG TV
+        items.append(_didl_container("photos", "0", _photo.PHOTOS_TITLE, n_photos))
     # Audiobooks — only when the audiobooks source exists + has authors
     # (P5). Authors → books → chapters, resolved via the AB udn.
     if n_books:
@@ -335,6 +330,7 @@ _BROWSE_EXACT = {
     "albums":          _br_albums,
     "genres":          _br_genres,
     "videos":          _br_videos,
+    "photos":          _br_photos,
     "vidall":          _br_vidall,
 
     "viddates":        _br_viddates,
@@ -361,6 +357,8 @@ _BROWSE_PREFIX = (
     ("vidperson:",  _br_vidperson),
     ("vidloc:",     _br_vidloc),
     ("vid:",        _br_vid),
+    ("phalbum:",    _br_phalbum),
+    ("ph:",         _br_ph),
     ("pl:",         _br_playlist),
     ("favalbum:",   _br_favalbum),
 )
