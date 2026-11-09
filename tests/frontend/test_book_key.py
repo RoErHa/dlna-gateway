@@ -96,3 +96,43 @@ def test_position_is_saved_under_the_book_and_ends_with_the_book(page, stub, gat
     body = json.loads(r["body"])
     assert body["album_key"] == NILE
     assert body["finished"] is True
+
+
+def _record_toasts(page):
+    page.evaluate("window._toasts=[]; const _t=toast;"
+                  "window.toast=(m,ms)=>{_toasts.push(String(m)); _t(m,ms);}")
+
+
+def test_tapping_the_chapter_you_were_in_resumes_an_ordinary_book(page, stub, gateway):
+    """2026-11-09, Heretics of Dune: the owner tapped the chapter he had
+    been listening to; "start here" restarted it and overwrote the
+    bookmark with ~0:03."""
+    from tests.frontend.test_audiobooks import BOOK_KEY, _seed_book
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    gateway.positions[BOOK_KEY] = {"album_key": BOOK_KEY, "url": tracks[1]["url"],
+                                   "position_sec": 754, "duration_sec": 1800,
+                                   "finished": 0, "updated_at": 0}
+    _boot(page, stub)
+    _books(page)
+    _record_toasts(page)
+    page.evaluate(f"startPlay({json.dumps(tracks[1])}, null)")
+    page.wait_for_function(
+        "_toasts.some(m => m.includes('Resuming · 12:34'))", timeout=3000)
+    assert page.evaluate("browserQueue[0].url") == tracks[1]["url"]
+
+
+def test_tapping_another_chapter_starts_there(page, stub, gateway):
+    from tests.frontend.test_audiobooks import BOOK_KEY, _seed_book
+    gateway.servers = [MUSIC, BOOKS]
+    tracks = _seed_book(gateway)
+    gateway.positions[BOOK_KEY] = {"album_key": BOOK_KEY, "url": tracks[1]["url"],
+                                   "position_sec": 754, "duration_sec": 1800,
+                                   "finished": 0, "updated_at": 0}
+    _boot(page, stub)
+    _books(page)
+    _record_toasts(page)
+    page.evaluate(f"startPlay({json.dumps(tracks[2])}, null)")
+    page.wait_for_function("browserQueue.length === 1", timeout=3000)
+    assert page.evaluate("browserQueue[0].url") == tracks[2]["url"]
+    assert not page.evaluate("_toasts.some(m => m.includes('Resuming'))")

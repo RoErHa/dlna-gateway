@@ -6,7 +6,7 @@ const APP_CACHE = 'dlna-gw-app-v21';  // v21: fonts served locally, not by Googl
 //   chrome and no content (2026-09-21). bindClick() now makes that survivable —
 //   this bump is what gets the matching HTML out to clients in the first place.
 const ART_CACHE = 'dlna-gw-art-v3';   // v3: /art gained &size= — evict the full-res originals cached under the old size-less urls
-const API_CACHE = 'dlna-gw-api-v1';   // stable browse GETs (stale-while-revalidate)
+const API_CACHE = 'dlna-gw-api-v2';   // stable browse GETs (stale-while-revalidate). v2: album_tracks gained book_key — evict lists cached without it
 
 // GET endpoints that return STABLE browse data (change only on re-index /
 // metadata edits). Cached stale-while-revalidate so repeat navigation is

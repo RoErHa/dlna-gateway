@@ -2698,7 +2698,8 @@ async function startPlay(item,rowEl){
   curItemId=item.id;
   document.querySelectorAll(".row").forEach(r=>r.classList.remove("active"));
   if(rowEl)rowEl.classList.add("active");
-  // Audiobooks: tapping a chapter is an explicit "start HERE" — but it
+  // Audiobooks: tapping a chapter starts THERE (resuming when the bookmark
+  // sits in that chapter — see _playBookFromChapter) — but it
   // must still be a BOOK queue (auto-advance to later chapters, and
   // positions keep saving; the old single-track path silently produced
   // sessions that never bookmarked).
@@ -2716,12 +2717,14 @@ async function _playBookFromChapter(item){
   let tracks=r?((await r.json()).tracks||[]):[];
   let idx=tracks.findIndex(t=>t.url===item.url);
   if(idx<0){ tracks=[item]; idx=0; }   // defensive — play at least the tap
-  // In a folder of several books a file IS a book, so tapping it opens
-  // that book: resume its bookmark when it sits in this very file.
+  // Tapping the file your bookmark is in RESUMES it — for every book, not
+  // only in a folder of several (2026-11-09: the owner tapped the chapter
+  // he had been listening to, and "start here" restarted it AND overwrote
+  // the bookmark). "↻ Start over" in the book header is the explicit restart.
   const t=tracks[idx];
-  if(t.book_key&&t.book_key!==t.album_key){
+  {
     try{
-      const pr=await api(`/api/position?album_key=${enc(t.book_key)}`);
+      const pr=await api(`/api/position?album_key=${enc(_abBookKey(t))}`);
       const pos=pr?(await pr.json()).position:null;
       if(pos&&!pos.finished&&pos.url===t.url&&pos.position_sec>1){
         toast(`▶ Resuming · ${fmtSec(pos.position_sec)}`);
