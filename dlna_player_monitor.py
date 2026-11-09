@@ -126,7 +126,10 @@ class MonitorMixin:
             # actually playing, so a session stopped on the Naim resumes
             # in the PWA / CarPlay at the right spot. Never fatal — a
             # failed save just waits for the next poll.
+            # Never while a resume Seek is settling: the renderer still
+            # reports ~0:03, and saving that wipes the real bookmark.
             if (self._is_book and cur_state == "PLAYING" and cur_t
+                    and getattr(self, "_resume_token", None) is None
                     and time.monotonic() - self._last_pos_save >= 15.0):
                 self._last_pos_save = time.monotonic()
                 try:

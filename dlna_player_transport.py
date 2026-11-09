@@ -30,9 +30,11 @@ restart fixes it". Now every failure logs `✗ SEND FAILED` with the URL, and
 `_queue_next_uri` is what makes playback gapless — the renderer needs the
 next URI BEFORE the current track ends.
 
-`_seek_async` fires ~1.5s after Play with one retry: a Seek issued while the
-Naim is still TRANSITIONING faults. Failure is non-fatal — the chapter just
-starts at 0:00 instead of the saved position.
+`_seek_async` waits until the renderer reports PLAYING, seeks, then reads the
+position back and retries once if it did not land (2026-11-09: a Seek sent
+1.5 s after Play was silently dropped by the Naim, which takes ~4 s to
+start). Failure is non-fatal — the chapter plays from 0:00 — but it is
+logged, and the monitor saves no position until the Seek has settled.
 """
 import logging
 import threading
@@ -48,26 +50,78 @@ class TransportMixin:
     """See module docstring. Mixed into `RendererQueue`; never
     instantiated alone — it relies on the host's fields and lock."""
 
+    # Resume timing. The Naim takes ~4 s from Play to PLAYING (every
+    # START→PLAYING pair in gateway.log, 2026-11-09), and a Seek sent
+    # before that is ACCEPTED and then dropped — no fault, the chapter
+    # just plays from 0:00. So: wait for PLAYING, seek, then ASK where it
+    # is, and retry once if it did not land.
+    _RESUME_PLAYING_TIMEOUT = 20.0
+    _RESUME_POLL_SEC = 0.5
+    _RESUME_SETTLE_SEC = 1.5
+    _RESUME_TOLERANCE_SEC = 10.0
+
     def _seek_async(self, seconds: float):
-        """Fire the resume Seek off-thread: the renderer needs a moment
-        to reach PLAYING (a Seek during TRANSITIONING faults on the
-        Naim), so wait, seek, and retry once. Failure is non-fatal —
-        the chapter simply plays from 0:00."""
-        def _run():
-            from dlna_avtransport import avtransport_seek
-            self._stop_event.wait(1.5)
-            if self._stop_event.is_set():
-                return
+        """Fire the resume Seek off-thread. While it runs, `_resume_token`
+        is set, and the monitor saves NO position: its first save lands
+        ~3 s into the chapter, and before this it overwrote the bookmark
+        with that whenever the Seek had not (yet) taken — so one failed
+        resume destroyed the bookmark for every later attempt."""
+        token = object()
+        self._resume_token = token
+        threading.Thread(target=self._resume_seek, args=(seconds, token),
+                         daemon=True, name="renderer-seek").start()
+
+    def _resume_current(self, token) -> bool:
+        # start() clears _stop_event right after cancelling, so an old
+        # seek thread can miss the set; the token is what tells it a
+        # newer queue owns the renderer now.
+        return (getattr(self, "_resume_token", None) is token
+                and not self._stop_event.is_set())
+
+    def _resume_seek(self, seconds: float, token) -> None:
+        from dlna_avtransport import (_sec_to_hms, avtransport_get_position,
+                                      avtransport_probe_state, avtransport_seek)
+        target = _sec_to_hms(seconds)
+        try:
             with self._lock:
                 av_url = self._av_url
             if not av_url:
                 return
-            if not avtransport_seek(av_url, seconds):
-                self._stop_event.wait(2.0)
-                if not self._stop_event.is_set():
-                    avtransport_seek(av_url, seconds)
-        threading.Thread(target=_run, daemon=True,
-                         name="renderer-seek").start()
+            waited, state = 0.0, ""
+            while waited < self._RESUME_PLAYING_TIMEOUT:
+                if not self._resume_current(token):
+                    return
+                state, _ = avtransport_probe_state(av_url)
+                if state == "PLAYING":
+                    break
+                self._stop_event.wait(self._RESUME_POLL_SEC)
+                waited += self._RESUME_POLL_SEC
+            if state != "PLAYING":
+                log.warning(f"RendererQueue ✗ RESUME → {target}: renderer "
+                            f"never reached PLAYING in {waited:.0f}s "
+                            f"(state {state or '?'}); playing from 0:00")
+                return
+            at = None
+            for attempt in (1, 2):
+                if not self._resume_current(token):
+                    return
+                ok = avtransport_seek(av_url, seconds)
+                self._stop_event.wait(self._RESUME_SETTLE_SEC)
+                at = avtransport_get_position(av_url).get("position")
+                if ok and at is not None and \
+                        abs(at - seconds) <= self._RESUME_TOLERANCE_SEC:
+                    log.info(f"RendererQueue ⏩ RESUME → {target} ✓ "
+                             f"(renderer at {_sec_to_hms(at)}, "
+                             f"attempt {attempt}, after {waited:.1f}s)")
+                    return
+            log.warning(f"RendererQueue ✗ RESUME → {target}: Seek did not "
+                        f"land (renderer at "
+                        f"{_sec_to_hms(at) if at is not None else '?'})")
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"RendererQueue ✗ RESUME → {target}: {e}")
+        finally:
+            if getattr(self, "_resume_token", None) is token:
+                self._resume_token = None
 
     def _send_current(self) -> bool:
         """Send SetURI + Play for tracks[_index]. Returns True on success.

@@ -212,6 +212,8 @@ def render_queue(h, body):
             return
 
         log.info(f"POST /api/render_queue  {len(tracks)} tracks → {rnd.name}"
+                 f"{'  book' if is_book else ''}"
+                 f"{f'  resume@{start_at:.0f}s' if start_at > 1 else ''}"
                  f"{'  (force=True, taking over)' if force else ''}")
         queue = _st.QUEUES.get(udn)
 

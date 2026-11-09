@@ -60,7 +60,14 @@ doc. Dates are targets.
   18.8 h single file). Library inventory: music 63 AAC + 22 ALAC `.m4a`, no
   `.m4b`; audiobooks 366 AAC (130 `.m4b`, 31 books, 11–48 kHz). Still open
   for 2026-11-09:
-  - **Resume was never exercised** — no Seek was sent. Cause found:
+  - **Resume on the Naim WORKS since 2026-11-09** (`⏩ RESUME → 0:00:59 ✓
+    … attempt 2`). It had never worked: the Naim accepts a Seek sent before
+    it is really playing and drops it (the first Seek was dropped even
+    AFTER it reported PLAYING), and the monitor's first save then wrote
+    ~0:03 over the bookmark. Now: wait for PLAYING, seek, read the position
+    back, retry once; no save while the Seek settles. Left: Stop does not
+    save the position, so a bookmark can trail by up to 15 s.
+  - **The Poirot folder shares one resume slot.** Cause found:
     `playback_positions` keys ONE row per FOLDER, and *BBC Radio 4 Hercule
     Poirot* holds 27 separate books as single files in one folder, so the
     whole series shares one resume slot (it pointed at the episode played
