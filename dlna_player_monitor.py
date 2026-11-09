@@ -136,7 +136,8 @@ class MonitorMixin:
                     pos = avtransport_get_position(av_url)
                     if pos.get("position"):
                         from dlna_library import DB
-                        key = cur_t.get("album_key") or cur_t.get("url", "")
+                        key = (cur_t.get("book_key") or cur_t.get("album_key")
+                               or cur_t.get("url", ""))
                         DB.position_set(key, cur_t.get("url", ""),
                                         pos["position"], pos.get("duration"))
                 except Exception as e:                        # noqa: BLE001

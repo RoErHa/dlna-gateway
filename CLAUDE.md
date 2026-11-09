@@ -67,14 +67,14 @@ doc. Dates are targets.
     ~0:03 over the bookmark. Now: wait for PLAYING, seek, read the position
     back, retry once; no save while the Seek settles. Left: Stop does not
     save the position, so a bookmark can trail by up to 15 s.
-  - **The Poirot folder shares one resume slot.** Cause found:
+  - **The Poirot folder shared one resume slot** — FIXED 2026-11-09
+    (`dlna_book_key.py`; 8 of 491 folders split). Was:
     `playback_positions` keys ONE row per FOLDER, and *BBC Radio 4 Hercule
     Poirot* holds 27 separate books as single files in one folder, so the
     whole series shares one resume slot (it pointed at the episode played
-    last). Proposal: key per FILE when the files of a folder carry
-    different album tags (each Poirot file's album is "BBC Radio 4: <title>").
-    Then re-test a real Seek on the Naim with a multi-chapter book.
-  - Natural end of track → next file: not tested (Next by hand worked).
+    last). Keyed per BOOK, not per file: most folders with differing
+    tags are one book in discs/parts, which normalising keeps together.
+  - Natural end of track → next file: WORKS (owner, 2026-11-09).
   - Write the answer into docs/AUDIOBOOKS.md and close its open question.
   - Two more blank-title `audio_error code=4` at 16:20 and 16:29 from
     192.168.1.145, i.e. the Stop bug fixed at 15:46. Output switching does not
@@ -151,7 +151,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **114/114 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **115/115 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -414,6 +414,7 @@ Appium.
 | `dlna_library_worklist.py` | `WorklistMixin` — the "- Unknown Artists -" hand-editing worklist: the one place the gateway admits it cannot do a job in code. Split from `collections` 2026-08-25 when the sweep pushed it past 400 lines. |
 | `dlna_library_languages.py` | `LanguagesMixin` — which language each audiobook is in, for the PWA's 🌐 letter-bar entry. ASSERTED languages (a file tag, or set by hand) live in `book_language`; a DETECTED one is derived on every read and never stored. See **[Audiobooks by language](docs/AUDIOBOOKS.md#audiobooks-by-language--the--entry-2026-10-12)**. |
 | `dlna_book_language.py` | The pure decision "what language is this book written in?" over its path, album tag and chapter titles — and `normalize_language`, which turns a tag value or a typed code into ISO 639-1. Refuses rather than guesses: a book the words do not decide is Unknown. |
+| `dlna_book_key.py` | Which resume slot an audiobook file belongs to: its folder, or `<folder> ▸ <title>` when the folder holds SEVERAL books (the Poirot folder is 27). Tags are normalised first (digits, disc/part/season words, filler words dropped) so `(disk 1…10)` stays one book; split only when 2+ titles survive. Shared by `album_tracks` (`book_key` on every row), the Naim monitor and Subsonic bookmarks — they must agree or a bookmark is lost between surfaces. `position_get(<folder>)` answers with the newest book in it. `tests/test_book_key.py` (18), `tests/frontend/test_book_key.py` (3). |
 | `dlna_asgi_books.py` | `GET /api/book_languages` + `GET /api/book_language_albums` — the 🌐 view. Its own module because `dlna_asgi_browse.py` sits at its budget. |
 | `dlna_library_collections.py` | `CollectionsMixin` — playlists, album favourites, lyrics, audiobook positions, book metadata, device roles. **The invariant this module exists to protect: none of these tables is touched by `clear(udn)`.** |
 | `dlna_library_radio.py` | `RadioFavouritesMixin` — the saved internet-radio stations. Enforces the 25-station cap SERVER-side (`DB.RADIO_FAV_MAX`); same `clear(udn)` survival contract. |
@@ -633,7 +634,8 @@ play_counts(url, count, last_played)
   Incremented by LibraryDB.radio_tracks(); persists across rebuild-index.
 playback_positions(album_key, url, position_sec, duration_sec, finished, updated_at)
   PRIMARY KEY (album_key) — audiobook resume: ONE row per book (its
-  folder), holding which chapter + offset. Survives clear(udn) like
+  folder, or `<folder> ▸ <title>` for one book of a folder holding
+  several — dlna_book_key, 2026-11-09), holding which chapter + offset. Survives clear(udn) like
   play_counts/lyrics. finished=1 → PWA offers "start over"; any normal
   save clears it. Root-level single-file books key by URL (PWA fallback).
   See "Audiobooks" section.

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 
+from dlna_book_key import book_key
 from dlna_library_search import SearchMixin
 from dlna_library_sql import (
     _ALBUM_EDITION_YEAR,
@@ -122,6 +123,14 @@ class BrowseMixin(SearchMixin):
                     # never EMPTY an album: that reads as data loss.
                     rows = conn.execute(
                         base.format(extra=""), (udn, album_key)).fetchall()
+                # Each file's audiobook resume slot, decided over the WHOLE
+                # folder (never the narrowed rows) so every surface agrees.
+                albums = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT album FROM tracks "
+                    "WHERE udn=? AND album_key=?", (udn, album_key))]
+                return [dict(r, book_key=book_key(album_key, r["album"],
+                                                  r["url"], albums))
+                        for r in rows]
             else:
                 rows = conn.execute(
                     f"""SELECT {cols} FROM tracks t

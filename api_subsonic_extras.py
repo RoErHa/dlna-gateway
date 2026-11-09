@@ -158,8 +158,9 @@ def _create_bookmark(h, params):
     if not t:
         _fail(h, ERR_NOT_FOUND, "track not found")
         return
-    key = t.get("album_key") or url   # root-level single-file book
-    _proto.DB.position_set(key, url, pos_ms / 1000.0)
+    # The file's own book (dlna_book_key): its folder, or one book of a
+    # folder that holds several; a root-level single file keys by url.
+    _proto.DB.position_set(_proto.DB.book_key_of(t), url, pos_ms / 1000.0)
     _ok(h, {})
 
 
@@ -170,6 +171,5 @@ def _delete_bookmark(h, params):
         _fail(h, ERR_MISSING_PARAM, "id required")
         return
     t = _proto.DB.track_by_url(url)
-    key = (t.get("album_key") if t else "") or url
-    _proto.DB.position_clear(key)
+    _proto.DB.position_clear(_proto.DB.book_key_of(t) if t else url)
     _ok(h, {})

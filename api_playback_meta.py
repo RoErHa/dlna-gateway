@@ -36,6 +36,7 @@ import os
 
 import api_playback_state as _st
 from api_playback_state import _parse_json_or_400
+from dlna_book_key import folder_of
 from dlna_config import close_quietly  # noqa: F401
 
 log = logging.getLogger("dlna.api.playback")
@@ -182,6 +183,8 @@ def positions_list_payload(params) -> tuple:
         p["author"]        = t.get("artist", "")
         p["art"]           = t.get("art", "")
         p["chapter_title"] = t.get("title", "")
+        # The folder to OPEN — album_key may name one book of several.
+        p["folder"]        = t.get("album_key") or folder_of(p["album_key"])
         out.append(p)
     return 200, {"positions": out}
 

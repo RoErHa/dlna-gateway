@@ -324,18 +324,23 @@ const _AB_SAVE_MS=20000;
 let _abLastSave=0;
 const _AB_FINISH_TAIL_SEC=60;   // last chapter, final minute → finished
 
+// A file's resume slot. The server decides it (`book_key`, see
+// dlna_book_key.py): the book's folder, or ONE book of a folder that holds
+// several (the Poirot folder is 27 books). A root-level single-file book
+// has album_key='' and keys by its URL so those don't share one row.
+function _abBookKey(t){ return t.book_key||t.album_key||t.url; }
+
 function _abSavePosition(ev){
   if(!browserQueueIsBook) return;
   const t=browserQueue[browserIdx];
   if(!t||!t.url) return;
-  // Book identity = its folder (album_key). A single-file book at the
-  // library ROOT has album_key='' — fall back to the file URL so those
-  // books don't all share one position row.
-  const key=t.album_key||t.url;
+  const key=_abBookKey(t);
   const dur=browserAudio.duration;
   const pos=browserAudio.currentTime||0;
   if(!dur||isNaN(dur)) return;
-  const isLast=browserIdx===browserQueue.length-1;
+  // The last file of THIS book — in a folder of several books the queue
+  // runs on into the next one, which is a different bookmark.
+  const isLast=!browserQueue.slice(browserIdx+1).some(x=>_abBookKey(x)===key);
   const finished=isLast&&(dur-pos)<=_AB_FINISH_TAIL_SEC;
   const body=JSON.stringify({album_key:key,url:t.url,
     position_sec:pos,duration_sec:dur,finished});
@@ -1021,7 +1026,7 @@ function renderContinueListening(positions){
       + `</div>`;
     div.addEventListener("click", ()=>{
       if(p.book||p.author){
-        showAlbumTracks(p.author||"", p.book||"", null, p.album_key||"");
+        showAlbumTracks(p.author||"", p.book||"", null, p.folder||p.album_key||"");
       }
     });
     list.appendChild(div);
@@ -2711,6 +2716,20 @@ async function _playBookFromChapter(item){
   let tracks=r?((await r.json()).tracks||[]):[];
   let idx=tracks.findIndex(t=>t.url===item.url);
   if(idx<0){ tracks=[item]; idx=0; }   // defensive — play at least the tap
+  // In a folder of several books a file IS a book, so tapping it opens
+  // that book: resume its bookmark when it sits in this very file.
+  const t=tracks[idx];
+  if(t.book_key&&t.book_key!==t.album_key){
+    try{
+      const pr=await api(`/api/position?album_key=${enc(t.book_key)}`);
+      const pos=pr?(await pr.json()).position:null;
+      if(pos&&!pos.finished&&pos.url===t.url&&pos.position_sec>1){
+        toast(`▶ Resuming · ${fmtSec(pos.position_sec)}`);
+        _resumeBook(item.artist||"", item.album||"", tracks, pos);
+        return;
+      }
+    }catch(e){/* fall through to start here */}
+  }
   playTracklist(tracks.slice(idx), item.album||"", item.artist||"", {book:true});
 }
 

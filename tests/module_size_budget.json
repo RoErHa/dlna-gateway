@@ -57,6 +57,7 @@
     "dlna_asgi_video.py": 400,
     "dlna_auth_throttle.py": 400,
     "dlna_avtransport.py": 400,
+    "dlna_book_key.py": 400,
     "dlna_book_language.py": 400,
     "dlna_config.py": 400,
     "dlna_content.py": 400,

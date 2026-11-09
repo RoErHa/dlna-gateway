@@ -23,6 +23,7 @@ import sqlite3
 import time
 import uuid
 
+from dlna_book_key import SEP, book_key
 from dlna_library_worklist import WorklistMixin
 from dlna_library_sql import (
     FAVOURITES_ID,
@@ -304,15 +305,33 @@ class CollectionsMixin(WorklistMixin):
                 (album_key, url, pos, dur, 1 if finished else 0))
         return True
     def position_get(self, album_key: str) -> dict | None:
+        """The bookmark under this key. Asked for a FOLDER that holds
+        several books (dlna_book_key), it answers with the newest bookmark
+        of any book in it — that is what the folder's ▶ Continue resumes."""
         if not album_key:
             return None
+        prefix = album_key + SEP
         with self._pool.read() as conn:
             r = conn.execute(
                 "SELECT album_key, url, position_sec, duration_sec, "
                 "       finished, updated_at "
-                "FROM playback_positions WHERE album_key=?",
-                (album_key,)).fetchone()
+                "FROM playback_positions WHERE album_key=? "
+                "   OR substr(album_key, 1, ?)=? "
+                "ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+                (album_key, len(prefix), prefix)).fetchone()
         return dict(r) if r else None
+    def book_key_of(self, track: dict) -> str:
+        """The resume key for one tracks row (dlna_book_key.book_key) —
+        for callers that hold a single track, not its folder's list."""
+        ak = track.get("album_key") or ""
+        albums = self.folder_albums(track.get("udn", ""), ak) if ak else []
+        return book_key(ak, track.get("album", ""), track.get("url", ""),
+                        albums)
+    def folder_albums(self, udn: str, album_key: str) -> list:
+        with self._pool.read() as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT DISTINCT album FROM tracks WHERE udn=? AND album_key=?",
+                (udn, album_key))]
     def position_clear(self, album_key: str) -> bool:
         with self._pool.write() as conn:
             cur = conn.execute(
