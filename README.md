@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/tag/RoErHa/dlna-gateway?sort=semver&label=release)](https://github.com/RoErHa/dlna-gateway/tags)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-193%20checks%20%C2%B7%201%2C837%20unit%20%C2%B7%20306%20browser-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-193%20checks%20%C2%B7%201%2C838%20unit%20%C2%B7%20306%20browser-brightgreen.svg)](#testing)
 [![Lint: ruff](https://img.shields.io/badge/lint-ruff%20%C2%B7%200%20violations-brightgreen.svg)](#code-quality-gates)
 [![Quality gates](https://img.shields.io/badge/quality%20gates-5%20%C2%B7%20all%20at%20zero-brightgreen.svg)](#code-quality-gates)
 [![Security policy](https://img.shields.io/badge/security-policy-informational.svg)](SECURITY.md)
@@ -308,7 +308,8 @@ The headline list above is the short version.
   by date, albums, people, places and favourites. A folder too big for a
   remote splits into country → city → year → month → week, and screenshots
   gather in their own albums. Nothing is copied or converted: the TV gets
-  Immich's own JPEG previews. See [docs/PHOTO_SUPPORT.md](docs/PHOTO_SUPPORT.md).
+  Immich's own JPEG previews. An audio-only Naim is not offered the folder.
+  See [docs/PHOTO_SUPPORT.md](docs/PHOTO_SUPPORT.md).
 - **Subsonic-compatible API** (`/rest/*`). Read-only-ish surface that
   lets Subsonic clients (Amperfy, substreamer, …) browse and stream.
   Designed for **CarPlay**, which the PWA can't do.

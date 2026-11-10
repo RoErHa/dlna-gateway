@@ -170,6 +170,9 @@ not open. A language change alone posts nothing to `/api/edit_track`.
 track would otherwise show an empty language select. Guarded by
 `tests/frontend/test_book_language.py` (10).
 
-Open question still standing: whether the Naim accepts m4b/AAC over
-AVTransport — the tree exposes the books either way; test with one
-file on the real device.
+**The Naim plays m4b/AAC over AVTransport** (answered 2026-11-08, owner
+at the Naim, read from `gateway.log`): every file reached PLAYING within
+~5 s with no SEND FAILED and no watchdog — m4b at 44.1, 22.05 and
+11.025 kHz (*A Clash of Kings Pt 1*, an 18.8 h single file), plus AAC and
+ALAC music. Resume (Seek) works since 2026-11-09, and a book's last file
+running out moves on to the next one.

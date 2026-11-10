@@ -45,6 +45,7 @@ class MediaRenderer:
     av_url:    str   # AVTransport control URL
     base_url:  str
     rc_url:    str = ""   # RenderingControl control URL (volume); may be empty
+    manufacturer: str = ""  # device.xml <manufacturer>; "Naim Audio" gets no 📷 Photos
     last_seen: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:

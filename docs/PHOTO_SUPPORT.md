@@ -27,6 +27,7 @@ in RAM (the TV asks for each photo twice: art, then the photo). That is
 - 2026-11-10: the whole library. `PHOTOS_ENABLED=1` replaced `PHOTOS_ALBUMS`.
 - 2026-11-10: big folders split up; screenshots moved into their own albums
   (owner, after checking the tree on the TV).
+- 2026-11-10: hidden from the Naim, kept on the TV (owner).
 
 ## Shape
 
@@ -42,6 +43,14 @@ in RAM (the TV asks for each photo twice: art, then the photo). That is
     photo: ph:<asset id>, object.item.imageItem.photo
            res = http://<lan-ip>:8765/gw/photo/<asset id>.jpg
 ```
+
+**Not on the Naim.** The Naim is audio-only, so the root does not offer
+📷 Photos to it (`api_upnp_browse_photo.shown_to`). A Browse carries the
+caller's address; when that address is a discovered renderer whose
+device.xml `<manufacturer>` starts with an entry of `HIDDEN_FROM`
+("Naim Audio"), the folder is left out of the root and its count. Any
+other device, and an address the gateway does not know, sees it. The
+Naim browses from its own address, the same one it is discovered at.
 
 An empty branch is left out. Order:
 - Years: newest first.

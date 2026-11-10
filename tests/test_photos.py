@@ -268,6 +268,33 @@ class TestBrowse(_BrowseCase):
         meta = ET.fromstring(self.browse("0", "BrowseMetadata")[0])
         self.assertEqual(meta[0].get("childCount"), str(n))
 
+    def test_the_naim_gets_no_photos_folder(self):
+        """Owner, 2026-11-10: hide 📷 Photos on the Naim, keep it on the TV.
+        Decided by the browsing device's maker, through the SOAP route."""
+        import dlna_discovery
+        from dlna_registry import MediaRenderer, RendererRegistry
+        reg = RendererRegistry()
+        reg.add(MediaRenderer("uuid:naim", "Uniti", "http://192.168.1.227:53043/d.xml",
+                              "", "", manufacturer="Naim Audio"))
+        reg.add(MediaRenderer("uuid:tv", "TV", "http://192.168.1.35:1408/", "", "",
+                              manufacturer="LG Electronics."))
+        body = ('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                '<u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">'
+                '<ObjectID>0</ObjectID><BrowseFlag>{}</BrowseFlag></u:Browse>'
+                '</s:Body></s:Envelope>')
+
+        def root(peer, flag="BrowseDirectChildren"):
+            xml = api_upnp.cd_control_soap(body.format(flag).encode(), peer)[2].decode()
+            return ET.fromstring(ET.fromstring(xml).find(".//Result").text)
+
+        with patch.object(dlna_discovery, "RENDERERS", reg):
+            for peer, shown in (("192.168.1.227", False), ("192.168.1.35", True),
+                                ("192.168.1.50", True), ("", True)):
+                ids = [e.get("id") for e in root(peer)]
+                self.assertEqual("photos" in ids, shown, peer)
+                count = root(peer, "BrowseMetadata")[0].get("childCount")
+                self.assertEqual(count, str(len(ids)), peer)
+
     def test_the_five_branches(self):
         self.assertEqual([i for i, _ in self.kids("photos")],
                          ["phdates", "phalbums", "phpeople", "phplaces", "phfavs"])

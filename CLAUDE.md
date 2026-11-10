@@ -51,14 +51,14 @@ doc. Dates are targets.
   making the BACKUP daily (owner's call) rather than adding a check-only
   job: the check rides every run. Retention moved to 7 daily + 8 weekly so
   the two months of reach survive. See "Backing up library.db (daily)".
-- [ ] **5. Does the Naim play MP4 audio through the gateway?** — FORMATS
-  ANSWERED 2026-11-08 (owner at the Naim, 16:29–16:38, read from
+- [x] **5. Does the Naim play MP4 audio through the gateway?** — YES, done
+  2026-11-10 (answer in docs/AUDIOBOOKS.md). FORMATS ANSWERED 2026-11-08 (owner at the Naim, 16:29–16:38, read from
   `gateway.log`): every one reached PLAYING within ~5 s, no SEND FAILED, no
   watchdog — AAC music (*Stone Temple Pilots – Thank You*), ALAC (*Two Steps
   From Hell – Invincible*), m4b at 44.1 kHz (*Poirot 01*, also pause/resume
   OK), 22.05 kHz (*Poirot 09*) and 11.025 kHz (*A Clash of Kings Pt 1*, an
   18.8 h single file). Library inventory: music 63 AAC + 22 ALAC `.m4a`, no
-  `.m4b`; audiobooks 366 AAC (130 `.m4b`, 31 books, 11–48 kHz). Still open
+  `.m4b`; audiobooks 366 AAC (130 `.m4b`, 31 books, 11–48 kHz). Followed up
   for 2026-11-09:
   - **Resume on the Naim WORKS since 2026-11-09** (`⏩ RESUME → 0:00:59 ✓
     … attempt 2`). It had never worked: the Naim accepts a Seek sent before
@@ -75,16 +75,16 @@ doc. Dates are targets.
     last). Keyed per BOOK, not per file: most folders with differing
     tags are one book in discs/parts, which normalising keeps together.
   - Natural end of track → next file: WORKS (owner, 2026-11-09).
-  - Write the answer into docs/AUDIOBOOKS.md and close its open question.
+  - Answer written into docs/AUDIOBOOKS.md (2026-11-10).
   - Two more blank-title `audio_error code=4` at 16:20 and 16:29 from
-    192.168.1.145, i.e. the Stop bug fixed at 15:46. Output switching does not
-    touch `<audio>`, so most likely that PWA was opened before the fix:
-    confirm none recur after a reload.
+    192.168.1.145 were a PWA opened before the Stop fix: none recurred
+    (`gateway.log` checked 2026-11-10).
 - [ ] **6. Click-through installer — proposal first.** Proposal WRITTEN
   2026-11-08: [docs/INSTALLER_PROPOSAL.md](docs/INSTALLER_PROPOSAL.md) —
   Stage 1 configurable without `.env` (data dir + loopback-only `/setup`),
   Stage 2 a Homebrew tap, Stage 3 a signed menu-bar app. Waiting on the
-  owner's answers to its §7; no code until then. Work starts 2026-11-09.
+  owner's answers to its §7; no code until then. The owner is still
+  weighing it (2026-11-10); no date set.
 
 ## Running the Gateway
 
@@ -464,8 +464,8 @@ Appium.
 | `api_upnp_descriptors.py` | The device descriptor and the two service SCPDs that make strict DLNA clients willing to browse us at all. |
 | `api_upnp_browse.py` | ContentDirectory Browse — the music, audiobook, playlist and favourite-album handlers, the dispatch tables, and `_gw_browse`. |
 | `api_upnp_browse_video.py` | The 📹 Videos tree (GWMovies) as browsed by the LG WebOS TV. |
-| `api_upnp_browse_photo.py` | The 📷 Photos tree for the LG TV: 📅 By date (year → month) · 📚 Albums (the screenshot albums last) · 👤 People · 📍 Places (country → city) · ⭐ Favourites; a folder over 200 photos becomes `phsplit:` sub-folders → `ph:<id>` (`object.item.imageItem.photo`, `image/jpeg` JPEG_LRG). Owns its `EXACT`/`PREFIX` tables (every id starts `ph`), merged into `api_upnp_browse`'s. |
-| `dlna_photos.py` | The Photos index: the whole Immich library for every `IMMICH_API_KEY*` (favourites and named people are per user; a person is one NAME across users), from a LOOPBACK `IMMICH_URL`, when `PHOTOS_ENABLED=1`. `build()` is pure; a daemon thread rebuilds every 900 s and swaps the snapshot in whole. Screenshots (only on a marker the device or Apple Photos wrote, `shot_kind`) leave every album for Mac-screencaptures / iOS-screencaptures <name>, in the TV's view only. Serves Immich's existing 1440 px JPEG preview — the TV shows no HEIC/NEF/WebP — and writes nothing to disk. `tests/test_photos.py` (44). |
+| `api_upnp_browse_photo.py` | The 📷 Photos tree for the LG TV: 📅 By date (year → month) · 📚 Albums (the screenshot albums last) · 👤 People · 📍 Places (country → city) · ⭐ Favourites; a folder over 200 photos becomes `phsplit:` sub-folders → `ph:<id>` (`object.item.imageItem.photo`, `image/jpeg` JPEG_LRG). Owns its `EXACT`/`PREFIX` tables (every id starts `ph`), merged into `api_upnp_browse`'s. Not offered to the Naim: `shown_to(peer)` hides the root entry from a renderer whose device.xml `<manufacturer>` is in `HIDDEN_FROM` ("Naim Audio"). |
+| `dlna_photos.py` | The Photos index: the whole Immich library for every `IMMICH_API_KEY*` (favourites and named people are per user; a person is one NAME across users), from a LOOPBACK `IMMICH_URL`, when `PHOTOS_ENABLED=1`. `build()` is pure; a daemon thread rebuilds every 900 s and swaps the snapshot in whole. Screenshots (only on a marker the device or Apple Photos wrote, `shot_kind`) leave every album for Mac-screencaptures / iOS-screencaptures <name>, in the TV's view only. Serves Immich's existing 1440 px JPEG preview — the TV shows no HEIC/NEF/WebP — and writes nothing to disk. `tests/test_photos.py` (45). |
 | `dlna_photos_immich.py` | The Immich 3 client behind it (paged `search/metadata`, albums, preview, `users/me`). |
 | `dlna_photos_split.py` | How a 📷 Photos folder over 200 photos splits: country → city → year → month → week, a level that divides nothing skipped; places biggest first, dates old to new; "Week 49 · 2023". Pure. |
 | `api_upnp_ssdp.py` | SSDP presence (NOTIFY + M-SEARCH) and GENA eventing for the gateway-as-MediaServer. |
@@ -1502,7 +1502,8 @@ All three tables survive `clear(udn)` / rebuild-index, like `album_art`.
 
 `api_upnp*` makes the gateway a complete DLNA Media Server. Root: Artists,
 Albums (a `#-0-A..Z` letter index), Genres, ⭐ Favourite Albums, Playlists —
-plus 📖 Audiobooks, 📹 Videos and 📷 Photos when populated. Strict clients (the Naim's
+plus 📖 Audiobooks, 📹 Videos and 📷 Photos when populated (📷 Photos never
+to the Naim — it is audio-only). Strict clients (the Naim's
 dLeyna/GUPnP, LG WebOS) browse ONLY when all of this holds (full tree and
 codec details in docs/FEATURES.md):
 
@@ -1822,7 +1823,7 @@ the 🌐 language rules: **[docs/AUDIOBOOKS.md](docs/AUDIOBOOKS.md)**.
   chapter URL, never an `album_key`; `.edit-field[hidden]{display:none}` is
   load-bearing. `tests/test_book_language.py` (28),
   `tests/frontend/test_book_language.py` (10).
-- Open question: does the Naim accept m4b/AAC over AVTransport?
+- The Naim plays m4b/AAC over AVTransport (answered 2026-11-08, item 5).
 
 ## Subsonic API (`/rest/*` — Amperfy / CarPlay)
 

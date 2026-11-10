@@ -184,7 +184,7 @@ def cm_control_soap(body: bytes):
         return 500, "text/html", f"<h1>error: {e}</h1>".encode()
 
 
-def cd_control_soap(body: bytes):
+def cd_control_soap(body: bytes, peer: str = ""):
     """Pure ContentDirectory SOAP handler → (status, content_type, body_bytes).
     Shared by the native ASGI /gw/cd/control route and the legacy stdlib handler.
 
@@ -206,7 +206,7 @@ def cd_control_soap(body: bytes):
             flag   = browse.findtext("BrowseFlag") or "BrowseDirectChildren"
             start  = int(browse.findtext("StartingIndex") or 0)
             count  = int(browse.findtext("RequestedCount") or 0) or 9999
-            result_xml, n_ret, total = _gw_browse(obj_id, flag, start, count)
+            result_xml, n_ret, total = _gw_browse(obj_id, flag, start, count, peer)
             log.debug(f"GW SOAP Browse {obj_id!r} → {n_ret}/{total}")
             return 200, _SOAP_CTYPE, _gw_browse_response(result_xml, n_ret, total)
 

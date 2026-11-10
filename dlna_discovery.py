@@ -136,6 +136,7 @@ def _fetch_device(location: str,
         name = _clean_name(
             device.findtext("u:friendlyName", "", ns)) or "Unknown Device"
         dev_type = device.findtext("u:deviceType", "", ns)
+        maker = _clean_name(device.findtext("u:manufacturer", "", ns))
 
         if gw_udn and udn == gw_udn:
             log.debug(f"Skipping self-discovery ({udn})")
@@ -183,7 +184,8 @@ def _fetch_device(location: str,
             DEVICE_ROLES.mark(udn, name, location=location, host=host, is_renderer=True)
             renderers.add(MediaRenderer(
                 udn=udn, name=name, location=location,
-                av_url=av_url, base_url=base, rc_url=rc_url or ""))
+                av_url=av_url, base_url=base, rc_url=rc_url or "",
+                manufacturer=maker))
             if "MediaServer" in dev_type:
                 log.debug(f"Combined device {name!r}: has AVTransport → "
                           f"renderer only, skipping ContentDirectory")

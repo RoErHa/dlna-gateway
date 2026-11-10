@@ -67,7 +67,7 @@ def _br_root(ctx: _Browse) -> tuple:
     # Music only while it is actually SERVING (api_upnp_ids.music_udn): an
     # unmounted volume leaves its rows indexed, and music that 404s on play
     # is worse than no music folder at all.
-    n_photos = _photo.photo_root_count()
+    n_photos = _photo.photo_root_count() if _photo.shown_to(ctx.peer) else 0
     udn = _ids.music_udn()
     if ctx.is_meta:
         return ctx.meta("-1", GW_NAME, 2 + (3 if udn else 0) + (1 if n_photos else 0)
@@ -365,9 +365,9 @@ _BROWSE_PREFIX = _BROWSE_PREFIX + _photo.PREFIX
 
 
 def _gw_browse(obj_id: str, browse_flag: str,
-               start: int, count: int) -> tuple:
+               start: int, count: int, peer: str = "") -> tuple:
     """Returns (DIDL-Lite XML, number_returned, total_matches)."""
-    ctx = _Browse(obj_id, browse_flag, start, count)
+    ctx = _Browse(obj_id, browse_flag, start, count, peer)
     handler = _BROWSE_EXACT.get(obj_id)
     if handler is None:
         handler = next((h for p, h in _BROWSE_PREFIX if obj_id.startswith(p)),

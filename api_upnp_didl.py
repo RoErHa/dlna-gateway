@@ -141,10 +141,11 @@ class _Browse:
     `count == 0` means "no limit" in the ContentDirectory spec, which is
     why the slice is conditional rather than a plain [start:start+count]."""
 
-    __slots__ = ("obj_id", "flag", "start", "count")
+    __slots__ = ("obj_id", "flag", "start", "count", "peer")
 
-    def __init__(self, obj_id: str, flag: str, start: int, count: int):
+    def __init__(self, obj_id: str, flag: str, start: int, count: int, peer: str = ""):
         self.obj_id, self.flag, self.start, self.count = obj_id, flag, start, count
+        self.peer = peer            # the browsing device's IP ('' = unknown)
 
     @property
     def is_meta(self) -> bool:

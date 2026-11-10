@@ -32,6 +32,7 @@ PLAIN :8765 bind (the TV does no TLS here): Immich's 1440 px JPEG preview,
 because the TV shows no HEIC, NEF or WebP. See docs/PHOTO_SUPPORT.md.
 """
 import os
+from urllib.parse import urlsplit
 
 import api_upnp_ids as _ids
 import dlna_photos
@@ -48,6 +49,7 @@ BRANCHES = (("phdates", "\U0001F4C5 By date"), ("phalbums", "\U0001F4DA Albums")
             ("phpeople", "\U0001F464 People"), ("phplaces", "\U0001F4CD Places"),
             ("phfavs", "⭐ Favourites"))
 SEP = "\x1f"
+HIDDEN_FROM = ("Naim Audio",)   # audio-only: no 📷 Photos in its root (owner, 2026-11-10)
 
 
 def photo_base() -> str:
@@ -75,6 +77,18 @@ def _counts(lib) -> dict:
     return {"phdates": len({m[:4] for m in lib.months}), "phalbums": len(lib.albums),
             "phpeople": len(lib.people), "phplaces": len(lib.places),
             "phfavs": len(lib.favourites)}
+
+
+def shown_to(peer: str) -> bool:
+    """False for a device that cannot show a photo: a renderer at `peer`
+    whose maker is in HIDDEN_FROM (the Naim browses from its own address).
+    The ids still answer; the root just does not offer the folder."""
+    import dlna_discovery
+    for r in dlna_discovery.RENDERERS.all() if peer else ():
+        if (urlsplit(r.location).hostname == peer
+                and r.manufacturer.startswith(HIDDEN_FROM)):
+            return False
+    return True
 
 
 def photo_root_count() -> int:

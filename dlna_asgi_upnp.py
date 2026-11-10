@@ -123,7 +123,7 @@ async def gw_cm_events(request: Request):
 async def gw_cd_control(request: Request):
     body = await request.body()
     status, ctype, payload = await run_in_threadpool(
-        api_upnp.cd_control_soap, body)
+        api_upnp.cd_control_soap, body, _peer(request))
     if status != 200:
         action = (request.headers.get("soapaction", "").rsplit("#", 1)[-1]
                   .strip('"') or "?")
