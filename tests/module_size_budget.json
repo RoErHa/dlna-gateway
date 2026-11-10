@@ -105,6 +105,7 @@
     "dlna_mbid.py": 400,
     "dlna_photos.py": 400,
     "dlna_photos_immich.py": 400,
+    "dlna_photos_split.py": 400,
     "dlna_player.py": 400,
     "dlna_player_monitor.py": 400,
     "dlna_player_policy.py": 400,

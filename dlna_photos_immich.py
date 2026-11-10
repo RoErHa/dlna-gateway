@@ -67,6 +67,10 @@ class Immich:
             nxt = data.get("nextPage")
             page = int(nxt) if nxt and str(nxt).isdigit() and int(nxt) > page else 0
 
+    def me(self) -> dict:
+        """{id, name} of the user this key belongs to."""
+        return self.json("GET", "/api/users/me") or {}
+
     def albums(self) -> list:
         """[{id, name}] of every album this user owns or was shared."""
         seen = {}

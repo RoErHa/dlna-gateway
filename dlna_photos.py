@@ -13,6 +13,11 @@ is api_upnp_browse_photo.py, the bytes dlna_asgi_photos.py.
     Immich, so each key is scanned and the answers merged), plus every album
     either user owns or was shared. Videos are in 📹 Videos. Trashed, locked
     and hidden assets never appear; archived ones only inside an album.
+  * SCREENSHOTS (2026-11-10) leave every album and gather in their own:
+    Mac-screencaptures, and one iOS-screencaptures per Immich user. Only a
+    marker the device or Apple Photos wrote counts (`shot_kind`, Apple's own
+    Screenshots album), never a guess from the picture's size alone: a
+    screen-sized photo is common. Immich itself is never changed.
   * FROM WHERE: Immich's own API on THIS Mac (`IMMICH_URL` must be a
     loopback address). Immich's files are never opened.
   * WHAT THE TV GETS: Immich's existing 1440 px JPEG preview. The TV shows
@@ -30,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -46,6 +52,17 @@ CACHE_ITEMS = 48            # previews kept in RAM: the TV asks for each twice (
 TIMELINE = {"timeline"}
 IN_ALBUMS = {"timeline", "archive"}
 _FETCH_ERRORS = (urllib.error.URLError, OSError, ValueError, KeyError, TypeError)
+# macOS names its screenshots; the Dutch names carry a soft hyphen on some versions.
+MAC_SHOT = re.compile(r"(screenshot|screen shot|scherm\u00ad?afbeelding|schermopname)[\s_-]", re.I)
+# iPhone/iPad screens (short, long side), for a PNG without a camera.
+IOS_SCREENS = {(640, 1136), (750, 1334), (1242, 2208), (1080, 1920), (1125, 2436),
+               (828, 1792), (1242, 2688), (1170, 2532), (1284, 2778), (1179, 2556),
+               (1290, 2796), (1206, 2622), (1320, 2868), (1536, 2048), (1620, 2160),
+               (1668, 2388), (1640, 2360), (2048, 2732)}
+# Apple Photos' own Screenshots album (synced into Immich): its call, not ours.
+APPLE_SHOT_ALBUMS = {"screenshots", "schermafbeeldingen", "screen shots"}
+MAC_ALBUM = "Mac-screencaptures"
+IOS_ALBUM = "iOS-screencaptures"
 
 
 class Photo(NamedTuple):
@@ -92,6 +109,40 @@ def _photo(item: dict) -> Photo:
                  (exif.get("city") or "").strip(), (exif.get("country") or "").strip())
 
 
+def shot_kind(item: dict) -> str:
+    """'mac', 'ios' or '' — on a marker the device wrote, never on looks.
+    Measured 2026-11-10: iOS writes "Screenshot" as the EXIF description, or
+    saves a PNG ("Apple Computer Inc." as make, or a screen's exact size and
+    no camera). macOS names the file. A screen-sized JPEG without either is
+    left alone: on this library half of those are photos. (build() also
+    counts what Apple Photos put in its own Screenshots album.)"""
+    name = item.get("originalFileName") or ""
+    if MAC_SHOT.match(name):
+        return "mac"
+    exif = item.get("exifInfo") or {}
+    if (exif.get("description") or "").strip().lower() == "screenshot":
+        return "ios"
+    if name.lower().endswith(".png"):
+        make = exif.get("make") or ""
+        w, h = exif.get("exifImageWidth") or 0, exif.get("exifImageHeight") or 0
+        if make.startswith("Apple Computer") or (not make and (min(w, h), max(w, h)) in IOS_SCREENS):
+            return "ios"
+    return ""
+
+
+def _shot_albums(photos: dict, shots: dict, users: dict) -> list:
+    """Mac-screencaptures, then iOS-screencaptures <first name> per owner."""
+    groups = defaultdict(list)
+    for pid, (kind, owner) in shots.items():
+        groups[("mac", "") if kind == "mac" else ("ios", owner)].append(photos[pid])
+    out = []
+    for (kind, owner), ps in groups.items():
+        first = (users.get(owner) or "").split()
+        name = MAC_ALBUM if kind == "mac" else " ".join([IOS_ALBUM] + first[:1])
+        out.append(Album(f"shots-{kind}-{owner}".rstrip("-"), name, _chrono(ps)))
+    return sorted(out, key=lambda a: (a.name != MAC_ALBUM, a.name))
+
+
 def _shown(item: dict, allowed: set) -> bool:
     return (not item.get("isTrashed") and UUID.fullmatch(item.get("id", "")) is not None
             and item.get("visibility", "timeline") in allowed)
@@ -101,17 +152,26 @@ def _chrono(photos) -> list:
     return sorted(photos, key=lambda p: (p.date, p.id))
 
 
-def build(scans, albums) -> Library:
+def build(scans, albums, users=None) -> Library:
     """The pure half of a refresh.
     scans:  [(key, timeline items as Immich returns them)], one per key.
-    albums: [(key, {id, name}, that album's items)]."""
-    lib, people, favs = Library(), defaultdict(dict), {}
+    albums: [(key, {id, name}, that album's items)].
+    users:  {Immich user id: name}, to name each owner's screenshot album."""
+    lib, people, favs, shots = Library(), defaultdict(dict), {}, {}
+    in_apple = {it.get("id") for _, meta, items in albums
+                if meta["name"].replace("\u00ad", "").strip().casefold() in APPLE_SHOT_ALBUMS
+                for it in items}
+
+    def kind(it):
+        return shot_kind(it) or ("ios" if it.get("id") in in_apple else "")
     for key, items in scans:
         for it in items:
             if not _shown(it, TIMELINE):
                 continue
             p = lib.photos.setdefault(it["id"], _photo(it))
             lib.owner.setdefault(p.id, key)
+            if kind(it):
+                shots.setdefault(p.id, (kind(it), it.get("ownerId", "")))
             if it.get("isFavorite"):
                 favs[p.id] = p
             for person in it.get("people") or []:
@@ -135,11 +195,16 @@ def build(scans, albums) -> Library:
         ps = []
         for it in items:
             if _shown(it, IN_ALBUMS):
-                ps.append(lib.photos.setdefault(it["id"], _photo(it)))
+                p = lib.photos.setdefault(it["id"], _photo(it))
                 lib.owner.setdefault(it["id"], key)
+                if kind(it):            # out of the album, into its screenshot album
+                    shots.setdefault(p.id, (kind(it), it.get("ownerId", "")))
+                else:
+                    ps.append(p)
         if ps:
             lib.albums.append(Album(meta["id"], meta["name"], _chrono(ps)))
     lib.albums.sort(key=lambda a: (a.photos[-1].date, a.name), reverse=True)
+    lib.albums += _shot_albums(lib.photos, shots, users or {})
     lib.people = sorted(((n, _chrono(ps.values())) for n, ps in people.items()),
                         key=lambda np: np[0].casefold())
     # Places: biggest country first; inside one, biggest city first and the
@@ -174,10 +239,12 @@ class PhotoIndex:
 
     def refresh(self) -> None:
         t0 = time.monotonic()
-        scans, albums = [], []
+        scans, albums, users = [], [], {}
         for key in self.keys:
             api = self.client(self.url, key)
             try:
+                me = api.me()
+                users[me.get("id", "")] = me.get("name", "")
                 scans.append((key, list(api.search())))
                 for meta in api.albums():
                     albums.append((key, meta, list(api.search(albumIds=[meta["id"]]))))
@@ -186,7 +253,7 @@ class PhotoIndex:
         if not scans:
             log.warning("photos: no key could read Immich; keeping the previous index")
             return
-        lib = build(scans, albums)
+        lib = build(scans, albums, users)
         with self._lock:
             self.lib = lib
             self._cache = OrderedDict((k, v) for k, v in self._cache.items() if k in lib.owner)

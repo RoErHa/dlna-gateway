@@ -25,6 +25,8 @@ in RAM (the TV asks for each photo twice: art, then the photo). That is
 
 - 2026-11-09: one album (`PHOTOS_ALBUMS`), verified on the TV.
 - 2026-11-10: the whole library. `PHOTOS_ENABLED=1` replaced `PHOTOS_ALBUMS`.
+- 2026-11-10: big folders split up; screenshots moved into their own albums
+  (owner, after checking the tree on the TV).
 
 ## Shape
 
@@ -36,6 +38,7 @@ in RAM (the TV asks for each photo twice: art, then the photo). That is
     ├── 👤 People             phpeople → phperson:<b64 name> → photos
     ├── 📍 Places             phplaces → phcountry:<b64> → phcity:<b64 country\0city> → photos
     └── ⭐ Favourites         phfavs → photos
+    any folder of photos over 200 → phsplit:<b64 base id \x1f level=key …>
     photo: ph:<asset id>, object.item.imageItem.photo
            res = http://<lan-ip>:8765/gw/photo/<asset id>.jpg
 ```
@@ -43,12 +46,81 @@ in RAM (the TV asks for each photo twice: art, then the photo). That is
 An empty branch is left out. Order:
 - Years: newest first.
 - Months and the photos in any folder: chronological.
-- Albums: newest first.
+- Albums: newest first; the screenshot albums last.
 - People: A–Z.
 - Places: the country with the most photos first. Inside a country, the
   biggest city first, then "(no city)" for photos with a country only.
 
 A photo title is `YYYY-MM-DD HH:MM · city`.
+
+### Big folders split up
+
+Some folders were thousands of photos long: the album "Recent" 11,840,
+"Vastgelegd door mij" 9,121, December 2023 6,645 (an import date). Paging
+through those with a remote is hopeless, so **a folder holding more than 200
+photos shows sub-folders instead**, in the order the owner asked for:
+
+    country → city → year → month → week
+
+- A level that would not divide the photos is skipped: December 2023 splits
+  by country, then city, then (one year, one month) straight into weeks.
+- A group of 200 or fewer lists its photos; a bigger one splits again from
+  the next level down. Past the week, the photos are listed as they are:
+  Trondheim in December 2023 is 215 photos from one day.
+- Order: places biggest first, dates old to new; "(no place)", "(no city)"
+  and "(no date)" always last.
+- Names follow the rest of the tree: "The Netherlands", "Hoorn", "2023",
+  "December 2023", "Week 49 · 2023" (ISO week numbers).
+- It applies to every folder of photos: albums, months, people, cities and
+  favourites. Years, countries and the album list are lists of folders and
+  stay as they are.
+- `phsplit:` carries the folder it came from plus one `level=key` step per
+  level (`c` country, `t` city, `y`, `m`, `w`). A Browse finds the base
+  folder's photos the usual way, then narrows them one step at a time. Steps
+  must go down the levels, or the id is empty.
+
+Measured 2026-11-10: "Recent" opens in 10 ms (8 countries), its Netherlands
+group in 7 ms (122 cities).
+
+### Screenshots get their own albums
+
+At the owner's request, screenshots leave every album and gather in:
+
+- **Mac-screencaptures** — both users';
+- **iOS-screencaptures <first name>** — one per Immich user who has any.
+
+Photos inside are old to new, like every folder. They stay on the timeline
+(📅 By date, 📍 Places, 👤 People); only the albums change. An album left
+empty disappears, which is what happens to Apple's own "Screenshots"/
+"Schermafbeeldingen" album. **Nothing in Immich is changed**: this is the
+TV's view only.
+
+A photo is a screenshot only on a marker the device or Apple Photos wrote
+(`dlna_photos.shot_kind`):
+
+| Marker | Kind |
+|---|---|
+| File name `Screenshot …`, `Screen Shot …`, `Schermafbeelding …`, `Schermopname …` (macOS) | Mac |
+| EXIF description "Screenshot" (iOS writes it) | iOS |
+| PNG with make "Apple Computer Inc." (iOS screenshots, also cropped ones) | iOS |
+| PNG with no camera at an exact iPhone/iPad screen size | iOS |
+| In Apple Photos' own Screenshots album, as synced into Immich | iOS (unless Mac by name) |
+
+A screen-sized **JPEG** without one of those markers is left alone. Checked
+by eye on 2026-11-10: of 68 such images, about half were photos (an old
+iPhone saved pictures at its screen size, and the metadata of both is
+equally empty).
+
+Measured 2026-11-10:
+- 363 screenshots, all Marja's. 326 of them agree with Apple's own
+  Screenshots album (329); the album's other 3 count through the last rule.
+  The 34 found outside that album were all checked by eye: all screenshots.
+- **Mac-screencaptures holds one photo.** The Macs' screenshots are not in
+  Immich: one "Screenshot 2022-06-14 at 21.47.09" is.
+- **Ron has no iOS-screencaptures album.** His screenshots in Immich are
+  JPEGs without a marker (converted on import), alike in metadata to his
+  real photos, so none qualifies. The album appears by itself once his
+  iPhone uploads screenshots as PNGs.
 
 `<res>` advertises `image/jpeg` with `DLNA.ORG_PN=JPEG_LRG` (1440 px fits
 JPEG_LRG's 4096² limit) and `DLNA.ORG_OP=00`: a still image needs no byte
@@ -80,8 +152,9 @@ Measured 2026-11-10:
 | File | Job |
 |---|---|
 | `dlna_photos.py` | The index. `build()` is pure: Immich items in, one `Library` snapshot out. `PhotoIndex.refresh()` collects the items on a daemon thread every `PHOTOS_REFRESH_SEC` (900 s, min 300), builds off to the side and swaps the snapshot in whole. Browsing never waits on Immich and never sees a half-built library. If no key can read Immich, the previous snapshot stays. `start()` configures the shared `INDEX` **in place**: rebinding it would strand every reader on an empty index. |
-| `dlna_photos_immich.py` | The Immich 3 client: paged search, albums, preview. |
-| `api_upnp_browse_photo.py` | The browse handlers and their own `EXACT`/`PREFIX` tables, merged into `api_upnp_browse`'s. Each handler reads the snapshot once. |
+| `dlna_photos_immich.py` | The Immich 3 client: paged search, albums, preview, and `users/me` (whose key is whose, to name the iOS screenshot albums). |
+| `dlna_photos_split.py` | How a big folder splits: levels, order, names, the step check. Pure. |
+| `api_upnp_browse_photo.py` | The browse handlers and their own `EXACT`/`PREFIX` tables, merged into `api_upnp_browse`'s. Each handler reads the snapshot once. `_find()` answers every folder of photos, so a `phsplit:` group finds its base the same way. |
 | `dlna_asgi_photos.py` | `GET`/`HEAD /gw/photo/<asset id>.jpg`, on the plain `:8765` bind with the rest of `/gw/*` (the TV does no TLS there). |
 
 ## Immich 3 quirks this depends on

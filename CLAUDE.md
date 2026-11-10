@@ -151,7 +151,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **119/119 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **120/120 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -464,9 +464,10 @@ Appium.
 | `api_upnp_descriptors.py` | The device descriptor and the two service SCPDs that make strict DLNA clients willing to browse us at all. |
 | `api_upnp_browse.py` | ContentDirectory Browse — the music, audiobook, playlist and favourite-album handlers, the dispatch tables, and `_gw_browse`. |
 | `api_upnp_browse_video.py` | The 📹 Videos tree (GWMovies) as browsed by the LG WebOS TV. |
-| `api_upnp_browse_photo.py` | The 📷 Photos tree for the LG TV: 📅 By date (year → month) · 📚 Albums · 👤 People · 📍 Places (country → city) · ⭐ Favourites → `ph:<id>` (`object.item.imageItem.photo`, `image/jpeg` JPEG_LRG). Owns its `EXACT`/`PREFIX` tables (every id starts `ph`), merged into `api_upnp_browse`'s. |
-| `dlna_photos.py` | The Photos index: the whole Immich library for every `IMMICH_API_KEY*` (favourites and named people are per user; a person is one NAME across users), from a LOOPBACK `IMMICH_URL`, when `PHOTOS_ENABLED=1`. `build()` is pure; a daemon thread rebuilds every 900 s and swaps the snapshot in whole. Serves Immich's existing 1440 px JPEG preview — the TV shows no HEIC/NEF/WebP — and writes nothing to disk. `tests/test_photos.py` (31). |
-| `dlna_photos_immich.py` | The Immich 3 client behind it (paged `search/metadata`, albums, preview). |
+| `api_upnp_browse_photo.py` | The 📷 Photos tree for the LG TV: 📅 By date (year → month) · 📚 Albums (the screenshot albums last) · 👤 People · 📍 Places (country → city) · ⭐ Favourites; a folder over 200 photos becomes `phsplit:` sub-folders → `ph:<id>` (`object.item.imageItem.photo`, `image/jpeg` JPEG_LRG). Owns its `EXACT`/`PREFIX` tables (every id starts `ph`), merged into `api_upnp_browse`'s. |
+| `dlna_photos.py` | The Photos index: the whole Immich library for every `IMMICH_API_KEY*` (favourites and named people are per user; a person is one NAME across users), from a LOOPBACK `IMMICH_URL`, when `PHOTOS_ENABLED=1`. `build()` is pure; a daemon thread rebuilds every 900 s and swaps the snapshot in whole. Screenshots (only on a marker the device or Apple Photos wrote, `shot_kind`) leave every album for Mac-screencaptures / iOS-screencaptures <name>, in the TV's view only. Serves Immich's existing 1440 px JPEG preview — the TV shows no HEIC/NEF/WebP — and writes nothing to disk. `tests/test_photos.py` (44). |
+| `dlna_photos_immich.py` | The Immich 3 client behind it (paged `search/metadata`, albums, preview, `users/me`). |
+| `dlna_photos_split.py` | How a 📷 Photos folder over 200 photos splits: country → city → year → month → week, a level that divides nothing skipped; places biggest first, dates old to new; "Week 49 · 2023". Pure. |
 | `api_upnp_ssdp.py` | SSDP presence (NOTIFY + M-SEARCH) and GENA eventing for the gateway-as-MediaServer. |
 | `api_subsonic.py` | Subsonic API composition root. Split 2026-08-20 (was 1,174 lines across auth, wire format, id codecs and 33 handlers). |
 | `api_subsonic_proto.py` | The Subsonic wire protocol: authentication, the response envelope, the JSON→XML serialiser. |
@@ -1501,7 +1502,7 @@ All three tables survive `clear(udn)` / rebuild-index, like `album_art`.
 
 `api_upnp*` makes the gateway a complete DLNA Media Server. Root: Artists,
 Albums (a `#-0-A..Z` letter index), Genres, ⭐ Favourite Albums, Playlists —
-plus 📖 Audiobooks and 📹 Videos when populated. Strict clients (the Naim's
+plus 📖 Audiobooks, 📹 Videos and 📷 Photos when populated. Strict clients (the Naim's
 dLeyna/GUPnP, LG WebOS) browse ONLY when all of this holds (full tree and
 codec details in docs/FEATURES.md):
 

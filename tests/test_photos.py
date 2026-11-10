@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 tests/test_photos.py — the 📷 Photos tree for the LG TV (dlna_photos,
-dlna_photos_immich, api_upnp_browse_photo, dlna_asgi_photos).
+dlna_photos_immich, dlna_photos_split, api_upnp_browse_photo,
+dlna_asgi_photos).
 
 Immich is never contacted: the index takes a fake client, and the tests of
 the real client stub its HTTP.
@@ -24,8 +25,9 @@ import api_upnp_ids
 import dlna_asgi_photos
 import dlna_photos
 import dlna_photos_immich
-from api_upnp_ids import _b64e
-from dlna_photos import PhotoIndex, build
+import dlna_photos_split
+from api_upnp_ids import _b64e, _b64d
+from dlna_photos import Photo, PhotoIndex, build, shot_kind
 from dlna_photos_immich import Immich
 
 A1 = "c6fe38ee-8332-4f49-bb1f-ff278cc8cd39"
@@ -64,8 +66,16 @@ class FakeImmich:
                               {"id": A2, "name": "Archief"}],
                       {A1: [MARJA[0], MARJA[1]], A2: [RON[2]]})}
 
+    users = {"ron": {"id": "u-ron", "name": "Ron Hamersma"},
+             "marja": {"id": "u-marja", "name": "Marja"}}
+
     def __init__(self, url, key):
         self.key = key
+
+    def me(self):
+        if self.key not in self.users:
+            raise urllib.error.URLError("refused")
+        return self.users[self.key]
 
     def search(self, albumIds=None):
         FakeImmich.calls.append(("search", self.key, albumIds))
@@ -220,7 +230,7 @@ class TestImmichClient(unittest.TestCase):
                                           {"id": A2, "name": "(album)"}])
 
 
-class TestBrowse(unittest.TestCase):
+class _BrowseCase(unittest.TestCase):
 
     def setUp(self):
         fd, self._db = tempfile.mkstemp(suffix=".db")
@@ -244,6 +254,9 @@ class TestBrowse(unittest.TestCase):
         root = ET.fromstring(self.browse(oid)[0])
         return [(e.get("id"), e.find("{http://purl.org/dc/elements/1.1/}title").text)
                 for e in root]
+
+
+class TestBrowse(_BrowseCase):
 
     def test_no_photos_folder_while_the_index_is_empty(self):
         with patch.object(dlna_photos, "INDEX", PhotoIndex()):
@@ -329,6 +342,151 @@ class TestRoute(unittest.TestCase):
                 r = self.get(name)
                 self.assertEqual((r.status_code, r.body),
                                  (502, b'{"error":"photo unavailable"}'), name)
+
+
+def shot(i, when, owner, name="IMG_1.PNG", **exif):
+    return item(i, when, ownerId=owner, originalFileName=name,
+                exifInfo={"city": "", "country": "", **exif})
+
+
+S1 = "55555555-5555-4555-8555-555555555555"
+S2 = "66666666-6666-4666-8666-666666666666"
+S3 = "77777777-7777-4777-8777-777777777777"
+
+
+class TestScreenshots(unittest.TestCase):
+
+    def test_only_a_marker_the_device_wrote_counts(self):
+        mac = shot(S1, "2022-06-14T21:47:09", "u", "Screenshot 2022-06-14 at 21.47.09.jpeg")
+        self.assertEqual(shot_kind(mac), "mac")
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", "Schermafbeelding 2023-01-01 om 10.00.png")), "mac")
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", "IMG_1.jpeg", description="Screenshot")), "ios")
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", make="Apple Computer Inc.",
+                                        exifImageWidth=675, exifImageHeight=954)), "ios")
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", exifImageWidth=828, exifImageHeight=1792)), "ios")
+        # Looks alone are not enough: half of these were photos.
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", "IMG_2.JPG",
+                                        exifImageWidth=750, exifImageHeight=1334)), "")
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", "tekening.png",
+                                        exifImageWidth=828, exifImageHeight=1696)), "")
+        self.assertEqual(shot_kind(shot(S1, "2022", "u", "IMG_3.png", make="Apple",
+                                        exifImageWidth=828, exifImageHeight=1792)), "")
+        self.assertEqual(shot_kind(RON[0]), "")
+
+    def test_they_leave_every_album_and_gather_per_kind_and_owner(self):
+        ios_ron = shot(S1, "2023-01-01T10:00:00", "u-ron", description="Screenshot")
+        ios_marja_new = shot(S2, "2024-05-01T10:00:00", "u-marja", exifImageWidth=828,
+                             exifImageHeight=1792)
+        mac = shot(S3, "2022-06-14T21:47:09", "u-marja", "Screenshot 2022-06-14 at 21.47.09.jpeg")
+        ios_marja_old = dict(shot(P4, "2021-01-01T09:00:00", "u-marja", description="Screenshot"))
+        lib = build([("ron", [RON[0], ios_ron]), ("marja", [ios_marja_new, mac, ios_marja_old])],
+                    [("marja", {"id": A1, "name": "Feest"}, [RON[0], ios_ron, mac]),
+                     ("marja", {"id": A2, "name": "Alleen screenshots"}, [ios_marja_new])],
+                    {"u-ron": "Ron Hamersma", "u-marja": "Marja"})
+        self.assertEqual([(a.id, a.name, [p.id for p in a.photos]) for a in lib.albums], [
+            (A1, "Feest", [P1]),
+            ("shots-mac", "Mac-screencaptures", [S3]),
+            ("shots-ios-u-marja", "iOS-screencaptures Marja", [P4, S2]),   # old to new
+            ("shots-ios-u-ron", "iOS-screencaptures Ron", [S1])])
+        self.assertIn(S1, [p.id for p in lib.months["2023-01"]])    # still on the timeline
+
+    def test_what_apple_photos_called_a_screenshot_is_one(self):
+        cropped = shot(S1, "2023-01-01T10:00:00", "u-marja", "IMG_6193.PNG",
+                       exifImageWidth=802, exifImageHeight=1740)
+        lib = build([("marja", [cropped, MARJA[0]])],
+                    [("marja", {"id": A1, "name": "Scherm\u00adafbeeldingen"}, [cropped]),
+                     ("marja", {"id": A2, "name": "Feest"}, [cropped, MARJA[0]])],
+                    {"u-marja": "Marja"})
+        self.assertEqual([(a.name, [p.id for p in a.photos]) for a in lib.albums],
+                         [("Feest", [P1]), ("iOS-screencaptures Marja", [S1])])
+
+    def test_refresh_names_each_owner(self):
+        FakeImmich.data = dict(FakeImmich.data)
+        saved = FakeImmich.data["ron"]
+        FakeImmich.data["ron"] = (RON + [shot(S1, "2023-01-01T10:00:00", "u-ron",
+                                              description="Screenshot")], [], {})
+        try:
+            names = [a.name for a in _index().lib.albums]
+        finally:
+            FakeImmich.data["ron"] = saved
+        self.assertEqual(names[-1], "iOS-screencaptures Ron")
+
+
+def ph(i, when, city="", country=""):
+    return Photo(f"{i:08d}-0000-4000-8000-000000000000", when, when, city, country)
+
+
+class TestSplit(unittest.TestCase):
+
+    def setUp(self):
+        p = patch.object(dlna_photos_split, "SPLIT_OVER", 2)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_small_folder_lists_its_photos(self):
+        self.assertIsNone(dlna_photos_split.split([ph(1, "2023-01-01"), ph(2, "2023-01-02")]))
+
+    def test_places_first_biggest_first_no_place_last(self):
+        ps = [ph(1, "2023-01-01", "", ""), ph(2, "2023-01-01", "Paris", "France"),
+              ph(3, "2023-01-01", "Hoorn", "Netherlands"), ph(4, "2023-01-02", "Hoorn", "Netherlands")]
+        level, groups = dlna_photos_split.split(ps)
+        self.assertEqual((level, [k for k, _ in groups]), ("c", ["Netherlands", "France", ""]))
+        self.assertEqual([dlna_photos_split.label("c", k) for k, _ in groups],
+                         ["Netherlands", "France", "(no place)"])
+
+    def test_a_level_that_divides_nothing_is_skipped(self):
+        one_place = [ph(i, d, "Hoorn", "Netherlands") for i, d in
+                     enumerate(["2023-12-01", "2023-12-02", "2023-12-11", "2023-12-12"])]
+        level, groups = dlna_photos_split.split(one_place)
+        self.assertEqual(level, "w")                    # one country, city, year, month
+        self.assertEqual([dlna_photos_split.label("w", k) for k, _ in groups],
+                         ["Week 48 · 2023", "Week 50 · 2023"])
+
+    def test_dates_old_to_new_and_the_next_split_starts_lower(self):
+        ps = [ph(1, "2024-03-01"), ph(2, "2022-01-01"), ph(3, "2023-05-01"), ph(4, "2023-06-01")]
+        level, groups = dlna_photos_split.split(ps)
+        self.assertEqual((level, [k for k, _ in groups]), ("y", ["2022", "2023", "2024"]))
+        self.assertEqual(dlna_photos_split.split(groups[1][1] * 2, after=2)[0], "m")
+        self.assertEqual(dlna_photos_split.label("m", "2023-05"), "May 2023")
+
+    def test_past_the_week_the_photos_list(self):
+        self.assertIsNone(dlna_photos_split.split([ph(i, "2023-01-01") for i in range(5)]))
+
+    def test_steps_must_go_down_the_levels(self):
+        ok = dlna_photos_split.steps_ok
+        self.assertTrue(ok(["c=Netherlands", "y=2023", "w=2023-W49"]))
+        for bad in ([], ["y=2023", "c=France"], ["c=a", "c=b"], ["x=1"], ["c"], ["cy=1"]):
+            self.assertFalse(ok(bad), bad)
+
+
+class TestBrowseSplit(_BrowseCase):
+    """A big album breaks up, and every group can be browsed and described."""
+
+    def setUp(self):
+        super().setUp()
+        p = patch.object(dlna_photos_split, "SPLIT_OVER", 1)
+        p.start()
+        self._p.append(p)
+
+    def test_a_big_album_splits_by_place_then_date(self):
+        groups = self.kids(f"phalbum:{A1}")         # P1 Bakkum, P2 no city; both NL
+        self.assertEqual([t for _, t in groups], ["Bakkum", "(no city)"])
+        path = _b64d(groups[0][0].split(":", 1)[1]).split("\x1f")
+        self.assertEqual(path, [f"phalbum:{A1}", "t=Bakkum"])
+        self.assertEqual([i for i, _ in self.kids(groups[0][0])], [f"ph:{P1}"])
+        meta = ET.fromstring(self.browse(groups[0][0], "BrowseMetadata")[0])[0]
+        self.assertEqual((meta.get("parentID"), meta.get("childCount")), (f"phalbum:{A1}", "1"))
+
+    def test_a_split_month(self):
+        groups = self.kids("phmonth:2021-01")       # P4 France, P2 Netherlands
+        self.assertEqual([t for _, t in groups], ["France", "Netherlands"])
+
+    def test_garbled_split_ids_are_empty(self):
+        sid = lambda *parts: "phsplit:" + _b64e("\x1f".join(parts))      # noqa: E731
+        for oid in ("phsplit:", "phsplit:!!", sid(f"phalbum:{A1}"), sid("phsplit:x", "c=a"),
+                    sid(f"phalbum:{A1}", "c=Nowhere"), sid(f"phalbum:{A1}", "y=2020", "c=France"),
+                    sid("photos", "c=Netherlands")):
+            self.assertEqual(self.browse(oid)[1:], (0, 0), oid)
 
 
 if __name__ == "__main__":

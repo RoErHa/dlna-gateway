@@ -169,8 +169,9 @@ POST /api/album_favourites/remove?artist=X&album=Y
 `api_upnp._gw_browse` exposes the gateway as a MediaServer the Naim browses
 directly (no PWA). **Root container "0" lists five children:** `Artists`,
 `Albums`, `Genres` (the **full library**),
-then `⭐ Favourite Albums` and `Playlists` — plus a sixth, `📹 Videos`, only
-when GWMovies is enabled + populated.
+then `⭐ Favourite Albums` and `Playlists` — plus `📖 Audiobooks`, `📹 Videos`
+(when GWMovies is enabled + populated) and `📷 Photos` (when the Immich photo
+index has anything; tree and rules in [PHOTO_SUPPORT.md](PHOTO_SUPPORT.md)).
 
 **Videos sub-tree** (for the LG TV; guarded by
 `tests/test_upnp_videos_browse.py`): `videos` → `📅 By date` (year → month),

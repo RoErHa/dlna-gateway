@@ -19,29 +19,35 @@ Shape (an empty branch is left out, like 📹 Videos):
     photo = ph:<asset id>, object.item.imageItem.photo
 
 Years are newest first, months and photos chronological, albums newest
-first, people A-Z, places biggest first. A person is one NAME, merged across
-Immich users (each user names faces separately).
+first (the screenshot albums last), people A-Z, places biggest first. A
+person is one NAME, merged across Immich users.
+
+A photo folder over 200 photos shows sub-folders instead (country → city →
+year → month → week, dlna_photos_split): `phsplit:<b64 base id \\x1f
+level=key …>`. The base is the folder it came from, so its photos are found
+the same way and then narrowed one step at a time.
 
 Each item's `<res>` AND its art point at `/gw/photo/<asset id>.jpg` on the
 PLAIN :8765 bind (the TV does no TLS here): Immich's 1440 px JPEG preview,
 because the TV shows no HEIC, NEF or WebP. See docs/PHOTO_SUPPORT.md.
 """
-import calendar
 import os
 
 import api_upnp_ids as _ids
 import dlna_photos
+import dlna_photos_split as _split
 from api_upnp_didl import _Browse, _didl_container
 from api_upnp_ids import _b64d, _b64e, _xml_esc
+from dlna_photos_split import NO_CITY, month_title
 
 PHOTOS_TITLE = "\U0001F4F7 Photos"
 # 1440 px fits JPEG_LRG (≤ 4096²); OP=00: no byte seeking for a still image.
 PROTOCOL = ("http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_LRG;DLNA.ORG_OP=00;"
             "DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00d00000000000000000000000000000")
-NO_CITY = "(no city)"
 BRANCHES = (("phdates", "\U0001F4C5 By date"), ("phalbums", "\U0001F4DA Albums"),
             ("phpeople", "\U0001F464 People"), ("phplaces", "\U0001F4CD Places"),
             ("phfavs", "⭐ Favourites"))
+SEP = "\x1f"
 
 
 def photo_base() -> str:
@@ -76,12 +82,26 @@ def photo_root_count() -> int:
     return sum(1 for n in _counts(_lib()).values() if n)
 
 
-def _photos(ctx: _Browse, parent: str, title: str, photos: list) -> tuple:
-    if ctx.is_meta:
-        return ctx.meta(parent, title, len(photos))
-    base = photo_base()
-    return ctx.listing([_didl_photo(p, ctx.obj_id, base) for p in ctx.page(photos)],
-                       len(photos))
+def _split_id(path: list) -> str:
+    return "phsplit:" + _b64e(SEP.join(path))
+
+
+def _photos(ctx: _Browse, parent: str, title: str, photos: list,
+            path: list, after: int = -1) -> tuple:
+    """A folder of photos — or, when it is too big, of the groups it splits
+    into. `path` is [base id, step …], `after` the level of the last step."""
+    cut = _split.split(photos, after)
+    if cut is None:
+        if ctx.is_meta:
+            return ctx.meta(parent, title, len(photos))
+        base = photo_base()
+        return ctx.listing([_didl_photo(p, ctx.obj_id, base) for p in ctx.page(photos)],
+                           len(photos))
+    level, groups = cut
+    at = _split.LEVELS.index(level)
+    return _folders(ctx, parent, title, [
+        (_split_id(path + [f"{level}={k}"]), _split.label(level, k), _split.size(ps, at))
+        for k, ps in groups])
 
 
 def _folders(ctx: _Browse, parent: str, title: str, kids: list) -> tuple:
@@ -94,6 +114,57 @@ def _folders(ctx: _Browse, parent: str, title: str, kids: list) -> tuple:
 
 def _arg(ctx: _Browse) -> str:
     return ctx.obj_id.split(":", 1)[1]
+
+
+def _cities(lib, country: str):
+    return next((cs for c, cs in lib.places if c == country), None) if country else None
+
+
+def _find(lib, oid: str):
+    """(parent, title, photos) of a folder of photos, else None."""
+    prefix, _, arg = oid.partition(":")
+    found = None
+    if oid == "phfavs":
+        found = ("photos", BRANCHES[4][1], lib.favourites)
+    elif prefix == "phmonth" and month_title(arg):
+        found = (f"phyear:{arg[:4]}", month_title(arg), lib.months.get(arg))
+    elif prefix == "phalbum":
+        a = next((a for a in lib.albums if a.id == arg), None)
+        found = a and ("phalbums", a.name, a.photos)
+    elif prefix == "phperson" and _b64d(arg):
+        name = _b64d(arg)
+        found = ("phpeople", name, next((ps for n, ps in lib.people if n == name), None))
+    elif prefix == "phcity":
+        country, _, city = _b64d(arg).partition("\0")
+        ps = next((ps for c, ps in (_cities(lib, country) or []) if c == city), None)
+        found = (f"phcountry:{_b64e(country)}", city or NO_CITY, ps)
+    return found if found and found[2] else None
+
+
+def _br_list(ctx: _Browse) -> tuple:
+    """phfavs, phmonth:, phalbum:, phperson:, phcity: — a folder of photos."""
+    found = _find(_lib(), ctx.obj_id)
+    if found is None:
+        return ctx.empty()
+    return _photos(ctx, *found, [ctx.obj_id])
+
+
+def _br_phsplit(ctx: _Browse) -> tuple:
+    """One group of a big folder: the base folder's photos, narrowed step by step."""
+    path = _b64d(_arg(ctx)).split(SEP)
+    found = _find(_lib(), path[0]) if _split.steps_ok(path[1:]) else None
+    if found is None:
+        return ctx.empty()
+    photos = found[2]
+    for step in path[1:]:
+        level, _, k = step.partition("=")
+        photos = [p for p in photos if _split.key(level, p) == k]
+    if not photos:
+        return ctx.empty()
+    level, _, k = path[-1].partition("=")
+    parent = path[0] if len(path) == 2 else _split_id(path[:-1])
+    return _photos(ctx, parent, _split.label(level, k), photos, path,
+                   _split.LEVELS.index(level))
 
 
 def _br_photos(ctx: _Browse) -> tuple:
@@ -112,46 +183,21 @@ def _br_phdates(ctx: _Browse) -> tuple:
 
 def _br_phyear(ctx: _Browse) -> tuple:
     year, lib = _arg(ctx), _lib()
-    months = sorted(m for m in lib.months if m[:4] == year)
+    months = sorted(m for m in lib.months if m[:4] == year and month_title(m))
     if not months:
         return ctx.empty()
     return _folders(ctx, "phdates", year, [
-        (f"phmonth:{m}", f"{calendar.month_name[int(m[5:7])]} {year}", len(lib.months[m]))
-        for m in months if m[5:7].isdigit() and 1 <= int(m[5:7]) <= 12])
-
-
-def _br_phmonth(ctx: _Browse) -> tuple:
-    m = _arg(ctx)
-    photos = _lib().months.get(m)
-    if not photos:
-        return ctx.empty()
-    return _photos(ctx, f"phyear:{m[:4]}",
-                   f"{calendar.month_name[int(m[5:7])]} {m[:4]}", photos)
+        (f"phmonth:{m}", month_title(m), _split.size(lib.months[m], -1)) for m in months])
 
 
 def _br_phalbums(ctx: _Browse) -> tuple:
-    return _folders(ctx, "photos", BRANCHES[1][1],
-                    [(f"phalbum:{a.id}", a.name, len(a.photos)) for a in _lib().albums])
-
-
-def _br_phalbum(ctx: _Browse) -> tuple:
-    album = next((a for a in _lib().albums if a.id == _arg(ctx)), None)
-    if album is None:
-        return ctx.empty()
-    return _photos(ctx, "phalbums", album.name, album.photos)
+    return _folders(ctx, "photos", BRANCHES[1][1], [
+        (f"phalbum:{a.id}", a.name, _split.size(a.photos, -1)) for a in _lib().albums])
 
 
 def _br_phpeople(ctx: _Browse) -> tuple:
-    return _folders(ctx, "photos", BRANCHES[2][1],
-                    [(f"phperson:{_b64e(n)}", n, len(ps)) for n, ps in _lib().people])
-
-
-def _br_phperson(ctx: _Browse) -> tuple:
-    name = _b64d(_arg(ctx))
-    photos = next((ps for n, ps in _lib().people if n == name), None) if name else None
-    if not photos:
-        return ctx.empty()
-    return _photos(ctx, "phpeople", name, photos)
+    return _folders(ctx, "photos", BRANCHES[2][1], [
+        (f"phperson:{_b64e(n)}", n, _split.size(ps, -1)) for n, ps in _lib().people])
 
 
 def _br_phplaces(ctx: _Browse) -> tuple:
@@ -159,30 +205,14 @@ def _br_phplaces(ctx: _Browse) -> tuple:
         (f"phcountry:{_b64e(c)}", c, len(cities)) for c, cities in _lib().places])
 
 
-def _cities(country: str):
-    return next((cs for c, cs in _lib().places if c == country), None) if country else None
-
-
 def _br_phcountry(ctx: _Browse) -> tuple:
     country = _b64d(_arg(ctx))
-    cities = _cities(country)
+    cities = _cities(_lib(), country)
     if not cities:
         return ctx.empty()
     return _folders(ctx, "phplaces", country, [
-        (f"phcity:{_b64e(country + chr(0) + city)}", city or NO_CITY, len(ps))
+        (f"phcity:{_b64e(country + chr(0) + city)}", city or NO_CITY, _split.size(ps, -1))
         for city, ps in cities])
-
-
-def _br_phcity(ctx: _Browse) -> tuple:
-    country, _, city = _b64d(_arg(ctx)).partition("\0")
-    photos = next((ps for c, ps in (_cities(country) or []) if c == city), None)
-    if not photos:
-        return ctx.empty()
-    return _photos(ctx, f"phcountry:{_b64e(country)}", city or NO_CITY, photos)
-
-
-def _br_phfavs(ctx: _Browse) -> tuple:
-    return _photos(ctx, "photos", BRANCHES[4][1], _lib().favourites)
 
 
 def _br_ph(ctx: _Browse) -> tuple:
@@ -195,7 +225,7 @@ def _br_ph(ctx: _Browse) -> tuple:
 
 
 EXACT = {"photos": _br_photos, "phdates": _br_phdates, "phalbums": _br_phalbums,
-         "phpeople": _br_phpeople, "phplaces": _br_phplaces, "phfavs": _br_phfavs}
-PREFIX = (("phyear:", _br_phyear), ("phmonth:", _br_phmonth), ("phalbum:", _br_phalbum),
-          ("phperson:", _br_phperson), ("phcountry:", _br_phcountry),
-          ("phcity:", _br_phcity), ("ph:", _br_ph))
+         "phpeople": _br_phpeople, "phplaces": _br_phplaces, "phfavs": _br_list}
+PREFIX = (("phyear:", _br_phyear), ("phmonth:", _br_list), ("phalbum:", _br_list),
+          ("phperson:", _br_list), ("phcountry:", _br_phcountry),
+          ("phcity:", _br_list), ("phsplit:", _br_phsplit), ("ph:", _br_ph))
