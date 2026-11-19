@@ -322,12 +322,18 @@ def client_log(h, body):
         # Pull out and clamp common fields that we care about; stringify
         # the rest into a single compact tail.
         fields = []
+        # The resume fields (2026-11-19) are what tells "the tap never
+        # reached the page" from "play() resolved and stayed silent".
         for key in ("code", "codeName", "err", "reason", "retries",
-                    "title", "artist", "ready_state", "network_state"):
+                    "title", "artist", "ready_state", "network_state",
+                    "phase", "position", "paused_ms", "reload", "by_system",
+                    "advanced", "paused", "visibility", "standalone"):
             if key in data:
                 v = str(data[key])[:120]
                 fields.append(f"{key}={v}")
-        ua = str(data.get("ua") or data.get("user_agent", ""))[:80]
+        # 160, not 80: the Safari version ("Version/26.1") sits past char 80,
+        # and which iOS a report came from is half of reading it.
+        ua = str(data.get("ua") or data.get("user_agent", ""))[:160]
         msg = str(data.get("message", ""))[:200]
         tail = "  ".join(fields)
         _client_log.info(

@@ -300,6 +300,48 @@ is the realistic best the web path can offer. Guarded by
 `tests/frontend/test_mediasession.py` (play→playing, pause→paused, and the
 playing→paused→playing call-interruption round-trip).
 
+### Resume after an interruption — reload before play (2026-11-19)
+
+The one tap above was not enough on iOS 26. In a home-screen web app,
+`play()` on an element iOS had paused resolves with **no error and no
+sound** (WebKit bug 295518, NEW/Critical since 2025-07, still open in 26.1;
+reproduced by others after a reopen, and matching "I have to open the app
+and start again" with nothing in `gateway.log`). The workaround reported on
+that bug is to assign `src` again right before `play()`.
+
+- **Whose pause was it?** Every pause our code makes goes through
+  `_pauseBrowserAudio()`, which flags it (only when the element is actually
+  playing — `pause()` on a paused element fires no event and would leave the
+  flag set for the next interruption). A `pause` event without the flag is
+  the system's: `_pausedBySystem`.
+- **`_resumeBrowserAudio(reason)`** — the lock-screen/CarPlay ▶ and the
+  app's ▶ both go through it. After a system pause, or any pause longer than
+  `_RESUME_RELOAD_MS` (20 s, the relay's connection may be gone too), it
+  calls `_reloadAt(pos)` and then `play()`; a quick pause by hand stays a
+  plain `play()`, no rebuffer. `play()` runs before the report so it stays
+  inside the tap's user activation.
+- **`_reloadAt(pos)`** — `src = <base>#t=<pos>` (the fetch starts at the
+  position, so the start of the track is never heard) plus a seek on
+  `loadedmetadata` for an engine that ignores the fragment; audiobook speed
+  re-asserted; live radio (`/radio_stream`) rejoins with no position.
+- **Network retry keeps the position.** The code-2/3 retry used to re-arm
+  `src = src`, restarting the track at 0:00 — what a connection dropped
+  during a long call became. It uses `_reloadAt` now, and `_audioRetryCount`
+  keys the URL **without** the fragment: keyed with it, each retry carries a
+  new position, counts as a new source and never runs out.
+- **Observable.** Each resume POSTs `client_log[resume]` (reason, reload,
+  by_system, paused_ms, position, visibility, standalone, a 160-char UA) and
+  4 s later `client_log[resume_check] advanced=true|false paused=…`, counted
+  from `timeupdate` moves. No `resume` line after a lock-screen tap = the tap
+  never reached the page (iOS suspended it); `advanced=true` while silent =
+  295518 survived the reload.
+- **Not done, on purpose:** resuming by itself when the app is reopened. iOS
+  pauses for a call and for AirPods being taken out alike, and the page
+  cannot tell them apart — that would start music on the phone's speaker.
+
+Guarded by `tests/frontend/test_resume.py` (9; both engines), against a real
+`<audio>` playing the stub's silent WAV (`gateway.stream_seconds = 30`).
+
 ### Browser audio error handling (MediaError discrimination)
 
 `static/app.js` listens for `error` events on the `<audio>` element and branches on `MediaError.code`:

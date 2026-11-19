@@ -449,7 +449,7 @@ function _abSleepArm(minutes){
   _abSleepTimer=setTimeout(()=>{
     _abSleepTimer=null;
     if(!browserAudio.paused){
-      browserAudio.pause();   // pause listener saves the position
+      _pauseBrowserAudio();   // pause listener saves the position
       $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
       toast("😴 Sleep timer — paused");
     }
@@ -507,7 +507,7 @@ function _libraryOf(t){
 
 function _libHoldPlayback(label, idx, t){
   _libHold={label, idx, at:Date.now()};
-  browserAudio.pause();
+  _pauseBrowserAudio();
   $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
   toast(`⏸ ${label} library unavailable — paused on "${t?.title||'track'}". `+
         "Playback continues when the drive is back.");
@@ -562,7 +562,9 @@ browserAudio.addEventListener("error", e=>{
   const code = err ? err.code : 0;
   const codeName = _MEDIA_ERR[code] || `unknown(${code})`;
   const t = browserQueue[browserIdx];
-  const src = browserAudio.currentSrc || "";
+  // Without the `#t=` a resume adds (_reloadAt): keyed WITH it, every retry
+  // would carry a new position, count as a new source, and never run out.
+  const src = (browserAudio.currentSrc || "").split("#")[0];
   const retries = _audioRetryCount.get(src) || 0;
 
   // Always surface the event to the gateway so we can see what's really happening.
@@ -588,9 +590,12 @@ browserAudio.addEventListener("error", e=>{
   if((code === 2 || code === 3) && retries < 1 && src){
     _audioRetryCount.set(src, retries + 1);
     toast(`⟳ Retrying "${t?.title||'track'}" (${codeName})`);
+    const pos = browserAudio.currentTime || 0;
     setTimeout(()=>{
-      // Re-arm the same src (forces a fresh request)
-      browserAudio.src = src;
+      // Re-arm the same src (forces a fresh request) AT the position it
+      // failed at: `src = src` alone restarted the track from 0:00, which is
+      // what a network drop during a long phone call turned into.
+      _reloadAt(pos);
       _playBrowserAudio("retry_"+codeName);
     }, 800);
     return;
@@ -641,6 +646,115 @@ function _playBrowserAudio(reason){
   });
 }
 
+// ── Resume after an interruption (phone call, Siri, another app) ──
+//
+// iOS pauses <audio> for a call and never resumes a web page on its own, so
+// the ceiling is ONE tap: lock screen, CarPlay, AirPods, or ▶ in the app.
+// That tap used to call play() on the element as iOS left it, and on iOS 26
+// a home-screen web app answers that with a play() that RESOLVES — no error,
+// nothing in gateway.log — and no sound (WebKit bug 295518, open since
+// 2025-07). The workaround reported there, and what this does: assign the
+// source again right before play(), at the position it stopped.
+//
+// Reload only when it can matter: the pause was not ours (an interruption),
+// or it lasted longer than _RESUME_RELOAD_MS (the relay's connection may be
+// gone too). A quick pause/resume by hand stays a plain play(), no rebuffer.
+//
+// Deliberately NOT done: resuming by itself when the app is reopened. A page
+// cannot tell a call from AirPods being taken out — iOS pauses for both —
+// so that would start the music on the phone's speaker.
+const _RESUME_RELOAD_MS = 20000;
+const _RESUME_CHECK_MS  = 4000;
+let _pauseIsOurs=false;   // set by _pauseBrowserAudio, read by the pause event
+let _pausedAt=0, _pausedPos=0, _pausedBySystem=false;
+
+// Every pause our own code makes goes through here, so the pause event can
+// tell it apart from one iOS made. pause() on a paused element fires no
+// event, and a flag left set would then mislabel the NEXT interruption.
+function _pauseBrowserAudio(){
+  if(!browserAudio.paused) _pauseIsOurs=true;
+  browserAudio.pause();
+}
+
+browserAudio.addEventListener("pause",()=>{
+  if(browserAudio.ended){_pauseIsOurs=false;return;}
+  _pausedAt=Date.now();
+  _pausedPos=browserAudio.currentTime||0;
+  _pausedBySystem=!_pauseIsOurs && !!browserAudio.getAttribute("src");
+  _pauseIsOurs=false;
+});
+browserAudio.addEventListener("play",()=>{_pausedBySystem=false;_pausedAt=0;});
+
+function _isStandalone(){
+  try{
+    return !!(navigator.standalone ||
+              matchMedia("(display-mode: standalone)").matches);
+  }catch(e){ return false; }
+}
+
+// Re-assign the current source at `pos` seconds. Live radio has no position:
+// it rejoins the stream. Returns false when there is nothing to reload.
+function _reloadAt(pos){
+  const base=(browserAudio.getAttribute("src")||"").split("#")[0];
+  if(!base) return false;
+  const live=/\/radio_stream\?/.test(base);
+  const p=live?0:Math.max(0,pos||0);
+  // `#t=` starts the fetch at the position, so the first second of the
+  // track is never heard; the seek on loadedmetadata covers an engine that
+  // ignores the fragment.
+  browserAudio.src = p>0.5 ? `${base}#t=${p.toFixed(1)}` : base;
+  if(browserQueueIsBook){browserAudio.playbackRate=_abRate;}
+  if(p>0.5){
+    browserAudio.addEventListener("loadedmetadata",()=>{
+      try{
+        if(Math.abs((browserAudio.currentTime||0)-p)>1) browserAudio.currentTime=p;
+      }catch(e){}
+    },{once:true});
+  }
+  return true;
+}
+
+function _resumeBrowserAudio(reason){
+  if(!browserAudio.getAttribute("src")) return _playBrowserAudio(reason);
+  const pausedMs=_pausedAt?Date.now()-_pausedAt:0;
+  const bySystem=_pausedBySystem;
+  const reload=bySystem||pausedMs>_RESUME_RELOAD_MS;
+  const pos=browserAudio.currentTime||_pausedPos||0;
+  const readyState=browserAudio.readyState, networkState=browserAudio.networkState;
+  if(reload) _reloadAt(pos);
+  // play() before anything else: it must run inside the tap's activation.
+  const p=_playBrowserAudio(reason);
+  _reportClientError({kind:"resume", reason, reload, by_system:bySystem,
+    paused_ms:pausedMs, position:Math.round(pos),
+    ready_state:readyState, network_state:networkState,
+    visibility:document.visibilityState, standalone:_isStandalone(),
+    ua:navigator.userAgent.slice(0,160)});
+  _resumeCheck(reason, reload);
+  return p;
+}
+
+// Did the resume actually PLAY? A resolved play() is not proof (295518).
+// Count timeupdates that move currentTime for a few seconds and report the
+// answer, so the next "it didn't resume" has a line in gateway.log.
+function _resumeCheck(reason, reload){
+  let last=-1, moves=0;
+  const onTick=()=>{
+    const t=browserAudio.currentTime||0;
+    if(last>=0&&t>last+0.2) moves++;
+    last=t;
+  };
+  browserAudio.addEventListener("timeupdate",onTick);
+  setTimeout(()=>{
+    browserAudio.removeEventListener("timeupdate",onTick);
+    _reportClientError({kind:"resume_check", reason, reload,
+      advanced:moves>=2, paused:browserAudio.paused,
+      position:Math.round(browserAudio.currentTime||0),
+      ready_state:browserAudio.readyState,
+      network_state:browserAudio.networkState,
+      visibility:document.visibilityState});
+  }, _RESUME_CHECK_MS);
+}
+
 // ── MediaSession — lock screen / CarPlay controls + metadata ──
 function _updateMediaSession(t, idx){
   if(!("mediaSession" in navigator)) return;
@@ -655,11 +769,11 @@ function _updateMediaSession(t, idx){
   });
   // Transport handlers — registered every track so iOS keeps them active
   navigator.mediaSession.setActionHandler("play", ()=>{
-    _playBrowserAudio("mediasession_play");
+    _resumeBrowserAudio("mediasession_play");
     $("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";
   });
   navigator.mediaSession.setActionHandler("pause", ()=>{
-    browserAudio.pause();
+    _pauseBrowserAudio();
     $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
   });
   navigator.mediaSession.setActionHandler("previoustrack", ()=>{
@@ -2936,13 +3050,13 @@ async function control(cmd){
         if(_libHold && browserAudio.paused){ _browserPlayIdx(_libHold.idx); break; }
         if(browserAudio.paused){
           $("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";
-          _playBrowserAudio("user_pause_toggle");
-        }else{browserAudio.pause();$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
+          _resumeBrowserAudio("user_pause_toggle");
+        }else{_pauseBrowserAudio();$("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";}
         break;
       case "stop":
         // removeAttribute, never src="": an empty src resolves to the page's
         // own URL, and every engine answers it with MediaError 4 (2026-11-08).
-        browserAudio.pause();browserAudio.removeAttribute("src");browserAudio.load();
+        _pauseBrowserAudio();browserAudio.removeAttribute("src");browserAudio.load();
         browserQueue=[];browserIdx=0;browserQueueIsBook=false;_abApplyRate();
         $("btn-pp").textContent="▶ Play";$("mini-pp").textContent="▶";
         break;

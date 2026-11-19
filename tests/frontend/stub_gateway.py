@@ -105,6 +105,7 @@ class StubGateway:
         self.radio_search_results: list[dict] = []
         self.radio_fav_full: bool = False      # force /add to 409
         self.icy_title: str = ""               # /api/radio/nowplaying
+        self.stream_seconds: int = 1           # length of the /stream clip
         self.sse_events: list[dict] = []       # frames /api/events emits on connect
         self.videos: list[dict] = []           # GET /api/videos (V2-PWA)
         # audiobook resume positions keyed by album_key (P2)
@@ -592,8 +593,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._safe_write(png)
             return
         if path == "/stream":
-            # Tiny silent WAV — enough for <audio> to load and "play"
-            wav = self._silent_wav(seconds=1)
+            # Tiny silent WAV — enough for <audio> to load and "play".
+            # A test that seeks (resume at a position) asks for a longer one.
+            wav = self._silent_wav(seconds=gw.stream_seconds)
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(wav)))

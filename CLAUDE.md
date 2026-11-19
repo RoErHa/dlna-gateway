@@ -846,6 +846,18 @@ measurements, incidents, the things that bit — are in
   (single source of truth → dependable one-tap resume on CarPlay / lock
   screen). Hands-free resume after a call is impossible for a web page.
   `tests/frontend/test_mediasession.py`.
+- **The one tap must RELOAD after an interruption** (2026-11-19). iOS 26
+  home-screen apps answer a plain `play()` on an interrupted element with a
+  resolved promise and silence (WebKit 295518) — no error, no log line. Every
+  pause our code makes goes through `_pauseBrowserAudio()`, so a pause event
+  without it is iOS's (`_pausedBySystem`); `_resumeBrowserAudio()` (lock
+  screen ▶, app ▶) then re-assigns the source at its position (`_reloadAt`,
+  `#t=` + a seek on `loadedmetadata`; live radio rejoins) before `play()` —
+  also after any pause > `_RESUME_RELOAD_MS` (20 s). A network retry keeps
+  its position too, and the retry counter keys the URL WITHOUT `#t=`. Each
+  resume logs `client_log[resume]` + `client_log[resume_check] advanced=…`.
+  Never auto-resume on reopening the app: a page can't tell a call from
+  AirPods being taken out. `tests/frontend/test_resume.py` (9).
 - **MediaError**: code 1 ignored, 2/3 retry the track once then skip, 4 skip
   at once; every event POSTs to `/api/client_log`.
 - **Stall watchdog** (`_stallCheck`, 2 s poll): no `currentTime` progress
