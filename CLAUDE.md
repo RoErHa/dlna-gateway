@@ -19,73 +19,6 @@ bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
 Releases are tagged (`v2.1.0`, `v2.2.0`). Tags are cheap and mark points worth
 returning to.
 
-## Open work — the next few days (set 2026-11-08, after v2.2.0)
-
-Tick an item (`- [x]`, with the date and commit) **in the commit that ships
-it**, and remove this section once every item is ticked or moved to its own
-doc. Dates are targets.
-
-- [x] **1. GitHub Release for v2.2.0** — done 2026-11-08:
-  https://github.com/RoErHa/dlna-gateway/releases/tag/v2.2.0. Notes = the
-  tag message, with the count corrected in the notes only. Known wart: the tag
-  message says "231 commits", the real count is 225 — left as is (owner's
-  call, 2026-11-08).
-- [x] **2. Self-host the PWA's two fonts** — done 2026-11-08. DM Mono +
-  Syne (SIL OFL 1.1, licences beside them) in `static/fonts/` (7 woff2,
-  ~89 KB; Syne is variable), declared at the top of `app.css`, precached by
-  the SW (`APP_CACHE` v21). The CSP's `style-src`/`font-src` are `'self'`
-  only; `test_security_headers.py::TestNoThirdParty` keeps any origin out
-  of the policy and `index.html`, and `test_csp.py::test_the_fonts_load_from_the_gateway`
-  asks the browser whether the faces loaded. The PWA now loads nothing
-  from another origin.
-- [x] **3. Today's `audio_error code=4`** — done 2026-11-08. NOT a dead
-  row: the track (Texas, *Insane*, a valid 16/44.1 FLAC — ffmpeg decodes
-  it clean) had streamed in full. It was **Stop**: `src=""` resolves to the
-  page URL, every engine answers MediaError 4, and the handler ran with the
-  queue already emptied — a blank-titled `audio_error` and a "Can't play …
-  unsupported format" toast for pressing Stop. Stop now uses
-  `removeAttribute("src")`, and the handler ignores an element with no
-  source. `test_audio_errors.py::test_stop_is_not_reported_as_an_unsupported_track`
-  (fails on the old code, both engines).
-- [x] **4. Check Time Machine daily, not weekly** — done 2026-11-08, by
-  making the BACKUP daily (owner's call) rather than adding a check-only
-  job: the check rides every run. Retention moved to 7 daily + 8 weekly so
-  the two months of reach survive. See "Backing up library.db (daily)".
-- [x] **5. Does the Naim play MP4 audio through the gateway?** — YES, done
-  2026-11-10 (answer in docs/AUDIOBOOKS.md). FORMATS ANSWERED 2026-11-08 (owner at the Naim, 16:29–16:38, read from
-  `gateway.log`): every one reached PLAYING within ~5 s, no SEND FAILED, no
-  watchdog — AAC music (*Stone Temple Pilots – Thank You*), ALAC (*Two Steps
-  From Hell – Invincible*), m4b at 44.1 kHz (*Poirot 01*, also pause/resume
-  OK), 22.05 kHz (*Poirot 09*) and 11.025 kHz (*A Clash of Kings Pt 1*, an
-  18.8 h single file). Library inventory: music 63 AAC + 22 ALAC `.m4a`, no
-  `.m4b`; audiobooks 366 AAC (130 `.m4b`, 31 books, 11–48 kHz). Followed up
-  for 2026-11-09:
-  - **Resume on the Naim WORKS since 2026-11-09** (`⏩ RESUME → 0:00:59 ✓
-    … attempt 2`). It had never worked: the Naim accepts a Seek sent before
-    it is really playing and drops it (the first Seek was dropped even
-    AFTER it reported PLAYING), and the monitor's first save then wrote
-    ~0:03 over the bookmark. Now: wait for PLAYING, seek, read the position
-    back, retry once; no save while the Seek settles. Left: Stop does not
-    save the position, so a bookmark can trail by up to 15 s.
-  - **The Poirot folder shared one resume slot** — FIXED 2026-11-09
-    (`dlna_book_key.py`; 8 of 491 folders split). Was:
-    `playback_positions` keys ONE row per FOLDER, and *BBC Radio 4 Hercule
-    Poirot* holds 27 separate books as single files in one folder, so the
-    whole series shares one resume slot (it pointed at the episode played
-    last). Keyed per BOOK, not per file: most folders with differing
-    tags are one book in discs/parts, which normalising keeps together.
-  - Natural end of track → next file: WORKS (owner, 2026-11-09).
-  - Answer written into docs/AUDIOBOOKS.md (2026-11-10).
-  - Two more blank-title `audio_error code=4` at 16:20 and 16:29 from
-    192.168.1.145 were a PWA opened before the Stop fix: none recurred
-    (`gateway.log` checked 2026-11-10).
-- [ ] **6. Click-through installer — proposal first.** Proposal WRITTEN
-  2026-11-08: [docs/INSTALLER_PROPOSAL.md](docs/INSTALLER_PROPOSAL.md) —
-  Stage 1 configurable without `.env` (data dir + loopback-only `/setup`),
-  Stage 2 a Homebrew tap, Stage 3 a signed menu-bar app. Waiting on the
-  owner's answers to its §7; no code until then. The owner is still
-  weighing it (2026-11-10); no date set.
-
 ## Running the Gateway
 
 ```bash
@@ -1849,7 +1782,7 @@ the 🌐 language rules: **[docs/AUDIOBOOKS.md](docs/AUDIOBOOKS.md)**.
   chapter URL, never an `album_key`; `.edit-field[hidden]{display:none}` is
   load-bearing. `tests/test_book_language.py` (28),
   `tests/frontend/test_book_language.py` (10).
-- The Naim plays m4b/AAC over AVTransport (answered 2026-11-08, item 5).
+- The Naim plays m4b/AAC over AVTransport (answered 2026-11-08; details in docs/AUDIOBOOKS.md).
 
 ## Subsonic API (`/rest/*` — Amperfy / CarPlay)
 

@@ -1,6 +1,14 @@
 # Installer proposal — getting the gateway onto someone else's Mac
 
-> **Status: PROPOSAL, for review (2026-11-08).** Nothing here is built. It
+> **Status: SHELVED (2026-11-19) — owner's decision.** The owner made the
+> installer conditional on the PWA resuming after a phone call on iOS
+> ("if it does not work, no one will ever use it"). On-device test that
+> evening, iOS 26: after a call iOS removes the home-screen app's
+> lock-screen controls entirely, so there is nothing to tap — see
+> docs/FRONTEND.md → "Resume after an interruption". Stage 3 was already out:
+> no paid Apple Developer account. Kept as the record of what was proposed.
+>
+> **Was: PROPOSAL, for review (2026-11-08).** Nothing here is built. It
 > supersedes the parked feasibility plan in [PACKAGING.md](PACKAGING.md),
 > which stays as the background: its four hard problems still hold, and this
 > document turns them into a sequence with decisions attached. Work starts
