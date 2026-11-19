@@ -147,7 +147,7 @@ which is the discovery hook, so nothing else would say so.
 
 Guarded by `tests/test_localfs_watch.py` (25),
 `tests/test_localfs_wiring.py` (18) and
-`tests/frontend/test_library_bar.py` (8). Verified by breaking BOTH
+`tests/frontend/test_library_bar.py` (16). Verified by breaking BOTH
 halves: neutering the re-check reddens 7 of 8 late-mount tests, and
 neutering `add_allowed_root` reddens the three that assert what the
 one file server ends up allowed to serve.

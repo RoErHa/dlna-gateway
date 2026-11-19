@@ -485,6 +485,72 @@ async function _reportClientError(payload){
   }catch(e){ /* best effort — don't recurse */ }
 }
 
+// ── Hold playback while its library's drive is missing ───────────
+// After a reboot the gateway can be up before the music volume is
+// unlocked. Every track then fails (the file server refuses a path
+// outside the roots it has), and the skip-on-error rule below chewed
+// through ten queued tracks in fifteen seconds (2026-11-18 13:15). A
+// missing drive is not a bad track: hold on the track that failed, and
+// carry on from it when the `libraries` SSE event says the drive is back.
+let _libWaiting=new Set();   // labels of waiting libraries (last good answer)
+let _libHold=null;           // {label, idx, at} while playback is held
+let _libRows=[];             // the waiting entries from the last good /api/libraries
+const LIB_RESUME_WINDOW_MS=15*60*1000;  // longer → load it, don't blast it
+
+// Which library a queued track plays from. Only LocalFs files can be
+// missing; a book queue is Audiobooks, anything else is Music (videos
+// never go through this queue).
+function _libraryOf(t){
+  if(!t||!/\/localfs\/stream\//.test(t.url||"")) return "";
+  return browserQueueIsBook?"Audiobooks":"Music";
+}
+
+function _libHoldPlayback(label, idx, t){
+  _libHold={label, idx, at:Date.now()};
+  browserAudio.pause();
+  $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
+  toast(`⏸ ${label} library unavailable — paused on "${t?.title||'track'}". `+
+        "Playback continues when the drive is back.");
+  _reportClientError({kind:"library_hold", label, title:t?.title||"",
+                      artist:t?.artist||"", queue_len:browserQueue.length});
+  _renderLibraryBar();
+}
+
+// Called after every successful /api/libraries read.
+function _libMaybeResume(){
+  const h=_libHold;
+  if(!h||_libWaiting.has(h.label)) return;
+  _libHold=null;
+  const t=browserQueue[h.idx];
+  if(activeDevice!=="browser"||!t) return;   // the queue moved on meanwhile
+  browserIdx=h.idx;
+  if(Date.now()-h.at<=LIB_RESUME_WINDOW_MS){
+    toast(`▶ ${h.label} library is back — resuming`);
+    _browserPlayIdx(h.idx);
+  }else{
+    browserAudio.src=`/stream?url=${enc(t.url)}`;
+    toast(`${h.label} library is back — press ▶ to continue`);
+  }
+}
+
+// Leaves the current track alone (the stall watchdog and the advance are
+// the caller's business) and moves on, or stops at the end of the queue.
+function _skipUnplayable(t, why){
+  if(browserQueue.length > 1){
+    toast(`⚠ Skipping "${t?.title||'track'}" — ${why}`);
+    setTimeout(()=>{
+      if(browserIdx < browserQueue.length - 1){
+        browserIdx++; _browserPlayIdx(browserIdx);
+      } else {
+        $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
+      }
+    }, 1500);
+  } else {
+    toast(`⚠ Can't play "${t?.title||'track'}" — ${why}`);
+    $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
+  }
+}
+
 browserAudio.addEventListener("error", e=>{
   if(activeDevice!=="browser") return;
   // No source set = we unloaded it on purpose (Stop). Nothing failed, and
@@ -532,19 +598,16 @@ browserAudio.addEventListener("error", e=>{
 
   // Reached here: code 4, or we've already retried once. Treat as unplayable.
   const why = code === 4 ? "unsupported format" : `${codeName} error`;
-  if(browserQueue.length > 1){
-    toast(`⚠ Skipping "${t?.title||'track'}" — ${why}`);
-    setTimeout(()=>{
-      if(browserIdx < browserQueue.length - 1){
-        browserIdx++; _browserPlayIdx(browserIdx);
-      } else {
-        $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
-      }
-    }, 1500);
-  } else {
-    toast(`⚠ Can't play "${t?.title||'track'}" — ${why}`);
-    $("btn-pp").textContent="▶ Play"; $("mini-pp").textContent="▶";
-  }
+  const lib = _libraryOf(t);
+  if(!lib){ _skipUnplayable(t, why); return; }
+  // Ask the gateway NOW rather than trusting the bar: a PWA left open
+  // across a reboot may not have heard the `libraries` event yet.
+  const idx = browserIdx;
+  refreshLibraries().then(()=>{
+    if(browserIdx !== idx || browserQueue[idx] !== t) return;  // user moved on
+    if(_libWaiting.has(lib)) _libHoldPlayback(lib, idx, t);
+    else _skipUnplayable(t, why);
+  });
 });
 
 // Clear the retry counter on a successful play-start
@@ -635,7 +698,9 @@ browserAudio.addEventListener("timeupdate",()=>{
 
 function _browserPlayIdx(idx){
   const t=browserQueue[idx];if(!t)return;
+  _libHold=null;   // any new play attempt supersedes a hold (a failure re-holds)
   _stallWatchdogStop();
+  _renderLibraryBar();
   browserAudio.src=`/stream?url=${enc(t.url)}`;
   // Loading a new src resets playbackRate to defaultPlaybackRate in some
   // engines — re-assert the audiobook speed per chapter.
@@ -762,12 +827,20 @@ async function refreshLibraries(){
   const r=await api("/api/libraries");if(!r)return;
   let rows;
   try{ rows=await r.json(); }catch(e){ return; }
+  _libRows=(rows||[]).filter(x=>x && x.state==="waiting");
+  _libWaiting=new Set(_libRows.map(x=>x.label));
+  _renderLibraryBar();
+  _libMaybeResume();
+}
+function _renderLibraryBar(){
   const bar=$("library-bar"), msg=$("library-bar-msg");
   if(!bar||!msg) return;
-  const waiting=(rows||[]).filter(x=>x && x.state==="waiting");
-  if(!waiting.length){ bar.style.display="none"; return; }
-  msg.innerHTML=waiting.map(x=>esc(x.message||
+  if(!_libRows.length){ bar.style.display="none"; return; }
+  let html=_libRows.map(x=>esc(x.message||
       (x.label+" library unavailable — mount "+x.root+"."))).join("<br>");
+  if(_libHold && _libWaiting.has(_libHold.label))
+    html+="<br>⏸ Playback is paused and continues when the drive is back.";
+  msg.innerHTML=html;
   bar.style.display="block";
 }
 
@@ -2858,6 +2931,9 @@ async function control(cmd){
     // Handle browser audio locally — no server round-trip needed
     switch(cmd.action){
       case "pause":
+        // Held for a missing drive: ▶ retries the held track (and holds
+        // again, with the toast, if the drive is still not there).
+        if(_libHold && browserAudio.paused){ _browserPlayIdx(_libHold.idx); break; }
         if(browserAudio.paused){
           $("btn-pp").textContent="⏸ Pause";$("mini-pp").textContent="⏸";
           _playBrowserAudio("user_pause_toggle");

@@ -697,7 +697,15 @@ the obvious way and broke something else.
   `libraries` SSE event drive the PWA's `#library-bar`; a failed fetch
   leaves the bar as it was. Tell: `path-traversal blocked: <music path> not
   under (<books root>,)`. `tests/test_localfs_watch.py` (25),
-  `tests/frontend/test_library_bar.py` (8).
+  `tests/frontend/test_library_bar.py` (16).
+  **The PWA HOLDS browser playback for a waiting root** (2026-11-19): a
+  LocalFs track that fails while its library (book queue → Audiobooks, else
+  Music) is waiting is not skipped — on 2026-11-18 a PWA open across a
+  reboot skipped ten tracks in 15 s before SAMDATA was unlocked. The error
+  path re-reads `/api/libraries` before deciding; the `libraries` SSE event
+  resumes the held track (auto-play within `LIB_RESUME_WINDOW_MS`, 15 min;
+  later it is loaded and waits for ▶). A bad file on a mounted drive still
+  skips.
 - **A rescan may only call a file gone when the walk looked**
   (2026-10-10, `dlna_walk.trusted_removals`). Removals under a folder whose
   listing errored are held back (component match — `Lost` ≠ `Lost Tapes`);
