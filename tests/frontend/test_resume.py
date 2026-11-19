@@ -183,3 +183,62 @@ def test_a_pause_on_a_paused_element_does_not_mislabel_the_next_interruption(pla
     playing.wait_for_timeout(400)
     _interrupt(playing)
     assert playing.evaluate("_pausedBySystem") is True
+
+
+def _lose_the_pause_event(app):
+    """iOS stopped the element while the page was frozen: the pause event
+    never reached our code (seen 2026-11-19: paused_ms=0, by_system=false)."""
+    app.evaluate("""async () => {
+      const a = document.getElementById('browser-audio');
+      const fired = new Promise(r => a.addEventListener('pause', r, {once: true}));
+      a.pause();
+      await fired;                  // let our handler run, then undo what it saw
+      _pausedAt = 0; _pausedBySystem = false; _pausedPos = 0;
+    }""")
+
+
+def test_a_pause_iOS_hid_from_us_still_reloads(playing, gateway):
+    """Treated as our own quick pause, the tap was a plain play() — and iOS
+    started the song again from 0:00."""
+    _lose_the_pause_event(playing)
+    gateway.clear_requests()
+    _press_lock_screen_play(playing)
+    assert re.search(r"#t=1[23]\.\d$", _src(playing)), _src(playing)
+    gateway.wait_for_request("/api/client_log", method="POST",
+                             match=lambda r: '"resume"' in (r["body"] or ""),
+                             timeout=3.0)
+    resume = _reports(gateway, "resume")[0]
+    assert resume["by_system"] is True and resume["reload"] is True
+    assert resume["paused_ms"] == 0
+
+
+def test_an_element_iOS_reset_resumes_where_it_last_played(playing):
+    """The reset element reads 0:00; the position comes from where it was
+    last heard playing, not from the element."""
+    _lose_the_pause_event(playing)
+    playing.evaluate("""async () => {
+      const a = document.getElementById('browser-audio');
+      a.currentTime = 0;
+      await new Promise(r => setTimeout(r, 200));
+    }""")
+    _press_lock_screen_play(playing)
+    assert re.search(r"#t=1[23]\.\d$", _src(playing)), _src(playing)
+    playing.wait_for_timeout(800)
+    assert playing.evaluate(
+        "document.getElementById('browser-audio').currentTime") >= 11.5
+
+
+def test_the_last_position_belongs_to_its_own_track(playing):
+    """A new track must never resume at the previous track's position."""
+    playing.evaluate("""async () => {
+      const a = document.getElementById('browser-audio');
+      a.setAttribute('src', '/stream?url=' + encodeURIComponent('http://stub/t1.flac'));
+      await new Promise(r => setTimeout(r, 200));
+      // A new src stops the element WITHOUT a pause event — the same shape
+      // as a pause iOS hid from us.
+      _pausedAt = 0; _pausedBySystem = false; _pausedPos = 0;
+      a.currentTime = 0;
+      await new Promise(r => setTimeout(r, 200));
+    }""")
+    _press_lock_screen_play(playing)
+    assert "#t=" not in _src(playing), _src(playing)

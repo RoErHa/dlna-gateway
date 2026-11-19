@@ -335,11 +335,31 @@ that bug is to assign `src` again right before `play()`.
   from `timeupdate` moves. No `resume` line after a lock-screen tap = the tap
   never reached the page (iOS suspended it); `advanced=true` while silent =
   295518 survived the reload.
+- **A pause iOS hid from us is still an interruption** (added the same
+  evening). iOS can stop — or reset — the element while the page is frozen
+  for a call, and the `pause` event never arrives: the log showed
+  `paused_ms=0 by_system=false`, so the ▶ in the reopened app was a plain
+  `play()` and *Ooh Baby* started again from 0:00. A resume with no pause
+  seen since the last `play` (`!_pausedAt`) now counts as a system pause
+  (logged `by_system=true paused_ms=0`). Because a reset element reads 0:00,
+  the position falls back to `_lastPos` — where it was last heard PLAYING,
+  recorded from `timeupdate` only while not paused and only for the same
+  source, so it can neither be overwritten by the reset nor leak into the
+  next track.
 - **Not done, on purpose:** resuming by itself when the app is reopened. iOS
   pauses for a call and for AirPods being taken out alike, and the page
   cannot tell them apart — that would start music on the phone's speaker.
 
-Guarded by `tests/frontend/test_resume.py` (9; both engines), against a real
+**What the on-device test showed (2026-11-19, three calls, iOS 26,
+home-screen app — also after deleting and re-adding it): the lock-screen
+player DISAPPEARS after a call.** No Now Playing controls, nothing to tap;
+the only way back is reopening the app and pressing ▶. The reload above
+therefore helps the in-app ▶ only — the one-tap lock-screen resume is not
+reachable for a home-screen web app. The three `client_log[resume]` lines
+from that evening are in-app presses (`visibility=visible`), not lock-screen
+taps. Still to try: a plain Safari tab. Amperfy (native) resumes fine.
+
+Guarded by `tests/frontend/test_resume.py` (12; both engines), against a real
 `<audio>` playing the stub's silent WAV (`gateway.stream_seconds = 30`).
 
 ### Browser audio error handling (MediaError discrimination)

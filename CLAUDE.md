@@ -856,8 +856,14 @@ measurements, incidents, the things that bit — are in
   also after any pause > `_RESUME_RELOAD_MS` (20 s). A network retry keeps
   its position too, and the retry counter keys the URL WITHOUT `#t=`. Each
   resume logs `client_log[resume]` + `client_log[resume_check] advanced=…`.
-  Never auto-resume on reopening the app: a page can't tell a call from
-  AirPods being taken out. `tests/frontend/test_resume.py` (9).
+  A resume with NO pause event seen (`!_pausedAt` — iOS stopped/reset the
+  element while the page was frozen) counts as a system pause too, and a
+  reset element's position falls back to `_lastPos` (last heard playing,
+  same source only). Never auto-resume on reopening the app: a page can't
+  tell a call from AirPods being taken out. **On-device verdict
+  (2026-11-19): after a call iOS removes the home-screen app's lock-screen
+  controls entirely** — this only fixes the in-app ▶; see docs/FRONTEND.md.
+  `tests/frontend/test_resume.py` (12).
 - **MediaError**: code 1 ignored, 2/3 retry the track once then skip, 4 skip
   at once; every event POSTs to `/api/client_log`.
 - **Stall watchdog** (`_stallCheck`, 2 s poll): no `currentTime` progress

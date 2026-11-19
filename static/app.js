@@ -685,6 +685,18 @@ browserAudio.addEventListener("pause",()=>{
 });
 browserAudio.addEventListener("play",()=>{_pausedBySystem=false;_pausedAt=0;});
 
+// Where the track last was while it PLAYED. iOS can reset the element while
+// the page is frozen for a call — no pause event ever arrives, and the next
+// play() starts the song from 0:00 (seen 2026-11-19). Recorded only while
+// playing, so a reset to 0 under a frozen page cannot overwrite it.
+let _lastPos=0, _lastPosSrc="";
+browserAudio.addEventListener("timeupdate",()=>{
+  if(browserAudio.paused) return;
+  const t=browserAudio.currentTime||0;
+  if(t<=0.5) return;
+  _lastPos=t; _lastPosSrc=(browserAudio.getAttribute("src")||"").split("#")[0];
+});
+
 function _isStandalone(){
   try{
     return !!(navigator.standalone ||
@@ -717,9 +729,17 @@ function _reloadAt(pos){
 function _resumeBrowserAudio(reason){
   if(!browserAudio.getAttribute("src")) return _playBrowserAudio(reason);
   const pausedMs=_pausedAt?Date.now()-_pausedAt:0;
-  const bySystem=_pausedBySystem;
+  // No pause event since the last play, yet we are asked to resume: iOS
+  // stopped or reset the element while the page was frozen, so the event
+  // never reached us. That is an interruption too (logged as by_system=true
+  // with paused_ms=0).
+  const unseen=!_pausedAt;
+  const bySystem=_pausedBySystem||unseen;
   const reload=bySystem||pausedMs>_RESUME_RELOAD_MS;
-  const pos=browserAudio.currentTime||_pausedPos||0;
+  const base=(browserAudio.getAttribute("src")||"").split("#")[0];
+  const cur=browserAudio.currentTime||0;
+  // An element iOS reset reads ~0: fall back to where it last played.
+  const pos=cur>0.5?cur:(_pausedAt&&_pausedPos>0.5?_pausedPos:(_lastPosSrc===base?_lastPos:0));
   const readyState=browserAudio.readyState, networkState=browserAudio.networkState;
   if(reload) _reloadAt(pos);
   // play() before anything else: it must run inside the tap's activation.
