@@ -19,6 +19,33 @@ bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
 Releases are tagged (`v2.1.0`, `v2.2.0`). Tags are cheap and mark points worth
 returning to.
 
+## Open work (set 2026-11-20)
+
+Tick an item (`- [x]`, with the date and commit) **in the commit that ships
+it**, and remove this section once every item is ticked or moved to its own
+doc.
+
+- [ ] **1. Anonymise the docs — FIRST.** The repo is public and the docs
+  still name the owner's own setup: volume names, backup disks, the tailnet
+  hostname, LAN/tailnet IPs (also inside quoted log lines). Plan: propose a
+  placeholder scheme first (e.g. `/Volumes/<MUSIC_DRIVE>`,
+  `<host>.<tailnet>.ts.net`, `192.168.1.x`) plus a sweep list of every file
+  and hit, agree it with the owner, then edit. Keep every incident write-up
+  and measurement — only the names go. Code defaults and tests count too,
+  not only Markdown. No git-history rewrite unless the owner asks for one.
+- [ ] **2. rAudio — the native player (record only; no gateway work yet).**
+  Decided 2026-11-19 after the PWA could not resume after a call on iOS 26
+  (see docs/FRONTEND.md → "Resume after an interruption"): a SwiftUI player
+  for macOS + iOS, a CLIENT of `/api/*`, in its OWN repo, built on the
+  owner's MacBook. Started 2026-11-20 (empty project runs on Mac and
+  iPhone). It reaches the gateway over Tailscale HTTPS (`:8443`) only, so
+  it needs no gateway change to start. Any gateway change it does need is
+  made HERE, never in a MacBook clone of this repo (one branch, one checkout).
+- [ ] **3. Read the Safari-tab resume test.** Planned 2026-11-19: does
+  resume after a call work in a plain Safari tab (not the home-screen app)?
+  `grep 'client_log\[resume' gateway.log` and look for `standalone=False`.
+  Record the verdict in docs/FRONTEND.md.
+
 ## Running the Gateway
 
 ```bash

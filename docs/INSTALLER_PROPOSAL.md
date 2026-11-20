@@ -7,6 +7,8 @@
 > lock-screen controls entirely, so there is nothing to tap — see
 > docs/FRONTEND.md → "Resume after an interruption". Stage 3 was already out:
 > no paid Apple Developer account. Kept as the record of what was proposed.
+> What came instead (2026-11-20): a native SwiftUI player, rAudio, in its
+> own repo, as a client of the gateway (see CLAUDE.md → "Open work").
 >
 > **Was: PROPOSAL, for review (2026-11-08).** Nothing here is built. It
 > supersedes the parked feasibility plan in [PACKAGING.md](PACKAGING.md),
