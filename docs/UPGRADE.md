@@ -310,6 +310,28 @@ because the upgrade's install let Playwright garbage-collect them.
 - **The rollback point** (now the 3.14 venv, ~276 MB) is kept in
   `~/dlna-gateway-backups/upgrade-prev/` until the next `--apply` replaces it.
 
+## 2026-11-21 — Appium 4, and the drivers the tool does not move
+
+A routine `--apply` (3 brew formulae, 13 pip packages, `cc1dbc1`) passed
+every gate. It also took **appium 3.9.0 → 4.0.0**, a major version. The
+npm install-script trap from TESTING.md did not bite here, because
+`allow-scripts=appium` is set in the user's npm config.
+
+What the tool leaves alone: **Appium drivers.** `--apply` upgrades the
+`appium` package but never runs `appium driver update`, so the installed
+`xcuitest@11.17.0` was carried over unchanged. `appium driver list
+--installed --updates` afterwards offered `11.17.7` and
+`13.6.1 (potentially unsafe)`, which is a driver major. Whether 11.17 works
+under Appium 4 was **not checked**: the iOS-Simulator smoke test (Layer 2c)
+is opt-in and was not re-run. Nothing in `run_all.py` uses Appium, so the
+gates could not have caught it.
+
+Open: the next time Layer 2c runs, if it fails at session start, try
+`appium driver update xcuitest` (minor update) first, then
+`appium driver update xcuitest --unsafe` (major). A later improvement would
+be for `upgrade.py` to report outdated Appium drivers next to `appium`
+itself.
+
 ## Bringing this to another app
 
 The design is portable; only the layer table is per app. To port it:
