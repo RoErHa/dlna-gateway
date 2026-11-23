@@ -51,7 +51,6 @@ fi
 ulimit -n 8192 2>/dev/null || true
 
 # ── Live identity + ports (match the installed launchd plist) ────────────────
-export APP_VERSION="${APP_VERSION:-2.0.0}"
 export GW_UDN="${GW_UDN:-uuid:dlna-gateway-iina-8765}"
 export GW_NAME="${GW_NAME:-DLNA Gateway (IINA)}"
 export LOCALFS_MUSIC_ROOT="${LOCALFS_MUSIC_ROOT:-/Volumes/SAMDATA/Music}"
