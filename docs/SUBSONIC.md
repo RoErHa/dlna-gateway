@@ -69,7 +69,7 @@ Errors: `"status":"failed"` with `{"error": {"code": N, "message": "…"}}`.
 | `/rest/search3?query=` | `DB.search` | Existing FTS5 search |
 | `/rest/getPlaylists` | `DB.pl_list()` | All playlists |
 | `/rest/getPlaylist?id=` | `DB.pl_get(pl_id)` | One playlist's tracks |
-| `/rest/createPlaylist` `/updatePlaylist` `/deletePlaylist` | `DB.pl_create / pl_add_track / pl_remove_track / pl_delete` | Bidirectional sync |
+| `/rest/createPlaylist` `/updatePlaylist` `/deletePlaylist` | `DB.pl_create / pl_add_track / pl_remove_track / pl_delete` | Bidirectional sync. A rename goes through `DB.pl_rename` (Favourites and the worklist are refused, error 50); `createPlaylist` with a `playlistId` replaces the order as well as the tracks |
 | `/rest/star` `/unstar` | `DB.album_fav_add / album_fav_remove` | Album-level starring → reuses Album Favourites |
 | `/rest/getStarred2` | `DB.album_fav_list()` | Starred albums |
 | `/rest/stream?id=` | track ID → URL → `dlna_player.proxy_stream` | Audio (Range supported via existing proxy) |

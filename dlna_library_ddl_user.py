@@ -167,6 +167,7 @@ SCHEMA_USER = """
                     duration   TEXT,
                     art        TEXT,
                     added_at   TEXT DEFAULT (datetime('now')),
+                    position   INTEGER,
                     UNIQUE(pl_id, url)
                 );
 

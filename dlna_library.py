@@ -15,7 +15,8 @@ roles, schema DDL and migrations.
     dlna_library_tracks.py        TracksMixin       tracks + metadata_overrides
     dlna_library_browse.py        BrowseMixin       artists/albums/genres/search/radio
     dlna_library_videos.py        VideosMixin       GWMovies index + geocode cache
-    dlna_library_collections.py   CollectionsMixin  playlists/favs/lyrics/positions
+    dlna_library_collections.py   CollectionsMixin  favs/lyrics/positions/roles
+    dlna_library_playlists.py     PlaylistsMixin    playlists (via Collections)
     dlna_library_languages.py     LanguagesMixin    audiobook language (🌐)
 
 MIXINS, NOT COLLABORATORS — deliberately. The composed class keeps the
@@ -91,7 +92,7 @@ class LibraryDB(SchemaMixin, MigrationsMixin, TracksMixin,
     """
     Thread-safe SQLite wrapper for:
       - Track index (tracks + FTS5)          → TracksMixin / BrowseMixin
-      - Playlists (playlists + playlist_tracks) → CollectionsMixin
+      - Playlists (playlists + playlist_tracks) → PlaylistsMixin (via CollectionsMixin)
       - Videos, favourites, lyrics, positions   → see module docstring
 
     Uses db_pool.Pool for connection management:

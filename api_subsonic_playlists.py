@@ -34,7 +34,9 @@ from api_subsonic_ids import (
     _track_id_decode,
 )
 from api_subsonic_proto import (
+    ERR_GENERIC,
     ERR_MISSING_PARAM,
+    ERR_NOT_AUTHORIZED,
     ERR_NOT_FOUND,
     _fail,
     _ok,
@@ -132,6 +134,9 @@ def _create_playlist(h, params):
                 "duration": meta.get("duration", ""),
                 "art":      "",
             })
+        # Replacing the list replaces its order too. 'changed' means another
+        # device edited it just now; the tracks stand as they are.
+        _proto.DB.pl_reorder(pid, list(dict.fromkeys(new_urls)))
 
     _get_playlist(h, {"id": f"pl:{pid}"})
 
@@ -151,9 +156,20 @@ def _update_playlist(h, params):
         return
 
     name = params.get("name", "")
-    if name:
-        with _proto.DB._pool.write() as c:
-            c.execute("UPDATE playlists SET name=? WHERE id=?", (name, pid))
+    # A client may send the name it already has along with a track edit;
+    # that is not a rename, so it must not trip the Favourites rule. A
+    # refused rename comes first, so it leaves the tracks alone too.
+    if name and name != pl["name"]:
+        result = _proto.DB.pl_rename(pid, name)
+        if result == "protected":
+            _fail(h, ERR_NOT_AUTHORIZED, "This playlist can't be renamed")
+            return
+        if result == "not_found":
+            _fail(h, ERR_NOT_FOUND, "Playlist not found")
+            return
+        if result == "bad_name":
+            _fail(h, ERR_GENERIC, "Bad playlist name")
+            return
 
     for sid in params.get("songIdToAdd__all", []):
         u = _track_id_decode(sid)

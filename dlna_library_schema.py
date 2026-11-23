@@ -90,6 +90,9 @@ class SchemaMixin:
         # legacy DB the trigger doesn't exist yet when they run).
         with self._pool.write() as conn:
             self._migrate_fts_update_trigger(conn)
+        # 2026-11-23: playlists gain an order of their own.
+        with self._pool.write() as conn:
+            self._migrate_playlist_position(conn)
         # Ensure Favourites always exists
         with self._pool.write() as conn:
             conn.execute(

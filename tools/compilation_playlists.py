@@ -24,6 +24,11 @@ Existing playlists are never touched: a candidate whose name matches an
 existing playlist (case-insensitive) is skipped, so re-running after new
 rips only adds what's new. DRY-RUN by default; --apply mutates.
 
+The name is the ONLY thing that says "already made": rename one of these
+playlists (possible since 2.3.0) and the next run offers it again. Accepted
+on purpose — the dry run shows it, and keeping a second marker just to
+recognise a renamed playlist would be more to go wrong than a list to delete.
+
     python3 tools/compilation_playlists.py               # preview
     python3 tools/compilation_playlists.py --apply       # create them
     python3 tools/compilation_playlists.py --min-tracks 8

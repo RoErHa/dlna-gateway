@@ -82,7 +82,9 @@ SAFETY
 Nothing here writes to `tracks`, touches a file, or edits an existing
 playlist. A candidate whose name already matches a playlist
 (case-insensitively) is skipped, so re-running after new rips only adds
-what is new. DRY-RUN by default; `--apply` mutates.
+what is new. DRY-RUN by default; `--apply` mutates. The name is the only
+marker: a playlist renamed since is offered again (see
+compilation_playlists.py for why that is accepted).
 
     python3 tools/folder_compilation_playlists.py            # preview
     python3 tools/folder_compilation_playlists.py -v         # + rejects

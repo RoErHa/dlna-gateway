@@ -43,7 +43,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 # are POST-only since 2026-11-04 (dlna_routes.QUERY_POST_ROUTES).
 QUERY_POST_PATHS = frozenset({
     "/api/index/rebuild", "/api/playlist/create", "/api/playlist/delete",
-    "/api/playlist/add", "/api/playlist/remove",
+    "/api/playlist/add", "/api/playlist/remove", "/api/playlist/rename",
     "/api/album_favourites/add", "/api/album_favourites/remove",
 })
 

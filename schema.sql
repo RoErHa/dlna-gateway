@@ -145,6 +145,7 @@ CREATE TABLE playlist_tracks (
                     duration   TEXT,
                     art        TEXT,
                     added_at   TEXT DEFAULT (datetime('now')),
+                    position   INTEGER,
                     UNIQUE(pl_id, url)
                 );
 CREATE TABLE device_roles (

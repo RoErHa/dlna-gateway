@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 dlna_library_collections.py — `CollectionsMixin`: the user-owned
-state that is deliberately DECOUPLED from `tracks` — playlists, album
-favourites, radio favourites, lyrics, audiobook playback positions,
-OpenLibrary book metadata, and the device-role cache.
+state that is deliberately DECOUPLED from `tracks` — playlists (in
+`PlaylistsMixin`, dlna_library_playlists.py), album favourites, radio
+favourites, lyrics, audiobook playback positions, OpenLibrary book
+metadata, and the device-role cache.
 
 Split out of dlna_library.py (2026-08-20). See dlna_library_schema.py
 for why these are mixins rather than collaborators.
@@ -18,21 +19,16 @@ bookmarks all survive it. Anything added here must keep that property
 from __future__ import annotations
 
 import logging
-import random
-import sqlite3
 import time
-import uuid
 
 from dlna_book_key import SEP, book_key
+from dlna_library_playlists import PlaylistsMixin
 from dlna_library_worklist import WorklistMixin
-from dlna_library_sql import (
-    FAVOURITES_ID,
-)
 
 log = logging.getLogger("dlna.library")
 
 
-class CollectionsMixin(WorklistMixin):
+class CollectionsMixin(PlaylistsMixin, WorklistMixin):
     """See module docstring. Mixed into `LibraryDB`; never instantiated
     on its own — it relies on `self._pool` from the host class."""
 
@@ -122,83 +118,6 @@ class CollectionsMixin(WorklistMixin):
                 "plain=excluded.plain, synced=excluded.synced, "
                 "source=excluded.source, fetched_at=excluded.fetched_at",
                 (url, plain, synced, source, int(_t.time())))
-    # ── Playlists ─────────────────────────────────────────────────
-
-    def pl_list(self) -> list:
-        with self._pool.read() as conn:
-            rows = conn.execute(
-                """SELECT p.id, p.name, COUNT(pt.id) as count
-                   FROM playlists p
-                   LEFT JOIN playlist_tracks pt ON pt.pl_id = p.id
-                   GROUP BY p.id
-                   ORDER BY p.sort_order, p.name""").fetchall()
-        return [dict(r) for r in rows]
-    def pl_get(self, pl_id: str) -> dict | None:
-        with self._pool.read() as conn:
-            pl = conn.execute(
-                "SELECT id, name FROM playlists WHERE id=?",
-                (pl_id,)).fetchone()
-            if not pl:
-                return None
-            tracks = conn.execute(
-                """SELECT url, title, artist, album, duration, art
-                   FROM playlist_tracks WHERE pl_id=?
-                   ORDER BY added_at, id""", (pl_id,)).fetchall()
-        return {"id": pl["id"], "name": pl["name"],
-                "tracks": [dict(t) for t in tracks]}
-    def pl_create(self, name: str) -> str:
-        pl_id = str(uuid.uuid4())[:8]
-        with self._pool.write() as conn:
-            conn.execute("INSERT INTO playlists (id, name) VALUES (?,?)",
-                         (pl_id, name))
-
-        return pl_id
-    def pl_delete(self, pl_id: str) -> bool:
-        if pl_id == FAVOURITES_ID:
-            return False
-        with self._pool.write() as conn:
-            cur = conn.execute("DELETE FROM playlists WHERE id=?", (pl_id,))
-
-        return cur.rowcount > 0
-    def pl_add_track(self, pl_id: str, track: dict) -> str:
-        """Returns 'added', 'duplicate', or 'not_found'."""
-        with self._pool.write() as conn:
-            pl = conn.execute(
-                "SELECT id FROM playlists WHERE id=?", (pl_id,)).fetchone()
-            if not pl:
-                return "not_found"
-            try:
-                conn.execute(
-                    "INSERT INTO playlist_tracks "
-                    "(pl_id, url, title, artist, album, duration, art) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (pl_id, track.get("url",""), track.get("title",""),
-                     track.get("artist",""), track.get("album",""),
-                     track.get("duration",""), track.get("art","")))
-
-                return "added"
-            except sqlite3.IntegrityError:
-                return "duplicate"
-    def pl_remove_track(self, pl_id: str, url: str) -> bool:
-        with self._pool.write() as conn:
-            cur = conn.execute(
-                "DELETE FROM playlist_tracks WHERE pl_id=? AND url=?",
-                (pl_id, url))
-
-        return cur.rowcount > 0
-    def pl_to_m3u(self, pl_id: str, shuffle: bool = False,
-                  output_path: str = "/tmp/dlna-gw-pl.m3u") -> str | None:
-        pl = self.pl_get(pl_id)
-        if not pl or not pl["tracks"]:
-            return None
-        tracks = list(pl["tracks"])
-        if shuffle:
-            random.shuffle(tracks)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("#EXTM3U\n")
-            for t in tracks:
-                f.write(f"#EXTINF:-1,{t.get('title','')}\n{t['url']}\n")
-        return output_path
     # ── Album favourites ──────────────────────────────────────────
     # Distinct from the track-level Favourites playlist: these are
     # whole-album entries keyed by (artist, album) so they survive

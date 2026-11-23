@@ -105,6 +105,29 @@ class MigrationsMixin(UniqueMigrationsMixin):
             conn.execute("ALTER TABLE device_roles ADD COLUMN host TEXT")
             conn.commit()
             log.info("DB migration: added host column to device_roles")
+    def _migrate_playlist_position(self, conn: sqlite3.Connection):
+        """Add `playlist_tracks.position` and fill it ONCE with the order
+        every playlist has today, so upgrading moves nothing. Column and
+        values go in together (explicit BEGIN: sqlite3 would commit the
+        ALTER on its own), because a column left unfilled would never be
+        filled. An older gateway ignores the column."""
+        def done():
+            return "position" in {row[1] for row in conn.execute(
+                "PRAGMA table_info(playlist_tracks)")}
+        if done():
+            return
+        conn.execute("BEGIN IMMEDIATE")
+        if done():              # another process got there while we waited
+            return
+        conn.execute("ALTER TABLE playlist_tracks ADD COLUMN position INTEGER")
+        n = conn.execute(
+            "UPDATE playlist_tracks SET position = o.n FROM ("
+            "  SELECT id, ROW_NUMBER() OVER ("
+            "    PARTITION BY pl_id ORDER BY added_at, id) AS n"
+            "  FROM playlist_tracks) AS o "
+            "WHERE o.id = playlist_tracks.id").rowcount
+        log.info(f"DB migration: playlist_tracks gained position "
+                 f"({n} row(s) numbered in their present order)")
     def _migrate_album_fav_key(self, conn: sqlite3.Connection):
         """Add `album_key` to album_favourites and widen the PK to
         (artist, album, album_key) so a LocalFs compilation can be

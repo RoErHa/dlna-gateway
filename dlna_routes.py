@@ -68,6 +68,7 @@ QUERY_POST_ROUTES = {
     "/api/playlist/delete":api_playlists.playlist_delete,
     "/api/playlist/add":   api_playlists.playlist_add,
     "/api/playlist/remove":api_playlists.playlist_remove,
+    "/api/playlist/rename":api_playlists.playlist_rename,
     "/api/album_favourites/add":    api_playlists.album_favourite_add,
     "/api/album_favourites/remove": api_playlists.album_favourite_remove,
 }
@@ -78,6 +79,9 @@ POST_ROUTES = {
     "/api/control":      api_playback.control,
     "/api/edit_track":   api_playback.edit_track,
     "/api/client_log":   api_playback.client_log,
+    "/api/playlist/add_many":    api_playlists.playlist_add_many,
+    "/api/playlist/remove_many": api_playlists.playlist_remove_many,
+    "/api/playlist/reorder":     api_playlists.playlist_reorder,
     "/api/radio/favourites/add":     api_radio.favourite_add,
     "/api/radio/favourites/remove":  api_radio.favourite_remove,
     "/api/radio/favourites/reorder": api_radio.favourite_reorder,
