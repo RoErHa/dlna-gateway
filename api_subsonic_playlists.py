@@ -83,6 +83,35 @@ def _get_playlist(h, params):
     }})
 
 
+def _decode_all(song_ids) -> list:
+    """The urls behind `song_ids`, in order, each once, unknown ids skipped."""
+    urls = (_track_id_decode(sid) for sid in song_ids)
+    return list(dict.fromkeys(u for u in urls if u is not None))
+
+
+def _set_tracks(pid: str, current: list, final: list) -> None:
+    """Turn the playlist's `current` urls into `final`, in that order. A row
+    in both is MOVED, never deleted and re-added: its title and cover may no
+    longer be anywhere else (an orphaned row)."""
+    for u in current:
+        if u not in final:
+            _proto.DB.pl_remove_track(pid, u)
+    for u in final:
+        if u in current:
+            continue
+        meta = _proto.DB.track_meta_by_url(u) or {}
+        _proto.DB.pl_add_track(pid, {
+            "url":      u,
+            "title":    meta.get("title", ""),
+            "artist":   meta.get("artist", ""),
+            "album":    meta.get("album", ""),
+            "duration": meta.get("duration", ""),
+            "art":      "",
+        })
+    # 'changed' means another device edited it just now; the tracks stand.
+    _proto.DB.pl_reorder(pid, final)
+
+
 def _create_playlist(h, params):
     """Subsonic merges create + replace under one endpoint:
        - With playlistId: update an existing playlist's track list.
@@ -105,38 +134,12 @@ def _create_playlist(h, params):
         _fail(h, ERR_MISSING_PARAM, "Need playlistId or name")
         return
 
-    # Replace the playlist's tracks with the given song list. Walk the
-    # current track URLs vs the requested ones; remove what's not in
-    # the new list and add what's missing.
-    cur_pl = _proto.DB.pl_get(pid)
-    cur_urls = {t["url"] for t in cur_pl["tracks"]} if cur_pl else set()
-    new_urls = []
-    for sid in song_ids:
-        u = _track_id_decode(sid)
-        if u is not None:
-            new_urls.append(u)
-    new_set = set(new_urls)
-
-    # Remove URLs that aren't in the new list (only if the client
-    # actually sent songIds — otherwise leave existing tracks alone).
+    # Replace the tracks only if the client actually sent songIds —
+    # otherwise leave the existing ones alone.
     if song_ids:
-        for old in cur_urls - new_set:
-            _proto.DB.pl_remove_track(pid, old)
-        for u in new_urls:
-            if u in cur_urls:
-                continue
-            meta = _proto.DB.track_meta_by_url(u) or {}
-            _proto.DB.pl_add_track(pid, {
-                "url":      u,
-                "title":    meta.get("title", ""),
-                "artist":   meta.get("artist", ""),
-                "album":    meta.get("album", ""),
-                "duration": meta.get("duration", ""),
-                "art":      "",
-            })
-        # Replacing the list replaces its order too. 'changed' means another
-        # device edited it just now; the tracks stand as they are.
-        _proto.DB.pl_reorder(pid, list(dict.fromkeys(new_urls)))
+        cur = _proto.DB.pl_get(pid)
+        _set_tracks(pid, [t["url"] for t in cur["tracks"]] if cur else [],
+                    _decode_all(song_ids))
 
     _get_playlist(h, {"id": f"pl:{pid}"})
 
@@ -171,37 +174,27 @@ def _update_playlist(h, params):
             _fail(h, ERR_GENERIC, "Bad playlist name")
             return
 
-    for sid in params.get("songIdToAdd__all", []):
-        u = _track_id_decode(sid)
-        if u is None:
+    # Every index means the list as the client saw it, so all of them are
+    # looked up in ONE reading. (It was re-read after each removal, so
+    # removing 0 and 1 took the first and the THIRD track.) Removals come
+    # before additions: "remove them all, add them in this order" is how a
+    # client reorders, and additions first would leave nothing.
+    current = [t["url"] for t in pl["tracks"]]
+    gone = set()
+    for idx_s in params.get("songIndexToRemove__all", []):
+        try:
+            idx = int(idx_s)
+        except ValueError:
             continue
-        meta = _proto.DB.track_meta_by_url(u) or {}
-        _proto.DB.pl_add_track(pid, {
-            "url":      u,
-            "title":    meta.get("title", ""),
-            "artist":   meta.get("artist", ""),
-            "album":    meta.get("album", ""),
-            "duration": meta.get("duration", ""),
-            "art":      "",
-        })
-
-    for sid in params.get("songIdToRemove__all", []):
-        u = _track_id_decode(sid)
-        if u is not None:
-            _proto.DB.pl_remove_track(pid, u)
-
-    # By-index removal too (Subsonic's documented mode).
-    if params.get("songIndexToRemove__all"):
-        cur = _proto.DB.pl_get(pid)
-        for idx_s in params.get("songIndexToRemove__all", []):
-            try:
-                idx = int(idx_s)
-            except ValueError:
-                continue
-            if 0 <= idx < len(cur["tracks"]):
-                _proto.DB.pl_remove_track(pid, cur["tracks"][idx]["url"])
-                # re-fetch so subsequent indices stay correct
-                cur = _proto.DB.pl_get(pid)
+        if 0 <= idx < len(current):
+            gone.add(current[idx])
+    by_id = set(_decode_all(params.get("songIdToRemove__all", [])))
+    kept = [u for u in current if u not in gone and u not in by_id]
+    added = [u for u in _decode_all(params.get("songIdToAdd__all", []))
+             if u not in by_id]
+    final = list(dict.fromkeys(kept + added))
+    if final != current:
+        _set_tracks(pid, current, final)
 
     _ok(h, {})
 

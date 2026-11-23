@@ -384,6 +384,42 @@ class TestReorder(_Base):
         self.assertEqual(self.order(), ["9", "3", "1"])
 
 
+class TestSubsonicUpdate(_Base):
+    def update(self, **params):
+        reply = self.subsonic("updatePlaylist",
+                              playlistId=f"pl:{self.pid}", **params)
+        self.assertEqual(reply["status"], "ok")
+
+    def test_several_indices_mean_the_list_the_client_saw(self):
+        for n in (4, 5):
+            self.db.pl_add_track(self.pid, _t(n))
+        self.update(songIndexToRemove=["0", "1", "3"])
+        self.assertEqual(self.order(), ["3", "5"])
+
+    def test_bad_and_repeated_indices(self):
+        self.update(songIndexToRemove=["x", "-1", "99", "0", "0"])
+        self.assertEqual(self.order(), ["2", "3"])
+
+    def test_remove_all_and_add_all_is_a_reorder(self):
+        """…and keeps each row: these tracks are in no index, so a row
+        deleted and added again would come back without its title."""
+        tid = api_subsonic._track_id
+        self.update(songIndexToRemove=["0", "1", "2"],
+                    songIdToAdd=[tid(_u(n)) for n in (3, 1, 2)])
+        self.assertEqual(self.order(), ["3", "1", "2"])
+        self.assertEqual([t["title"] for t in self.db.pl_get(self.pid)["tracks"]],
+                         ["T3", "T1", "T2"])
+
+    def test_add_appends_and_a_present_track_stays_put(self):
+        tid = api_subsonic._track_id
+        self.update(songIdToAdd=[tid(_u(n)) for n in (9, 1, 8)])
+        self.assertEqual(self.order(), ["1", "2", "3", "9", "8"])
+
+    def test_remove_by_id(self):
+        self.update(songIdToRemove=[api_subsonic._track_id(_u(2))])
+        self.assertEqual(self.order(), ["1", "3"])
+
+
 class TestPositionColumn(_Base):
     def _make_old(self):
         """Put the table back to what the previous version wrote, with ids

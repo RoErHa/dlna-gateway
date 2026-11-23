@@ -34,6 +34,9 @@ Settled while building it:
 - A renamed compilation playlist is offered again by the tools. Accepted:
   they are run by hand and show it in the dry run first.
 - Subsonic `createPlaylist` with a `playlistId` now replaces the order too.
+- Subsonic `songIndexToRemove` took the wrong tracks when given several
+  indices (the list was re-read between removals). Fixed: all indices mean
+  the list as the client saw it, and removals come before additions.
 - Since a call takes at most 2,000 urls, a longer playlist can't be
   reordered (the longest today has 468).
 
