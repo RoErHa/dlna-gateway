@@ -184,7 +184,7 @@
 <body>
 <header class="wrap">
   <div class="bar"><i></i><i></i><i></i><i></i></div>
-  <span class="eyebrow">DLNA Gateway · v2.2.0</span>
+  <span class="eyebrow">DLNA Gateway · v2.3.0</span>
   <h1>Field manual</h1>
   <p class="standfirst">
     A self-hosted music gateway: it indexes a filesystem, serves the bytes itself,
@@ -195,9 +195,9 @@
   <div class="spec">
     <div><span class="k">Music</span><span class="v">27,329</span></div>
     <div><span class="k">Audiobooks</span><span class="v">11,629</span></div>
-    <div><span class="k">Videos</span><span class="v">3,032</span></div>
-    <div><span class="k">Modules</span><span class="v">114</span></div>
-    <div><span class="k">Routes</span><span class="v">81</span></div>
+    <div><span class="k">Videos</span><span class="v">3,055</span></div>
+    <div><span class="k">Modules</span><span class="v">121</span></div>
+    <div><span class="k">Routes</span><span class="v">86</span></div>
   </div>
   <p style="font-size:.82rem;color:var(--ink-faint);margin:0">
     Listeners — <code>8443</code> TLS + HTTP/2 <em>(tailnet + LAN + loopback)</em> ·
@@ -416,21 +416,21 @@
   </figure>
 
   <div class="wrap">
-    <h3>How the 114 modules group</h3>
+    <h3>How the 121 modules group</h3>
     <div class="t-scroll">
       <table>
         <thead><tr><th>Family</th><th class="num">Modules</th><th>Responsibility</th></tr></thead>
         <tbody>
-          <tr><td class="mono">dlna_library_*</td><td class="num">21</td><td>The index — schema + DDL, migrations, tracks, browse, search, facets, artists, credits, collections, worklist, languages, videos</td></tr>
-          <tr><td class="mono">dlna_asgi_*</td><td class="num">14</td><td>The HTTP edge, split per surface (incl. the ℹ️ artist panel and the 🌐 book-language view, the browser request guard, the security headers)</td></tr>
+          <tr><td class="mono">dlna_library_*</td><td class="num">22</td><td>The index — schema + DDL, migrations, tracks, browse, search, facets, artists, credits, collections, playlists, worklist, languages, videos</td></tr>
+          <tr><td class="mono">dlna_asgi_*</td><td class="num">15</td><td>The HTTP edge, split per surface (incl. the ℹ️ artist panel and the 🌐 book-language view, the photo bytes, the browser request guard, the security headers)</td></tr>
           <tr><td class="mono">api_subsonic_*</td><td class="num">7</td><td>Subsonic protocol — auth, ids, browse, media, extras</td></tr>
-          <tr><td class="mono">api_upnp_*</td><td class="num">7</td><td>Gateway-as-MediaServer — DIDL, descriptors, browse, SSDP</td></tr>
+          <tr><td class="mono">api_upnp_*</td><td class="num">8</td><td>Gateway-as-MediaServer — DIDL, descriptors, browse (music, video, photos), SSDP</td></tr>
           <tr><td class="mono">dlna_providers/*</td><td class="num">7</td><td>The backend seam — LocalFs split into scan, tags, art and read halves</td></tr>
           <tr><td class="mono">dlna_player_*</td><td class="num">6</td><td>Per-renderer queue, monitor, transport, volume</td></tr>
           <tr><td class="mono">artist knowledge</td><td class="num">5</td><td><code>dlna_mbid</code>, <code>dlna_lineup</code>, <code>dlna_artist_fetch</code>, <code>dlna_artist_infer</code>, <code>dlna_credits</code> — pure decisions that refuse rather than guess</td></tr>
           <tr><td class="mono">api_playback_*</td><td class="num">4</td><td>Playback control, cover art, track metadata</td></tr>
           <tr><td class="mono">dlna_localfs_*</td><td class="num">4</td><td>The <code>:8200</code> file server, its pure HTTP helpers, boot wiring, and the root watcher</td></tr>
-          <tr><td class="mono">…</td><td class="num">39</td><td>Discovery, proxies, indexer, config, events, SSRF guard, XML safety, watchdogs, phone alerts, Subsonic login throttle</td></tr>
+          <tr><td class="mono">…</td><td class="num">43</td><td>The Immich photo index, audiobook resume keys, discovery, proxies, indexer, config, events, SSRF guard, XML safety, watchdogs, phone alerts, Subsonic login throttle</td></tr>
         </tbody>
       </table>
     </div>
@@ -439,7 +439,7 @@
       <p>
         Every module carries a line ceiling in a committed budget file: it may
         shrink, never grow, and a new module is held to 400 lines from birth. All
-        113 are within that target and the over-budget list is empty — it has
+        121 are within that target and the over-budget list is empty — it has
         stayed that way since the debt was paid off at 84 modules — so the ratchet
         behaves as a flat limit without ever having needed a flag day.
       </p>
@@ -465,7 +465,7 @@
     <table>
       <thead><tr><th>Table</th><th>Holds</th><th>Keyed by</th></tr></thead>
       <tbody>
-        <tr><td class="mono">playlists · playlist_tracks</td><td>User playlists</td><td class="mono">id · pl_id, url</td></tr>
+        <tr><td class="mono">playlists · playlist_tracks</td><td>User playlists, in an order of their own (<code>position</code>)</td><td class="mono">id · pl_id, url</td></tr>
         <tr><td class="mono">album_favourites</td><td>Bookmarked albums — a LocalFs favourite is its folder</td><td class="mono">artist, album, album_key</td></tr>
         <tr><td class="mono">playback_positions</td><td>Audiobook resume — one row per book</td><td class="mono">album_key</td></tr>
         <tr><td class="mono">book_meta</td><td>OpenLibrary series overlay; <code>manual</code> wins</td><td class="mono">album_key</td></tr>
@@ -545,8 +545,8 @@
 </section>
 
 <footer class="wrap">
-  DLNA Gateway v2.2.0 · 27,329 music tracks + 11,629 audiobook chapters + 3,032 videos ·
-  figures as of 2026-11-08 ·
+  DLNA Gateway v2.3.0 · 27,329 music tracks + 11,629 audiobook chapters + 3,055 videos ·
+  figures as of 2026-11-23 ·
   The living reference is <code>CLAUDE.md</code> and the write-ups under <code>docs/</code>;
   this page is the orientation for a cold start.
 </footer>

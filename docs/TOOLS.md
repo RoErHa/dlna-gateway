@@ -451,7 +451,9 @@ The artist floor excludes single-artist albums (Supertramp "Paris"); the
 per-folder ceiling excludes generic-title collisions ("Greatest Hits" =
 20 different artists' separate albums). Existing playlists are skipped by
 case-insensitive name, so re-running after new rips only adds what's new
-— safe as a post-rip habit. DRY-RUN by default; `--apply` mutates.
+— safe as a post-rip habit. The name is the only marker: a playlist renamed
+since (possible from 2.3.0) is offered again, which the dry run shows.
+DRY-RUN by default; `--apply` mutates.
 
 ```bash
 python3 tools/compilation_playlists.py               # preview
@@ -463,8 +465,9 @@ python3 -m unittest tools.test_compilation_playlists -v   # 10 tests
 First real run (2026-07-03) created 13 playlists (the 2 meter sessies
 family, Essential Classical Chillout, Toen Was Het Stil Op Straat,
 Cohen Covered, …); the 3 Billboard candidates already existed. Side
-fix: `pl_get` now orders by `added_at, id` — `added_at` alone has
-second resolution, so bulk adds tied and returned in arbitrary order.
+fix: `pl_get` ordered by `added_at, id` from then on — `added_at` alone has
+second resolution, so bulk adds tied and returned in arbitrary order. Since
+2026-11-23 the order is `playlist_tracks.position`, filled from that pair.
 
 ### `tools/folder_compilation_playlists.py`
 
@@ -541,7 +544,8 @@ would destroy the sequencing that is the whole point of a compilation.
 
 Nothing here writes to `tracks`, touches a file, or edits an existing
 playlist; a candidate whose name already matches one is skipped, so
-re-running after new rips only adds what is new. DRY-RUN by default.
+re-running after new rips only adds what is new (a playlist renamed since
+is offered again, as above). DRY-RUN by default.
 
 ```bash
 python3 tools/folder_compilation_playlists.py            # preview

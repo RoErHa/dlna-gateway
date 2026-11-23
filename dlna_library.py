@@ -26,8 +26,8 @@ them across the app, the tools and the test suite) and every
 collaborator objects would have meant `DB.tracks.upsert(...)` and a
 rewrite of all of them.
 
-MRO note: the mixins are siblings, none of them inherits another, and
-no method name is defined twice — so resolution order is irrelevant to
+MRO note: the mixins are siblings (a few inherit one that was split off
+them), and no method name is defined twice — so resolution order is irrelevant to
 behaviour and cross-mixin calls (`BrowseMixin` → `run_with_fts_heal` on
 `MigrationsMixin`, say) simply resolve on the composed class.
 `tests/run_all.py` (section T3.2b) asserts both properties, plus that the

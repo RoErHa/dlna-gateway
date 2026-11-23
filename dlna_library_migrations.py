@@ -7,10 +7,10 @@ machinery.
 Split out of dlna_library.py (2026-08-20). See dlna_library_schema.py
 for why these are mixins rather than collaborators.
 
-⚠ These run on IMPORT of dlna_library (`DB = LibraryDB()` is a
-module-level singleton), so merely importing the module — from a test,
-a tool, or a REPL in the repo dir — applies every pending migration to
-the real `library.db`, even while the gateway is live. Safe by design
+⚠ These run whenever a `LibraryDB` is BUILT: at the gateway's boot, but
+also on the first `DB.<anything>` in a tool, a test or a REPL in the repo
+dir (importing dlna_library alone opens nothing since 2026-08-26) — on the
+real `library.db`, even while the gateway is live. Safe by design
 (idempotent, WAL, per-call pool connections) but surprising.
 
 `run_with_fts_heal` is the single heal implementation wrapping every

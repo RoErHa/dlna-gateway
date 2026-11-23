@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.2)
+"""Generate ARCHITECTURE.PDF — a coloured diagram of the current (2.3)
 DLNA Gateway architecture plus reference lists.
 
 Page 1  : the architecture drawing + colour legend.
@@ -215,7 +215,7 @@ EXTERNALS = [
 def build_diagram():
     d = Drawing(W, H)
 
-    txt(d, 6, H - 15, "DLNA Gateway — Architecture (2.2 · ASGI/Hypercorn)",
+    txt(d, 6, H - 15, "DLNA Gateway — Architecture (2.3 · ASGI/Hypercorn)",
         size=15, bold=True, color=INK)
     txt(d, 6, H - 28,
         "Four journeys, each read left to right · node codes (P/T/D/E/J) "
@@ -581,7 +581,11 @@ def list_pages():
         ("P/g21", "api_playback.py",
          "Playback, /stream route, /art proxy, /api/client_log, state, "
          "indexer management."),
-        ("P/g22", "api_playlists.py", "Playlist CRUD endpoints."),
+        ("P/g22", "api_playlists.py · dlna_library_playlists.py",
+         "Playlist endpoints (create, rename, add / remove one or several, "
+         "reorder, delete) and the order behind them "
+         "(playlist_tracks.position). Every refusal of the editing calls "
+         "has a fixed code; Favourites and the worklist cannot be renamed."),
         ("P/g23", "api_upnp.py",
          "The gateway-as-MediaServer: a COMPLETE DLNA Media Server the Naim/LG "
          "browse. device.xml (MediaServer + X_DLNADOC + icons + ContentDirectory "
@@ -780,6 +784,17 @@ def list_pages():
         ("P/g54", "dlna_asgi_devices.py",
          "POST /api/renderers/forget — the one way to forget a renderer. "
          "Loopback only (403 otherwise); built for chaos.py's fake renderer."),
+        ("P/g55", "dlna_photos.py · dlna_photos_immich.py · "
+         "dlna_photos_split.py · api_upnp_browse_photo.py · "
+         "dlna_asgi_photos.py",
+         "The Photos tree for the TV: the Immich library by date, album, "
+         "person, place and favourite, rebuilt every 15 min from a loopback "
+         "IMMICH_URL. Serves Immich's 1440 px JPEG preview and writes "
+         "nothing to disk. Not offered to the Naim."),
+        ("P/g56", "dlna_book_key.py",
+         "Which resume slot an audiobook file belongs to: its folder, or "
+         "one book of a folder holding several. Shared by the PWA, the Naim "
+         "monitor and Subsonic bookmarks."),
     ]
     for c, f, r in progs:
         prog_rows.append([P(c, prog_code), P(f, prog), P(r, prog)])

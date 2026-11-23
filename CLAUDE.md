@@ -16,7 +16,7 @@ bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
 (`~/dlna-gateway-2.0` — the directory name is vestigial). Commit on `main`, run the gates, deploy with
 `launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway`.
 
-Releases are tagged (`v2.1.0`, `v2.2.0`). Tags are cheap and mark points worth
+Releases are tagged (`v2.1.0`, `v2.2.0`, `v2.3.0`). Tags are cheap and mark points worth
 returning to.
 
 ## Open work (set 2026-11-20)
@@ -33,13 +33,15 @@ doc.
   and hit, agree it with the owner, then edit. Keep every incident write-up
   and measurement — only the names go. Code defaults and tests count too,
   not only Markdown. No git-history rewrite unless the owner asks for one.
-- [ ] **2. rAudio — the native player (record only; no gateway work yet).**
+- [ ] **2. rAudio — the native player (record only).**
   Decided 2026-11-19 after the PWA could not resume after a call on iOS 26
   (see docs/FRONTEND.md → "Resume after an interruption"): a SwiftUI player
   for macOS + iOS, a CLIENT of `/api/*`, in its OWN repo, built on the
   owner's MacBook. Started 2026-11-20 (empty project runs on Mac and
   iPhone). It reaches the gateway over Tailscale HTTPS (`:8443`) only, so
-  it needs no gateway change to start. Any gateway change it does need is
+  it needed no gateway change to start; its first one, playlist editing
+  (`docs/gateway-contract-playlists.md`), shipped 2026-11-23 in 2.3.0
+  (`e0b3ad9`). Any gateway change it does need is
   made HERE, never in a MacBook clone of this repo (one branch, one checkout).
 - [ ] **3. Read the Safari-tab resume test.** Planned 2026-11-19: does
   resume after a call work in a plain Safari tab (not the home-screen app)?
@@ -1827,6 +1829,10 @@ encoding and connection steps: **[docs/SUBSONIC.md](docs/SUBSONIC.md)**.
   ONLY when `album_key` is set — keeps non-LocalFs ids byte-identical),
   `ar:<b64>`, `pl:<id>`, `rs:<station_uuid>`. search3 album entries must
   carry `album_key`; match by id, not by name.
+- `updatePlaylist`: every `songIndexToRemove` means the list as the client
+  saw it (ONE reading), and removals come before additions — "remove all,
+  add all" is how a client reorders. A track in both is moved, never deleted
+  and re-added (an orphaned row would lose its title and cover).
 - `getAlbumList2` pages alphabetical types in SQL; `random` is day-seeded;
   a bad `size`/`offset` degrades to the default.
 - Starring = `album_favourites`; scrobble bumps `play_counts`;

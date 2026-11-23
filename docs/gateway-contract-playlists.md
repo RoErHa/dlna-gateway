@@ -2,8 +2,8 @@
 
 For the **dlna-gateway** project. rAudio (Sprint 11) needs these four
 endpoints; the PWA may use them too. Written against gateway commit
-`cc1dbc1`; the line references below are to that version. Nothing here
-changes an existing endpoint's request or reply.
+`cc1dbc1`. Nothing here changes an existing `/api` endpoint's request or
+reply; two Subsonic calls behave better (see below).
 
 | Story | Endpoint |
 |---|---|
@@ -15,8 +15,9 @@ changes an existing endpoint's request or reply.
 RA-90 and RA-92 can ship without RA-91, which is the only one that changes
 the database.
 
-**Implemented 2026-11-23** (gateway 2.3.0, `tests/test_playlist_editing.py`).
-Settled while building it:
+**Implemented 2026-11-23** (gateway 2.3.0, `e0b3ad9` and `dc3d4c5`,
+`tests/test_playlist_editing.py`). The text below is the contract as built;
+settled on the way:
 
 - The code lives in `dlna_library_playlists.py` (`PlaylistsMixin`), because
   `dlna_library_collections.py` was at its 400-line limit. `DB.pl_*` is
@@ -26,6 +27,8 @@ Settled while building it:
 - The worklist's name is protected in both directions: renaming another
   playlist TO it would hand that playlist to a sync that deletes rows. So
   the worklist answers `protected` even for the name it already has.
+- Subsonic clients may resend the name a playlist already has along with a
+  track edit; that is not treated as a rename, so it works on Favourites.
 - A name with control characters is a `bad_request` (not legal XML for the
   Naim and Subsonic lists).
 - `remove_many` counts distinct urls: one given twice is removed once and is
@@ -38,7 +41,7 @@ Settled while building it:
   indices (the list was re-read between removals). Fixed: all indices mean
   the list as the client saw it, and removals come before additions.
 - Since a call takes at most 2,000 urls, a longer playlist can't be
-  reordered (the longest today has 468).
+  reordered (the longest today has under 500).
 
 ## Rules for all four
 
@@ -65,19 +68,20 @@ Settled while building it:
 `POST /api/playlist/rename?id=<id>&name=<name>` (query values, like create)
 
 - `name` is trimmed; empty → 400 `bad_request`.
-- `__favourites__` → 400 `protected`.
-- The same name as now is fine (200). Two playlists may share a name, as today.
+- `__favourites__` → 400 `protected`; so is the worklist's name, as the old
+  or the new name.
+- Otherwise the same name as now is fine (200). Two playlists may share a name, as today.
 - Reply: `{"ok": true, "id": "ab12cd34", "name": "Road trip"}`
 
 **Watch out**
 
-- `api_subsonic_playlists._update_playlist` renames with its own SQL, with no
-  Favourites check. Put the rule in one `pl_rename` in
-  `dlna_library_collections.py` and call it from there too.
+- The rule is in one `pl_rename` (`dlna_library_playlists.py`), also called by
+  `api_subsonic_playlists._update_playlist`, which used to rename with its own
+  SQL and no Favourites check.
 - `dlna_library_worklist.py` and `tools/compilation_playlists.py` recognise
   *their* playlists by name. Renaming the worklist would make the next run
-  create a second one, so refuse it (`protected`). A renamed compilation
-  playlist would be created again by the tool: decide there.
+  create a second one, so it is refused (`protected`). A renamed compilation
+  playlist is offered again by the tool.
 
 ## 2. Add several
 
@@ -129,16 +133,17 @@ Settled while building it:
 
 ### Database
 
-Today `pl_get` orders by `added_at, id`. Proposal:
+`pl_get` used to order by `added_at, id`. Since 2.3.0:
 
-- `ALTER TABLE playlist_tracks ADD COLUMN position INTEGER` (nullable), in the
-  DDL for a fresh database and as an idempotent `_migrate_playlist_position`
-  (like `_migrate_device_roles`: check `PRAGMA table_info` first).
-- Fill it once, so **no playlist changes order by upgrading**:
+- `playlist_tracks.position INTEGER` (nullable), in the DDL for a fresh
+  database and added by the idempotent `_migrate_playlist_position`, which
+  adds and fills the column in one transaction.
+- Filled once, so **no playlist changes order by upgrading**:
   `ROW_NUMBER() OVER (PARTITION BY pl_id ORDER BY added_at, id)`.
 - `pl_get`: `ORDER BY position IS NULL, position, added_at, id`. Rows inserted
-  by code that doesn't know the column (the tools) then simply come last.
-- `pl_add_track` and `add_many`: position = highest in the playlist + 1.
+  by code that doesn't know the column then simply come last.
+- `pl_add_track` and `add_many`: such rows get their number first, then
+  position = highest in the playlist + 1.
 - `reorder`: positions 1…n. Removing leaves gaps; that's fine.
 - Going back to an older gateway stays possible: it ignores the column.
 - Run `./backup-library.sh` before the first start with it.
@@ -147,14 +152,14 @@ Today `pl_get` orders by `added_at, id`. Proposal:
 
 `/api/playlist`, the Naim tree (`api_upnp_browse.py`), Subsonic
 `getPlaylist` and `pl_to_m3u` all read `pl_get`. So does Subsonic's
-`songIndexToRemove`, whose indices therefore stay right.
+`songIndexToRemove`, whose indices therefore mean the new order.
 
-Subsonic `createPlaylist` with a `playlistId` replaces the tracks but not
-their order. It could call the same reorder code. Optional.
+Subsonic `createPlaylist` with a `playlistId` and `updatePlaylist` write
+through the same reorder code.
 
-## Tests the gateway should have
+## Tests the gateway has
 
-Use a temporary database, and bind `DB` where the handlers read it (see the
+They use a temporary database, and bind `DB` where the handlers read it (see the
 comment in `tests/test_positions.py`: rebinding the re-export left the
 handlers on the real library).
 
