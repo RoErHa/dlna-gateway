@@ -12,8 +12,11 @@ What is hard here is the POSITION, not the Seek:
 
   * The Naim reports 0:00:00 (= None) for seconds after a Seek into a long
     file. A second "+30" that took that for zero would throw the listener
-    back to 0:30. So the last seek is remembered (`_seek_mark`, per track)
-    and quick presses add up from it.
+    back to 0:30. It also goes on reporting the position from BEFORE the
+    seek, and answers so slowly (~4 s) that "just now" is seconds ago:
+    three quick +30 went 1:43, 1:43, 2:13 (2026-11-24). So the last seek is
+    remembered (`_seek_mark`, per track), quick presses add up from it, and
+    a reported position is believed only when it fits.
   * A Seek before the renderer is PLAYING is accepted and dropped, so
     anything but PLAYING / PAUSED_PLAYBACK is refused.
   * Once our queue is over (`_stop_event`), what the renderer plays is
@@ -32,9 +35,12 @@ class SeekMixin:
     """See module docstring. Mixed into `RendererQueue`; never
     instantiated alone — it relies on the host's fields and lock."""
 
-    # Trust the last seek over the renderer for this long...
-    _SEEK_SETTLE_SEC = 4.0
-    # ...and this long when the renderer reports no position at all.
+    # For this long after a seek a reported position must be within
+    # _SEEK_FIT_SEC of where the seek says we are (buffering costs the Naim
+    # 4-5 s), or it is from before the seek.
+    _SEEK_SETTLE_SEC = 15.0
+    _SEEK_FIT_SEC = 8.0
+    # And this long the seek stands in when no position is reported at all.
     _SEEK_UNKNOWN_SEC = 20.0
     # No position this soon after Play is simply 0:00.
     _SEEK_JUST_STARTED_SEC = 5.0
@@ -51,10 +57,12 @@ class SeekMixin:
         mark = self._seek_mark
         if mark is not None and mark[0] == idx:
             age = now - mark[1]
-            limit = (self._SEEK_SETTLE_SEC if reported is not None
-                     else self._SEEK_UNKNOWN_SEC)
-            if age < limit:
-                return mark[2] + (age if playing else 0.0)
+            expected = mark[2] + (age if playing else 0.0)
+            if reported is None and age < self._SEEK_UNKNOWN_SEC:
+                return expected
+            if (reported is not None and age < self._SEEK_SETTLE_SEC
+                    and abs(reported - expected) > self._SEEK_FIT_SEC):
+                return expected
         if reported is not None:
             return reported
         if started > 0 and now - started < self._SEEK_JUST_STARTED_SEC:

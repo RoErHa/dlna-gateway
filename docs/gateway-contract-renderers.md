@@ -88,8 +88,9 @@ gateway's startup level once, and the trim to 0, also on a take-over *(code)*.
 
 A seek answers `{"ok": true, "position": <target>}`. It stays inside the track: never
 before 0, never closer than 3 s to the end, so +30 near the end does not skip. Show
-the answered `position` until the state has one again: the Naim reports none for
-seconds after a seek. Quick relative presses add up.
+the answered `position` until the state agrees with it: for seconds after a seek the
+Naim reports none, or the OLD one, and it can take 4 s to answer (measured on the Naim
+2026-11-24). Quick relative presses add up.
 
 | Status | `error` | When |
 |---|---|---|

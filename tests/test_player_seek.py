@@ -122,6 +122,25 @@ class TestSeek(_WithFake):
             _, target = self.q.seek(30, relative=True)
         self.assertAlmostEqual(target, 160, delta=2)
 
+    def _base(self, reported, age, target, playing=True):
+        self.q._seek_mark = (0, time.monotonic() - age, target)
+        return self.q._seek_base(reported, 0, 0.0, playing)
+
+    def test_a_position_from_before_the_seek_is_not_believed(self):
+        """The real Naim, 2026-11-24: three quick +30 from 1:13 went to 1:43,
+        1:43, 2:13. Its SOAP took ~4 s and it still reported 1:13."""
+        self.assertAlmostEqual(self._base(73, 4.2, 103), 107.2, delta=0.5)
+        self.assertAlmostEqual(self._base(73, 12, 103), 115, delta=0.5)
+        self.assertAlmostEqual(self._base(133, 4.2, 103), 107.2, delta=0.5)
+
+    def test_a_position_that_fits_the_seek_is_believed(self):
+        """Behind the prediction by what buffering cost: that is the truth."""
+        self.assertEqual(self._base(104, 5, 103), 104)
+        self.assertEqual(self._base(103, 5, 103, playing=False), 103)
+
+    def test_a_seek_long_ago_no_longer_counts(self):
+        self.assertEqual(self._base(73, 60, 103), 73)
+
     def test_unknown_position_without_a_recent_seek_is_refused(self):
         self.play()
         self.q._started_at = time.monotonic() - 60

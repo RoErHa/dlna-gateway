@@ -16,7 +16,7 @@ bit-perfect file server) behind a pluggable **`LibraryProvider` seam**; see
 (`~/dlna-gateway-2.0` — the directory name is vestigial). Commit on `main`, run the gates, deploy with
 `launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway`.
 
-Releases are tagged (`v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.3.1`, `v2.3.2`). Tags are cheap and mark points worth
+Releases are tagged (`v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.3.1`, `v2.3.2`, `v2.4.0`). Tags are cheap and mark points worth
 returning to.
 
 ## Open work (set 2026-11-20)
@@ -404,7 +404,7 @@ Appium.
 | `dlna_player_policy.py` | The PURE decision functions behind renderer playback (`_monitor_decision`, `_dur_to_sec`, `_gapless_advanced`) + the tuning constants. Pure = directly unit-testable, which is why the stall guards live here. |
 | `dlna_player_monitor.py` | `MonitorMixin` — the per-queue 2-second state-poll loop that advances tracks and enforces the stall guards. |
 | `dlna_player_transport.py` | `TransportMixin` — SetURI/Play/Seek and the consecutive-send-failure abort. |
-| `dlna_player_seek.py` | `SeekMixin` — a person's seek on a renderer (`seek` / `seek_abs`, not the audiobook resume seek) and `_publish_state`, the ONE place a `state` SSE event is sent: it names the renderer and drops the snapshot cache first. After a Seek the Naim reports no position for seconds, so quick ±30 s presses add up from the remembered target (`_seek_mark`, cleared per track). Refused: radio, not PLAYING/PAUSED, and once our queue is over (what plays then is somebody else's). The watchdog clock follows the seek, so END lines' `played` is the position reached. `tests/test_player_seek.py` (33). |
+| `dlna_player_seek.py` | `SeekMixin` — a person's seek on a renderer (`seek` / `seek_abs`, not the audiobook resume seek) and `_publish_state`, the ONE place a `state` SSE event is sent: it names the renderer and drops the snapshot cache first. After a Seek the Naim reports no position, or the OLD one, for seconds (measured 2026-11-24), so quick ±30 s presses add up from the remembered target (`_seek_mark`, cleared per track). Refused: radio, not PLAYING/PAUSED, and once our queue is over (what plays then is somebody else's). The watchdog clock follows the seek, so END lines' `played` is the position reached. `tests/test_player_seek.py` (36). |
 | `dlna_player_volume.py` | `VolumeMixin` — startup volume + user trim, via RenderingControl SOAP. |
 | `dlna_player_registry.py` | `QueueRegistry` + the process-wide `QUEUES` singleton (one `RendererQueue` per renderer UDN). |
 | `dlna_xml.py` | The ONE place untrusted XML is parsed. Refuses DTDs outright (entity-expansion amplification was measured at 10× per nesting level on the unauthenticated `/gw/*` SOAP endpoints) and caps input size; raises `ParseError` so existing handlers need no new branch. Also `read_capped` — the bounded READ that must happen first, because the size cap above can only judge bytes already in memory. |
