@@ -13,12 +13,12 @@ if PROJECT not in sys.path:
 from dlna_library import LibraryDB
 import tools.relink_playlists_to_localfs as relink
 
-DEAD = "http://192.168.1.125:26125/content/"
+DEAD = "http://192.168.1.10:26125/content/"
 LF_UDN = "uuid:localfs-x"
 
 
-def _lf_url(i):  return f"http://192.168.1.125:8200/localfs/stream/lf{i}"
-def _lf_art(i):  return f"http://192.168.1.125:8200/localfs/art/lf{i}"
+def _lf_url(i):  return f"http://192.168.1.10:8200/localfs/stream/lf{i}"
+def _lf_art(i):  return f"http://192.168.1.10:8200/localfs/art/lf{i}"
 
 
 class TestRelink(unittest.TestCase):

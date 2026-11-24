@@ -6,7 +6,7 @@ Runs against a live gateway instance. Takes ~5 seconds.
 
 Usage:
     python tests/run_all.py                          # defaults to http://localhost:8765
-    python tests/run_all.py http://192.168.1.125:8765
+    python tests/run_all.py http://192.168.1.10:8765
     python tests/run_all.py --offline                # file-only checks, no running server needed
     python tests/run_all.py --frontend               # also run the Playwright frontend suite
     python tests/run_all.py --frontend-only          # ONLY run the Playwright frontend suite

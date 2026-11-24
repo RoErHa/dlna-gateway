@@ -189,7 +189,7 @@ Recommended: **Amperfy** (free, open source, well-rated, CarPlay).
    plist or `.env`) and restart.
 2. Install Amperfy on the iPhone.
 3. Add server:
-   - URL: `https://ronsmacmini.tail5be6ad.ts.net:8443/rest`
+   - URL: `https://mymachine.tailXXXXX.ts.net:8443/rest`
    - Username: `user` (or whatever `SUBSONIC_USER` is set to)
    - Password: the value of `SUBSONIC_PASSWORD`
 4. Tap a playlist or starred album. Plug into CarPlay. Drive.

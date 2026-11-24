@@ -11,7 +11,7 @@ Full plan/design lived in the local-only `REPORTS.html` Part II (not in the
 repo — see above). What's live:
 
 - **Second LocalFs library** — `AUDIOBOOKS_ROOT` in `.env`
-  (`/Volumes/SAMDATA-1TB/Audio_Books`; or `localfs.audiobooks_root` in
+  (`/Volumes/MEDIA2/Audio_Books`; or `localfs.audiobooks_root` in
   config.json). `maybe_start_localfs` starts a second `LocalFsProvider`
   (name "RoHaAudioBooks", own UDN, `dlna_localfs_wiring.AUDIOBOOKS_UDN`),
   served by the same `:8200` file server (root joins `allowed_roots`).

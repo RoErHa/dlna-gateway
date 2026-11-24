@@ -84,8 +84,8 @@ def resolve_within(file_path: str,
     Two things here are load-bearing, and both were wrong before 2026-08-21:
 
     * **Containment is asked about path COMPONENTS, not string prefixes.**
-      `str(p).startswith(root)` says `/Volumes/SAMDATA/Music Videos` is
-      inside `/Volumes/SAMDATA/Music`, because as text it is. With the
+      `str(p).startswith(root)` says `/Volumes/MEDIA/Music Videos` is
+      inside `/Volumes/MEDIA/Music`, because as text it is. With the
       deployed roots that admitted any sibling directory whose name began
       with a root's name — every byte of it, to any unauthenticated peer on
       the LAN, since renderers fetch from this server directly.

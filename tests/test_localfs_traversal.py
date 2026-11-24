@@ -14,8 +14,8 @@ be, since renderers fetch bytes from it directly.
 The one that mattered: containment was `str(resolved).startswith(root)`, a
 STRING prefix test, so a sibling directory whose name merely begins with a
 root's name was inside. With the deployed roots that is
-`/Volumes/SAMDATA/Music` admitting `/Volumes/SAMDATA/Music Videos`, and
-`/Volumes/SAMDATA-1TB/Audio_Books` admitting `/Volumes/SAMDATA-1TB/Audio_Books_private`.
+`/Volumes/MEDIA/Music` admitting `/Volumes/MEDIA/Music Videos`, and
+`/Volumes/MEDIA2/Audio_Books` admitting `/Volumes/MEDIA2/Audio_Books_private`.
 Containment is a question about path COMPONENTS, and is now asked as one.
 
 The URL half is separately safe by construction and stays tested here so it
@@ -247,8 +247,8 @@ class TestVideoLinkException(unittest.TestCase):
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix="localfs-link-")).resolve()
         self.root = self.base / "GWMovies"
-        self.lib = self.base / "PHOTOS-ALL"
-        self.sibling = self.base / "PHOTOS-ALL-private"
+        self.lib = self.base / "library-1"
+        self.sibling = self.base / "library-1-private"
         self.other = self.base / "Elsewhere"
         for d in (self.root, self.lib, self.sibling, self.other):
             d.mkdir()

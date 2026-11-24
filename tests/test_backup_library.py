@@ -70,7 +70,7 @@ class _Sandbox:
         dests = []
         if destination:
             dests.append({"DestinationID": "8563DECB",
-                          "LastKnownVolumeName": "WD-SERVER",
+                          "LastKnownVolumeName": "BACKUP-DISK",
                           "SnapshotDates": [now - datetime.timedelta(days=d, minutes=5)
                                             for d in snapshots]})
         with open(self.prefs_path, "wb") as fh:

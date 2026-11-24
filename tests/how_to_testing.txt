@@ -3,7 +3,7 @@ cd ~/dlna-gateway
 python tests/run_all.py --offline
 
 # Full test against running gateway:
-python tests/run_all.py http://192.168.1.125:8765
+python tests/run_all.py http://192.168.1.10:8765
 
 # Frontend Playwright suite — covers every button (existence, enabled/disabled
 # state, click behaviour). Boots an in-process stub gateway, no live server

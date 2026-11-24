@@ -30,7 +30,7 @@ from tests.chaos import classify_stderr  # noqa: E402
 
 
 # Verbatim from the live /tmp/dlna-gateway.err.
-RESTART_NOISE = """[2026-08-26 23:05:57 +0200] [97265] [INFO] Running on https://100.78.51.93:8443 (CTRL + C to quit)
+RESTART_NOISE = """[2026-08-26 23:05:57 +0200] [97265] [INFO] Running on https://100.64.0.1:8443 (CTRL + C to quit)
 [2026-08-26 23:05:57 +0200] [97265] [INFO] Running on http://127.0.0.1:8765 (CTRL + C to quit)
 """
 

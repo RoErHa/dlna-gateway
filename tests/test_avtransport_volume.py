@@ -181,7 +181,7 @@ class TestProbeState(unittest.TestCase):
     error reason — NOT be collapsed into a bare UNKNOWN that hides the
     cause."""
 
-    URL = "http://192.168.1.227:59218/Control/RygelAVTransport"
+    URL = "http://192.168.1.20:59218/Control/RygelAVTransport"
 
     def setUp(self):
         # Isolate the per-renderer WARN rate limiter between tests.

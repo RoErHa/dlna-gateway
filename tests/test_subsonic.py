@@ -980,17 +980,17 @@ class TestLoginThrottle(unittest.TestCase):
         self.now = [1000.0]
         self.t = T.AuthThrottle(clock=lambda: self.now[0])
 
-    def fail(self, n, ip="100.72.54.16"):
+    def fail(self, n, ip="100.64.0.2"):
         return [self.t.failure(ip) for _ in range(n)]
 
     def test_blocks_on_the_tenth_failure_in_a_minute(self):
         self.assertEqual(self.fail(self.T.MAX_FAILURES - 1), [0.0] * 9)
-        self.assertEqual(self.t.blocked("100.72.54.16"), 0.0)
-        self.assertEqual(self.t.failure("100.72.54.16"), self.T.BLOCK_SEC)
-        self.assertEqual(self.t.blocked("100.72.54.16"), self.T.BLOCK_SEC)
-        self.assertEqual(self.t.blocked("100.90.97.36"), 0.0)   # others unaffected
+        self.assertEqual(self.t.blocked("100.64.0.2"), 0.0)
+        self.assertEqual(self.t.failure("100.64.0.2"), self.T.BLOCK_SEC)
+        self.assertEqual(self.t.blocked("100.64.0.2"), self.T.BLOCK_SEC)
+        self.assertEqual(self.t.blocked("100.64.0.3"), 0.0)   # others unaffected
         self.now[0] += self.T.BLOCK_SEC
-        self.assertEqual(self.t.blocked("100.72.54.16"), 0.0)
+        self.assertEqual(self.t.blocked("100.64.0.2"), 0.0)
 
     def test_each_trip_doubles_up_to_the_cap(self):
         lengths = []
@@ -1002,13 +1002,13 @@ class TestLoginThrottle(unittest.TestCase):
 
     def test_slow_failures_never_trip(self):
         for _ in range(50):
-            self.assertEqual(self.t.failure("100.72.54.16"), 0.0)
+            self.assertEqual(self.t.failure("100.64.0.2"), 0.0)
             self.now[0] += self.T.WINDOW_SEC / 5 + 1
 
     def test_a_success_forgets_the_address(self):
         self.fail(self.T.MAX_FAILURES)                  # first trip
         self.now[0] += self.T.BLOCK_SEC
-        self.t.success("100.72.54.16")
+        self.t.success("100.64.0.2")
         self.assertEqual(self.fail(self.T.MAX_FAILURES)[-1], self.T.BLOCK_SEC)
 
     def test_a_quiet_day_is_a_clean_slate(self):
@@ -1060,7 +1060,7 @@ class TestLoginThrottleRoute(unittest.TestCase):
         self.addCleanup(setattr, api_subsonic_proto,
                         "SUBSONIC_PASSWORD_OVERRIDE", None)
 
-    def call(self, password, ip="100.72.54.16", path="ping", **extra):
+    def call(self, password, ip="100.64.0.2", path="ping", **extra):
         import asyncio
         import types
         import urllib.parse
@@ -1073,7 +1073,7 @@ class TestLoginThrottleRoute(unittest.TestCase):
         import json
         return json.loads(r.body)["subsonic-response"]["status"]
 
-    def trip(self, ip="100.72.54.16"):
+    def trip(self, ip="100.64.0.2"):
         with self.assertLogs("dlna.asgi", "WARNING") as logs:
             for _ in range(self.T.MAX_FAILURES):
                 self.assertEqual(self.call("WRONG", ip), "failed")
@@ -1081,9 +1081,9 @@ class TestLoginThrottleRoute(unittest.TestCase):
 
     def test_blocked_client_is_refused_even_with_the_right_password(self):
         logs = self.trip()
-        self.assertIn("Subsonic ✗ throttled 100.72.54.16", logs.output[0])
+        self.assertIn("Subsonic ✗ throttled 100.64.0.2", logs.output[0])
         self.assertEqual(self.call("pw"), "failed")
-        self.assertEqual(self.call("pw", ip="100.90.97.36"), "ok")
+        self.assertEqual(self.call("pw", ip="100.64.0.3"), "ok")
         self.now[0] += self.T.BLOCK_SEC
         self.assertEqual(self.call("pw"), "ok")
 

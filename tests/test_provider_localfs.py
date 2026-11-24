@@ -72,7 +72,7 @@ class TestPureHelpers(unittest.TestCase):
 
     def test_udn_different_per_root(self):
         a = _udn_for_root(Path("/Music"))
-        b = _udn_for_root(Path("/Volumes/SAMDATA/Music"))
+        b = _udn_for_root(Path("/Volumes/MEDIA/Music"))
         self.assertNotEqual(a, b)
 
     def test_album_key_is_containing_folder(self):

@@ -75,7 +75,7 @@ ended `RemoteDisconnected: Remote end closed connection without response`;
 `/tmp/dlna-gateway.err` filled with `:8200` tracebacks (`Errno 57`) whose
 frames point into `Cellar/python@3.15/3.15.0_1/…` — with no source lines,
 because those files no longer existed. From 22:28, every video scan:
-`[Errno 1] Operation not permitted: '/Volumes/SAMDATA/GWMovies'` — the disk
+`[Errno 1] Operation not permitted: '/Volumes/MEDIA/GWMovies'` — the disk
 was mounted; macOS was refusing *this process*. That warning was the only
 line in the whole 11-02 log.
 
@@ -83,7 +83,7 @@ line in the whole 11-02 log.
 brew upgrade (glib and clamav moved at the same minute — not `upgrade.py`)
 installed 3.15.2 and cleaned up the 3.15.0_1 keg the gateway had been
 started from 26 minutes earlier. Radio survived because its relay lives in
-the already-loaded hypercorn process and reads nothing from SAMDATA. The
+the already-loaded hypercorn process and reads nothing from that volume. The
 EPERM mechanism (macOS judging file access against a binary no longer on
 disk) is inference; the trigger and timing are not.
 

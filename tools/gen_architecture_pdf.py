@@ -115,7 +115,7 @@ LANES = [
      "what happens when you press play", GREEN, GREEN_L, [
         ("Files on disk",
          ["Music, audiobooks and video on", "external volumes, read-only."],
-         "/Volumes/SAMDATA  (D/3)"),
+         "/Volumes/MEDIA  (D/3)"),
         ("Index",
          ["Tags read once per file;", "a folder is an album."],
          "P/g10 localfs · P/g9 indexer"),
@@ -907,8 +907,8 @@ def list_pages():
         ("D/2", "UPnP MediaServer", "MinimServer / generic UPnP (AssetUPnP "
          "decommissioned). Browsed via P/g10 UpnpProvider + P/g13 "
          "ContentDirectory SOAP. Kept for any non-LocalFs source.", GREEN),
-        ("D/3", "Media files", "/Volumes/SAMDATA/Music + "
-         "/Volumes/SAMDATA/GWMovies (external drive, read-only). Audio: "
+        ("D/3", "Media files", "/Volumes/MEDIA/Music + "
+         "/Volumes/MEDIA/GWMovies (external drive, read-only). Audio: "
          "indexed by P/g9, tags read by localfs provider, bytes served by "
          "P/g11. Video: scanned by P/g31, served by P/g11 "
          "(/localfs/video).", GREEN),
@@ -1141,8 +1141,8 @@ def list_pages():
      ("T/a11", "localfs_scan.py",
       "Standalone LocalFs indexer (CLI). Don't run against the live DB "
       "without a base_url — it leaves placeholder URLs.", [
-        ("--root PATH", "Music root to scan (default $LOCALFS_MUSIC_ROOT or "
-         "/Volumes/SAMDATA/Music)."),
+        ("--root PATH", "Music root to scan (default "
+         "$LOCALFS_MUSIC_ROOT)."),
         ("--force", "Ignore the (mtime, size) cache and re-tag every file. "
          "Use after schema changes."),
         ("--compare", "Skip scanning — just print tracks/albums per UDN "
@@ -1173,7 +1173,7 @@ def list_pages():
          "~/.config/beets/config.yaml (enables the musicbrainz metadata "
          "plugin; backs up any existing) and exit. Run this first."),
         ("--music-root PATH", "Library root to import (default "
-         "/Volumes/SAMDATA/Music)."),
+         "$LOCALFS_MUSIC_ROOT)."),
         ("--album PATH", "Import a single album directory instead of the "
          "whole root."),
         ("--config PATH", "beets config path (default "

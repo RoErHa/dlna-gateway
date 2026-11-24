@@ -144,7 +144,7 @@ beet list -f '$albumartist - $album - $track $title [$mb_trackid]' artist:Focus
 Trigger a dlna-gateway re-index after a batch (your existing index entrypoint), e.g.:
 
 ```bash
-curl -s http://192.168.1.125:<port>/api/reindex    # or whatever your route is
+curl -s http://192.168.1.10:<port>/api/reindex    # or whatever your route is
 ```
 
 ---

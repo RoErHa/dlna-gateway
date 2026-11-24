@@ -52,10 +52,10 @@ class TestLegitimatePacketsStillWork(unittest.TestCase):
     Naim disappeared', not as a red test. These are the real shapes."""
 
     def test_a_normal_device_announcement(self):
-        pkt = _notify("http://192.168.1.227:35231/desc.xml")
+        pkt = _notify("http://192.168.1.20:35231/desc.xml")
         self.assertEqual(
-            ssdp.parse_location(pkt, "192.168.1.227"),
-            "http://192.168.1.227:35231/desc.xml")
+            ssdp.parse_location(pkt, "192.168.1.20"),
+            "http://192.168.1.20:35231/desc.xml")
 
     def test_header_name_is_case_insensitive(self):
         pkt = b"NOTIFY * HTTP/1.1\r\nLocation: http://10.0.0.4:80/d.xml\r\n\r\n"
@@ -76,7 +76,7 @@ class TestLegitimatePacketsStillWork(unittest.TestCase):
     def test_no_source_given_skips_the_source_check(self):
         """Callers that genuinely have no peer address (the subnet-scan
         path, tests) must still be able to parse."""
-        pkt = _notify("http://192.168.1.227:35231/desc.xml")
+        pkt = _notify("http://192.168.1.20:35231/desc.xml")
         self.assertIsNotNone(ssdp.parse_location(pkt, ""))
 
 

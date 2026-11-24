@@ -53,7 +53,7 @@ ulimit -n 8192 2>/dev/null || true
 # ── Live identity + ports (match the installed launchd plist) ────────────────
 export GW_UDN="${GW_UDN:-uuid:dlna-gateway-iina-8765}"
 export GW_NAME="${GW_NAME:-DLNA Gateway (IINA)}"
-export LOCALFS_MUSIC_ROOT="${LOCALFS_MUSIC_ROOT:-/Volumes/SAMDATA/Music}"
+# LOCALFS_MUSIC_ROOT comes from .env: a default exported here would override it.
 export LOCALFS_PORT="${LOCALFS_PORT:-8200}"
 # /gw/* (UPnP for the Naim) + the SSDP advert are served by the app on the
 # plain :8765 bind (GATEWAY_PLAIN_PORT, default 8765) — no separate device port.

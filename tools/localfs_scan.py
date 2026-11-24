@@ -8,10 +8,10 @@ Lets you scan and inspect a LocalFs index without wiring it into the
 running gateway:
 
     # Run an incremental scan (only changed/new files re-tagged):
-    python3 tools/localfs_scan.py --root /Volumes/SAMDATA/Music
+    python3 tools/localfs_scan.py --root /Volumes/MEDIA/Music
 
     # Force a full re-scan, ignoring the mtime/size cache:
-    python3 tools/localfs_scan.py --root /Volumes/SAMDATA/Music --force
+    python3 tools/localfs_scan.py --root /Volumes/MEDIA/Music --force
 
     # Show track counts for every UDN currently in library.db
     python3 tools/localfs_scan.py --compare
@@ -72,8 +72,8 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         description="Run a LocalFsProvider scan against a music root.")
     p.add_argument("--root", default=os.environ.get(
-        "LOCALFS_MUSIC_ROOT", "/Volumes/SAMDATA/Music"),
-        help="Music root to scan (default: %(default)s)")
+        "LOCALFS_MUSIC_ROOT", "").strip(),
+        help="Music root to scan (default: LOCALFS_MUSIC_ROOT)")
     p.add_argument("--force", action="store_true",
                    help="Ignore the (mtime, size) cache and re-tag "
                         "every file. Use after schema changes.")
@@ -91,12 +91,15 @@ def main(argv=None) -> int:
         _compare_view(Path(args.db))
         return 0
 
+    if not args.root:
+        print("ERROR: set LOCALFS_MUSIC_ROOT in .env, or pass --root",
+              file=sys.stderr)
+        return 2
     root = Path(args.root).expanduser()
     if not root.exists():
         print(f"ERROR: root not found: {root}", file=sys.stderr)
-        print("  Hint: is the volume mounted? On the user's setup, "
-              "SAMDATA needs `~/bin/unlock-samdata.sh` after a boot.",
-              file=sys.stderr)
+        print("  Hint: is the volume mounted? An encrypted drive must be "
+              "unlocked first after a boot.", file=sys.stderr)
         return 2
 
     db = LibraryDB(db_file=args.db)

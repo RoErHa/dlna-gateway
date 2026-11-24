@@ -25,14 +25,12 @@ Tick an item (`- [x]`, with the date and commit) **in the commit that ships
 it**, and remove this section once every item is ticked or moved to its own
 doc.
 
-- [ ] **1. Anonymise the docs — FIRST.** The repo is public and the docs
-  still name the owner's own setup: volume names, backup disks, the tailnet
-  hostname, LAN/tailnet IPs (also inside quoted log lines). Plan: propose a
-  placeholder scheme first (e.g. `/Volumes/<MUSIC_DRIVE>`,
-  `<host>.<tailnet>.ts.net`, `192.168.1.x`) plus a sweep list of every file
-  and hit, agree it with the owner, then edit. Keep every incident write-up
-  and measurement — only the names go. Code defaults and tests count too,
-  not only Markdown. No git-history rewrite unless the owner asks for one.
+- [x] **1. Anonymise the docs** (2026-11-24). Drives, hosts, addresses and
+  family names became placeholders in docs, code defaults and tests;
+  `tests/test_anonymised.py` keeps them out. The owner decided NOT to rewrite
+  git history. Placeholders: `/Volumes/MEDIA` and `/Volumes/MEDIA2`,
+  `mymachine.tailXXXXX.ts.net` (`tail0000` in tests), `192.168.1.10` gateway /
+  `.20` Naim / `.30` TV, `100.64.0.x` tailnet. Use these in anything new.
 - [ ] **2. rAudio — the native player (record only).**
   Decided 2026-11-19 after the PWA could not resume after a call on iOS 26
   (see docs/FRONTEND.md → "Resume after an interruption"): a SwiftUI player
@@ -70,7 +68,7 @@ both are passed.
 ## Code quality gates (added 2026-08-20)
 
 Before this date the repo had **no lint, format, or type configuration
-and no CI** — nothing enforced any standard. Five gates now run inside
+and no CI** — nothing enforced any standard. Six gates now run inside
 `python tests/run_all.py --offline`, each sized to sit at **zero
 violations** so any hit is a real regression rather than backlog:
 
@@ -80,6 +78,7 @@ violations** so any hit is a real regression rather than backlog:
 | **T0.SIZE** — per-module line ratchet | `tests/module_size_budget.json` | split the code, or `python3 tools/regen_size_budget.py` to lock in a shrink |
 | `tests/test_lock_sync.py` — dependency pins | `requirements.lock` + `requirements-dev.lock` | `python3 tools/regen_lock.py` |
 | `tests/test_no_silent_swallows.py` — observability | — | log the exception, or narrow the `except` |
+| `tests/test_anonymised.py` — nothing about the owner's setup (2026-11-24) | `.private-terms` (gitignored) + `.env` | use a placeholder (Open work item 1) |
 | **T0.BADGES** — the README's numbers (added 2026-08-26) | `tools/badges.py` | `python3 tools/badges.py --write` |
 
 **T0.BADGES** — why it exists and how the checks/unit/browser halves are
@@ -92,7 +91,7 @@ number, because live mode performs extra checks.
 class, not a style preference — `F, E9, W, B, RET, UP, C4, PIE, ASYNC`.
 **ASYNC matters most here**: the whole edge is an ASGI app, and one
 blocking call inside an `async def` serialises every request. It already
-caught four real ones — `os.path.isfile()` on the **external SAMDATA
+caught four real ones — `os.path.isfile()` on the **external music
 volume** inside the video routes, where a spun-down USB disk stalls the
 event loop (and the SSE stream) for seconds. Blocking work belongs in
 `run_in_threadpool`; `dlna_asgi._isfile()` is the helper.
@@ -417,7 +416,7 @@ Appium.
 | `api_radio.py` | Internet-radio API handlers (`/api/radio/*` — search, favourites, nowplaying). |
 | `dlna_lyrics.py` | On-demand lyrics fetch via lrclib.net (the network half; the cache lives in `LibraryDB`). |
 | `dlna_fdmon.py` | Open-file-descriptor watchdog (diagnostic) — logs FD count vs the limit so a leak shows as a rising trajectory BEFORE it crashes the gateway. Its periodic heartbeat is INFO only when the count actually MOVED (2026-08-25); a flat number repeated every few minutes was 40% of `gateway.log` and buried the playback lines you go there to find. The ALERT / rising / high-water branches are what catch a leak; `GATEWAY_DEBUG=1` restores the full heartbeat. Same treatment for `dlna_video_index.scan_videos`: a rescan that changed nothing (`+0 prune 0 overrides 0`) logs at DEBUG, a rescan that moved the library still logs at INFO. **That scanner never prunes on an untrustworthy walk** (2026-10-04): `os.walk` swallows directory errors, so a drive dropping mid-scan reads as an empty tree — on 2026-10-03 a walk that saw 0 files pruned all 4,104 videos, and the next scan re-probed and re-geocoded every one. A walk that hit an error, or saw nothing while the index holds rows, now WARNs and prunes nothing (`force=True` still clears). `tests/test_video_scan.py`. The music scanner got the same guard, finer-grained, via `dlna_walk.py`. Together those two were **295 of 400 lines**. |
-| `dlna_runtime_watch.py` | Is the Python running us still the one on disk? Fingerprints the interpreter, stdlib and venv site-packages (`st_dev`/`st_ino`) at boot and re-checks every `RUNTIME_WATCH_SEC` (60 s). Gone/replaced on 2 consecutive checks AND a launchable venv `python3` AND no live `.maintenance.pid` holder → logs CRITICAL and `os._exit(75)`: **non-zero on purpose** — hypercorn's master respawns a worker that exits 0 from its own (equally stale) interpreter path, while a non-zero exit shuts the master down so launchd `KeepAlive` restarts the job on the new keg. Exists because on 2026-10-31 a `brew upgrade` deleted the running python@3.15 keg: `:8200` dropped every request and macOS refused `/Volumes/SAMDATA` (`EPERM`) while radio kept playing — 2.5 days half-alive until a manual restart. **`.maintenance.pid`** (holder's PID; dead PID = ignored) is held by `tools/upgrade.py --apply/--rollback` and by `setup.sh` around `setup_venv` — without it the watch restarts the gateway onto a venv upgrade.py is still building and gating. `tests/test_runtime_watch.py` (27). |
+| `dlna_runtime_watch.py` | Is the Python running us still the one on disk? Fingerprints the interpreter, stdlib and venv site-packages (`st_dev`/`st_ino`) at boot and re-checks every `RUNTIME_WATCH_SEC` (60 s). Gone/replaced on 2 consecutive checks AND a launchable venv `python3` AND no live `.maintenance.pid` holder → logs CRITICAL and `os._exit(75)`: **non-zero on purpose** — hypercorn's master respawns a worker that exits 0 from its own (equally stale) interpreter path, while a non-zero exit shuts the master down so launchd `KeepAlive` restarts the job on the new keg. Exists because on 2026-10-31 a `brew upgrade` deleted the running python@3.15 keg: `:8200` dropped every request and macOS refused `/Volumes/MEDIA` (`EPERM`) while radio kept playing — 2.5 days half-alive until a manual restart. **`.maintenance.pid`** (holder's PID; dead PID = ignored) is held by `tools/upgrade.py --apply/--rollback` and by `setup.sh` around `setup_venv` — without it the watch restarts the gateway onto a venv upgrade.py is still building and gating. `tests/test_runtime_watch.py` (27). |
 | `api_playlists.py` | Playlist CRUD + the four editing endpoints (`rename`, `add_many`, `remove_many`, `reorder`): every reply has `ok`, every refusal a fixed `code`, never a 500 for bad input. The contract rAudio codes against is `docs/gateway-contract-playlists.md`. |
 | `dlna_ffmpeg.py` / `dlna_geocode.py` / `dlna_video_index.py` | Video feature (see `docs/VIDEO_SUPPORT.md`): optional ffmpeg/ffprobe helpers + HLS transcode cmds; Nominatim reverse-geocode (cache-first, 1.1s rate limit); the periodic GWMovies scanner (`scan_videos`, 5-min loop from `dlna_localfs_wiring`) incl. `apply_location_overrides` (re-lays inferred/manual locations after every scan). |
 | `dlna_countries.py` | ISO 3166-1 alpha-2 → English name (`country_name`). **GENERATED** via Node `Intl.DisplayNames` (regen one-liner in its docstring / generating commit) — used so the video country-selection level shows "Netherlands", not "NL" (ids/filenames keep the code). The PWA uses the browser's `Intl.DisplayNames` directly. |
@@ -667,7 +666,7 @@ the obvious way and broke something else.
   **The PWA HOLDS browser playback for a waiting root** (2026-11-19): a
   LocalFs track that fails while its library (book queue → Audiobooks, else
   Music) is waiting is not skipped — on 2026-11-18 a PWA open across a
-  reboot skipped ten tracks in 15 s before SAMDATA was unlocked. The error
+  reboot skipped ten tracks in 15 s before the music drive was unlocked. The error
   path re-reads `/api/libraries` before deciding; the `libraries` SSE event
   resumes the held track (auto-play within `LIB_RESUME_WINDOW_MS`, 15 min;
   later it is loaded and waits for ▶). A bad file on a mounted drive still
@@ -929,7 +928,7 @@ three-slow-client test moved RSS 114 MB → 133 MB (**10× less**).
 
 ### HTTPS / Tailscale cert
 
-The gateway auto-detects `*.crt` + `*.key` in the working directory on startup. Currently uses a Tailscale-issued Let's Encrypt cert: `ronsmacmini.tail5be6ad.ts.net.{crt,key}`. Mobile devices on the tailnet get a trusted cert with no install or exception needed.
+The gateway auto-detects `*.crt` + `*.key` in the working directory on startup. Currently uses a Tailscale-issued Let's Encrypt cert: `mymachine.tailXXXXX.ts.net.{crt,key}`. Mobile devices on the tailnet get a trusted cert with no install or exception needed.
 
 **Cert renewal is automated** via `renew-cert.sh` + `com.roha.dlna-cert-renew` LaunchAgent (Mondays 04:30). The script no-ops unless the cert has < 30 days left, then runs `tailscale cert …`, and **only if the expiry actually MOVED** restarts every LaunchAgent in `CERT_RELOAD_LABELS` (`.env`, comma-separated; unset → the gateway alone). Both rules came from `cert-renewal.log` (2026-10-23): on 2026-07-20 Tailscale answered "Public cert unchanged" and the script still logged "renewal complete" (now a WARN, and nothing is restarted); and epub-reader loads these same files but was never restarted, so after the 2026-09-21 renewal it served the old certificate until a development restart happened along, ~7 h before that one expired. **`.env` is READ by the script, never sourced** (`env_get`; the real environment still wins): sourcing executes it as shell, so `GW_NAME=DLNA Gateway (IINA)` was a syntax error that made `.` abandon every key after line 48, an unquoted `a, b` assigned `a,` and ran `b`, and `KEY=x word` would RUN `word`. Found by the first live `--force` run, 2026-10-23. `tests/test_renew_cert.py` (10) runs the real script in a sandbox under `/bin/bash` 3.2. All output appended to `cert-renewal.log` (separate from `gateway.log` for grep-ability). Belt-and-braces: the gateway checks the cert at boot and every 6 h and logs a WARN, plus a push alert, if it has < 14 days left (`dlna_alerts.check_cert`) — surfaces a silently-dead LaunchAgent. (The original `_warn_if_cert_expiring_soon` went with the stdlib TLS server in `baa2c0c`; for a year this paragraph described a check that no longer existed. Restored 2026-11-04.) A failed run also sends `cert_renew_failed` via the script's EXIT trap.
 
@@ -1287,7 +1286,7 @@ from its NAME, never mtime, and an unparsable name is never pruned.
 
 **Off-disk = Time Machine, and the job checks it is still running**
 (2026-11-08, hardening #2). The snapshots sit on the same SSD as
-`library.db`; Time Machine (to the WD-SERVER disk) is the second copy. Time
+`library.db`; Time Machine (to a backup disk) is the second copy. Time
 Machine never says when it stops, so after its own snapshot the job checks
 that Time Machine's newest backup is at most `BACKUP_TM_MAX_AGE_DAYS` old
 (`.env`, default 3, `0` = off). Too old or none on record → exit 1 →
@@ -1380,7 +1379,7 @@ launchctl kickstart -k gui/$(id -u)/com.roha.dlna-gateway
 A `brew upgrade` that replaces python@3.x deletes the old keg the running
 process was started from. The process stays up but is stale: on 2026-10-31
 the `:8200` file server dropped every request (`RemoteDisconnected`, PWA
-`MediaError code 4`) and macOS refused `/Volumes/SAMDATA` with `[Errno 1]
+`MediaError code 4`) and macOS refused `/Volumes/MEDIA` with `[Errno 1]
 Operation not permitted` while the disk was mounted. Radio, which touches
 neither, kept playing — so it looked half-alive for 2.5 days.
 `dlna_runtime_watch` now exits the worker 75 within ~2 min and launchd

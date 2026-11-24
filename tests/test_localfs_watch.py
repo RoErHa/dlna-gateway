@@ -100,7 +100,7 @@ class TestRegister(_WatchCase):
         self.assertEqual(self.w.waiting(), ["Music"])
 
     def test_the_warning_names_the_volume_to_go_and_mount(self):
-        missing = str(self.tmp / "SAMDATA-Music")
+        missing = str(self.tmp / "MEDIA-Music")
         with self.assertLogs("dlna.localfs.watch", "WARNING") as cm:
             self.w.register("Music", missing, self.activate)
         joined = "\n".join(cm.output)
@@ -172,7 +172,7 @@ class TestTheVolumeAppears(_WatchCase):
 class TestWhatTheUiIsTold(_WatchCase):
 
     def test_a_waiting_root_names_the_volume_in_its_message(self):
-        missing = str(self.tmp / "SAMDATA" / "Music")
+        missing = str(self.tmp / "MEDIA" / "Music")
         self.w.register("Music", missing, self.activate)
         row = self.w.snapshot()[0]
         self.assertEqual(row["state"], watch.WAITING)

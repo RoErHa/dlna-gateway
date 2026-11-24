@@ -13,9 +13,9 @@ from tools.relink_overrides_to_localfs import (
     _FANOUT_CAP, apply_plan, plan_relink)
 
 UDN = "uuid:localfs-testtesttest"
-BASE = "http://192.168.1.125:8200/localfs/stream/"
-OLD = "http://192.168.1.125:8201/localfs/stream/"
-ASSET = "http://192.168.1.125:26125/content/c2/b16/f44100/"
+BASE = "http://192.168.1.10:8200/localfs/stream/"
+OLD = "http://192.168.1.10:8201/localfs/stream/"
+ASSET = "http://192.168.1.10:26125/content/c2/b16/f44100/"
 
 
 class Base(unittest.TestCase):

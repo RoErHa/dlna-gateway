@@ -13,13 +13,13 @@ Usage:
 
     # Override port / DB / allowed roots:
     python3 tools/localfs_serve.py --port 8201 \\
-        --root /Volumes/SAMDATA/Music \\
+        --root /Volumes/MEDIA/Music \\
         --db library.db
 
     # Quick proof: full file in one stream, sha256 check
     curl -s http://localhost:8200/localfs/stream/<track_id> \\
         | sha256sum
-    sha256sum /Volumes/SAMDATA/Music/Pink\\ Floyd/...
+    sha256sum /Volumes/MEDIA/Music/Pink\\ Floyd/...
 
     # Quick proof: range request
     curl -v -r 0-1023 http://localhost:8200/localfs/stream/<track_id> \\
@@ -67,8 +67,7 @@ def main(argv=None) -> int:
                    help="library.db path (default: %(default)s)")
     p.add_argument("--root", action="append", default=None,
                    help="Allowed music root. May be passed multiple "
-                        "times. Defaults to $LOCALFS_MUSIC_ROOT or "
-                        "/Volumes/SAMDATA/Music. Path-traversal "
+                        "times. Defaults to $LOCALFS_MUSIC_ROOT. Path-traversal "
                         "defence: file_path values outside any root "
                         "are refused (403).")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -79,8 +78,11 @@ def main(argv=None) -> int:
     # Default --root if none provided
     roots: list[str] = list(args.root or [])
     if not roots:
-        env_root = os.environ.get("LOCALFS_MUSIC_ROOT",
-                                  "/Volumes/SAMDATA/Music")
+        env_root = os.environ.get("LOCALFS_MUSIC_ROOT", "").strip()
+        if not env_root:
+            print("ERROR: set LOCALFS_MUSIC_ROOT in .env, or pass --root",
+                  file=sys.stderr)
+            return 2
         roots = [env_root]
     roots_resolved = tuple(str(Path(r).expanduser().resolve())
                             for r in roots)

@@ -11,6 +11,9 @@
 # supported by .gitignore, so the negation must be on its own line:
 !.env.example
 
+# The owner's private names; tests/test_anonymised.py keeps them out of the repo.
+.private-terms
+
 # Personal prep recipe — operational, not public docs.
 PREPARE_PUBLIC_RELEASE.md
 

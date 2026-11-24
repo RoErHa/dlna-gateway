@@ -13,12 +13,12 @@ suspect paths is written to ./corrupt-audio.txt — feed it into your
 own deletion script, or use --trash / --hard-delete to act in-place.
 
 Usage:
-    python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music
-    python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music -v
-    python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --limit 1000
-    python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --trash
-    python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --hard-delete -y
-    python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music \\
+    python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music
+    python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music -v
+    python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --limit 1000
+    python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --trash
+    python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --hard-delete -y
+    python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music \\
         --exts flac,mp3,m4a --out broken.txt
 """
 import argparse

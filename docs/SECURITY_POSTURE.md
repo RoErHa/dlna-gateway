@@ -81,23 +81,22 @@ are now named explicitly in `.env` and read by `hypercorn_conf.py`:
 | `8200` file server | LAN only | Renderers fetch bytes directly; a single socket, so one address |
 
 ⚠️ **The LAN address on `:8443` serves a certificate that does not match it.**
-`192.168.1.125:8443` was added 2026-08-20 so the PWA is reachable over
+`192.168.1.10:8443` was added 2026-08-20 so the PWA is reachable over
 HTTPS on the LAN, but the `tailscale cert` is issued for
-`ronsmacmini.tail5be6ad.ts.net` — a browser warns on every visit
+`mymachine.tailXXXXX.ts.net` — a browser warns on every visit
 (`curl` without `-k` fails outright; with `-k` it is a normal 200/HTTP-2).
 Consequence worth knowing before debugging a blank app: a cert-warning
 origin is **not a trusted secure context**, so an installed PWA there can
 fail to register its Service Worker and show the "full UI, no content"
 symptom — the same appearance as the 2026-06-27 SW outage, different cause.
-For a LAN-installable PWA use `http://192.168.1.125:8765` instead: plain
+For a LAN-installable PWA use `http://192.168.1.10:8765` instead: plain
 HTTP on a private address *is* treated as a secure context. The clean HTTPS
 route is the tailnet hostname, which validates properly.
 
-This closed two real exposures: a **second LAN interface** (`192.168.1.238`)
+This closed two real exposures: a **second LAN interface** (`192.168.1.11`)
 that nobody intended to serve, and TLS on the LAN address where the cert
 never matched anyway. The LAN address is **DHCP-reserved** on the router
-(Netgear @ `192.168.1.1`, against the Ethernet MAC `d0:11:e5:ed:76:35`,
-2026-08-20) — which is what makes naming a literal IP in `.env` reasonable
+(against the Ethernet MAC, 2026-08-20) — which is what makes naming a literal IP in `.env` reasonable
 rather than fragile. Note the Wi-Fi interface carries a macOS *randomized*
 MAC, so it could never have been reserved reliably; it is no longer served. **Loopback must stay bound** — `tests/run_all.py` and
 the beets tools reach the gateway at `127.0.0.1`. If a configured address
@@ -109,7 +108,7 @@ reason the binds live in `.env` rather than the LaunchAgent's argv.
 **8. Containment is about path COMPONENTS, not string prefixes (2026-08-21).**
 The LocalFs file server checked `str(resolved).startswith(root)`, so any
 sibling directory whose name merely began with a root's name was inside it —
-`/Volumes/SAMDATA/Music` admitted `/Volumes/SAMDATA/Music Videos`, and
+`/Volumes/MEDIA/Music` admitted `/Volumes/MEDIA/Music Videos`, and
 `Audio_Books` admitted `Audio_Books_private`. Every byte of them, to any
 unauthenticated peer on the LAN, because renderers fetch from this server
 directly. All three byte routes were affected; the check had been

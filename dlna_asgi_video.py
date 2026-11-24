@@ -26,7 +26,7 @@ cannot seek: the HLS variant computes a VOD playlist from the duration
 instantly and transcodes only the ~6s segment the player asks for.
 
 ⚠ `_isfile()` wraps `os.path.isfile` in the threadpool ON PURPOSE. These
-paths live on an EXTERNAL volume (SAMDATA); a stat() against a spun-down USB
+paths live on an EXTERNAL volume; a stat() against a spun-down USB
 disk blocks for seconds, and inside an `async def` that stalls the entire
 gateway, not just this request. Never call os.path.* directly here.
 """
@@ -50,7 +50,7 @@ log = logging.getLogger("dlna.asgi")
 async def _isfile(path: str) -> bool:
     """`os.path.isfile` off the event loop.
 
-    The video/poster roots live on an EXTERNAL volume (SAMDATA). A stat()
+    The video/poster roots live on an EXTERNAL volume. A stat()
     against a spun-down USB disk blocks for seconds, and inside an
     `async def` that stalls the whole gateway — every other request plus
     the SSE stream — not just this one. Ruff ASYNC240 guards this."""

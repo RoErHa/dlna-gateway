@@ -248,9 +248,9 @@ class TestAudiobooksRootConfig(unittest.TestCase):
             os.environ["AUDIOBOOKS_ROOT"] = self._saved
 
     def test_env_var_wins(self):
-        os.environ["AUDIOBOOKS_ROOT"] = "/Volumes/SAMDATA-1TB/Audio_Books"
+        os.environ["AUDIOBOOKS_ROOT"] = "/Volumes/MEDIA2/Audio_Books"
         self.assertEqual(self.wiring.audiobooks_root(),
-                         "/Volumes/SAMDATA-1TB/Audio_Books")
+                         "/Volumes/MEDIA2/Audio_Books")
 
     def test_unset_returns_empty(self):
         os.environ.pop("AUDIOBOOKS_ROOT", None)

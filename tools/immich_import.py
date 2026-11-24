@@ -2,7 +2,7 @@
 """Link new Immich videos into the gateway's video root.
 
 The pipeline the gateway already provides: anything landing in
-`/Volumes/SAMDATA/GWMovies` is picked up by the 5-minute periodic video
+`LOCALFS_VIDEO_ROOT` is picked up by the 5-minute periodic video
 scan, GPS-reverse-geocoded, titled `<location>_<YYYYMMDD>_<HHMM>` and
 served in the Videos section (see docs/VIDEO_SUPPORT.md). The one manual
 step was bringing phone videos over from Immich: this tool automates it.
@@ -10,10 +10,10 @@ step was bringing phone videos over from Immich: this tool automates it.
   * Each new video becomes a SYMLINK to its Immich original, not a copy, so
     it costs no disk or backup space. The file server follows these links
     only into `LOCALFS_VIDEO_LINK_ROOTS`, so every source must be listed there.
-  * Sources: all of Immich's ORIGINALS. The external libraries come first
-    because their paths never change, then `library/` + `upload/` under the
-    Immich data volume. `encoded-video/` (transcodes), `thumbs/`, `profile/`
-    and `backups/` are never touched.
+  * Sources: the folders in `LOCALFS_VIDEO_LINK_ROOTS`, in that order. List all
+    of Immich's ORIGINALS: external libraries first, because their paths never
+    change, then `library/` + `upload/` under the Immich data volume. Never
+    list `encoded-video/` (transcodes), `thumbs/`, `profile/` or `backups/`.
   * Dedup is by CONTENT HASH (BLAKE2b), recorded in a cache DB at
     `<dest>/.immich-import.db`: files already in GWMovies (however they
     got there, whatever their name) are registered on first run and
@@ -46,16 +46,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_SOURCE = "/Volumes/SAMDATA-1TB/IMMICH-UPLOAD"
-DEFAULT_DEST = "/Volumes/SAMDATA/GWMovies"
 SOURCE_SUBDIRS = ("library", "upload")
-# (root, subdirs) in preference order: when the same video exists twice, the
-# link goes to the first, and external libraries never move their files.
-DEFAULT_SOURCES = (
-    ("/Volumes/SAMDATA-1TB/PHOTOS-ALL", ("",)),
-    ("/Volumes/SAMDATA-1TB/PHOTOS-Mar", ("",)),
-    (DEFAULT_SOURCE, SOURCE_SUBDIRS),
-)
 DEFAULT_MIN_SECONDS = 3.0
 # Deleting a video in Immich leaves one dead link, which is normal. Many at once
 # means a lost permission or a moved library, which the nightly job must report.
@@ -182,17 +173,32 @@ def make_link(src: Path, out: Path) -> None:
         raise OSError(f"link does not lead to {src}")
 
 
-def listed_link_roots() -> list[str]:
-    """`LOCALFS_VIDEO_LINK_ROOTS`, from the environment or the project's .env."""
-    raw = os.environ.get("LOCALFS_VIDEO_LINK_ROOTS")
+def env_setting(key: str) -> str:
+    """`key` from the environment or the project's .env; '' when in neither."""
+    raw = os.environ.get(key)
     if raw is None:
         try:
             for line in (PROJECT / ".env").read_text().splitlines():
-                if line.startswith("LOCALFS_VIDEO_LINK_ROOTS="):
+                if line.startswith(key + "="):
                     raw = line.split("=", 1)[1]
         except OSError:
             pass
-    return [r.strip() for r in (raw or "").split(":") if r.strip()]
+    raw = (raw or "").strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1]
+    return raw
+
+
+def listed_link_roots() -> list[str]:
+    """The folders in `LOCALFS_VIDEO_LINK_ROOTS`."""
+    return [r.strip() for r in env_setting("LOCALFS_VIDEO_LINK_ROOTS").split(":")
+            if r.strip()]
+
+
+def default_sources(roots: list[str]) -> tuple:
+    """(root, subdirs) in preference order: when the same video exists twice, the
+    link goes to the first, so list external libraries (stable paths) first."""
+    return tuple((r, ("",)) for r in roots)
 
 
 def unservable(source: Path, subdirs, roots: list[str]) -> list[str]:
@@ -227,8 +233,10 @@ def main(argv=None):
         description="Link new Immich videos into the gateway video root "
                     "(dry-run by default).")
     ap.add_argument("--source", default=None,
-                    help="one source root (default: every Immich library)")
-    ap.add_argument("--dest", default=DEFAULT_DEST)
+                    help="one source root (default: every folder in "
+                         "LOCALFS_VIDEO_LINK_ROOTS)")
+    ap.add_argument("--dest", default=None,
+                    help="the gateway video root (default: LOCALFS_VIDEO_ROOT)")
     ap.add_argument("--subdirs", default=None,
                     help="comma list of source subdirs to walk (default "
                          "'library,upload' = Immich's originals); pass '' "
@@ -255,7 +263,11 @@ def main(argv=None):
                          "deliberately-deleted clips gone forever)")
     args = ap.parse_args(argv)
 
-    dest = Path(args.dest)
+    dest_setting = args.dest or env_setting("LOCALFS_VIDEO_ROOT")
+    if not dest_setting:
+        print("FATAL: set LOCALFS_VIDEO_ROOT in .env, or pass --dest"); return 2
+    dest = Path(dest_setting)
+    roots = listed_link_roots()
     if args.source:
         if args.subdirs is None:
             subdirs = SOURCE_SUBDIRS
@@ -264,14 +276,16 @@ def main(argv=None):
                 if args.subdirs else ("",)
         sources = ((args.source, subdirs),)
     else:
-        sources = DEFAULT_SOURCES
+        sources = default_sources(roots)
+        if not sources:
+            print("FATAL: set LOCALFS_VIDEO_LINK_ROOTS in .env, or pass "
+                  "--source"); return 2
     sources = tuple((Path(root), subs) for root, subs in sources)
     for source, _subs in sources:
         if not source.is_dir():
             print(f"FATAL: source not mounted: {source}"); return 2
     if not dest.is_dir():
         print(f"FATAL: dest not mounted: {dest}"); return 2
-    roots = listed_link_roots()
     refused = [b for s, subs in sources for b in unservable(s, subs, roots)]
     if refused:
         print("FATAL: not in LOCALFS_VIDEO_LINK_ROOTS, so these links would "

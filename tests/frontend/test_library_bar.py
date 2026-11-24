@@ -11,13 +11,13 @@ import pytest
 
 
 
-def _waiting(label="Music", root="/Volumes/SAMDATA/Music"):
+def _waiting(label="Music", root="/Volumes/MEDIA/Music"):
     return {"label": label, "root": root, "state": "waiting",
             "message": f"{label} library unavailable — mount {root}. "
                        "It will be picked up automatically, no restart needed."}
 
 
-def _active(label="Audiobooks", root="/Volumes/SAMDATA-1TB/Audio_Books"):
+def _active(label="Audiobooks", root="/Volumes/MEDIA2/Audio_Books"):
     return {"label": label, "root": root, "state": "active"}
 
 
@@ -26,11 +26,11 @@ def test_a_waiting_root_names_the_volume_to_mount(gateway, app):
     app.reload()
     bar = app.locator("#library-bar")
     bar.wait_for(state="visible", timeout=5000)
-    assert "/Volumes/SAMDATA/Music" in bar.inner_text()
+    assert "/Volumes/MEDIA/Music" in bar.inner_text()
 
 
 def test_the_bar_stays_hidden_when_every_volume_is_there(gateway, app):
-    gateway.libraries = [_active(), _active("Music", "/Volumes/SAMDATA/Music")]
+    gateway.libraries = [_active(), _active("Music", "/Volumes/MEDIA/Music")]
     app.reload()
     app.wait_for_timeout(600)
     assert not app.locator("#library-bar").is_visible()
@@ -53,18 +53,18 @@ def test_only_the_waiting_root_is_named(gateway, app):
     bar = app.locator("#library-bar")
     bar.wait_for(state="visible", timeout=5000)
     text = bar.inner_text()
-    assert "/Volumes/SAMDATA/Music" in text
+    assert "/Volumes/MEDIA/Music" in text
     assert "Audio_Books" not in text
 
 
 def test_two_missing_volumes_are_both_named(gateway, app):
-    gateway.libraries = [_waiting(), _waiting("Video", "/Volumes/SAMDATA/GWMovies")]
+    gateway.libraries = [_waiting(), _waiting("Video", "/Volumes/MEDIA/GWMovies")]
     app.reload()
     bar = app.locator("#library-bar")
     bar.wait_for(state="visible", timeout=5000)
     text = bar.inner_text()
-    assert "/Volumes/SAMDATA/Music" in text
-    assert "/Volumes/SAMDATA/GWMovies" in text
+    assert "/Volumes/MEDIA/Music" in text
+    assert "/Volumes/MEDIA/GWMovies" in text
 
 
 def test_the_bar_clears_itself_once_the_drive_is_mounted(gateway, app):
@@ -74,7 +74,7 @@ def test_the_bar_clears_itself_once_the_drive_is_mounted(gateway, app):
     app.reload()
     app.locator("#library-bar").wait_for(state="visible", timeout=5000)
 
-    gateway.libraries = [_active("Music", "/Volumes/SAMDATA/Music")]
+    gateway.libraries = [_active("Music", "/Volumes/MEDIA/Music")]
     app.evaluate("refreshLibraries()")
     app.wait_for_selector("#library-bar", state="hidden", timeout=5000)
 
@@ -105,13 +105,13 @@ def test_a_failed_libraries_fetch_never_blanks_the_bar(gateway, app):
 
 
 # ── Holding playback while the drive is missing (2026-11-19) ─────────
-# 2026-11-18 13:15: the gateway came up before /Volumes/SAMDATA was
+# 2026-11-18 13:15: the gateway came up before /Volumes/MEDIA was
 # unlocked, every music track got a 403 from the file server, and the
 # skip-on-error rule ran through ten queued tracks in fifteen seconds.
 # A missing drive is not a bad track: hold, and resume when it is back.
 
 def _localfs_queue(app, n=3, book=False):
-    tracks = [{"url": f"http://192.168.1.125:8200/localfs/stream/id{i}",
+    tracks = [{"url": f"http://192.168.1.10:8200/localfs/stream/id{i}",
                "title": f"T{i}", "artist": "A", "album": "B",
                "art": "", "mime": ""} for i in range(n)]
     app.evaluate(f"""
@@ -167,7 +167,7 @@ def test_a_missing_music_drive_holds_instead_of_skipping(gateway, app):
 def test_a_bad_track_on_a_mounted_drive_still_skips(gateway, app):
     """The hold is for a missing drive only — a genuinely broken file
     must not freeze the queue."""
-    gateway.libraries = [_active("Music", "/Volumes/SAMDATA/Music")]
+    gateway.libraries = [_active("Music", "/Volumes/MEDIA/Music")]
     app.reload()
     _localfs_queue(app)
     _fail_current(app)
@@ -204,7 +204,7 @@ def test_a_book_is_not_held_for_the_music_drive(gateway, app):
 
 def test_playback_resumes_by_itself_when_the_drive_is_back(gateway, app):
     _hold(app, gateway)
-    gateway.libraries = [_active("Music", "/Volumes/SAMDATA/Music")]
+    gateway.libraries = [_active("Music", "/Volumes/MEDIA/Music")]
     app.evaluate("refreshLibraries()")    # what the `libraries` SSE event does
     app.wait_for_function("_libHold === null", timeout=3000)
     assert "back" in app.locator("#toast").text_content()
@@ -219,7 +219,7 @@ def test_a_long_hold_loads_the_track_but_does_not_start_it(gateway, app):
     _hold(app, gateway)
     _count_plays(app)
     app.evaluate("_libHold.at -= 16 * 60 * 1000")
-    gateway.libraries = [_active("Music", "/Volumes/SAMDATA/Music")]
+    gateway.libraries = [_active("Music", "/Volumes/MEDIA/Music")]
     app.evaluate("refreshLibraries()")
     app.wait_for_function("_libHold === null", timeout=3000)
     assert app.evaluate("!!window.__played") is False
@@ -239,7 +239,7 @@ def test_stop_while_held_means_nothing_resumes(gateway, app):
     _hold(app, gateway)
     app.evaluate("control({action:'stop'})")
     _count_plays(app)
-    gateway.libraries = [_active("Music", "/Volumes/SAMDATA/Music")]
+    gateway.libraries = [_active("Music", "/Volumes/MEDIA/Music")]
     app.evaluate("refreshLibraries()")
     app.wait_for_timeout(500)
     assert app.evaluate("!!window.__played") is False

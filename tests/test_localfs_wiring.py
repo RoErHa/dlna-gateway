@@ -128,7 +128,7 @@ class _WiringCase(unittest.TestCase):
              mock.patch.object(wiring.threading, "Thread", _FakeThread), \
              mock.patch.object(watch.threading, "Thread", _FakeThread):
             servers.add.side_effect = lambda s: added.append(s)
-            wiring.maybe_start_localfs(lambda: "192.168.1.125")
+            wiring.maybe_start_localfs(lambda: "192.168.1.10")
             if then is not None:
                 then()
 
@@ -368,8 +368,8 @@ class TestMusicRootConfig(unittest.TestCase):
             os.environ["LOCALFS_MUSIC_ROOT"] = self._saved
 
     def test_env_var_wins(self):
-        os.environ["LOCALFS_MUSIC_ROOT"] = "/Volumes/SAMDATA/Music"
-        self.assertEqual(wiring.music_root(), "/Volumes/SAMDATA/Music")
+        os.environ["LOCALFS_MUSIC_ROOT"] = "/Volumes/MEDIA/Music"
+        self.assertEqual(wiring.music_root(), "/Volumes/MEDIA/Music")
 
     def test_config_fallback(self):
         os.environ.pop("LOCALFS_MUSIC_ROOT", None)

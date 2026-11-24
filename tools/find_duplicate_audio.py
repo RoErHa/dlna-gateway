@@ -9,7 +9,7 @@ instead.)
 
 find_duplicate_audio.py — locate duplicate audio FILES on disk.
 
-A "duplicate" here is two-or-more physical audio files on SAMDATA that
+A "duplicate" here is two-or-more physical audio files on the music drive that
 contain the **same recording**. AcoustID's content-based fingerprinting
 identified them all to the same (artist, album, title) so they all live
 in `metadata_overrides` with identical post-correction metadata; only
@@ -32,23 +32,23 @@ The OTHER files in each group are "losers" — candidates for Trash.
 - Both require confirmation prompt unless `-y`.
 
 URL→path mapping strategy: HEAD each URL to get `Content-Length`, then
-walk SAMDATA and match each URL to a disk file by exact file_size.
+walk the music drive and match each URL to a disk file by exact file_size.
 File size is essentially unique for audio files (especially hi-res
 multi-MB files); collisions are rare and we skip ambiguous matches with
 a warning.
 
 Usage:
     # Default — scan only, write list:
-    python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music
+    python3 tools/find_duplicate_audio.py /Volumes/MEDIA/Music
 
     # Verbose:
-    python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music -v
+    python3 tools/find_duplicate_audio.py /Volumes/MEDIA/Music -v
 
     # Trash all losers with confirmation:
-    python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --trash
+    python3 tools/find_duplicate_audio.py /Volumes/MEDIA/Music --trash
 
     # Non-interactive permanent delete:
-    python3 tools/find_duplicate_audio.py /Volumes/SAMDATA/Music --hard-delete -y
+    python3 tools/find_duplicate_audio.py /Volumes/MEDIA/Music --hard-delete -y
 """
 import argparse
 import http.client

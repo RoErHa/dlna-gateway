@@ -11,7 +11,7 @@
 
 Walks the music root and **moves to Trash** any directory whose entire
 subtree contains zero music files. The user's library lives at
-`/Volumes/SAMDATA/Music` (external drive — see project memory).
+`/Volumes/MEDIA/Music` (an external drive).
 
 Music extensions (default): `.mp3 .flac .ogg .opus .m4a .aac .wav .wma
 .ape .aiff .aif .dff .dsf .alac`. **`.mp4` is deliberately excluded**
@@ -53,25 +53,25 @@ clean such mixed dirs manually.
 
 ```bash
 # Required first step — preview without acting:
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music --dry-run
 
 # Verbose preview (logs every kept directory too):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run -v
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music --dry-run -v
 
 # Stop after 200 dirs (safety/sanity check; no deletions when limit hit):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --dry-run -v --limit 200
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music --dry-run -v --limit 200
 
 # Real run — Trash, with confirmation prompt:
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music
 
 # Real run — non-interactive (e.g. cron / a script):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music -y
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music -y
 
 # Override extension list:
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --exts mp3,flac,ogg
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music --exts mp3,flac,ogg
 
 # Permanent rm -rf (NOT recoverable — use only if you're sure):
-python3 tools/prune_empty_music_dirs.py /Volumes/SAMDATA/Music --hard-delete -y
+python3 tools/prune_empty_music_dirs.py /Volumes/MEDIA/Music --hard-delete -y
 ```
 
 #### Flags
@@ -220,28 +220,28 @@ full default extension set: `.flac .mp3 .ogg .opus .m4a .alac .aac
 
 ```bash
 # Default — scan only, write list to ./corrupt-audio.txt:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music
 
 # Verbose preview (logs every OK file too):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music -v
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music -v
 
 # Stop after scanning 1000 files (no deletions even if --trash passed):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --limit 1000
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --limit 1000
 
 # Move flagged files to Trash, with confirmation prompt:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --trash
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --trash
 
 # Non-interactive permanent delete (NOT recoverable):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --hard-delete -y
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --hard-delete -y
 
 # Restrict to one or two formats:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --exts flac,mp3
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --exts flac,mp3
 
 # Different output path for the list:
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --out /tmp/broken.txt
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --out /tmp/broken.txt
 
 # Suppress the list file (just print):
-python3 tools/find_corrupt_audio.py /Volumes/SAMDATA/Music --out /dev/null
+python3 tools/find_corrupt_audio.py /Volumes/MEDIA/Music --out /dev/null
 ```
 
 #### Flags
@@ -273,11 +273,13 @@ python3 -m unittest tools.test_find_corrupt_audio -v
 ### `tools/immich_import.py`
 
 Links **new videos from all of Immich's originals** into the gateway video
-root (`/Volumes/SAMDATA/GWMovies`) as symlinks, not copies: the external
-libraries (`PHOTOS-ALL`, `PHOTOS-Mar`) first, then `library/` + `upload/` on
-the Immich data volume (`encoded-video/` transcodes never touched). Every
-source must be listed in `LOCALFS_VIDEO_LINK_ROOTS`, or the run stops, because
-the file server would refuse those links. The gateway does
+root (`/Volumes/MEDIA/GWMovies`) as symlinks, not copies. The sources are
+the folders in `LOCALFS_VIDEO_LINK_ROOTS`, in that order, and the first listed
+wins a duplicate: put external libraries (`library-1`, `library-2`) first, then
+`library/` + `upload/` on the Immich data volume, never `encoded-video/`
+(transcodes). A `--source` outside that list stops the run, because the file
+server would refuse those links; with the key or `LOCALFS_VIDEO_ROOT` unset the
+run stops and names it. The gateway does
 the rest automatically: the 5-minute periodic scan picks new files up,
 reverse-geocodes their GPS and titles them `<location>_<YYYYMMDD>_<HHMM>`
 (see `docs/VIDEO_SUPPORT.md`) — filenames are preserved because titles
@@ -308,7 +310,7 @@ dead link after deleting a video in Immich is normal and only logged.
 **The dedup cache is deliberately STICKY** — `dest_files` keeps every
 content hash EVER seen in dest, so a clip you deleted from GWMovies never
 comes back on a re-run. That stickiness once silently withheld 1,783
-PHOTOS-ALL videos whose content had been in GWMovies before (2026-07-07);
+library-1 videos whose content had been in GWMovies before (2026-07-07);
 **`--reimport-deleted`** narrows the dedup set to files PRESENT now (and
 re-evaluates stale 'duplicate' source verdicts) when you DO want deleted
 content back. **`--source`** limits a run to one folder; with **`--subdirs ""`** it is
@@ -317,9 +319,9 @@ walked as a plain folder tree.
 ```bash
 python3 tools/immich_import.py               # preview
 python3 tools/immich_import.py --apply       # link new videos
-python3 tools/immich_import.py --source /Volumes/SAMDATA-1TB/PHOTOS-ALL \
+python3 tools/immich_import.py --source /Volumes/MEDIA2/library-1 \
     --subdirs "" --reimport-deleted --apply  # one library, deleted clips too
-python3 -m unittest tools.test_immich_import -v   # 44 tests
+python3 -m unittest tools.test_immich_import -v   # 45 tests
 ```
 
 ### `tools/infer_video_locations.py`
@@ -958,7 +960,7 @@ search matches without fingerprints and beets writes full canonical tags.
 | Flag | Effect |
 |---|---|
 | `--write-config` | Write the prog-tuned, tag-in-place `~/.config/beets/config.yaml` (backs up any existing) and exit |
-| `--music-root PATH` | Library root (default `/Volumes/SAMDATA/Music`) |
+| `--music-root PATH` | Library root (default: `LOCALFS_MUSIC_ROOT`) |
 | `--album PATH` | Import a single album dir instead of the whole root |
 | `--quiet` | Auto-accept strong matches, no prompts — the bulk pass (`beet import -q`) |
 | `--timid` | Prompt per match (more granular than the default per-album prompt) |
@@ -974,7 +976,7 @@ search matches without fingerprints and beets writes full canonical tags.
 - Hard-fails fast if `beet` isn't installed (`brew install chromaprint
   beets` + the keg plugin deps — see the one-time-deps block above) or the
   config is missing/not in-place.
-- Refuses to run if the music drive isn't mounted (external SAMDATA).
+- Refuses to run if the music drive isn't mounted (an external volume).
 - Confirms before any in-place write (with the backup warning) unless `-y`.
 - Warns when DSD (`.dsf`/`.dff`) files are under the target or when fpcalc
   is absent — Chromaprint can't decode DSD (`docs/enrichment.md` §6); those

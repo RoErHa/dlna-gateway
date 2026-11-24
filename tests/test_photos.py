@@ -30,7 +30,7 @@ from api_upnp_ids import _b64e, _b64d
 from dlna_photos import Photo, PhotoIndex, build, shot_kind
 from dlna_photos_immich import Immich
 
-A1 = "c6fe38ee-8332-4f49-bb1f-ff278cc8cd39"
+A1 = "88888888-8888-4888-8888-888888888888"
 A2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 P1 = "11111111-1111-4111-8111-111111111111"
 P2 = "22222222-2222-4222-8222-222222222222"
@@ -45,14 +45,14 @@ def item(i, when, city="", country="", people=(), fav=False, **kw):
             "people": [{"name": n, "isHidden": n == "Hidden"} for n in people], **kw}
 
 
-# Ron sees P1-P3 and names Benjamin; Marja sees P1, P2, P4, names "Benjamin"
+# Sam sees P1-P3 and names Alex; Kim sees P1, P2, P4, names "Alex"
 # too (her own Immich person, same name) and favourites P2. P3 is archived
 # and only in her album A2.
-RON = [item(P1, "2020-09-05T13:04:39", "Bakkum", "Netherlands", ["Benjamin"]),
+SAM = [item(P1, "2020-09-05T13:04:39", "Zwolle", "Netherlands", ["Alex"]),
        item(P2, "2021-01-02T10:00:00", "", "Netherlands"),
        item(P3, "2021-01-03T10:00:00", visibility="archive")]
-MARJA = [item(P1, "2020-09-05T13:04:39", "Bakkum", "Netherlands", ["Benjamin"]),
-         item(P2, "2021-01-02T10:00:00", "", "Netherlands", ["Benjamin"], fav=True),
+KIM = [item(P1, "2020-09-05T13:04:39", "Zwolle", "Netherlands", ["Alex"]),
+         item(P2, "2021-01-02T10:00:00", "", "Netherlands", ["Alex"], fav=True),
          item(P4, "2021-01-01T09:00:00", "Paris", "France", ["", "Hidden"]),
          item("not-a-uuid", "2021-01-01T09:00:00"),
          item(P3, "2021-01-03T10:00:00", visibility="locked")]
@@ -61,13 +61,13 @@ MARJA = [item(P1, "2020-09-05T13:04:39", "Bakkum", "Netherlands", ["Benjamin"]),
 class FakeImmich:
     calls = []
     blobs = {}
-    data = {"ron": (RON, [], {}),
-            "marja": (MARJA, [{"id": A1, "name": "Verjaardag Benjamin 6 jaar"},
+    data = {"sam": (SAM, [], {}),
+            "kim": (KIM, [{"id": A1, "name": "Verjaardag"},
                               {"id": A2, "name": "Archief"}],
-                      {A1: [MARJA[0], MARJA[1]], A2: [RON[2]]})}
+                      {A1: [KIM[0], KIM[1]], A2: [SAM[2]]})}
 
-    users = {"ron": {"id": "u-ron", "name": "Ron Hamersma"},
-             "marja": {"id": "u-marja", "name": "Marja"}}
+    users = {"sam": {"id": "u-sam", "name": "Sam Example"},
+             "kim": {"id": "u-kim", "name": "Kim"}}
 
     def __init__(self, url, key):
         self.key = key
@@ -92,7 +92,7 @@ class FakeImmich:
         return FakeImmich.blobs.get(asset_id, JPEG)
 
 
-def _index(keys=("ron", "marja")):
+def _index(keys=("sam", "kim")):
     FakeImmich.calls, FakeImmich.blobs = [], {}
     idx = PhotoIndex("http://localhost:2283", list(keys), True, client=FakeImmich)
     idx.refresh()
@@ -109,9 +109,9 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(lb(bad), "", bad)
 
     def test_every_immich_key_is_tried(self):
-        env = {"IMMICH_API_KEY": "ron", "IMMICH_API_KEY_MARJA": "marja",
+        env = {"IMMICH_API_KEY": "sam", "IMMICH_API_KEY_KIM": "kim",
                "IMMICH_API_KEY_EMPTY": " ", "OTHER": "x"}
-        self.assertEqual(dlna_photos.keys_from_env(env), ["ron", "marja"])
+        self.assertEqual(dlna_photos.keys_from_env(env), ["sam", "kim"])
 
     def test_off_unless_switched_on(self):
         self.assertFalse(PhotoIndex("http://localhost:2283", ["k"], False).enabled)
@@ -150,25 +150,25 @@ class TestBuild(unittest.TestCase):
 
     def test_albums_newest_first(self):
         self.assertEqual([a.name for a in self.lib.albums],
-                         ["Archief", "Verjaardag Benjamin 6 jaar"])
+                         ["Archief", "Verjaardag"])
 
     def test_one_name_is_one_person_across_users(self):
         self.assertEqual([(n, [p.id for p in ps]) for n, ps in self.lib.people],
-                         [("Benjamin", [P1, P2])])
+                         [("Alex", [P1, P2])])
 
     def test_favourites_are_any_users(self):
         self.assertEqual([p.id for p in self.lib.favourites], [P2])
 
     def test_places_biggest_country_first_and_no_city_last(self):
         self.assertEqual([(c, [(city, len(ps)) for city, ps in cs]) for c, cs in self.lib.places],
-                         [("Netherlands", [("Bakkum", 1), ("", 1)]), ("France", [("Paris", 1)])])
+                         [("Netherlands", [("Zwolle", 1), ("", 1)]), ("France", [("Paris", 1)])])
 
     def test_a_photo_is_owned_by_the_first_key_that_listed_it(self):
-        self.assertEqual(self.lib.owner[P1], "ron")
-        self.assertEqual(self.lib.owner[P4], "marja")
+        self.assertEqual(self.lib.owner[P1], "sam")
+        self.assertEqual(self.lib.owner[P4], "kim")
 
     def test_build_is_pure(self):
-        lib = build([("k", RON[:1])], [])
+        lib = build([("k", SAM[:1])], [])
         self.assertEqual(list(lib.photos), [P1])
         self.assertEqual(lib.albums, [])
 
@@ -176,7 +176,7 @@ class TestBuild(unittest.TestCase):
 class TestRefreshAndPreview(unittest.TestCase):
 
     def test_a_key_that_fails_is_skipped(self):
-        idx = _index(("broken", "marja"))
+        idx = _index(("broken", "kim"))
         self.assertIn(P4, idx.lib.photos)
 
     def test_no_working_key_keeps_the_previous_index(self):
@@ -190,7 +190,7 @@ class TestRefreshAndPreview(unittest.TestCase):
         self.assertEqual(idx.preview(P4), JPEG)
         self.assertEqual(idx.preview(P4), JPEG)
         self.assertEqual([c for c in FakeImmich.calls if c[0] == "preview"],
-                         [("preview", "marja", P4)])
+                         [("preview", "kim", P4)])
 
     def test_an_id_not_in_the_index_is_never_fetched(self):
         idx = _index()
@@ -237,7 +237,7 @@ class _BrowseCase(unittest.TestCase):
         os.close(fd)
         from dlna_library import LibraryDB
         self._p = [patch.object(api_upnp_ids, "DB", LibraryDB(self._db)),
-                   patch.object(api_upnp_ids, "_get_lan_ip", return_value="192.168.1.125"),
+                   patch.object(api_upnp_ids, "_get_lan_ip", return_value="192.168.1.10"),
                    patch.object(dlna_photos, "INDEX", _index())]
         for p in self._p:
             p.start()
@@ -274,9 +274,9 @@ class TestBrowse(_BrowseCase):
         import dlna_discovery
         from dlna_registry import MediaRenderer, RendererRegistry
         reg = RendererRegistry()
-        reg.add(MediaRenderer("uuid:naim", "Uniti", "http://192.168.1.227:53043/d.xml",
+        reg.add(MediaRenderer("uuid:naim", "Uniti", "http://192.168.1.20:53043/d.xml",
                               "", "", manufacturer="Naim Audio"))
-        reg.add(MediaRenderer("uuid:tv", "TV", "http://192.168.1.35:1408/", "", "",
+        reg.add(MediaRenderer("uuid:tv", "TV", "http://192.168.1.30:1408/", "", "",
                               manufacturer="LG Electronics."))
         body = ('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
                 '<u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">'
@@ -288,7 +288,7 @@ class TestBrowse(_BrowseCase):
             return ET.fromstring(ET.fromstring(xml).find(".//Result").text)
 
         with patch.object(dlna_discovery, "RENDERERS", reg):
-            for peer, shown in (("192.168.1.227", False), ("192.168.1.35", True),
+            for peer, shown in (("192.168.1.20", False), ("192.168.1.30", True),
                                 ("192.168.1.50", True), ("", True)):
                 ids = [e.get("id") for e in root(peer)]
                 self.assertEqual("photos" in ids, shown, peer)
@@ -305,16 +305,16 @@ class TestBrowse(_BrowseCase):
         self.assertEqual([i for i, _ in self.kids("phmonth:2021-01")], [f"ph:{P4}", f"ph:{P2}"])
 
     def test_albums_people_favourites(self):
-        self.assertEqual(self.kids("phalbums")[1], (f"phalbum:{A1}", "Verjaardag Benjamin 6 jaar"))
+        self.assertEqual(self.kids("phalbums")[1], (f"phalbum:{A1}", "Verjaardag"))
         self.assertEqual(len(self.kids(f"phalbum:{A1}")), 2)
-        self.assertEqual(self.kids("phpeople"), [(f"phperson:{_b64e('Benjamin')}", "Benjamin")])
-        self.assertEqual(len(self.kids(f"phperson:{_b64e('Benjamin')}")), 2)
+        self.assertEqual(self.kids("phpeople"), [(f"phperson:{_b64e('Alex')}", "Alex")])
+        self.assertEqual(len(self.kids(f"phperson:{_b64e('Alex')}")), 2)
         self.assertEqual([i for i, _ in self.kids("phfavs")], [f"ph:{P2}"])
 
     def test_places(self):
         nl = f"phcountry:{_b64e('Netherlands')}"
         self.assertEqual(self.kids("phplaces")[0], (nl, "Netherlands"))
-        self.assertEqual([t for _, t in self.kids(nl)], ["Bakkum", "(no city)"])
+        self.assertEqual([t for _, t in self.kids(nl)], ["Zwolle", "(no city)"])
         no_city = self.kids(nl)[1][0]
         self.assertEqual([i for i, _ in self.kids(no_city)], [f"ph:{P2}"])
 
@@ -322,7 +322,7 @@ class TestBrowse(_BrowseCase):
         xml, n, total = self.browse(f"phalbum:{A1}")
         self.assertIn("<upnp:class>object.item.imageItem.photo</upnp:class>", xml)
         self.assertIn("http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_LRG", xml)
-        self.assertIn(f">http://192.168.1.125:8765/gw/photo/{P1}.jpg</res>", xml)
+        self.assertIn(f">http://192.168.1.10:8765/gw/photo/{P1}.jpg</res>", xml)
         xml, n, total = self.browse(f"ph:{P1}", "BrowseMetadata")
         self.assertEqual((n, total), (1, 1))
         self.assertIn('parentID="phmonth:2020-09"', xml)
@@ -398,45 +398,45 @@ class TestScreenshots(unittest.TestCase):
                                         exifImageWidth=828, exifImageHeight=1696)), "")
         self.assertEqual(shot_kind(shot(S1, "2022", "u", "IMG_3.png", make="Apple",
                                         exifImageWidth=828, exifImageHeight=1792)), "")
-        self.assertEqual(shot_kind(RON[0]), "")
+        self.assertEqual(shot_kind(SAM[0]), "")
 
     def test_they_leave_every_album_and_gather_per_kind_and_owner(self):
-        ios_ron = shot(S1, "2023-01-01T10:00:00", "u-ron", description="Screenshot")
-        ios_marja_new = shot(S2, "2024-05-01T10:00:00", "u-marja", exifImageWidth=828,
+        ios_sam = shot(S1, "2023-01-01T10:00:00", "u-sam", description="Screenshot")
+        ios_kim_new = shot(S2, "2024-05-01T10:00:00", "u-kim", exifImageWidth=828,
                              exifImageHeight=1792)
-        mac = shot(S3, "2022-06-14T21:47:09", "u-marja", "Screenshot 2022-06-14 at 21.47.09.jpeg")
-        ios_marja_old = dict(shot(P4, "2021-01-01T09:00:00", "u-marja", description="Screenshot"))
-        lib = build([("ron", [RON[0], ios_ron]), ("marja", [ios_marja_new, mac, ios_marja_old])],
-                    [("marja", {"id": A1, "name": "Feest"}, [RON[0], ios_ron, mac]),
-                     ("marja", {"id": A2, "name": "Alleen screenshots"}, [ios_marja_new])],
-                    {"u-ron": "Ron Hamersma", "u-marja": "Marja"})
+        mac = shot(S3, "2022-06-14T21:47:09", "u-kim", "Screenshot 2022-06-14 at 21.47.09.jpeg")
+        ios_kim_old = dict(shot(P4, "2021-01-01T09:00:00", "u-kim", description="Screenshot"))
+        lib = build([("sam", [SAM[0], ios_sam]), ("kim", [ios_kim_new, mac, ios_kim_old])],
+                    [("kim", {"id": A1, "name": "Feest"}, [SAM[0], ios_sam, mac]),
+                     ("kim", {"id": A2, "name": "Alleen screenshots"}, [ios_kim_new])],
+                    {"u-sam": "Sam Example", "u-kim": "Kim"})
         self.assertEqual([(a.id, a.name, [p.id for p in a.photos]) for a in lib.albums], [
             (A1, "Feest", [P1]),
             ("shots-mac", "Mac-screencaptures", [S3]),
-            ("shots-ios-u-marja", "iOS-screencaptures Marja", [P4, S2]),   # old to new
-            ("shots-ios-u-ron", "iOS-screencaptures Ron", [S1])])
+            ("shots-ios-u-kim", "iOS-screencaptures Kim", [P4, S2]),   # old to new
+            ("shots-ios-u-sam", "iOS-screencaptures Sam", [S1])])
         self.assertIn(S1, [p.id for p in lib.months["2023-01"]])    # still on the timeline
 
     def test_what_apple_photos_called_a_screenshot_is_one(self):
-        cropped = shot(S1, "2023-01-01T10:00:00", "u-marja", "IMG_6193.PNG",
+        cropped = shot(S1, "2023-01-01T10:00:00", "u-kim", "IMG_6193.PNG",
                        exifImageWidth=802, exifImageHeight=1740)
-        lib = build([("marja", [cropped, MARJA[0]])],
-                    [("marja", {"id": A1, "name": "Scherm\u00adafbeeldingen"}, [cropped]),
-                     ("marja", {"id": A2, "name": "Feest"}, [cropped, MARJA[0]])],
-                    {"u-marja": "Marja"})
+        lib = build([("kim", [cropped, KIM[0]])],
+                    [("kim", {"id": A1, "name": "Scherm\u00adafbeeldingen"}, [cropped]),
+                     ("kim", {"id": A2, "name": "Feest"}, [cropped, KIM[0]])],
+                    {"u-kim": "Kim"})
         self.assertEqual([(a.name, [p.id for p in a.photos]) for a in lib.albums],
-                         [("Feest", [P1]), ("iOS-screencaptures Marja", [S1])])
+                         [("Feest", [P1]), ("iOS-screencaptures Kim", [S1])])
 
     def test_refresh_names_each_owner(self):
         FakeImmich.data = dict(FakeImmich.data)
-        saved = FakeImmich.data["ron"]
-        FakeImmich.data["ron"] = (RON + [shot(S1, "2023-01-01T10:00:00", "u-ron",
+        saved = FakeImmich.data["sam"]
+        FakeImmich.data["sam"] = (SAM + [shot(S1, "2023-01-01T10:00:00", "u-sam",
                                               description="Screenshot")], [], {})
         try:
             names = [a.name for a in _index().lib.albums]
         finally:
-            FakeImmich.data["ron"] = saved
-        self.assertEqual(names[-1], "iOS-screencaptures Ron")
+            FakeImmich.data["sam"] = saved
+        self.assertEqual(names[-1], "iOS-screencaptures Sam")
 
 
 def ph(i, when, city="", country=""):
@@ -496,10 +496,10 @@ class TestBrowseSplit(_BrowseCase):
         self._p.append(p)
 
     def test_a_big_album_splits_by_place_then_date(self):
-        groups = self.kids(f"phalbum:{A1}")         # P1 Bakkum, P2 no city; both NL
-        self.assertEqual([t for _, t in groups], ["Bakkum", "(no city)"])
+        groups = self.kids(f"phalbum:{A1}")         # P1 Zwolle, P2 no city; both NL
+        self.assertEqual([t for _, t in groups], ["Zwolle", "(no city)"])
         path = _b64d(groups[0][0].split(":", 1)[1]).split("\x1f")
-        self.assertEqual(path, [f"phalbum:{A1}", "t=Bakkum"])
+        self.assertEqual(path, [f"phalbum:{A1}", "t=Zwolle"])
         self.assertEqual([i for i, _ in self.kids(groups[0][0])], [f"ph:{P1}"])
         meta = ET.fromstring(self.browse(groups[0][0], "BrowseMetadata")[0])[0]
         self.assertEqual((meta.get("parentID"), meta.get("childCount")), (f"phalbum:{A1}", "1"))

@@ -86,21 +86,21 @@ class TestKnownDevicesStillWork(unittest.TestCase):
     def test_localfs_file_server_allowed(self):
         # The LocalFs server registers itself as a MediaServer at boot, so it
         # is a known host — /art and /stream depend entirely on reaching it.
-        with _registry("192.168.1.125"):
-            for url in ("http://192.168.1.125:8200/localfs/art/2f00ce45",
-                        "http://192.168.1.125:8200/localfs/stream/0006f30d"):
+        with _registry("192.168.1.10"):
+            for url in ("http://192.168.1.10:8200/localfs/art/2f00ce45",
+                        "http://192.168.1.10:8200/localfs/stream/0006f30d"):
                 ok, why = dlna_ssrf.check_url(url)
                 self.assertTrue(ok, f"{url} → {why}")
 
     def test_known_host_allowed_on_any_port(self):
         # Documented trade-off: granularity is HOST, not host:port, because a
         # UPnP server may serve art from a different port than its descriptor.
-        with _registry("192.168.1.227"):
-            ok, _ = dlna_ssrf.check_url("http://192.168.1.227:37080/desc.xml")
+        with _registry("192.168.1.20"):
+            ok, _ = dlna_ssrf.check_url("http://192.168.1.20:37080/desc.xml")
             self.assertTrue(ok)
 
     def test_unknown_private_host_still_refused_alongside_known(self):
-        with _registry("192.168.1.125"):
+        with _registry("192.168.1.10"):
             ok, _ = dlna_ssrf.check_url("http://192.168.1.126:8200/")
             self.assertFalse(ok)
 
@@ -134,7 +134,7 @@ class TestFailClosed(unittest.TestCase):
             raise RuntimeError("registry down")
         with patch.object(dlna_ssrf, "_known_internal_hosts", _boom):
             with self.assertRaises(RuntimeError):
-                dlna_ssrf.check_url("http://192.168.1.125:8200/x")
+                dlna_ssrf.check_url("http://192.168.1.10:8200/x")
 
     def test_registry_exception_inside_helper_yields_empty_set(self):
         # The helper swallows its own errors and returns an EMPTY set, which

@@ -43,7 +43,7 @@ Typical flow:
     python3 tools/beets_enrich.py --quiet
 
     # one album, forcing a revisit of an already-imported dir
-    python3 tools/beets_enrich.py --album "/Volumes/SAMDATA/Music/Focus/Moving Waves" --revisit
+    python3 tools/beets_enrich.py --album "/Volumes/MEDIA/Music/Focus/Moving Waves" --revisit
 
     # tag a batch, then kick a gateway re-index of the LocalFs library
     python3 tools/beets_enrich.py --quiet --reindex
@@ -84,7 +84,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DEFAULT_MUSIC_ROOT = "/Volumes/SAMDATA/Music"
+PROJECT = Path(__file__).resolve().parent.parent
 DEFAULT_GATEWAY = "http://127.0.0.1:8765"
 DEFAULT_CONFIG = Path.home() / ".config" / "beets" / "config.yaml"
 BEETS_LIBRARY = Path.home() / ".config" / "beets" / "library.db"
@@ -388,12 +388,20 @@ def _count_dsd(root: Path, limit: int = 5000) -> int:
     return n
 
 
+def configured_music_root() -> str:
+    """`LOCALFS_MUSIC_ROOT` from the environment or .env; '' when unset."""
+    if str(PROJECT) not in sys.path:
+        sys.path.insert(0, str(PROJECT))
+    import dlna_config                                     # noqa: F401 (.env)
+    return os.environ.get("LOCALFS_MUSIC_ROOT", "").strip()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Run the beets tag-in-place enrichment batch "
                     "(see docs/enrichment.md).")
-    ap.add_argument("--music-root", default=DEFAULT_MUSIC_ROOT,
-                    help=f"library root (default {DEFAULT_MUSIC_ROOT})")
+    ap.add_argument("--music-root", default=None,
+                    help="library root (default: LOCALFS_MUSIC_ROOT)")
     ap.add_argument("--album", default=None,
                     help="import a single album dir instead of the whole root")
     ap.add_argument("--config", default=str(DEFAULT_CONFIG),
@@ -422,6 +430,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.quiet and args.timid:
         print("error: --quiet and --timid are contradictory", file=sys.stderr)
+        return 2
+
+    args.music_root = args.music_root or configured_music_root()
+    if not args.music_root and (args.write_config or not args.album):
+        print("error: set LOCALFS_MUSIC_ROOT in .env, or pass --music-root",
+              file=sys.stderr)
         return 2
 
     cfg_path = Path(args.config).expanduser()

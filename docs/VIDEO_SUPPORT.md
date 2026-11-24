@@ -62,8 +62,8 @@ fallback.
    Server ContentDirectory (audio-only for the Naim). A video-capable DMS for
    TVs that browse the gateway is an optional later add (V5+), not in scope here.
 7. **Separate video root** — videos live in their OWN folder,
-   **`/Volumes/SAMDATA/GWMovies`**, distinct from the music root
-   `/Volumes/SAMDATA/Music` (`LOCALFS_MUSIC_ROOT`). New config var
+   **`/Volumes/MEDIA/GWMovies`**, distinct from the music root
+   `/Volumes/MEDIA/Music` (`LOCALFS_MUSIC_ROOT`). New config var
    **`LOCALFS_VIDEO_ROOT`** (env) / `localfs.video_root` (config.json), default
    **unset = video disabled** (mirrors how `LOCALFS_MUSIC_ROOT` gates audio).
    The video scan walks this root ONLY — fully independent of the music scan, so
@@ -115,7 +115,7 @@ store it in `videos.title` so browse/sort/search are simple.
 
 ## Phase V0 — deps + scaffolding
 - **Config:** add `LOCALFS_VIDEO_ROOT` (env) / `localfs.video_root`
-  (config.json) → `/Volumes/SAMDATA/GWMovies`. Unset = video disabled. Wire it
+  (config.json) → `/Volumes/MEDIA/GWMovies`. Unset = video disabled. Wire it
   in `dlna_config.py` + the LocalFs wiring (`dlna_localfs_wiring.py`) alongside
   `LOCALFS_MUSIC_ROOT`; add it to the LaunchAgent plist when enabling. (The two
   roots are independent; a missing/unmounted GWMovies just disables video, like
@@ -151,7 +151,7 @@ store it in `videos.title` so browse/sort/search are simple.
 - **Poster**: `ffmpeg -ss <10%> -frames:v 1` → JPEG into the poster cache; skip
   if ffmpeg absent (UI shows a generic film icon).
 - **Scan**: a SEPARATE pass that walks **`LOCALFS_VIDEO_ROOT`
-  (`/Volumes/SAMDATA/GWMovies`)** only — its own scanner (own mtime/size cache,
+  (`/Volumes/MEDIA/GWMovies`)** only — its own scanner (own mtime/size cache,
   own `uuid:localfs-movies` udn), fully independent of the music scan over
   `LOCALFS_MUSIC_ROOT`. Reuse the LocalFs walk/cache helpers but point them at
   the video root; no extension-filtering against the music tree. **Runs
@@ -260,7 +260,7 @@ V2 (serve + a minimal `<video>` player) is the first visible result.
 
 ## Symlinks in the video root (2026-11-07)
 
-Files in `GWMovies` may be symlinks to the Immich originals in `PHOTOS-ALL` and `PHOTOS-Mar`, to save
+Files in `GWMovies` may be symlinks to the Immich originals in `library-1` and `library-2`, to save
 disk and backup space. The id comes from the path inside `GWMovies`, so ids, people tags and location
 overrides are unaffected. A link into a drive that is not mounted stops the scan from pruning, like any
 walk error. A link whose file was really deleted is pruned. `LOCALFS_VIDEO_LINK_ROOTS` must list those

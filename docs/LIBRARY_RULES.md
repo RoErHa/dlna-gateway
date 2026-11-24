@@ -90,8 +90,8 @@ with a file server whose `allowed_roots` held only the books, while
 perfectly and every play 403'd:
 
 ```
-path-traversal blocked: /Volumes/SAMDATA/Music/…/Burning Down The House (Live).flac
-                        not under ('/Volumes/SAMDATA-1TB/Audio_Books',)
+path-traversal blocked: /Volumes/MEDIA/Music/…/Burning Down The House (Live).flac
+                        not under ('/Volumes/MEDIA2/Audio_Books',)
 stream ✗ upstream 403 … — refusing to relay a non-media body
 client_log[audio_error] code=4 codeName=unsupported
 ```

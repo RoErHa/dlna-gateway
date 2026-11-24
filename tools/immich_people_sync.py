@@ -46,7 +46,6 @@ if PROJECT not in sys.path:
 
 VIDEO_UDN = "uuid:localfs-movies"
 DEFAULT_DB = os.path.join(PROJECT, "library.db")
-DEFAULT_DEST = "/Volumes/SAMDATA/GWMovies"
 VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".3gp", ".avi", ".mkv", ".webm",
               ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg"}
 
@@ -237,8 +236,8 @@ def main(argv=None):
                     "(dry-run by default).")
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--udn", default=VIDEO_UDN)
-    ap.add_argument("--dest", default=DEFAULT_DEST,
-                    help="the gateway video root (GWMovies)")
+    ap.add_argument("--dest", default=None,
+                    help="the gateway video root (default: LOCALFS_VIDEO_ROOT)")
     ap.add_argument("--apply", action="store_true",
                     help="write video_people (default: preview only)")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -250,7 +249,11 @@ def main(argv=None):
     if not base_url or not api_key:
         print("FATAL: IMMICH_URL / IMMICH_API_KEY not set (.env)")
         return 2
-    dest = Path(args.dest)
+    dest_setting = args.dest or os.environ.get("LOCALFS_VIDEO_ROOT", "").strip()
+    if not dest_setting:
+        print("FATAL: set LOCALFS_VIDEO_ROOT in .env, or pass --dest")
+        return 2
+    dest = Path(dest_setting)
     if not dest.is_dir():
         print(f"FATAL: video root not mounted: {dest}")
         return 2

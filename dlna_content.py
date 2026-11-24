@@ -352,7 +352,7 @@ def _test():
     if len(sys.argv) < 2:
         print("Usage: python dlna_content.py <control_url>")
         print("  e.g. python dlna_content.py "
-              "http://192.168.1.125:26125/ContentDirectory/.../control.xml")
+              "http://192.168.1.10:26125/ContentDirectory/.../control.xml")
         return
 
     url = sys.argv[1]

@@ -25,9 +25,9 @@ if PROJECT not in sys.path:
 from dlna_library import (LibraryDB, _dedup_clause)
 
 
-_URL_16BIT = ("http://192.168.1.125:26125/content/c2/b16/f44100/"
+_URL_16BIT = ("http://192.168.1.10:26125/content/c2/b16/f44100/"
               "d-6034886842893489109-co45798ECD833FFD6F.flac")
-_URL_24BIT = ("http://192.168.1.125:26125/content/c2/b24/f96000/"
+_URL_24BIT = ("http://192.168.1.10:26125/content/c2/b24/f96000/"
               "d3571337766393215143-coC7284C5E.flac")
 
 
@@ -177,7 +177,7 @@ class TestBrowseDedup(unittest.TestCase):
                 "(udn,obj_id,url,title,artist,album,bit_depth,sample_rate) "
                 "VALUES (?,?,?,?,?,?,?,?)",
                 (self.udn, "b16",
-                 "http://192.168.1.125:26125/content/c2/b16/f44100/dbbb.flac",
+                 "http://192.168.1.10:26125/content/c2/b16/f44100/dbbb.flac",
                  "Track B", "Artist", "Album X", 16, 44100))
 
     def tearDown(self):
@@ -225,14 +225,14 @@ class TestBrowseDedup(unittest.TestCase):
                 "(udn,obj_id,url,title,artist,album,bit_depth,sample_rate) "
                 "VALUES (?,?,?,?,?,?,?,?)",
                 (self.udn, "c16-44",
-                 "http://192.168.1.125:26125/content/c2/b16/f44100/dccc.flac",
+                 "http://192.168.1.10:26125/content/c2/b16/f44100/dccc.flac",
                  "Track C", "Artist", "Album X", 16, 44100))
             conn.execute(
                 "INSERT INTO tracks "
                 "(udn,obj_id,url,title,artist,album,bit_depth,sample_rate) "
                 "VALUES (?,?,?,?,?,?,?,?)",
                 (self.udn, "c16-96",
-                 "http://192.168.1.125:26125/content/c2/b16/f96000/dccc.flac",
+                 "http://192.168.1.10:26125/content/c2/b16/f96000/dccc.flac",
                  "Track C", "Artist", "Album X", 16, 96000))
         tracks = self.db.album_tracks(self.udn, "Artist", "Album X")
         track_c_urls = [t["url"] for t in tracks if t["title"] == "Track C"]

@@ -17,7 +17,7 @@ comes up, and note why.
 | # | Item | Target | Status |
 |---|---|---|---|
 | 1 | Browser request guard (CSRF + DNS rebinding) | 2026-11-04 | ✅ done 2026-11-04 |
-| 2 | Off-disk copy of the library backups | 2026-11-07/08 | ✅ done 2026-11-08 (Time Machine to the new WD-SERVER disk) |
+| 2 | Off-disk copy of the library backups | 2026-11-07/08 | ✅ done 2026-11-08 (Time Machine to a new backup disk) |
 | 3 | Alerts when something goes wrong | 2026-11-18 | ✅ done 2026-11-04 (text message via Messages; live once `ALERT_SMS_TO` is set) |
 | 4 | Security headers on the web app | 2026-11-25 | ✅ done 2026-11-08 (CSP enforced) |
 | 5 | Optional login for the web app | — | ⏸ deferred 2026-11-04 (see §5) |
@@ -60,8 +60,8 @@ works.
 
 ## 2. Off-disk copy of the library backups — target 2026-11-07/08
 
-- [x] **Done 2026-11-08 by the owner: Time Machine, to the new WD-SERVER
-  disk.** Checked the same day: `tmutil destinationinfo` names WD-SERVER,
+- [x] **Done 2026-11-08 by the owner: Time Machine, to a new backup
+  disk.** Checked the same day: `tmutil destinationinfo` names that disk,
   there are two backups that day (08:17 and 10:13), and `tmutil isexcluded`
   reports both `library.db` and `~/dlna-gateway-backups` as included. The
   local weekly snapshot ran at 03:30 the same morning (`integrity ok`,
@@ -99,7 +99,7 @@ only in that file.
   copy, the verification and the missing-destination path.
 
 **The owner does this over the weekend of 7–8 November** and
-decides the destination then. The options: `/Volumes/SAMDATA` (always
+decides the destination then. The options: `/Volumes/MEDIA` (always
 attached, but in the same room and on the same power), another machine over
 the tailnet, or a cloud bucket. Setting up Time Machine would also cover
 this, and the rest of the Mac.

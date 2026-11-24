@@ -508,7 +508,7 @@ class TestDeviceRoles(unittest.TestCase):
     def _seed(self):
         self.db.role_set("uuid:naim", "Naim Uniti", host="192.168.1.9",
                          is_renderer=True)
-        self.db.role_set("uuid:localfs", "RoHaLocalFS", host="192.168.1.125",
+        self.db.role_set("uuid:localfs", "RoHaLocalFS", host="192.168.1.10",
                          is_server=True)
 
     def test_role_set_then_roles_all(self):

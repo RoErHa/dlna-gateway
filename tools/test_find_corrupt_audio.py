@@ -192,7 +192,7 @@ class TestScan(unittest.TestCase):
         self.assertEqual(stats.files_corrupt, [])
 
     def test_case_insensitive_extension_match(self):
-        # SAMDATA may have .FLAC / .Mp3 from older copies.
+        # The library may have .FLAC / .Mp3 from older copies.
         _touch(self.root / "Album/track.FLAC", b"\x00" * 16 + b"x" * 50)
         _touch(self.root / "Album/song.Mp3",   GOOD_HEADERS[".mp3"] + b"x" * 50)
         stats = self._scan()

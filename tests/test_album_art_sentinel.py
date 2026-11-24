@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dlna_library import LibraryDB                              # noqa: E402
 
 UDN = "uuid:localfs-art"
-REAL = "http://192.168.1.125:8200/localfs/art/abc123"
+REAL = "http://192.168.1.10:8200/localfs/art/abc123"
 
 
 class _Base(unittest.TestCase):

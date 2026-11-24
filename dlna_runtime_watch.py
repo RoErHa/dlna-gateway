@@ -8,7 +8,7 @@ gateway had been started from. The process kept running from files that no
 longer existed. 95 seconds later every request to the :8200 file server was
 dropped (`RemoteDisconnected` → the PWA's `MediaError code 4`, skipping a
 whole album in 14 s), and from 22:28 macOS refused the process access to
-/Volumes/SAMDATA (`[Errno 1] Operation not permitted`) although the disk was
+/Volumes/MEDIA (`[Errno 1] Operation not permitted`) although the disk was
 mounted. Internet radio kept working — it touches neither — so the gateway
 looked half-alive for two and a half days, until a manual restart fixed it
 instantly. Nothing in the app was wrong; the process was simply stale.

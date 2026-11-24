@@ -19,9 +19,9 @@ import dlna_asgi  # noqa: E402
 import dlna_asgi_guard as g  # noqa: E402
 import dlna_routes  # noqa: E402
 
-NAMES = frozenset({"localhost", "ronsmacmini", "ronsmacmini.tail5be6ad.ts.net",
-                   "rons-mac-mini.local"})
-TS = "ronsmacmini.tail5be6ad.ts.net:8443"
+NAMES = frozenset({"localhost", "mymachine", "mymachine.tail0000.ts.net",
+                   "my-machine.local"})
+TS = "mymachine.tail0000.ts.net:8443"
 
 
 def why(method="GET", **headers):
@@ -36,13 +36,13 @@ class TestHostRule(unittest.TestCase):
         self.assertEqual(why(host="192-168-1-125.rebind.it"), "host")
 
     def test_any_ip_literal_is_allowed(self):
-        for host in ("192.168.1.125:8765", "100.78.51.93", "127.0.0.1:8443",
+        for host in ("192.168.1.10:8765", "100.64.0.1", "127.0.0.1:8443",
                      "[::1]:8765", "[fe80::1]"):
             self.assertEqual(why(host=host), "", host)
 
     def test_known_names_with_or_without_port_case_or_trailing_dot(self):
-        for host in (TS, "RonsMacMini.tail5be6ad.ts.net.", "ronsmacmini",
-                     "localhost:8765", "Rons-Mac-mini.local:8765"):
+        for host in (TS, "MyMachine.tail0000.ts.net.", "mymachine",
+                     "localhost:8765", "My-Machine.local:8765"):
             self.assertEqual(why(host=host), "", host)
 
     def test_no_host_is_a_device_not_a_browser(self):
@@ -59,14 +59,14 @@ class TestHostRule(unittest.TestCase):
 
 class TestAllowedHostnames(unittest.TestCase):
     def test_tailscale_name_short_form_and_extras(self):
-        env = {"TAILSCALE_CERT_HOST": "RonsMacMini.tail5be6ad.ts.net",
+        env = {"TAILSCALE_CERT_HOST": "MyMachine.tail0000.ts.net",
                "GATEWAY_ALLOWED_HOSTS": " music.home:8765 , Jukebox ,"}
         with mock.patch.object(g.socket, "gethostname",
-                               return_value="Rons-Mac-mini.local"):
+                               return_value="My-Machine.local"):
             names = g.allowed_hostnames(env)
-        for n in ("localhost", "ronsmacmini.tail5be6ad.ts.net", "ronsmacmini",
-                  "music.home", "jukebox", "rons-mac-mini.local",
-                  "rons-mac-mini"):
+        for n in ("localhost", "mymachine.tail0000.ts.net", "mymachine",
+                  "music.home", "jukebox", "my-machine.local",
+                  "my-machine"):
             self.assertIn(n, names)
         self.assertNotIn("", names)
 
@@ -102,7 +102,7 @@ class TestCrossSiteRule(unittest.TestCase):
 
     def test_devices_send_no_fetch_metadata_and_pass(self):
         """The Naim's SOAP, Amperfy, curl: no Sec-Fetch-*, no Origin."""
-        self.assertEqual(why("POST", host="192.168.1.125:8765"), "")
+        self.assertEqual(why("POST", host="192.168.1.10:8765"), "")
 
 
 class TestOriginRule(unittest.TestCase):
@@ -111,9 +111,9 @@ class TestOriginRule(unittest.TestCase):
     with Origin and nothing else (measured in Chromium and WebKit)."""
 
     def test_foreign_origin_write_is_refused(self):
-        self.assertEqual(why("POST", host="192.168.1.125:8765",
+        self.assertEqual(why("POST", host="192.168.1.10:8765",
                              origin="http://evil.example"), "origin")
-        self.assertEqual(why("POST", host="192.168.1.125:8765",
+        self.assertEqual(why("POST", host="192.168.1.10:8765",
                              origin="http://192.168.1.50"), "origin")
 
     def test_opaque_origin_write_is_refused(self):
@@ -121,12 +121,12 @@ class TestOriginRule(unittest.TestCase):
 
     def test_same_host_origin_is_allowed_even_on_another_port(self):
         self.assertEqual(why("POST", host=TS, origin=f"https://{TS}"), "")
-        self.assertEqual(why("POST", host="192.168.1.125:8765",
-                             origin="https://192.168.1.125:8443"), "")
+        self.assertEqual(why("POST", host="192.168.1.10:8765",
+                             origin="https://192.168.1.10:8443"), "")
 
     def test_csp_reports_pass_with_a_null_origin(self):
         """WebKit posts violation reports with Origin: null (measured live)."""
-        h = {"host": "192.168.1.125:8765", "origin": "null"}
+        h = {"host": "192.168.1.10:8765", "origin": "null"}
         self.assertEqual(g.refusal("POST", h, NAMES, "/api/csp_report"), "")
         self.assertEqual(g.refusal("POST", h, NAMES, "/api/csp_reportx"), "origin")
         self.assertEqual(g.refusal("POST", h, NAMES, "/api/control"), "origin")

@@ -21,7 +21,7 @@ from __future__ import annotations
 SCHEMA_VIDEO = """
 
                 -- Video library (V1) — SEPARATE from audio `tracks`. Populated
-                -- by the scan over LOCALFS_VIDEO_ROOT (/Volumes/SAMDATA/GWMovies)
+                -- by the scan over LOCALFS_VIDEO_ROOT (/Volumes/MEDIA/GWMovies)
                 -- under its own udn (uuid:localfs-movies). id = sha1(rel_path)[:16]
                 -- (path-stable). Deliberately kept out of the audio browse + the
                 -- Naim's UPnP tree. `title` = embedded title or the constructed

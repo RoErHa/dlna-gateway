@@ -39,8 +39,8 @@ def call(app, method="GET", path="/", body=b"", headers=()):
 
     scope = {"type": "http", "method": method, "path": path, "raw_path": path.encode(),
              "query_string": b"", "root_path": "", "scheme": "http",
-             "http_version": "1.1", "server": ("192.168.1.125", 8765),
-             "headers": [(b"host", b"192.168.1.125:8765"), *headers],
+             "http_version": "1.1", "server": ("192.168.1.10", 8765),
+             "headers": [(b"host", b"192.168.1.10:8765"), *headers],
              "client": ("192.168.1.50", 5000)}
     asyncio.run(app(scope, receive, send))
     start = next(m for m in sent if m["type"] == "http.response.start")

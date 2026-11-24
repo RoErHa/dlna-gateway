@@ -2,7 +2,7 @@
 
 ## Why it exists
 
-The LG TV (OLED55C9PLA, 2019, webOS 4.x, `192.168.1.35`) cannot run Immich's
+The LG TV (OLED55C9PLA, 2019, webOS 4.x, `192.168.1.30`) cannot run Immich's
 web app: its browser is too old and shows a blank page. Its **DLNA media
 player** works and already browses the gateway's 📹 Videos, so the gateway
 also offers Immich photos there, as a 📷 Photos folder.
@@ -121,14 +121,14 @@ iPhone saved pictures at its screen size, and the metadata of both is
 equally empty).
 
 Measured 2026-11-10:
-- 363 screenshots, all Marja's. 326 of them agree with Apple's own
+- 363 screenshots, all user B's. 326 of them agree with Apple's own
   Screenshots album (329); the album's other 3 count through the last rule.
   The 34 found outside that album were all checked by eye: all screenshots.
 - **Mac-screencaptures holds one photo.** The Macs' screenshots are not in
   Immich: one "Screenshot 2022-06-14 at 21.47.09" is.
-- **Ron has no iOS-screencaptures album.** His screenshots in Immich are
-  JPEGs without a marker (converted on import), alike in metadata to his
-  real photos, so none qualifies. The album appears by itself once his
+- **User A has no iOS-screencaptures album.** Their screenshots in Immich are
+  JPEGs without a marker (converted on import), alike in metadata to the
+  real photos, so none qualifies. The album appears by itself once their
   iPhone uploads screenshots as PNGs.
 
 `<res>` advertises `image/jpeg` with `DLNA.ORG_PN=JPEG_LRG` (1440 px fits
@@ -145,14 +145,14 @@ seeking. `image/jpeg` is in the ConnectionManager's `SourceProtocolInfo`.
 - **Favourites and people are per Immich user**, so every
   `IMMICH_API_KEY*` is scanned and the answers merged.
   - A favourite of either user is a favourite here.
-  - A person is one NAME: if Ron and Marja both name a face "Benjamin",
-    that is one 👤 Benjamin.
+  - A person is one NAME: if users A and B both name a face "Alex",
+    that is one 👤 Alex.
   - Only named, non-hidden people appear.
 
 Measured 2026-11-10:
 - 48,958 images. Each key sees all of them; Immich returns both users'
   photos to either key.
-- 31 + 83 albums. 38 named people for Ron, 1 for Marja.
+- 31 + 83 albums. 38 named people for user A, 1 for user B.
 - About 27,000 photos carry a place.
 - One full scan takes ~28 s per key. The index is ~20 MB of RAM.
 

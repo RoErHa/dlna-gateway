@@ -15,7 +15,7 @@ from tools import beets_enrich as be
 
 class TestDefaultConfig(unittest.TestCase):
     def setUp(self):
-        self.cfg = be.default_config_yaml("/Volumes/SAMDATA/Music")
+        self.cfg = be.default_config_yaml("/Volumes/MEDIA/Music")
 
     def test_in_place_invariant_present(self):
         self.assertRegex(self.cfg, r"write:\s*yes")
@@ -23,7 +23,7 @@ class TestDefaultConfig(unittest.TestCase):
         self.assertRegex(self.cfg, r"move:\s*no")
 
     def test_music_root_and_separate_beets_library(self):
-        self.assertIn("/Volumes/SAMDATA/Music", self.cfg)
+        self.assertIn("/Volumes/MEDIA/Music", self.cfg)
         # beets' own db, NOT the gateway's library.db
         self.assertIn(".config/beets/library.db", self.cfg)
         self.assertNotIn("dlna-gateway/library.db", self.cfg)
@@ -208,7 +208,7 @@ class TestGatewaySSLContext(unittest.TestCase):
 
     def test_remote_host_keeps_verification(self):
         self.assertIsNone(
-            be._gateway_ssl_context("https://ronsmacmini.tail5be6ad.ts.net:8443"))
+            be._gateway_ssl_context("https://mymachine.tail0000.ts.net:8443"))
         self.assertIsNone(be._gateway_ssl_context("http://192.168.1.50:8765"))
 
 

@@ -255,8 +255,8 @@ class TestVideoRootResolver(unittest.TestCase):
             os.environ["LOCALFS_VIDEO_ROOT"] = self._saved
 
     def test_env_wins(self):
-        os.environ["LOCALFS_VIDEO_ROOT"] = "/Volumes/SAMDATA/GWMovies"
-        self.assertEqual(wiring.video_root(), "/Volumes/SAMDATA/GWMovies")
+        os.environ["LOCALFS_VIDEO_ROOT"] = "/Volumes/MEDIA/GWMovies"
+        self.assertEqual(wiring.video_root(), "/Volumes/MEDIA/GWMovies")
 
     def test_config_fallback(self):
         # video_root() imports load_config from dlna_config at call time.

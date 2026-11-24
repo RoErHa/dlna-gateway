@@ -10,7 +10,7 @@ a 5xx spike fails the run.
 Usage:
     python3 tests/chaos.py                                  # 200 iterations against https://localhost:8443
     python3 tests/chaos.py --iterations 1000 --workers 4
-    python3 tests/chaos.py --base https://192.168.1.125:8443
+    python3 tests/chaos.py --base https://192.168.1.10:8443
     python3 tests/chaos.py --seed 1234                      # reproduce a failure
     python3 tests/chaos.py --quiet                          # only summary
     python3 tests/chaos.py --fake-renderer                  # play to a fake, not the Naim/TV

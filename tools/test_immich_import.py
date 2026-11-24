@@ -26,14 +26,16 @@ class _Base(unittest.TestCase):
         (self.source / "upload").mkdir(parents=True)
         (self.source / "encoded-video").mkdir(parents=True)
         self.dest.mkdir()
-        self._env = os.environ.get("LOCALFS_VIDEO_LINK_ROOTS")
+        self._env = {k: os.environ.get(k) for k in
+                     ("LOCALFS_VIDEO_LINK_ROOTS", "LOCALFS_VIDEO_ROOT")}
         os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = str(self.source)
 
     def tearDown(self):
-        if self._env is None:
-            os.environ.pop("LOCALFS_VIDEO_LINK_ROOTS", None)
-        else:
-            os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = self._env
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self._tmp.cleanup()
 
     def put(self, relpath, content):
@@ -61,7 +63,7 @@ class TestDiscovery(_Base):
         self.assertEqual(list(iter_source_videos(self.source)), [])
 
     def test_empty_subdirs_walks_source_root(self):
-        # --subdirs '' → a plain folder tree (e.g. the PHOTOS-ALL external
+        # --subdirs '' → a plain folder tree (e.g. the library-1 external
         # library), not Immich's library/upload storage layout
         self.put("2019/trip/a.MOV", b"a")
         self.put("b.mp4", b"b")
@@ -248,9 +250,26 @@ class TestLinksInsteadOfCopies(_Base):
         self.assertTrue((self.dest / "a.mov").is_symlink())
         self.assertFalse(src.exists())
 
-    def test_default_sources_prefer_external_libraries(self):
-        names = [Path(r).name for r, _ in immich_import.DEFAULT_SOURCES]
-        self.assertEqual(names, ["PHOTOS-ALL", "PHOTOS-Mar", "IMMICH-UPLOAD"])
+    def test_default_sources_are_the_listed_folders_in_order(self):
+        # First listed wins a duplicate, so the order in .env is the preference.
+        a, b = self.source / "library", self.source / "upload"
+        os.environ["LOCALFS_VIDEO_LINK_ROOTS"] = f"{b}: {a}:"
+        os.environ["LOCALFS_VIDEO_ROOT"] = str(self.dest)
+        self.put("library/admin/one.mov", b"SAME")
+        second = self.put("upload/two.mov", b"SAME")
+        self.assertEqual(main(["--apply", "--min-seconds", "0"]), 0)
+        links = [p for p in self.dest.iterdir() if p.is_symlink()]
+        self.assertEqual([p.name for p in links], ["two.mov"])
+        self.assertTrue(os.path.samefile(links[0], second))
+
+    def test_unconfigured_folders_stop_the_run_and_name_the_key(self):
+        for key, args in (("LOCALFS_VIDEO_ROOT", ["--source", str(self.source)]),
+                          ("LOCALFS_VIDEO_LINK_ROOTS", ["--dest", str(self.dest)])):
+            os.environ[key] = ""       # set but empty, so .env is not consulted
+            out = io.StringIO()
+            with self.subTest(key), contextlib.redirect_stdout(out):
+                self.assertEqual(main([*args, "--apply"]), 2)
+            self.assertIn(key, out.getvalue())
 
     def _with_duration(self, durations, *args):
         real = immich_import.video_duration

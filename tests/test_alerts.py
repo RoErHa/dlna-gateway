@@ -308,7 +308,7 @@ class TestGuardRefusalAlerts(unittest.TestCase):
         with mock.patch.object(A, "alert") as alert, \
                 self.assertLogs("dlna.guard", "WARNING"):
             _asgi(g.RequestGuard(app, names=NAMES), "POST", "/api/control",
-                  [("host", "192.168.1.125:8765"), ("origin", "null")])
+                  [("host", "192.168.1.10:8765"), ("origin", "null")])
         self.assertIn("Nothing to configure", alert.call_args.args[2])
         self.assertNotIn("GATEWAY_ALLOWED_HOSTS", alert.call_args.args[2])
 

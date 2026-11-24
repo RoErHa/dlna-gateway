@@ -110,7 +110,7 @@ class LocalFsProvider(ReadMixin):
 
     def probe(self) -> bool:
         """True iff the music root is accessible — on macOS this
-        catches the TCC-locked-SAMDATA case (`Operation not
+        catches the TCC-locked-volume case (`Operation not
         permitted`) cleanly."""
         try:
             return self._root.exists() and self._root.is_dir() and any(
