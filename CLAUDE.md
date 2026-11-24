@@ -41,8 +41,9 @@ doc.
   2027-01-17. Any gateway change it needs is made HERE, never in a MacBook
   clone of this repo (one branch, one checkout), from a written contract in
   `docs/`: playlist editing shipped in 2.3.0 (`e0b3ad9`). V2.0 needs nothing
-  more; V3.0 plans on existing endpoints (being checked). Candidates, NOT
-  agreed: "Go to album / artist" from Now Playing (`/api/track_meta` would
+  more; V3.0 plans on existing endpoints, measured 2026-11-24 in
+  `docs/gateway-contract-renderers.md`. Candidates, NOT agreed: the three at
+  the end of that file, "Go to album / artist" from Now Playing (`/api/track_meta` would
   return `album_key` + `udn`), and smart playlists (needs a design).
 - [x] **3. Read the Safari-tab resume test** (2026-11-24). No: in a plain
   Safari tab the lock-screen controls stay after an interruption, but ▶ there
