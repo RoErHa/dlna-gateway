@@ -34,13 +34,16 @@ doc.
 - [ ] **2. rAudio — the native player (record only).**
   Decided 2026-11-19 after the PWA could not resume after a call on iOS 26
   (see docs/FRONTEND.md → "Resume after an interruption"): a SwiftUI player
-  for macOS + iOS, a CLIENT of `/api/*`, in its OWN repo, built on the
-  owner's MacBook. Started 2026-11-20 (empty project runs on Mac and
-  iPhone). It reaches the gateway over Tailscale HTTPS (`:8443`) only, so
-  it needed no gateway change to start; its first one, playlist editing
-  (`docs/gateway-contract-playlists.md`), shipped 2026-11-23 in 2.3.0
-  (`e0b3ad9`). Any gateway change it does need is
-  made HERE, never in a MacBook clone of this repo (one branch, one checkout).
+  for macOS + iOS, a CLIENT of `/api/*` over Tailscale HTTPS (`:8443`) only,
+  in its OWN repo, built on the owner's MacBook, with its own plan and
+  decision log. Status 2026-11-24: V1.0 and V1.1 released, sprints 0–14
+  done, V2.0 planned 2026-11-29, V3.0 (the Naim as output, video)
+  2027-01-17. Any gateway change it needs is made HERE, never in a MacBook
+  clone of this repo (one branch, one checkout), from a written contract in
+  `docs/`: playlist editing shipped in 2.3.0 (`e0b3ad9`). V2.0 needs nothing
+  more; V3.0 plans on existing endpoints (being checked). Candidates, NOT
+  agreed: "Go to album / artist" from Now Playing (`/api/track_meta` would
+  return `album_key` + `udn`), and smart playlists (needs a design).
 - [x] **3. Read the Safari-tab resume test** (2026-11-24). No: in a plain
   Safari tab the lock-screen controls stay after an interruption, but ▶ there
   is silent; music returns only with Safari open. docs/FRONTEND.md.
