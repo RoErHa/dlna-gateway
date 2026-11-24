@@ -107,7 +107,12 @@ class QueueRegistry:
             q = self._queues.pop(udn, None)
         if q is None:
             return False
-        if q.snapshot().get("alive"):
+        try:
+            playing = q.snapshot().get("alive")
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"discard {udn}: snapshot failed ({e}); stopping it")
+            playing = True
+        if playing:
             q.stop()
         return True
 

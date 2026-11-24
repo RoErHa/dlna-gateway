@@ -113,6 +113,16 @@ class TestQueueDiscard(unittest.TestCase):
         reg.discard(FAKE)
         self.assertFalse(q.stopped)
 
+    def test_a_broken_queue_is_stopped_and_dropped(self):
+        """2026-11-24: a queue whose snapshot raised made forget a 500."""
+        reg = QueueRegistry()
+        q = _FakeQueue(alive=True)
+        q.snapshot = mock.Mock(side_effect=AttributeError("broken"))
+        reg._queues[FAKE] = q
+        self.assertTrue(reg.discard(FAKE))
+        self.assertTrue(q.stopped)
+        self.assertIsNone(reg.peek(FAKE))
+
     def test_unknown_udn(self):
         self.assertFalse(QueueRegistry().discard(FAKE))
 

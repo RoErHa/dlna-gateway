@@ -39,6 +39,7 @@ suppresses it entirely — a radio stream has no duration and a momentary
 STOPPED is a rebuffer, not an end-of-track.
 """
 import logging
+import math
 
 log = logging.getLogger("dlna.player")
 
@@ -51,7 +52,7 @@ def _dur_to_sec(dur) -> int:
     if not dur:
         return 0
     if isinstance(dur, (int, float)):
-        return int(dur)
+        return int(dur) if math.isfinite(dur) else 0
     s = str(dur).strip()
     if not s:
         return 0
@@ -61,12 +62,45 @@ def _dur_to_sec(dur) -> int:
             for part in s.split(":"):
                 total = total * 60 + float(part)
             return int(total)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return 0
     try:
         return int(float(s))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return 0
+
+
+_TRACK_TEXT = ("title", "artist", "album", "art", "mime")
+
+
+def clean_tracks(tracks) -> tuple[list[dict], str]:
+    """`(queue-safe tracks, "")`, or `([], why)` when the list can't be queued.
+
+    Checked BEFORE a queue is touched (2026-11-24): the queue, its monitor and
+    its snapshot all read tracks with `.get`, so one that was not an object
+    answered 200 and then broke that renderer's queue for every later call. A
+    null text field becomes ''; fields not named here pass through untouched."""
+    if not isinstance(tracks, list):
+        return [], "tracks must be a list"
+    out = []
+    for n, track in enumerate(tracks, 1):
+        if not isinstance(track, dict):
+            return [], f"track {n} must be an object"
+        if not isinstance(track.get("url"), str) or not track["url"]:
+            return [], f"track {n} has no url"
+        clean = dict(track)
+        for key in _TRACK_TEXT:
+            value = track.get(key)
+            if value is None:
+                clean[key] = ""
+            elif not isinstance(value, str):
+                return [], f"track {n}: {key} must be text"
+        dur = track.get("duration")
+        if not (dur is None or isinstance(dur, str)
+                or (isinstance(dur, (int, float)) and math.isfinite(dur))):
+            return [], f"track {n}: duration must be text or a number"
+        out.append(clean)
+    return out, ""
 
 
 # Absolute renderer volume set ONCE at queue start. The Naim's scale is

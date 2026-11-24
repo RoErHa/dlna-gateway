@@ -71,6 +71,7 @@ from api_playback_meta import (  # noqa: F401
     track_meta,
 )
 import api_playback_state as _st
+from dlna_player_policy import clean_tracks
 from api_playback_state import (  # noqa: F401
     DB,
     _parse_json_or_400,
@@ -93,17 +94,25 @@ def version(h, params):
 
 # ── GET handlers ──────────────────────────────────────────────────
 
+_STOPPED = {"state": "stopped", "alive": False, "renderer": "",
+            "queue_len": 0, "queue_pos": 0}
+# Everything `POST /api/control` can do. Anything else is a 400: it used to be
+# a 200 that did nothing, which a client cannot tell from success.
+_CONTROL_ACTIONS = ("pause", "stop", "next", "prev", "trim_db")
+
+
 def renderer_state(h, params):
     udn = params.get("udn", "")
     if udn:
-        h._json(200, _st.QUEUES.get(udn).snapshot())
+        # peek, not get: asking about a renderer must not create a queue.
+        q = _st.QUEUES.peek(udn)
+        h._json(200, q.snapshot() if q else dict(_STOPPED))
         return
     # No UDN → "what's playing anywhere". Return every queue's snapshot,
     # plus a flat legacy view of the first alive one so old UI tabs that
     # haven't been updated still render something sensible.
     all_snaps = _st.QUEUES.snapshot_all()
-    legacy = {"state": "stopped", "alive": False, "renderer": "",
-              "queue_len": 0, "queue_pos": 0}
+    legacy = dict(_STOPPED)
     for snap in all_snaps.values():
         if snap.get("alive"):
             legacy = snap
@@ -184,12 +193,17 @@ def render_queue(h, body):
             start_at = max(0.0, float(data.get("start_at_sec") or 0))
         except (TypeError, ValueError):
             start_at = 0.0
-        rnd    = _st.RENDERERS.get(udn)
+        rnd    = _st.RENDERERS.get(udn) if isinstance(udn, str) else None
         if not rnd:
             h._json(404, {"error": f"Renderer {udn!r} not found"})
             return
         if not tracks:
             h._json(400, {"error": "No tracks"})
+            return
+        tracks, why = clean_tracks(tracks)
+        if why:
+            log.warning(f"render_queue 400 for {rnd.name}: {why}")
+            h._json(400, {"error": why})
             return
 
         # Busy check: one physical output can only play one thing. If the
@@ -269,6 +283,9 @@ def control(h, body):
             if not rnd:
                 h._json(404, {"error": "Renderer not found"})
                 return
+            if action not in _CONTROL_ACTIONS:
+                h._json(400, {"error": f"Unknown action: {str(action)[:40]!r}"})
+                return
             queue = _st.QUEUES.get(udn)
             if action == "pause":
                 queue.pause()
@@ -290,8 +307,6 @@ def control(h, body):
                     h._json(400, {"error": "value must be a float (dB)"})
                     return
                 queue.set_user_trim_db(trim)
-            else:
-                log.debug(f"Renderer control: {action!r} not implemented")
             h._json(200, {"ok": True})
         else:
             h._json(400, {"error": f"Unknown device: {device!r}"})

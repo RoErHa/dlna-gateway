@@ -28,6 +28,10 @@ class TestDurToSec(unittest.TestCase):
     Before the fix, int(dur) raised ValueError and killed the daemon
     thread before SetURI ever fired. This test locks in the parser."""
 
+    def test_infinite_and_nan_are_zero_not_an_exception(self):
+        for dur in (float("inf"), float("nan"), "inf", "nan", "inf:00", "1e999"):
+            self.assertEqual(_dur_to_sec(dur), 0, dur)
+
     def test_upnp_hms_strings(self):
         # These are exactly the strings that appeared in /tmp/dlna-gateway.err
         self.assertEqual(_dur_to_sec("0:04:51.000"), 291)

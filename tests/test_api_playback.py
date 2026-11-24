@@ -137,6 +137,49 @@ class TestRenderQueueHandler(unittest.TestCase):
         h, _ = self._post({"udn": "uuid:test"})
         self.assertEqual(h.status, 400)
 
+    def test_tracks_that_are_not_track_objects_are_refused(self):
+        """2026-11-24: these answered 200 and broke the renderer's queue —
+        every later state, queue and forget call for it was a 500."""
+        good = {"url": "http://x/1", "title": "a"}
+        for bad in ("x", ["x"], [None], [good, "x"], 5, {"url": "x"}, [[]],
+                    [{}], [{"url": ""}], [{"url": 5}], [{"url": None}],
+                    [{"url": "http://x/1", "title": 5}],
+                    [{"url": "http://x/1", "mime": ["a"]}],
+                    [{"url": "http://x/1", "duration": []}],
+                    [{"url": "http://x/1", "duration": float("nan")}]):
+            with self.subTest(bad=bad):
+                h, reg = self._post({"udn": "uuid:test", "tracks": bad})
+                self.assertEqual(h.status, 400)
+                self.assertTrue(h.body["error"])
+                self.assertIsNone(reg.peek("uuid:test"), "queue was touched")
+
+    def test_bad_tracks_are_refused_before_the_busy_check(self):
+        """A 400 says the request is wrong; a 409 would ask for a take-over
+        that then fails."""
+        reg = FakeRegistry(busy_udns={"uuid:test"})
+        h, _ = self._post({"udn": "uuid:test", "tracks": ["x"]}, registry=reg)
+        self.assertEqual(h.status, 400)
+
+    def test_missing_and_null_track_fields_are_fine(self):
+        """The PWA sends mime='' and no duration for some rows."""
+        h, reg = self._post({"udn": "uuid:test", "tracks": [
+            {"url": "http://x/1"},
+            {"url": "http://x/2", "title": None, "mime": None,
+             "duration": None, "is_stream": True},
+            {"url": "http://x/3", "title": "t", "duration": "0:03:00.5"},
+            {"url": "http://x/4", "title": "t", "duration": 180}]})
+        self.assertEqual(h.status, 200)
+        sent = reg.get("uuid:test").start_calls[0][1]
+        self.assertEqual([t["url"][-1] for t in sent], list("1234"))
+        self.assertEqual(sent[1]["title"], "")      # null would break the SOAP
+        self.assertTrue(sent[1]["is_stream"])       # other fields pass through
+
+    def test_udn_of_the_wrong_type_is_not_a_500(self):
+        for udn in ([], {}, 5, None):
+            with self.subTest(udn=udn):
+                h, _ = self._post({"udn": udn, "tracks": [{"url": "http://x/1"}]})
+                self.assertEqual(h.status, 404)
+
     def test_idle_renderer_accepts_queue(self):
         h, reg = self._post({"udn": "uuid:test",
                              "tracks": [{"url": "x", "title": "t"}]})
@@ -214,12 +257,22 @@ class TestRendererStateHandler(unittest.TestCase):
 
     def test_udn_scoped_returns_single_snapshot(self):
         reg = FakeRegistry(busy_udns={"uuid:alpha"})
+        reg.get("uuid:alpha")       # it has played: the queue exists
         h   = self._get({"udn": "uuid:alpha"}, registry=reg)
         self.assertEqual(h.status, 200)
         self.assertTrue(h.body.get("alive"))
         self.assertEqual(h.body.get("title"), "Currently Playing Song")
         # UDN-scoped response does NOT carry the full registry dump
         self.assertNotIn("queues", h.body)
+
+    def test_unknown_udn_reads_as_stopped_and_creates_no_queue(self):
+        reg = FakeRegistry()
+        h = self._get({"udn": "uuid:nobody"}, registry=reg)
+        self.assertEqual((h.status, h.body["state"], h.body["alive"]),
+                         (200, "stopped", False))
+        self.assertEqual(set(h.body), {"state", "alive", "renderer",
+                                       "queue_len", "queue_pos"})
+        self.assertIsNone(reg.peek("uuid:nobody"))
 
     def test_no_udn_returns_legacy_plus_queues(self):
         reg = FakeRegistry(busy_udns={"uuid:alpha"})
@@ -275,6 +328,17 @@ class TestControlHandler(unittest.TestCase):
         self.assertEqual(qa.pause_calls, 1,
                          "pause must hit the alpha queue")
         self.assertIsNone(qb, "beta queue must not have been created")
+
+    def test_unknown_action_is_a_400_not_a_silent_ok(self):
+        """`volume` (what CLAUDE.md used to say) answered ok and did nothing."""
+        for action in ("volume", "seek", "seek_abs", "resume", "", "🔥", 5,
+                       None, []):
+            with self.subTest(action=action):
+                h, reg = self._post({"device": "upnp:uuid:alpha",
+                                     "action": action, "value": 1})
+                self.assertEqual(h.status, 400)
+                q = reg.peek("uuid:alpha")
+                self.assertIsNone(q, "an unknown action created a queue")
 
     def test_concurrent_renderers_have_independent_state(self):
         """The whole point of per-renderer queues: controlling one must
