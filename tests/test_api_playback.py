@@ -331,7 +331,7 @@ class TestControlHandler(unittest.TestCase):
 
     def test_unknown_action_is_a_400_not_a_silent_ok(self):
         """`volume` (what CLAUDE.md used to say) answered ok and did nothing."""
-        for action in ("volume", "seek", "seek_abs", "resume", "", "🔥", 5,
+        for action in ("volume", "play", "mute", "resume", "", "🔥", 5,
                        None, []):
             with self.subTest(action=action):
                 h, reg = self._post({"device": "upnp:uuid:alpha",

@@ -70,6 +70,20 @@ def _dur_to_sec(dur) -> int:
         return 0
 
 
+# A seek never lands closer to the end than this: "+30" near the end plays
+# the last seconds instead of skipping to the next track.
+SEEK_END_GUARD_SEC = 3.0
+
+
+def seek_target(base: float, value: float, relative: bool,
+                duration: float) -> float:
+    """The second to seek to, kept inside the track. `duration` 0 = unknown."""
+    target = max(0.0, base + value if relative else value)
+    if duration and duration > 0:
+        target = min(target, max(0.0, duration - SEEK_END_GUARD_SEC))
+    return target
+
+
 _TRACK_TEXT = ("title", "artist", "album", "art", "mime")
 
 

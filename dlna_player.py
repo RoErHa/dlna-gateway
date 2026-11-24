@@ -31,8 +31,6 @@ import logging
 import threading
 import time
 
-from dlna_events import EVENTS
-
 # ── Re-exports: the family's public surface ──────────────────────────
 from dlna_player_monitor import MonitorMixin
 from dlna_player_policy import (  # noqa: F401
@@ -46,16 +44,16 @@ from dlna_player_policy import (  # noqa: F401
     _gapless_advanced,
     _monitor_decision,
 )
+from dlna_player_seek import SeekMixin
 from dlna_player_transport import TransportMixin
 from dlna_player_volume import VolumeMixin
 
 log = logging.getLogger("dlna.player")
 
 
-
 # ── RendererQueue — sequential playback for UPnP renderers ────────
 
-class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
+class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin, SeekMixin):
     """
     Manages sequential track playback on a UPnP AVTransport renderer.
 
@@ -69,8 +67,11 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
 
     _MAX_CONSECUTIVE_FAILS = 5
 
-    def __init__(self):
+    def __init__(self, udn: str = ""):
+        self._udn     = udn               # names this renderer in `state` events
         self._lock    = threading.Lock()
+        self._seek_lock = threading.Lock()
+        self._seek_mark = None            # (track index, when, target) — SeekMixin
         self._tracks: list  = []
         self._index:  int   = 0
         self._av_url: str   = ""
@@ -183,8 +184,7 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
             url = self._av_url
         if url:
             avtransport_stop(url)
-        self._invalidate_snap()
-        EVENTS.publish({"type": "state"})       # SSE: playback stopped (R2)
+        self._publish_state()
 
     def pause(self):
         """Toggle pause on the renderer."""
@@ -194,7 +194,7 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
         log.info("RendererQueue: user PAUSE toggle")
         if url:
             avtransport_pause(url)
-        self._invalidate_snap()
+        self._publish_state()
 
     def next_track(self):
         """Skip to the next track immediately."""
@@ -319,6 +319,7 @@ class RendererQueue(VolumeMixin, TransportMixin, MonitorMixin):
                     "duration":    pos.get("duration"),
                     "queue_len":   len(tracks),
                     "queue_pos":   idx + 1,
+                    "trim_db":     self._user_trim_db,
                     "uri":         cur.get("url", ""),
                     "media_title": pos.get("title") or cur.get("title", ""),
                 }

@@ -37,6 +37,7 @@ import time
 
 from dlna_player_policy import (
     UNKNOWN_ABORT_SEC,
+    _av_state_to_ui,
     _dur_to_sec,
     _gapless_advanced,
     _monitor_decision,
@@ -122,6 +123,10 @@ class MonitorMixin:
                 log.debug(f"RendererQueue monitor: state={cur_state} "
                           f"[{idx+1}/{total}]")
 
+            # Also what the DEVICE did: paused on its own remote, ran out.
+            if _av_state_to_ui(cur_state) != _av_state_to_ui(prev_state):
+                self._publish_state()
+
             # Audiobook queue: persist the position every ~15 s while
             # actually playing, so a session stopped on the Naim resumes
             # in the PWA / CarPlay at the right spot. Never fatal — a
@@ -175,7 +180,9 @@ class MonitorMixin:
                         with self._lock:
                             self._index += 1
                             self._started_at = time.monotonic()
+                            self._seek_mark = None
                         self._queue_next_uri()
+                        self._publish_state()
                         prev_state = cur_state
                         self._stop_event.wait(POLL_SEC)
                         continue
@@ -208,6 +215,7 @@ class MonitorMixin:
                     log.info(f"RendererQueue ■ QUEUE END — "
                              f"playlist finished ({total} track(s))")
                     self._stop_event.set()
+                    self._publish_state()
                     break
                 continue
 

@@ -44,7 +44,7 @@ if TYPE_CHECKING:                     # annotations only — see _new_queue()
 log = logging.getLogger("dlna.player")
 
 
-def _new_queue() -> RendererQueue:
+def _new_queue(udn: str = "") -> RendererQueue:
     """Construct a RendererQueue, importing it at CALL time.
 
     This module and `dlna_player` need each other: the registry builds queues,
@@ -65,7 +65,7 @@ def _new_queue() -> RendererQueue:
     already do.
     """
     from dlna_player import RendererQueue as _RendererQueue
-    return _RendererQueue()
+    return _RendererQueue(udn)
 
 
 # ── QueueRegistry — per-renderer queue owner ──────────────────────
@@ -88,7 +88,7 @@ class QueueRegistry:
         with self._lock:
             q = self._queues.get(udn)
             if q is None:
-                q = _new_queue()
+                q = _new_queue(udn)
                 self._queues[udn] = q
             return q
 

@@ -40,7 +40,6 @@ import logging
 import threading
 import time
 
-from dlna_events import EVENTS
 from dlna_player_policy import _dur_to_sec
 
 log = logging.getLogger("dlna.player")
@@ -173,6 +172,7 @@ class TransportMixin:
 
         with self._lock:
             self._started_at = time.monotonic()
+            self._seek_mark  = None
 
         # Set the startup volume BEFORE the Play (once per queue; a no-op
         # on tracks 2+). Doing it before avoids an audible step.
@@ -184,7 +184,7 @@ class TransportMixin:
             with self._lock:
                 self._consecutive_fails = 0
             self._queue_next_uri()
-            EVENTS.publish({"type": "state"})   # SSE: now-playing changed (R2)
+            self._publish_state()               # SSE: now-playing changed (R2)
             return True
 
         log.warning(f"RendererQueue ✗ SEND FAILED [{idx+1}/{len(tracks)}] "
@@ -202,6 +202,7 @@ class TransportMixin:
                         f"failures — stopping queue (renderer likely wedged; "
                         f"kickstart the gateway if this persists)")
             self._stop_event.set()
+            self._publish_state()
             return False
 
         if more:
@@ -211,6 +212,7 @@ class TransportMixin:
 
         log.info("RendererQueue ■ QUEUE END — all remaining tracks failed")
         self._stop_event.set()
+        self._publish_state()
         return False
 
     def _queue_next_uri(self):

@@ -35,6 +35,7 @@ Workers started by `/api/render_queue` are wrapped so any crash inside
 stayed invisible.
 """
 import logging
+import math
 import threading
 
 from dlna_avtransport import avtransport_send
@@ -98,7 +99,18 @@ _STOPPED = {"state": "stopped", "alive": False, "renderer": "",
             "queue_len": 0, "queue_pos": 0}
 # Everything `POST /api/control` can do. Anything else is a 400: it used to be
 # a 200 that did nothing, which a client cannot tell from success.
-_CONTROL_ACTIONS = ("pause", "stop", "next", "prev", "trim_db")
+_CONTROL_ACTIONS = ("pause", "stop", "next", "prev", "trim_db", "seek",
+                    "seek_abs")
+
+
+def _finite(value) -> float | None:
+    """A number a client sent, or None. NaN and infinity are valid in Python's
+    JSON and would poison a volume or a position."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
 
 
 def renderer_state(h, params):
@@ -269,6 +281,22 @@ def render(h, body):
         h._json(500, {"error": str(e)})
 
 
+def _seek(h, queue, value, relative):
+    sec = _finite(value)
+    if sec is None:
+        h._json(400, {"error": "value must be a number of seconds"})
+        return
+    code, target = queue.seek(sec, relative=relative)
+    if code == "ok":
+        h._json(200, {"ok": True, "position": target})
+    elif code == "not_seekable":
+        h._json(409, {"error": "not_seekable",
+                      "message": "Seeking isn't possible right now"})
+    else:
+        h._json(502, {"error": "seek_failed",
+                      "message": "The renderer refused to seek"})
+
+
 def control(h, body):
     try:
         cmd = _parse_json_or_400(h, body)
@@ -301,12 +329,14 @@ def control(h, body):
                 # natural volume (NOT an absolute SetVolume) — default 0
                 # so a tap can't accidentally blast the room. Clamped
                 # ±5 dB inside RendererQueue.set_user_trim_db.
-                try:
-                    trim = float(cmd.get("value", 0))
-                except (TypeError, ValueError):
+                trim = _finite(cmd.get("value", 0))
+                if trim is None:
                     h._json(400, {"error": "value must be a float (dB)"})
                     return
                 queue.set_user_trim_db(trim)
+            elif action in ("seek", "seek_abs"):
+                _seek(h, queue, cmd.get("value"), relative=action == "seek")
+                return
             h._json(200, {"ok": True})
         else:
             h._json(400, {"error": f"Unknown device: {device!r}"})

@@ -66,6 +66,21 @@ def test_seek_fwd_30_posts_control_for_upnp(page, stub, gateway):
     assert "seek" in body and "30" in body and "-30" not in body
 
 
+def test_a_refused_seek_says_so(page, stub, gateway):
+    """Radio on the Naim can't seek: the button used to do nothing at all."""
+    gateway.renderers = [{"udn": "uuid:naim", "name": "Naim"}]
+    gateway.control_refusal = (409, {"error": "not_seekable",
+                                     "message": "Seeking isn't possible right now"})
+    page.goto(stub.base_url + "/")
+    page.wait_for_function(
+        "document.querySelectorAll('#output-sel option').length >= 2", timeout=4000)
+    page.select_option("#output-sel", "upnp:uuid:naim")
+    page.locator("#btn-fwd").click()
+    page.wait_for_function(
+        "document.getElementById('toast').classList.contains('show')", timeout=3000)
+    assert "Seeking isn't possible" in page.locator("#toast").text_content()
+
+
 # ───── REGRESSION GUARD: playlist play must auto-start track 1 ─────
 def test_playlist_play_starts_first_track(page, stub, gateway):
     """Pressing the rendered ▶ Play button on a playlist must begin

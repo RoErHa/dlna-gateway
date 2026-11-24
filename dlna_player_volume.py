@@ -73,6 +73,7 @@ class VolumeMixin:
             self._user_trim_db = trim_db
             rc_url   = self._rc_url
             baseline = self._renderer_baseline
+        self._publish_state()
         if not rc_url:
             return
         # If we know the baseline, apply NOW so the user hears the change.

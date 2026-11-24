@@ -111,6 +111,7 @@
     "dlna_player_monitor.py": 400,
     "dlna_player_policy.py": 400,
     "dlna_player_registry.py": 400,
+    "dlna_player_seek.py": 400,
     "dlna_player_transport.py": 400,
     "dlna_player_volume.py": 400,
     "dlna_providers/__init__.py": 400,

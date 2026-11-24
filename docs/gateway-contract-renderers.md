@@ -1,20 +1,20 @@
 # Gateway contract: renderers, live state and video (rAudio V3.0)
 
 What the endpoints behind rAudio's E6 (remote control) and E7 (video) really do.
-Nothing here is a new endpoint. Measured 2026-11-24 on gateway 2.3.2, the
-renderer half against `tests/fake_renderer.py` (so not on a real Naim), video and
+Nothing here is a new endpoint. Measured 2026-11-24 on gateway 2.3.2 (the parts new
+in **2.4.0** are marked, and measured there), the renderer half against `tests/fake_renderer.py` (so not on a real Naim), video and
 HTTPS over the tailnet name. *(code)* marks what was read, not measured. Where this differs from rAudio's plan it is marked ⚠.
 
 | Story | Endpoint | Verdict |
 |---|---|---|
 | RA-60 output picker | `GET /api/renderers` | works |
 | RA-61 send an album | `POST /api/render_queue` | works |
-| RA-62 live state | `GET /api/events` + `GET /api/renderer_state` | ⚠ polling is needed, not only a fallback |
-| RA-63 volume, transport | `POST /api/control` | ⚠ trim only, write-only; no seek |
+| RA-62 live state | `GET /api/events` + `GET /api/renderer_state` | works (2.4.0); before it, ⚠ polling only |
+| RA-63 volume, transport | `POST /api/control` | works (2.4.0): trim, read back, and seek; ⚠ no absolute volume |
 | RA-64 take over | `POST /api/render_queue` → 409 | works |
 | RA-70…72 video | `GET /api/videos`, `/video/…`, `/video_hls/…` | works; ⚠ no MKV to test with |
 
-Needs 2.3.2: before it, malformed `tracks` broke a renderer's queue, and an unknown
+Needs 2.4.0. Before 2.3.2, malformed `tracks` broke a renderer's queue, and an unknown
 `/api/control` action answered `{"ok": true}` and did nothing.
 
 ## Renderers
@@ -54,7 +54,7 @@ gateway's startup level once, and the trim to 0, also on a take-over *(code)*.
 {"state": "playing", "alive": true, "paused": false, "renderer": "Naim",
  "title": "…", "artist": "…", "album": "…", "art": "…", "uri": "…",
  "media_title": "…", "position": 2.0, "duration": 14.0,
- "queue_pos": 1, "queue_len": 4}
+ "queue_pos": 1, "queue_len": 4, "trim_db": 0.0}
 ```
 
 - `state`: `playing`, `paused`, `stopped`. `alive` is true for playing and paused.
@@ -70,7 +70,8 @@ gateway's startup level once, and the trim to 0, also on a take-over *(code)*.
   before any queue was sent reads as `stopped` and is not "busy". After one, the
   renderer's real state is shown with the OLD queue's artist, album and cover, and it
   does count as busy.
-- ⚠ The volume and the trim are not in it.
+- `trim_db` (2.4.0) is what the gateway last set for this queue; a volume change on the
+  Naim itself is not in it, and neither is the absolute volume.
 
 ## Control
 
@@ -82,12 +83,23 @@ gateway's startup level once, and the trim to 0, also on a take-over *(code)*.
 | `stop` | stops and ends the queue's playback; harmless when stopped |
 | `next`, `prev` | moves; at either end it does nothing and still answers ok |
 | `trim_db` | `value` −5…+5 dB around the startup level; outside is clamped |
+| `seek` (2.4.0) | `value` seconds from where it is now, e.g. `-30` |
+| `seek_abs` (2.4.0) | `value` seconds from the start of the track |
 
-Anything else is a 400. `{"ok": true}` means the gateway took the command, not that
-the renderer obeyed. ⚠ There is **no seek, no mute, no absolute volume and no jump to
-a queue position**. ⚠ The trim can't be read back: after a restart of rAudio it is
-unknown, so the slider should start at 0 and send nothing until it is moved. A
-missing `value` counts as 0.
+A seek answers `{"ok": true, "position": <target>}`. It stays inside the track: never
+before 0, never closer than 3 s to the end, so +30 near the end does not skip. Show
+the answered `position` until the state has one again: the Naim reports none for
+seconds after a seek. Quick relative presses add up.
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | a sentence | `value` is missing or not a finite number (also for `trim_db`; there a missing value counts as 0) |
+| 409 | `not_seekable` | radio, nothing of ours playing, the queue is over, still starting, or the position is unknown |
+| 502 | `seek_failed` | the renderer refused |
+
+Any other action is a 400. `{"ok": true}` means the gateway took the command, not that
+the renderer obeyed. ⚠ There is **no mute, no absolute volume and no jump to a queue
+position**.
 
 Trim measured with startup level 22: +3 → 28, −5 → 12, +99 → 32 (clamped).
 
@@ -96,24 +108,28 @@ Trim measured with startup level 22: +3 → 28, −5 → 12, +99 → 32 (clamped
 `GET /api/events` (SSE): `hello` first, a `: keepalive` comment every 45 s, at most
 64 streams (503 + `Retry-After` beyond). `state`, `devices`, `index`, `libraries`.
 
-⚠ **A `state` event is only a nudge.** It is exactly `{"type": "state"}`: no renderer,
-no content. And most changes send none:
+A `state` event is a nudge: `{"type": "state", "udn": "…"}`, then read that renderer's
+state. Reading it after the event is never answered from the 0.5 s cache.
 
-| Change | `state` event |
-|---|---|
-| queue started, next, prev, stop | yes |
-| take-over | yes (one) |
-| pause and resume, by the gateway or on the device | **no** |
-| gapless change to the next track | **no** |
-| the last track ends | **no** |
-| stopped on the device: the gateway starts the NEXT track | yes |
-| volume | **no** |
+| Change | `state` event, 2.4.0 | before |
+|---|---|---|
+| queue started, next, prev, stop, take-over | at once | yes, without `udn` |
+| pause and resume, trim, seek, through the gateway | at once | **no** |
+| gapless change to the next track | within about 2 s | **no** |
+| paused or resumed on the device itself | within about 2 s | **no** |
+| the last track ends, or the queue is given up | within about 2 s | **no** |
+| stopped on the device: the gateway starts the NEXT track | within about 2 s | yes |
+| the position moving on | no: count it yourself | no |
 
-So RA-62 needs polling while something plays (the PWA: 1 s), with the events to speed
-it up and slow polling when idle. "Updates within 1 s" holds only that way. The last
-row is worth a warning in the app: **Stop on the Naim itself skips to the next track**,
-because the gateway can't tell it from a track that ended. Only `stop` here ends a queue.
-Measured on the fake: verify on the Naim in Sprint 16.
+"Within 2 s" is the monitor's own poll; it starts 4 s into a track. Expect the same
+event twice now and then (the command, then the device confirming it). After the queue
+is over nobody watches the device, so music started from its own app sends none.
+
+So RA-62 can be events, plus a slow poll as the safety net; "updates within
+1 s" holds for anything done through the gateway. The stopped-on-the-device row is worth
+a warning in the app: **Stop on the Naim itself skips to the next track**, because the
+gateway can't tell it from a track that ended. Only `stop` here ends a queue. Measured
+on the fake: verify on the Naim in Sprint 16, with seek.
 
 ## Video
 
@@ -136,11 +152,3 @@ Measured on the fake: verify on the Naim in Sprint 16.
 
 `:8443` on the tailnet name answers all of this over HTTP/2, and the request guard
 accepts a POST without `Origin`.
-
-## Worth deciding before Sprint 16 (not agreed, not built)
-
-1. `udn` in `state` events, and events for pause, track change and queue end. RA-62
-   could then rely on them.
-2. `trim_db` in the state, so a slider can show the truth.
-3. `seek` for a renderer. The gateway seeks already (`start_at_sec`), and the PWA's
-   ±30 s buttons do nothing on a renderer for want of it.

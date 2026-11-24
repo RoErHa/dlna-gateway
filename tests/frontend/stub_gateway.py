@@ -100,6 +100,7 @@ class StubGateway:
                                    "tracks": 0, "db_tracks": 0}
         # /api/render_queue can be told to reject with 409 once
         self.render_queue_busy: dict | None = None
+        self.control_refusal: tuple | None = None    # (status, body)
         # internet radio ("📡 Stations") — Phase 2 frontend
         self.radio_favourites: list[dict] = []
         self.radio_search_results: list[dict] = []
@@ -652,6 +653,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
             return
         if path == "/api/control":
+            if gw.control_refusal:
+                status, body = gw.control_refusal
+                self._send_json(body, status)
+                return
             self._send_json({"ok": True})
             return
         if path == "/api/book_language":

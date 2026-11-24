@@ -42,8 +42,9 @@ doc.
   clone of this repo (one branch, one checkout), from a written contract in
   `docs/`: playlist editing shipped in 2.3.0 (`e0b3ad9`). V2.0 needs nothing
   more; V3.0 plans on existing endpoints, measured 2026-11-24 in
-  `docs/gateway-contract-renderers.md`. Candidates, NOT agreed: the three at
-  the end of that file, "Go to album / artist" from Now Playing (`/api/track_meta` would
+  `docs/gateway-contract-renderers.md`. The
+  events, trim and seek it asked for shipped in 2.4.0. Candidates, NOT
+  agreed: "Go to album / artist" from Now Playing (`/api/track_meta` would
   return `album_key` + `udn`), and smart playlists (needs a design).
 - [x] **3. Read the Safari-tab resume test** (2026-11-24). No: in a plain
   Safari tab the lock-screen controls stay after an interruption, but ▶ there
@@ -115,7 +116,7 @@ of over-target modules is itself capped, so splitting one big file into
 three still-big files cannot pass. A flat 400-line rule was rejected
 because it would fail on day one for 15 modules and be switched off
 within a week. The debt was **paid off on 2026-08-20 (84/84 modules
-within target)** and has stayed paid as the tree grew — **121/121 today** and `over_target` is empty — so the ratchet now behaves
+within target)** and has stayed paid as the tree grew — **122/122 today** and `over_target` is empty — so the ratchet now behaves
 as a flat 400-line limit in practice, without ever having needed a
 flag-day. Every module above the line was split in the refactor series
 that ends at `dlna_providers/localfs.py`; the seams chosen are recorded
@@ -403,6 +404,7 @@ Appium.
 | `dlna_player_policy.py` | The PURE decision functions behind renderer playback (`_monitor_decision`, `_dur_to_sec`, `_gapless_advanced`) + the tuning constants. Pure = directly unit-testable, which is why the stall guards live here. |
 | `dlna_player_monitor.py` | `MonitorMixin` — the per-queue 2-second state-poll loop that advances tracks and enforces the stall guards. |
 | `dlna_player_transport.py` | `TransportMixin` — SetURI/Play/Seek and the consecutive-send-failure abort. |
+| `dlna_player_seek.py` | `SeekMixin` — a person's seek on a renderer (`seek` / `seek_abs`, not the audiobook resume seek) and `_publish_state`, the ONE place a `state` SSE event is sent: it names the renderer and drops the snapshot cache first. After a Seek the Naim reports no position for seconds, so quick ±30 s presses add up from the remembered target (`_seek_mark`, cleared per track). Refused: radio, not PLAYING/PAUSED, and once our queue is over (what plays then is somebody else's). The watchdog clock follows the seek, so END lines' `played` is the position reached. `tests/test_player_seek.py` (33). |
 | `dlna_player_volume.py` | `VolumeMixin` — startup volume + user trim, via RenderingControl SOAP. |
 | `dlna_player_registry.py` | `QueueRegistry` + the process-wide `QUEUES` singleton (one `RendererQueue` per renderer UDN). |
 | `dlna_xml.py` | The ONE place untrusted XML is parsed. Refuses DTDs outright (entity-expansion amplification was measured at 10× per nesting level on the unauthenticated `/gw/*` SOAP endpoints) and caps input size; raises `ParseError` so existing handlers need no new branch. Also `read_capped` — the bounded READ that must happen first, because the size cap above can only judge bytes already in memory. |
@@ -1676,8 +1678,8 @@ DAC/analog domain).
 POST /api/control
 {"action": "trim_db", "value": <-5..+5 dB>, "device": "upnp:<udn>"}
 ```
-`action` is `pause` (a toggle), `stop`, `next`, `prev` or `trim_db`; anything
-else is a 400 (until 2.3.2 a 200 that did nothing — this section said `volume`).
+`action` is `pause` (a toggle), `stop`, `next`, `prev`, `trim_db`, `seek`
+(± seconds) or `seek_abs`; anything else is a 400 (until 2.3.2 a 200 that did nothing — this section said `volume`).
 → `QUEUES.get(udn).set_user_trim_db(value)` — pushes to the renderer
 immediately and is sticky for the rest of the queue.
 

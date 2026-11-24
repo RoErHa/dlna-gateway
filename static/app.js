@@ -3103,8 +3103,12 @@ async function control(cmd){
     }
     return;
   }
-  await api("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
+  const r=await api("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({...cmd,device:activeDevice})});
+  if(r&&!r.ok){
+    const d=await r.json().catch(()=>({}));
+    toast(d.message||d.error||"The renderer refused");
+  }
   // Transport commands change whether the renderer is live — re-read the
   // state at once so the loop lands in the right tier (and the UI updates
   // without waiting for an idle-tier tick).
