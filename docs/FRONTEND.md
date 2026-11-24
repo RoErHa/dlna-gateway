@@ -355,9 +355,38 @@ home-screen app — also after deleting and re-adding it): the lock-screen
 player DISAPPEARS after a call.** No Now Playing controls, nothing to tap;
 the only way back is reopening the app and pressing ▶. The reload above
 therefore helps the in-app ▶ only — the one-tap lock-screen resume is not
-reachable for a home-screen web app. The three `client_log[resume]` lines
-from that evening are in-app presses (`visibility=visible`), not lock-screen
-taps. Still to try: a plain Safari tab. Amperfy (native) resumes fine.
+reachable for a home-screen web app. Amperfy (native) resumes fine.
+
+*Qualified 2026-11-24:* the three `client_log[resume]` lines of that evening were
+reported as ▶ pressed in the reopened app, and the page was visible. But their
+reason is `mediasession_play`, a play command from iOS; the page's own ▶ buttons
+log `user_pause_toggle`, then as now. So a resume that looks like a press in the
+page can be iOS's own command arriving as the page comes back. Read the REASON,
+not the visibility.
+
+**A plain Safari tab (2026-11-24, one interruption, iPhone): no better where it
+counts.** The listener's report: nothing resumed by itself; the lock-screen
+controls STAYED (unlike the home-screen app); ▶ there, pressed twice, gave no
+sound; music came back, at the right position, once Safari was open. The log:
+
+```
+12:10:05 resume       reason=mediasession_play position=98 paused_ms=86060
+                      reload=True by_system=True visibility=visible standalone=False
+12:10:09 resume_check advanced=True paused=False position=101
+```
+
+That is the only play command the page saw, and with that reason it was not the
+page's ▶. The reading that fits best is that iOS passed it on when Safari opened:
+the tap it had kept while the page was frozen, or a play of its own (the same
+pattern as 2026-11-19). It is not proven: silent playback (295518) would log the
+same, and whether anything was pressed in Safari was not recorded. Telling them apart takes a run that waits 20 s on the lock screen, then
+opens Safari without touching it. Not worth a code change either way: the page
+cannot act while iOS does not run it. `standalone=False` alone does not mean a
+phone (the Mac's Safari logs it too), so check the `ua`.
+
+**Verdict: one-tap lock-screen resume after an interruption is out of reach for
+the PWA, home-screen app and Safari tab alike. Reopen the page. The native
+player is the answer.**
 
 Guarded by `tests/frontend/test_resume.py` (12; both engines), against a real
 `<audio>` playing the stub's silent WAV (`gateway.stream_seconds = 30`).

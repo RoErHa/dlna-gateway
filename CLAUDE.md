@@ -41,10 +41,9 @@ doc.
   (`docs/gateway-contract-playlists.md`), shipped 2026-11-23 in 2.3.0
   (`e0b3ad9`). Any gateway change it does need is
   made HERE, never in a MacBook clone of this repo (one branch, one checkout).
-- [ ] **3. Read the Safari-tab resume test.** Planned 2026-11-19: does
-  resume after a call work in a plain Safari tab (not the home-screen app)?
-  `grep 'client_log\[resume' gateway.log` and look for `standalone=False`.
-  Record the verdict in docs/FRONTEND.md.
+- [x] **3. Read the Safari-tab resume test** (2026-11-24). No: in a plain
+  Safari tab the lock-screen controls stay after an interruption, but ▶ there
+  is silent; music returns only with Safari open. docs/FRONTEND.md.
 
 ## Running the Gateway
 
@@ -827,7 +826,8 @@ measurements, incidents, the things that bit — are in
   same source only). Never auto-resume on reopening the app: a page can't
   tell a call from AirPods being taken out. **On-device verdict
   (2026-11-19): after a call iOS removes the home-screen app's lock-screen
-  controls entirely** — this only fixes the in-app ▶; see docs/FRONTEND.md.
+  controls entirely** — this only fixes the in-app ▶. A plain Safari tab
+  (2026-11-24) keeps the controls but ▶ there is silent; see docs/FRONTEND.md.
   `tests/frontend/test_resume.py` (12).
 - **MediaError**: code 1 ignored, 2/3 retry the track once then skip, 4 skip
   at once; every event POSTs to `/api/client_log`.
